@@ -6,6 +6,10 @@
 #include "framework/FitToScreen.hpp"
 #include "framework/InterfaceSize.hpp"
 #include "framework/MenuBarReveal.hpp"
+#include "framework/PlaceWatcher.hpp"
+#include "framework/Theme.hpp"
+#include "framework/TitleBar.hpp"
+#include "framework/UiSizes.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -13,6 +17,7 @@
 #include <QCursor>
 #include <QDrag>
 #include <QDragEnterEvent>
+#include <QtLogging>
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QKeyEvent>
@@ -20,12 +25,14 @@
 #include <QMenuBar>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QSettings>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <memory>
 
 namespace mitcad {
@@ -42,7 +49,103 @@ public:
     setElideMode(Qt::ElideMiddle);
     setAcceptDrops(true);
   }
+  // In a Floating title row (mitcad#1990): each design a flat tab on the
+  // bar, its name (a • after it while edited) and its ×, the shown one a
+  // flat block filled with a tint of the text, without the
+  // style's base line; else the style's tabs in the frame's own row.
+  void setRowStyle(bool row) {
+    if (row == m_rowStyle) return;
+    m_rowStyle = row;
+    setDrawBase(!row);
+    // In the row the tabs share its room with the other controls: when it
+    // is short they are narrowed to their names elided (minimumTabSizeHint),
+    // every design's tab in sight, rather than scrolled with arrows, which
+    // left the first tabs out of sight beside the shown one. The style's
+    // own choice again in the frame's row.
+    if (row) {
+      m_frameScrollButtons = usesScrollButtons();
+    }
+    setUsesScrollButtons(row ? false : m_frameScrollButtons);
+    if (row) {
+      // The tab under the pointer highlighted (paintEvent).
+      setAttribute(Qt::WA_Hover);
+      setMouseTracking(true);
+    } else {
+      setMinimumHeight(0);
+      setMaximumHeight(QWIDGETSIZE_MAX);
+    }
+    updateGeometry();
+    update();
+  }
 protected:
+  QSize tabSizeHint(int index) const override {
+    if (!m_rowStyle) return QTabBar::tabSizeHint(index);
+    // The name, the room around it and the close button's; long names
+    // elided in the middle at 240 px.
+    const QWidget* close = tabButton(index, QTabBar::RightSide);
+    const int closeRoom = close != nullptr ? close->sizeHint().width() + 6 : 0;
+    const int text = fontMetrics().horizontalAdvance(tabText(index));
+    // As high as the bar (TitleBar::hostDocumentTabs fixes its height to
+    // the buttons' beside it), so that the name, the close button and the
+    // block share the bar's centre line with Home, File, Undo and Redo.
+    return QSize(std::min(text + 24, 240) + closeRoom, std::max(fontMetrics().height() + 10, minimumHeight()));
+  }
+  QSize minimumTabSizeHint(int index) const override {
+    if (!m_rowStyle) return QTabBar::minimumTabSizeHint(index);
+    const QSize full = tabSizeHint(index);
+    const QWidget* close = tabButton(index, QTabBar::RightSide);
+    const int closeRoom = close != nullptr ? close->sizeHint().width() + 6 : 0;
+    return QSize(std::min(full.width(), 64 + closeRoom), full.height());
+  }
+  void leaveEvent(QEvent* event) override {
+    QTabBar::leaveEvent(event);
+    if (m_rowStyle) update();
+  }
+  void paintEvent(QPaintEvent* event) override {
+    if (!m_rowStyle) {
+      QTabBar::paintEvent(event);
+      return;
+    }
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QPalette pal = palette();
+    QColor text = pal.color(QPalette::WindowText);
+    QColor quiet = text;
+    quiet.setAlpha(190);
+    const int hovered = tabAt(mapFromGlobal(QCursor::pos()));
+    for (int i = 0; i < count(); ++i) {
+      const QRect tab = tabRect(i);
+      const QRectF block = rowBlock(tab);
+      const bool selected = i == currentIndex();
+      if (selected || (i == hovered && isEnabled())) {
+        // The shown design a flat block filled with a tint of the text, no
+        // line round it; a hovered one on the chrome's hover fill.
+        QColor fill = text;
+        fill.setAlpha(28);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(selected ? fill : themeColor(ColorRole::HoverFill, pal));
+        painter.drawRoundedRect(block, 5, 5);
+      }
+      // The name left of the close button, elided in the middle.
+      const QWidget* close = tabButton(i, QTabBar::RightSide);
+      const int right = close != nullptr && !close->isHidden() ? close->geometry().left() - 4 : tab.right() - 10;
+      const QRect name(tab.left() + 12, tab.top(), std::max(0, right - tab.left() - 12), tab.height());
+      QFont font = this->font();
+      font.setWeight(selected ? QFont::DemiBold : QFont::Normal);
+      painter.setFont(font);
+      painter.setPen(selected ? text : quiet);
+      painter.drawText(name, Qt::AlignVCenter | Qt::AlignLeft,
+                       QFontMetrics(font).elidedText(tabText(i), Qt::ElideMiddle, name.width()));
+    }
+  }
+  // The shown or hovered tab's block in the row: as high as the row
+  // buttons' hover fill (the icon and 10, less a pixel at each edge),
+  // centred on the bar's centre line like them.
+  QRectF rowBlock(const QRect& tab) const {
+    const qreal high = std::min<qreal>(tab.height() - 2, uiIconSize(18) + 8);
+    const qreal top = tab.top() + (tab.height() - high) / 2.0;
+    return QRectF(tab.left() + 1.5, top, tab.width() - 3.0, high);
+  }
   bool eventFilter(QObject* watched, QEvent* event) override {
     if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) m_dragCancelled = true;
     return QTabBar::eventFilter(watched, event);
@@ -132,6 +235,8 @@ private:
   QPoint m_start;
   QPointer<MainWindow> m_pressedDocument;
   bool m_dragCancelled = false;
+  bool m_rowStyle = false;
+  bool m_frameScrollButtons = true; // the style's, kept while in a title row
 };
 }
 
@@ -154,6 +259,8 @@ DocumentFrame::DocumentFrame(WindowManager& manager)
   layout->addWidget(m_tabs);
   layout->addWidget(m_stack, 1);
   setCentralWidget(root);
+  m_root = root;
+  m_rootLayout = layout;
   // Its menu bar (with the tabs) hidden as the documents' own while
   // Preferences › Display › Show the menu bar is cleared (mitcad#1620).
   MenuBarReveal::instance().watch(menuBar());
@@ -162,7 +269,20 @@ DocumentFrame::DocumentFrame(WindowManager& manager)
   connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
     m_stack->setCurrentIndex(index);
     updateActiveDocument();
+    logShownTab();
   });
+  // In the Floating title row (mitcad#1990) a click on the shown design's
+  // tab leaves the Start page for the design (the owner, 17.11.2026: the
+  // Start page has no workspace panel to leave it by).
+  connect(m_tabs, &QTabBar::tabBarClicked, this, [this](int index) {
+    if (index >= 0 && index == m_tabs->currentIndex() && tabsInTitleRow()) {
+      if (MainWindow* document = activeDocument()) {
+        document->leaveStartPageForDesign();
+      }
+    }
+  });
+  // Where the shown design's tab is, for the UI tests (ui_click_logged).
+  new PlaceWatcher(m_tabs, [this] { logShownTab(); });
   connect(m_tabs, &QTabBar::tabMoved, this, [this](int from, int to) {
     QWidget* page = m_stack->widget(from);
     m_stack->removeWidget(page);
@@ -188,6 +308,12 @@ DocumentFrame::DocumentFrame(WindowManager& manager)
   qApp->installEventFilter(this);
 }
 
+DocumentFrame::~DocumentFrame() {
+  // The tab bar back from a design's title row (mitcad#1990), so that it
+  // goes with the frame and not before it with that design.
+  placeTabs(nullptr);
+}
+
 void DocumentFrame::install(WindowManager& manager) {
   connect(&manager, &WindowManager::windowAdded, &manager,
           [](MainWindow* document, MainWindow*, bool separate) {
@@ -209,7 +335,18 @@ void DocumentFrame::install(WindowManager& manager) {
     frame->addDocument(document);
   });
   connect(&manager, &WindowManager::windowRemoved, &manager, [](MainWindow* document) {
-    if (auto* frame = containing(document)) frame->removeDocument(document);
+    if (auto* frame = containing(document)) {
+#ifdef Q_OS_MACOS
+      // The closed page's native actions can hide shared application menu
+      // roles when Qt destroys them. Refresh the focused frame afterwards.
+      connect(document, &QObject::destroyed, qApp, [] {
+        if (auto* activeFrame = qobject_cast<DocumentFrame*>(QApplication::activeWindow())) {
+          activeFrame->updateActiveDocument();
+        }
+      }, Qt::QueuedConnection);
+#endif
+      frame->removeDocument(document);
+    }
   });
   manager.setPresenter([](MainWindow* document) {
     if (auto* frame = containing(document)) {
@@ -241,8 +378,11 @@ MainWindow* DocumentFrame::activeDocument() const { return qobject_cast<MainWind
 void DocumentFrame::addDocument(MainWindow* document, int index) {
   if (!document || m_stack->indexOf(document) >= 0) return;
   if (auto* frame = containing(document)) frame->removeDocument(document);
-  document->setParent(m_stack, Qt::Widget);
+  // Disable the page's native menu bar before reparenting. On macOS Qt
+  // otherwise attaches it to this frame, taking over the system menu bar.
+  // Destroying it then leaves the frame without a registered native bar.
   document->menuBar()->setNativeMenuBar(false);
+  document->setParent(m_stack, Qt::Widget);
   // updateChrome shows its own menu bar again while it is alone here.
   document->menuBar()->hide();
   index = index < 0 ? m_stack->count() : qBound(0, index, m_stack->count());
@@ -256,6 +396,8 @@ void DocumentFrame::addDocument(MainWindow* document, int index) {
 void DocumentFrame::removeDocument(MainWindow* document) {
   const int index = m_stack->indexOf(document);
   if (index < 0) return;
+  // Not in its title row when it goes (mitcad#1990).
+  if (document->isAncestorOf(m_tabs)) placeTabs(nullptr);
   document->removeEventFilter(this);
   disconnect(document, nullptr, this, nullptr);
   document->setDocumentVisible(false);
@@ -302,19 +444,66 @@ void DocumentFrame::updateActiveDocument() {
   setWindowModified(document->isWindowModified());
   if (m_manager) m_manager->setActiveWindow(document);
 }
+void DocumentFrame::logShownTab() {
+  const int index = m_tabs->currentIndex();
+  if (index < 0 || !m_tabs->isVisible()) {
+    return;
+  }
+  const QPoint at = m_tabs->mapTo(m_tabs->window(), m_tabs->tabRect(index).center());
+  const QString line = QStringLiteral("Document tab shown at %1,%2").arg(at.x()).arg(at.y());
+  if (line != m_loggedTab) {
+    m_loggedTab = line;
+    qDebug().noquote() << line;
+  }
+}
 bool DocumentFrame::showsDocumentTabs(int documentCount) { return documentCount >= 2; }
+bool DocumentFrame::tabsInTitleRow() const {
+  const MainWindow* shown = activeDocument();
+  const TitleBar* row = shown ? shown->findChild<TitleBar*>() : nullptr;
+  return row && row->isFloatingRow();
+}
+bool DocumentFrame::showsTabs() const {
+  return tabsInTitleRow() ? m_stack->count() >= 1 : showsDocumentTabs(int(m_stack->count()));
+}
+void DocumentFrame::placeTabs(MainWindow* host) {
+  auto* tabs = static_cast<DocumentTabs*>(m_tabs);
+  if (host) {
+    if (auto* row = host->findChild<TitleBar*>()) {
+      tabs->setRowStyle(true);
+      row->hostDocumentTabs(m_tabs);
+      return;
+    }
+  }
+  tabs->setRowStyle(false);
+  if (m_root && m_tabs->parentWidget() != m_root) {
+    m_tabs->hide();
+    m_tabs->setParent(m_root);
+    m_rootLayout->insertWidget(0, m_tabs);
+  }
+}
 void DocumentFrame::updateChrome() {
   // With the tab bar the frame's menu bar follows the shown document above
   // the tabs; without it the one document keeps its own menu bar, so its
-  // window coordinates are the frame's and its layout is unchanged.
-  const bool tabs = showsDocumentTabs(int(m_stack->count()));
+  // window coordinates are the frame's and its layout is unchanged. In a
+  // Floating title row (mitcad#1990) the tabs are the shown document's,
+  // and neither bar shows: the row's File, ? and ☰ have the menus.
+  MainWindow* shown = activeDocument();
+  const bool inRow = tabsInTitleRow();
+  placeTabs(inRow ? shown : nullptr);
+  const bool tabs = showsTabs();
   m_tabs->setVisible(tabs);
-  menuBar()->setVisible(tabs);
-  const MainWindow* shown = activeDocument();
+  // A document whose menus are its top bar's (the Floating layout of
+  // Windows and Linux, mitcad#1990) has no menu bar row, neither its own
+  // nor the frame's copy.
+  const MenuBarReveal& reveal = MenuBarReveal::instance();
+  const bool noBarRow = shown != nullptr && reveal.keepsHidden(shown->menuBar());
+  menuBar()->setVisible(tabs && !inRow && !noBarRow);
   // The system menu bar holds the frame's menus (a native menu bar); the
   // document's in-window copy then follows the preference.
   const bool inWindow = !menuBar()->isNativeMenuBar() || windowMenuBarShown();
-  for (MainWindow* page : documents()) page->menuBar()->setVisible(!tabs && page == shown && inWindow);
+  for (MainWindow* page : documents()) {
+    page->menuBar()->setVisible((!tabs || inRow) && page == shown && inWindow && !reveal.keepsHidden(page->menuBar()));
+  }
 }
 namespace {
 QString windowMenuBarKey() { return QStringLiteral("view/windowMenuBar"); }

@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A 60 x 40 x 30 mm block (F1.b0) and on its top face Sketch1 (F2): a free line, two fully constrained circles (one on the face, one beside the block) and a centre line on the face, as tools/ui-sketch-view-test.sh draws them (mitcad#302, mitcad#2034)."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-30, -20],
+    "length": 60, "width": 40, "height": 30, "operation": "new_body"}},
+  {"cmd": "sketch.create", "plane": {"face": "F1:top", "body": "F1.b0"}},
+  {"cmd": "sketch.add_line", "sketch": "F2", "start": [-28, 10], "end": [-4, 10]},
+  {"cmd": "sketch.add_circle", "sketch": "F2", "center": [10, 0], "diameter": 16},
+  {"cmd": "sketch.add_circle", "sketch": "F2", "center": [50, 0], "diameter": 16},
+  {"cmd": "sketch.add_line", "sketch": "F2", "start": [-25, -12], "end": [25, -12], "centerline": true}
+]

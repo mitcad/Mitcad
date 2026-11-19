@@ -6,16 +6,20 @@
 //! command runs with the process's memory measured against its limits, as
 //! the imports' memory guard measures it (`memory.rs`, mitcad#80), and is
 //! stopped with an error that says so before the process runs out of
-//! memory. The imports keep their own guard and are not stopped by this
-//! one; nor are undo and redo (`lib.rs`), which put back what a refused
-//! command array changed.
+//! memory. `import_file` (STEP, IGES, BRep, STL, OBJ, glTF) is a model
+//! command and runs under this guard too, which stops a STEP or IGES
+//! transfer inside and says the file needs more memory than the system has
+//! left (mitcad#2032). The bridge's own imports (`import_f3d`,
+//! `import_ipt`, ... in `lib.rs`) keep their own guard and are not stopped
+//! by this one; nor are undo and redo (`lib.rs`), which put back what a
+//! refused command array changed.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use mitcad_model::RecomputeMonitor;
-use mitcad_model::monitor::memory_guard::{self, MemoryReading};
+use mitcad_model::monitor::memory_guard::{self, GuardedWork, MemoryReading};
 use mitcad_model_api::{ApiError, DocumentApi};
 
 use crate::Document;
@@ -81,17 +85,35 @@ fn measurer(limit: u64) -> impl FnMut() -> MemoryReading + Send + 'static {
 }
 
 impl Document {
-    /// A model command (not an import, undo or redo), under the memory guard when the
-    /// process turned it on: with the job's monitor attached (the
-    /// application's), else with one of the command's own. A command the
-    /// guard stopped fails with the guard's reason and changes nothing.
-    pub(crate) fn guarded_command(&mut self, json: &str) -> Result<String, ApiError> {
-        self.guarded_model_action(|doc| doc.command(json))
+    /// A model command (not one of the bridge's imports, undo or redo),
+    /// under the memory guard when the process turned it on: with the job's
+    /// monitor attached (the application's), else with one of the
+    /// command's own. A command the guard stopped fails with the guard's
+    /// reason, in the words for `work` (an `import_file`'s are its own,
+    /// mitcad#2032), and changes nothing.
+    pub(crate) fn guarded_command(
+        &mut self,
+        json: &str,
+        work: GuardedWork,
+    ) -> Result<String, ApiError> {
+        self.guarded_work(work, |doc| doc.command(json))
     }
 
     /// Runs a caller-controlled model action under the same command guard.
     pub(crate) fn guarded_model_action<T>(
         &mut self,
+        action: impl FnOnce(
+            &mut mitcad_model::Document<crate::kernel::OcctKernel>,
+        ) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        self.guarded_work(GuardedWork::Command, action)
+    }
+
+    /// [`Document::guarded_model_action`] with the guard's reason in the
+    /// words for `work`.
+    fn guarded_work<T>(
+        &mut self,
+        work: GuardedWork,
         action: impl FnOnce(
             &mut mitcad_model::Document<crate::kernel::OcctKernel>,
         ) -> Result<T, ApiError>,
@@ -109,7 +131,8 @@ impl Document {
             }
         };
         let limit = LIMIT.load(Ordering::Relaxed);
-        let result = memory_guard::guarded(&monitor, measurer(limit), || action(&mut self.0));
+        let result =
+            memory_guard::guarded_for(&monitor, work, measurer(limit), || action(&mut self.0));
         if attached.is_none() {
             self.0.set_monitor(None);
         }

@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include <Message_ProgressRange.hxx>
+#include <Message_ProgressScope.hxx>
 #include <Standard_Handle.hxx>
 #include <TCollection_ExtendedString.hxx>
 #include <TDocStd_Document.hxx>
@@ -24,6 +26,26 @@ std::unique_lock<std::mutex> exchange_lock();
 
 // An empty XCAF document in millimetres.
 occ::handle<TDocStd_Document> new_document();
+
+// Runs a reader's transfer of a parsed file into a document
+// (`transfer(range)`: the Transfer of OCCT's STEP and IGES readers) within
+// `range` (mitcad#2032: the command's memory guard and the user's cancel
+// stop it). The parsing before it takes no range and cannot be stopped.
+// Throws Cancelled when the range breaks before the transfer, during it or
+// by its end, so that no partly transferred document is read; otherwise
+// gives whether the transfer succeeded.
+template <class Transfer>
+bool stoppable_transfer(const Message_ProgressRange& range, Transfer&& transfer) {
+  Message_ProgressScope scope(range, nullptr, 1.0);
+  if (scope.UserBreak()) {
+    throw Cancelled();
+  }
+  const bool done = transfer(scope.Next());
+  if (scope.UserBreak()) {
+    throw Cancelled();
+  }
+  return done;
+}
 
 // Adds each body as a free shape with its name and surface colour (its
 // placements are not looked at: see placed_bodies).

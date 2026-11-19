@@ -1,0 +1,22 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A glue flap (mitcad#1939): on a 2 mm board sheet 100 x 60 (rules F1, sketch F2, Face F3), add_glue_flap on its right edge: the flange's profile sketch (its plane F4 and sketch F5, before the flange) made a trapezoid slanting in by 15 degrees at both ends, the flange F6 30 long with that profile."},
+  {"cmd": "add_feature", "def": {"type": "sheet_rules", "process": "board", "thickness": 2, "bend_radius": 0.25,
+    "allowance": {"type": "bend_deduction", "deduction": 2}, "reference_side": "front",
+    "bend_relief": {"type": "round", "width": 1, "depth": 1}, "corner_relief": {"type": "round", "width": 1, "depth": 1}}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [0, 0]},
+    {"id": "p2", "type": "point", "at": [100, 0]},
+    {"id": "p3", "type": "point", "at": [100, 60]},
+    {"id": "p4", "type": "point", "at": [0, 60]},
+    {"id": "c5", "type": "line", "start": "p1", "end": "p2"},
+    {"id": "c6", "type": "line", "start": "p2", "end": "p3"},
+    {"id": "c7", "type": "line", "start": "p3", "end": "p4"},
+    {"id": "c8", "type": "line", "start": "p4", "end": "p1"}]}},
+  {"cmd": "add_feature", "def": {"type": "sheet_face", "rules": "F1",
+    "profiles": [{"sketch": "F2", "region": "r{c5[c8,c6],c6[c5,c7],c7[c6,c8],c8[c7,c5]}"}]}},
+  {"cmd": "add_glue_flap", "taper": 15, "inset": 2, "def": {"type": "sheet_flange", "body": "F3.b0",
+    "boundary": {"panel": {"feature": "F3", "slot": 0}, "curve": {"type": "sketch", "sketch": "F2", "segment": "c6[c5,c7]"}},
+    "angle": 1.5707963267948966, "length": {"mode": "tangent", "value": 30}, "position": "inside"}},
+  {"expect": {"feature": "F6", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "sheet_process"}, "result": {"process": "board"}}}
+]

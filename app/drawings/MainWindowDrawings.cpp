@@ -9,6 +9,7 @@
 #include "../MainWindow.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -16,6 +17,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QCursor>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -25,19 +27,25 @@
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMenu>
 #include <QSettings>
 #include <QtLogging>
 
 #include <gp_Dir.hxx>
 
 #include "../OcctViewer.hpp"
+#include "../browser/BrowserBackground.hpp"
+#include "../browser/BrowserController.hpp"
+#include "../framework/CommandLayout.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/FloatingLayout.hpp"
+#include "../framework/GlassCard.hpp"
 #include "../framework/Ribbon.hpp"
 #include "DrawingTemplates.hpp"
 #include "DrawingTools.hpp"
 #include "DrawingWorkspace.hpp"
+#include "DrawingsPanel.hpp"
 #include "SheetSizeRows.hpp"
 #include "../view/VersionWatermark.hpp"
 #ifdef MITCAD_MACOS_NATIVE_UI
@@ -214,6 +222,8 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
           }
           return false;
         });
+    // The Drawings card marks the sheet shown (mitcad#1990).
+    connect(m_drawingWorkspace, &drawings::DrawingWorkspace::sheetShown, this, [this] { refreshDrawingsCard(); });
     connect(m_drawingWorkspace, &drawings::DrawingWorkspace::closed, this, [this] {
       m_drawingDesign.clear();
       m_viewer->setFocus(Qt::OtherFocusReason);
@@ -253,7 +263,9 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
 }
 
 bool MainWindow::isDrawingCommand(const CommandDef& def) {
-  return def.tab == QStringLiteral("DRAWING") || def.tab == QStringLiteral("CUT SHEET");
+  // A command of a drawing's tabs in the default layout (mitcad#1951).
+  const QString tab = defaultHome(def.id).tab;
+  return tab == QStringLiteral("DRAWING") || tab == QStringLiteral("CUT SHEET");
 }
 
 bool MainWindow::leavesDrawing(const CommandDef& def) {
@@ -261,11 +273,12 @@ bool MainWindow::leavesDrawing(const CommandDef& def) {
     return true;
   }
   // Edit Parameters opens its table over the drawing (mitcad#1582): the
-  // drawing follows the design's changes.
-  if (def.id == QStringLiteral("solid.parameters")) {
+  // drawing follows the design's changes. Design Properties… is a dialog
+  // of the File menu that also shows on the Manage tab (mitcad#1975).
+  if (def.id == QStringLiteral("solid.parameters") || def.id == QStringLiteral("file.design_properties")) {
     return false;
   }
-  return !def.tab.isEmpty() && !isDrawingCommand(def);
+  return !defaultHome(def.id).isEmpty() && !isDrawingCommand(def);
 }
 
 void MainWindow::updateDrawingChrome() {
@@ -283,12 +296,25 @@ void MainWindow::updateDrawingChrome() {
   if (m_ribbon == nullptr) {
     return;
   }
+  // A drawing opened from the browser while Render is shown leaves Render
+  // first (mitcad#1990).
+  if (open) {
+    setRenderWorkspace(false);
+  }
   // The AppKit frontend reads its tabs from this ribbon (mitcad#1073).
   m_ribbon->setDrawingMode(open, open && m_drawingWorkspace->isCutSheet());
-  // The sheet takes the whole view: of the cards over it only the browser
-  // stays, from which another drawing is opened (mitcad#1008).
+  // The sheet takes the whole view: of the cards over it only the Drawings
+  // card stays (mitcad#1008), the design's drawings and their sheets in
+  // place of the whole model's Browser, from which another drawing or sheet
+  // is opened (mitcad#1990); the Browser's card comes back with the 3D view.
   if (m_floating != nullptr) {
-    m_floating->showOnlyCards(open ? QStringList{QStringLiteral("browserDock")} : QStringList());
+    if (m_drawingsCard != nullptr) {
+      m_drawingsCard->setVisible(open);
+    }
+    m_floating->showOnlyCards(open ? drawingCards() : QStringList());
+    if (open) {
+      refreshDrawingsCard();
+    }
   }
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeWindow) {
@@ -317,11 +343,10 @@ void MainWindow::addDrawingRibbonExtras() {
   auto* separator = new QAction(this);
   separator->setSeparator(true);
   if (closeAction != nullptr) {
-    m_ribbon->addGroupExtras(QStringLiteral("CUT SHEET"), QStringLiteral("CLOSE DRAWING"), {closeAction},
-                             {closeAction});
+    m_ribbon->addGroupExtras(QStringLiteral("cut_sheet.close"), {closeAction}, {closeAction});
   }
   if (dxfAction != nullptr && svgAction != nullptr) {
-    m_ribbon->addGroupExtras(QStringLiteral("CUT SHEET"), QStringLiteral("EXPORT"),
+    m_ribbon->addGroupExtras(QStringLiteral("cut_sheet.export"),
                              {dxfAction, svgAction, separator, m_cutLabelsAction});
   }
 }
@@ -340,8 +365,7 @@ void MainWindow::registerDrawingCommands() {
   // does not lead back to the 3D view (trigger, isDrawingCommand).
   // `when`: for a drawing ("drawing"), a cut sheet ("cut") or either ("").
   const auto add = [this](const QString& id, const QString& name, const QString& icon, const QString& tooltip,
-                          const QString& tab, const QString& group, bool pinned, const QString& when,
-                          std::function<void()> run) {
+                          const QString& when, std::function<void()> run) {
     CommandDef def;
     def.id = id;
     def.name = name;
@@ -349,9 +373,6 @@ void MainWindow::registerDrawingCommands() {
     def.tooltip = tooltip;
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Model;
-    def.tab = tab;
-    def.group = group;
-    def.pinned = pinned;
     // The tools' other words (Leader, Chain, BOM, …; mitcad#725).
     def.keywords = drawings::toolKeywords(id);
     def.run = std::move(run);
@@ -363,17 +384,14 @@ void MainWindow::registerDrawingCommands() {
     };
     m_registry->add(def);
   };
-  const QString drawingTab = QStringLiteral("DRAWING");
   add(QStringLiteral("drawing.close"), tr("Close Drawing"), QStringLiteral("view-arrow-left"),
-      tr("Shows the 3D view again"), drawingTab, QStringLiteral("CLOSE DRAWING"), true, QString(),
-      [this] { leaveDrawing(); });
+      tr("Shows the 3D view again"), QString(), [this] { leaveDrawing(); });
   for (const drawings::DrawingToolDef& tool : drawings::drawingTools()) {
     const QString id = tool.id;
     // The drawing's Bill of Materials is told apart from the Build tab's in the
     // command search (mitcad#718).
     const QString name = id == QStringLiteral("drawing.parts_list") ? tr("Bill of Materials (Drawing)") : tool.name;
-    add(id, name, tool.icon, tool.tooltip, drawingTab, drawings::toolGroupId(drawings::toolGroup(tool)), true,
-        QStringLiteral("drawing"), [this, id] {
+    add(id, name, tool.icon, tool.tooltip, QStringLiteral("drawing"), [this, id] {
           if (drawingOpen()) {
             m_drawingWorkspace->startTool(id);
           }
@@ -394,8 +412,8 @@ void MainWindow::registerDrawingCommands() {
   for (const ExportFormat& exported : formats) {
     const QString suffix = QString::fromLatin1(exported.format);
     add(QStringLiteral("drawing.export_") + suffix, tr(exported.label), QStringLiteral("export"),
-        tr("Writes the drawing as a %1 file").arg(suffix.toUpper()), drawingTab, QStringLiteral("EXPORT"), false,
-        QString::fromLatin1(exported.kind), [this, suffix] {
+        tr("Writes the drawing as a %1 file").arg(suffix.toUpper()), QString::fromLatin1(exported.kind),
+        [this, suffix] {
           if (drawingOpen()) {
             m_drawingWorkspace->exportDrawing(suffix);
           }
@@ -403,17 +421,23 @@ void MainWindow::registerDrawingCommands() {
   }
   // A cut sheet's Add Parts… (mitcad#853), on its CUT SHEET tab.
   add(QStringLiteral("drawing.add_parts"), tr("Add Components…"), QStringLiteral("add"),
-      tr("Adds bodies as flat components, each seen along its largest planar face"), QStringLiteral("CUT SHEET"),
-      QStringLiteral("PARTS"), true, QStringLiteral("cut"), [this] {
+      tr("Adds bodies as flat components, each seen along its largest planar face"), QStringLiteral("cut"), [this] {
         if (drawingOpen()) {
           m_drawingWorkspace->addParts();
         }
       });
-  // A row of the drawing's revision table (mitcad#707 phase 4): the bar's
-  // button above the sheet, no tab's.
+  // The sheet's size, projection, units, template and title block, on the
+  // DRAWING tab's Sheet group (mitcad#1990; the drawing's bar had it).
+  add(QStringLiteral("drawing.edit_sheet"), tr("Sheet…"), QStringLiteral("settings"),
+      tr("The sheet's size, projection, units, template and title block"), QStringLiteral("drawing"), [this] {
+        if (drawingOpen()) {
+          m_drawingWorkspace->editSheetSettings();
+        }
+      });
+  // A row of the drawing's revision table (mitcad#707 phase 4), on the
+  // DRAWING tab's Sheet group (mitcad#1990).
   add(QStringLiteral("drawing.add_revision"), tr("Add Revision…"), QStringLiteral("version-history"),
-      tr("Adds a row to the drawing's revision table"), QString(), QStringLiteral("CREATE"), false,
-      QStringLiteral("drawing"), [this] {
+      tr("Adds a row to the drawing's revision table"), QStringLiteral("drawing"), [this] {
         if (drawingOpen()) {
           m_drawingWorkspace->addRevision();
         }
@@ -530,6 +554,52 @@ void MainWindow::followDrawing() {
     return;
   }
   m_drawingWorkspace->refresh();
+  // The Drawings card follows the design's drawings (mitcad#1990).
+  refreshDrawingsCard();
+}
+
+QStringList MainWindow::drawingCards() const {
+  return {m_drawingsCard != nullptr ? QStringLiteral("drawingsDock") : QStringLiteral("browserDock")};
+}
+
+void MainWindow::addDrawingsCard() {
+  if (m_floating == nullptr || m_drawingsCard != nullptr || m_controller == nullptr) {
+    return;
+  }
+  drawings::DrawingsPanel::Hooks hooks;
+  hooks.open = [this](const QString& drawing) { openDrawing(drawing); };
+  hooks.showSheet = [this](int sheet) {
+    if (drawingOpen()) {
+      m_drawingWorkspace->chooseSheet(sheet);
+    }
+  };
+  // The command file.create_drawing's run: a drawing of the design.
+  hooks.create = [this] { createDrawing(QStringLiteral("C0")); };
+  hooks.menu = [this](const QString& drawing, const QString& component, const QString& name, const QPoint& at,
+                      const std::function<void()>& startRename) {
+    m_controller->drawingMenu(drawing, component, name, at, startRename);
+  };
+  hooks.rename = [this](const QString& drawing, const QString& name) { m_controller->renameDrawing(drawing, name); };
+  m_drawingsPanel = new drawings::DrawingsPanel(std::move(hooks));
+  m_drawingsCard = new GlassCard;
+  m_drawingsCard->setObjectName(QStringLiteral("drawingsDock"));
+  m_drawingsCard->setTitle(tr("Drawings"));
+  m_drawingsCard->setContent(m_drawingsPanel, QMargins(8, 0, 8, 8));
+  // In the left column, as high as its rows (and its + Drawing); hidden
+  // until a drawing opens.
+  FloatingLayout::Sizing sizing{kBrowserCardWidth, [panel = m_drawingsPanel] { return panel->contentHeight(); },
+                                1.0, false};
+  m_floating->addCard(m_drawingsCard, FloatingLayout::Anchor::TopLeft, sizing);
+  connect(m_drawingsPanel, &drawings::DrawingsPanel::contentHeightChanged, m_floating,
+          &FloatingLayout::requestLayout);
+  m_floating->watchContent(m_drawingsPanel);
+}
+
+void MainWindow::refreshDrawingsCard() {
+  if (m_drawingsPanel == nullptr || !drawingOpen()) {
+    return;
+  }
+  m_drawingsPanel->setDrawings(m_snapshot.drawings, m_drawingWorkspace->drawing(), m_drawingWorkspace->sheet());
 }
 
 bool MainWindow::escapeDrawing() {
@@ -548,6 +618,111 @@ void MainWindow::leaveDrawing() {
   if (drawingOpen()) {
     m_drawingWorkspace->closeDrawing();
   }
+}
+
+void MainWindow::setRenderWorkspace(bool on) {
+  if (m_ribbon == nullptr || m_ribbon->renderTabShown() == on) {
+    return;
+  }
+  // The rendered view on while the Render workspace is shown; the view
+  // mode that was on before it comes back when it is left (the owner,
+  // 17.11.2026).
+  QAction* rendered = m_registry->action(QStringLiteral("view.rendered"));
+  if (on) {
+    m_renderedBeforeRender = rendered != nullptr && rendered->isChecked();
+    m_ribbon->setRenderMode(true);
+    if (rendered != nullptr && rendered->isEnabled() && !rendered->isChecked()) {
+      rendered->trigger();
+    }
+    qDebug().noquote() << QStringLiteral("Workspace RENDER: the rendered view %1")
+                              .arg(rendered != nullptr && rendered->isChecked() ? QStringLiteral("on")
+                                                                                 : QStringLiteral("not available"));
+  } else {
+    m_ribbon->setRenderMode(false);
+    if (rendered != nullptr && !m_renderedBeforeRender && rendered->isChecked()) {
+      rendered->trigger();
+    }
+    qDebug().noquote() << QStringLiteral("Workspace RENDER left: the rendered view %1")
+                              .arg(rendered != nullptr && rendered->isChecked() ? QStringLiteral("on")
+                                                                                 : QStringLiteral("off"));
+  }
+  // Its stages, panels and live line (mitcad#2013), also when the tab
+  // shown did not change.
+  updateRenderWorkspace(on ? QStringLiteral("RENDER") : m_ribbon->currentTab());
+}
+
+void MainWindow::requestWorkspace(const QString& workspace) {
+  if (workspace == QLatin1String("RENDER")) {
+    // From a drawing: it closes first, then the Render tab (mitcad#1990).
+    if (drawingOpen()) {
+      qDebug().noquote() << QStringLiteral("Workspace RENDER: the drawing closed");
+      leaveDrawing();
+    }
+    setRenderWorkspace(true);
+    return;
+  }
+  // Another workspace leaves Render first.
+  setRenderWorkspace(false);
+  if (workspace != QLatin1String("DRAWING")) {
+    // Design or Make while a drawing is open: the drawing closes, and the
+    // ribbon shows that workspace's tabs (mitcad#1990).
+    if (drawingOpen()) {
+      qDebug().noquote() << QStringLiteral("Workspace %1: the drawing closed").arg(workspace);
+      leaveDrawing();
+    }
+    return;
+  }
+  if (drawingOpen()) {
+    return;
+  }
+  // The design's drawings and cut sheets, as the browser's Drawings
+  // folders list them.
+  QJsonArray drawings;
+  try {
+    drawings = queryArray(QStringLiteral("drawings"));
+  } catch (const std::exception&) {
+  }
+  if (drawings.isEmpty()) {
+    // None yet: Create Drawing, as File › Create Drawing… asks for it.
+    qDebug().noquote() << QStringLiteral("Workspace DRAWING: no drawing, Create Drawing asked");
+    createDrawing(QStringLiteral("C0"));
+    return;
+  }
+  if (drawings.size() == 1) {
+    const QString uid = drawings.at(0).toObject().value(QStringLiteral("drawing")).toString();
+    qDebug().noquote() << QStringLiteral("Workspace DRAWING: opened %1").arg(uid);
+    openDrawing(uid);
+    return;
+  }
+  // Several: the one to open, or a new one, from a menu under the selector.
+  QMenu menu(this);
+  menu.setObjectName(QStringLiteral("workspaceDrawingsMenu"));
+  QStringList entries;
+  for (const QJsonValue& value : std::as_const(drawings)) {
+    const QJsonObject drawing = value.toObject();
+    const QString uid = drawing.value(QStringLiteral("drawing")).toString();
+    QString name = drawing.value(QStringLiteral("name")).toString();
+    const QString component = drawing.value(QStringLiteral("component_name")).toString();
+    if (!component.isEmpty() && drawing.value(QStringLiteral("component")).toString() != QLatin1String("C0")) {
+      name = tr("%1 (%2)").arg(name, component);
+    }
+    QAction* open = menu.addAction(name);
+    connect(open, &QAction::triggered, this, [this, uid] {
+      qDebug().noquote() << QStringLiteral("Workspace DRAWING: opened %1").arg(uid);
+      openDrawing(uid);
+    });
+    entries << name;
+  }
+  menu.addSeparator();
+  QAction* create = menu.addAction(tr("Create Drawing…"));
+  connect(create, &QAction::triggered, this, [this] { createDrawing(QStringLiteral("C0")); });
+  // As the context menus log their entries (ui_menu_choose): those the
+  // arrow keys reach, in order.
+  entries << create->text();
+  qDebug().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
+  const QWidget* selector = m_ribbon != nullptr ? m_ribbon->findChild<QWidget*>(QStringLiteral("ribbonWorkspace")) : nullptr;
+  const QPoint at = selector != nullptr ? selector->mapToGlobal(QPoint(0, selector->height() + 4)) : QCursor::pos();
+  execMenu(&menu, at);
 }
 
 } // namespace mitcad

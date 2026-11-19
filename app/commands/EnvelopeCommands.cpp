@@ -70,8 +70,6 @@ CommandDef envelopeCommand(const CommandContext& context) {
   def.name = QObject::tr("Envelope");
   def.icon = QStringLiteral("envelope");
   def.tooltip = QObject::tr("Wraps a component, an occurrence or bodies in one light body of flat faces");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("envelope");
   def.keywords = {QStringLiteral("wrap"), QStringLiteral("skin"), QStringLiteral("placeholder"),
                   QStringLiteral("simplify"), QStringLiteral("layout"), QStringLiteral("hull")};
   def.featureType = QStringLiteral("envelope");

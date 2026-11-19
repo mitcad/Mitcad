@@ -20,6 +20,10 @@ and [docs/development.md](docs/development.md) before larger changes.
 - Use the terms of [docs/naming.md](docs/naming.md): MitCad, not
   Mitcad; component, not part; user-facing text names controls as the UI shows them (the
   Assemble group, not ASSEMBLE).
+- UI and UX work (new or changed toolbars, panels, cards, dialogs, texts,
+  colors) follows [docs/ui-conventions.md](docs/ui-conventions.md); a
+  reference picture or another app never overrides it. When a case is not
+  covered, the convention is extended in the same change.
 - Never commit real `.f3d` designs, FreeCAD documents or other
   third-party models; corpus tests read them from `MITCAD_F3D_CORPUS` and
   `MITCAD_FCSTD_CORPUS`.

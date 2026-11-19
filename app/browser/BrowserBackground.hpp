@@ -19,8 +19,8 @@ class GlassCard;
 // both layouts).
 enum class BrowserBackground { Card, Rows };
 
-// Without a saved choice: Rows on Windows and Linux, the card on macOS
-// (mitcad#429).
+// Without a saved choice: the card (mitcad#1990; Rows on Windows and Linux
+// before the toolbar panel, mitcad#429).
 BrowserBackground defaultBrowserBackground();
 // The saved choice, else the default.
 BrowserBackground savedBrowserBackground();

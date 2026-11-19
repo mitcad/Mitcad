@@ -1,0 +1,238 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Meshing: the polygons of two consecutive edges of a face's wire that leave
+their common vertex in nearly the same direction in the face's parameter
+plane (a cusp of the wire) and cross each other near it are untangled
+before the face is meshed, so that the face gets its triangles
+(mitcad#2022).
+
+The corner plates of fillets (ChFi3d's PerformMoreThreeCorner) pinch to a
+point where they meet a sharp edge or a stripe's end on a contact going on
+tangentially: their wires have corners of almost no angle (0.2 to 0.5
+degrees in the plate's parameter plane). On the reported bent guide of
+mitcad#2009, at a deviation of 0.002 with an angle of 2 or 5 degrees, the
+polygon of the stripe's end section, finely divided, crossed the first,
+long segment of the polygon of the plate's border along the rim near such
+a corner: a loop far smaller than the face checker's threshold (a circle
+twice the face's deflection across, which the plate's tolerances make
+0.1 and more), so it was left as it was, and the Delaunay triangulation
+of a frontier crossing itself had no inside: "a face could not be
+triangulated" (BRepMesh_BaseMeshAlgo::commitSurfaceTriangulation).
+
+- BRepMesh_ModelHealer::performInternal, before the faces are checked,
+  and amplifyEdges, before the faces of amplified edges are checked again:
+  untangleCusps, one face after another. For each two consecutive edges
+  of a wire with a common vertex whose first segments from it lie within 5
+  degrees of each other, while a segment of one polygon crosses a segment
+  of the other (not the two first ones), the point next to the vertex is
+  taken out of one polygon: the one whose crossing segment is fewer
+  segments from the vertex, unless that segment is its first one, then the
+  other. It is taken out of the edge's curve and all its pcurves, so that
+  the faces sharing the edge keep one polygon; at last the polygon's first
+  segment goes from the vertex past the crossing.
+- Elsewhere nothing changes. No catch is added.
+
+Test: cli.fcstd_bend_reported, the reported bent guide with its bend
+radius set to 24.5, 25 and 32 exported as STL at deviations from 0.0005 to
+0.05 mm with angles of 10 degrees, and at 0.002 mm with 5 degrees and at
+0.0005 and 0.002 mm with 2 degrees.
+
+diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_ModelHealer.cxx b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_ModelHealer.cxx
+index 1cf0e9ee..eab79ac8 100644
+--- a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_ModelHealer.cxx
++++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_ModelHealer.cxx
+@@ -17,6 +17,9 @@
+ #include <BRepMesh_Deflection.hxx>
+ #include <BRepMesh_FaceChecker.hxx>
+ #include <BRepMesh_EdgeDiscret.hxx>
++#include <BRepMesh_GeomTool.hxx>
++#include <IMeshData_Curve.hxx>
++#include <gp_Vec2d.hxx>
+ #include <IMeshData_Face.hxx>
+ #include <IMeshData_Wire.hxx>
+ #include <IMeshData_Edge.hxx>
+@@ -92,6 +95,158 @@ private:
+   const IMeshTools_Parameters& myParameters;
+ };
+ 
++//! The index of the point of an edge's discretization at its vertex theV
++//! (0 or the last), or -1.
++int indexAtVertex(const IMeshData::IEdgeHandle& theDEdge, const TopoDS_Vertex& theV)
++{
++  TopoDS_Edge anEdge = theDEdge->GetEdge();
++  anEdge.Orientation(TopAbs_FORWARD);
++  TopoDS_Vertex aFirst, aLast;
++  TopExp::Vertices(anEdge, aFirst, aLast);
++  const int aNb = theDEdge->GetCurve()->ParametersNb();
++  if (aFirst.IsSame(theV) && !aLast.IsSame(theV))
++  {
++    return 0;
++  }
++  if (aLast.IsSame(theV) && !aFirst.IsSame(theV))
++  {
++    return aNb - 1;
++  }
++  return -1;
++}
++
++//! Removes the point theIndex of an edge's discretization: from its curve
++//! and from every pcurve of it, so that its faces' polygons stay one.
++void removeEdgePoint(const IMeshData::IEdgeHandle& theDEdge, const int theIndex)
++{
++  for (int aPCurveIt = 0; aPCurveIt < theDEdge->PCurvesNb(); ++aPCurveIt)
++  {
++    theDEdge->GetPCurve(aPCurveIt)->RemovePoint(theIndex);
++  }
++  theDEdge->GetCurve()->RemovePoint(theIndex);
++}
++
++//! A cusp of a face's wire: two consecutive edges leaving their common
++//! vertex in its parameter plane in nearly the same direction (a corner of
++//! almost no angle, as where a fillet's corner plate pinches to a point on
++//! a sharp edge). Their polygons, each within its own deflection of its
++//! curve, cross each other there, a loop too small for the face checker,
++//! and the face's frontier has no inside: the face got no triangles. The
++//! points of one polygon between the vertex and the crossing are taken out
++//! (of the one with fewer of them), its first segment from the vertex going
++//! past the crossing, until the two polygons no longer cross. Returns
++//! whether a point was taken out.
++bool untangleCusp(const IMeshData::IFaceHandle& theDFace,
++                  const IMeshData::IEdgeHandle& theEdgeA,
++                  const TopAbs_Orientation      theOriA,
++                  const IMeshData::IEdgeHandle& theEdgeB,
++                  const TopAbs_Orientation      theOriB)
++{
++  if (theEdgeA->GetEdge().IsSame(theEdgeB->GetEdge()))
++  {
++    return false;
++  }
++  TopoDS_Vertex aV;
++  if (!TopExp::CommonVertex(theEdgeA->GetEdge(), theEdgeB->GetEdge(), aV))
++  {
++    return false;
++  }
++  const int aEndA = indexAtVertex(theEdgeA, aV);
++  const int aEndB = indexAtVertex(theEdgeB, aV);
++  if (aEndA < 0 || aEndB < 0)
++  {
++    return false;
++  }
++  const IMeshData::IPCurveHandle& aPCurveA = theEdgeA->GetPCurve(theDFace.get(), theOriA);
++  const IMeshData::IPCurveHandle& aPCurveB = theEdgeB->GetPCurve(theDFace.get(), theOriB);
++  bool                            aRemoved = false;
++  for (int aStep = 0; aStep < 1000; ++aStep)
++  {
++    const int aNbA = aPCurveA->ParametersNb(), aNbB = aPCurveB->ParametersNb();
++    if (aNbA < 3 && aNbB < 3)
++    {
++      break;
++    }
++    // The k-th point away from the vertex.
++    const auto aPntA = [&](const int k) -> const gp_Pnt2d& {
++      return aPCurveA->GetPoint(aEndA == 0 ? k : aNbA - 1 - k);
++    };
++    const auto aPntB = [&](const int k) -> const gp_Pnt2d& {
++      return aPCurveB->GetPoint(aEndB == 0 ? k : aNbB - 1 - k);
++    };
++    // A cusp only: the first segments leave the vertex within 5 degrees.
++    const gp_Vec2d aDirA(aPntA(0), aPntA(1)), aDirB(aPntB(0), aPntB(1));
++    if (aDirA.SquareMagnitude() < gp::Resolution() || aDirB.SquareMagnitude() < gp::Resolution()
++        || std::abs(aDirA.Angle(aDirB)) > 5. * M_PI / 180.)
++    {
++      break;
++    }
++    int aCrossA = -1, aCrossB = -1;
++    for (int i = 0; i + 1 < aNbA && aCrossA < 0; ++i)
++    {
++      for (int j = 0; j + 1 < aNbB; ++j)
++      {
++        if (i == 0 && j == 0)
++        {
++          continue;
++        }
++        gp_Pnt2d aInt;
++        if (BRepMesh_GeomTool::IntSegSeg(aPntA(i).XY(),
++                                         aPntA(i + 1).XY(),
++                                         aPntB(j).XY(),
++                                         aPntB(j + 1).XY(),
++                                         false,
++                                         false,
++                                         aInt)
++            == BRepMesh_GeomTool::Cross)
++        {
++          aCrossA = i;
++          aCrossB = j;
++          break;
++        }
++      }
++    }
++    if (aCrossA < 0)
++    {
++      break;
++    }
++    // Take out the points 1..aCrossA of A or 1..aCrossB of B (a polygon
++    // keeps its far end), the fewer.
++    const bool aOnA = (aCrossA > 0 && aCrossA + 1 < aNbA) && (aCrossB == 0 || aCrossA <= aCrossB || aCrossB + 1 >= aNbB);
++    const bool aOnB = !aOnA && aCrossB > 0 && aCrossB + 1 < aNbB;
++    if (!aOnA && !aOnB)
++    {
++      break;
++    }
++    const IMeshData::IEdgeHandle& aDEdge = aOnA ? theEdgeA : theEdgeB;
++    const int                     aEnd   = aOnA ? aEndA : aEndB;
++    const int                     aNb    = aOnA ? aNbA : aNbB;
++    // The first point away from the vertex (the others follow one by one).
++    removeEdgePoint(aDEdge, aEnd == 0 ? 1 : aNb - 2);
++    aRemoved = true;
++  }
++  return aRemoved;
++}
++
++//! Untangles the cusps of a face's wires (untangleCusp).
++void untangleCusps(const IMeshData::IFaceHandle& theDFace)
++{
++  for (int aWireIt = 0; aWireIt < theDFace->WiresNb(); ++aWireIt)
++  {
++    const IMeshData::IWireHandle& aDWire = theDFace->GetWire(aWireIt);
++    const int                     aNb    = aDWire->EdgesNb();
++    for (int aEdgeIt = 0; aEdgeIt < aNb && aNb > 1; ++aEdgeIt)
++    {
++      const int aNextIt = (aEdgeIt + 1) % aNb;
++      untangleCusp(theDFace,
++                   aDWire->GetEdge(aEdgeIt),
++                   aDWire->GetEdgeOrientation(aEdgeIt),
++                   aDWire->GetEdge(aNextIt),
++                   aDWire->GetEdgeOrientation(aNextIt));
++    }
++  }
++}
++
+ //! Returns True if some of two vertcies is same with reference one.
+ bool isSameWithSomeOf(const TopoDS_Vertex& theRefVertex,
+                       const TopoDS_Vertex& theVertex1,
+@@ -149,6 +304,12 @@ bool BRepMesh_ModelHealer::performInternal(const occ::handle<IMeshData_Model>& t
+   }
+ 
+   // TODO: Here we can process edges in order to remove close discrete points.
++  // (The cusps of the faces' wires untangled first, one face after another:
++  // a cusp's points are taken out of an edge, which other faces share.)
++  for (int aFaceIt = 0; aFaceIt < myModel->FacesNb(); ++aFaceIt)
++  {
++    untangleCusps(myModel->GetFace(aFaceIt));
++  }
+   OSD_Parallel::For(0, myModel->FacesNb(), *this, !isParallel());
+   amplifyEdges();
+ 
+@@ -199,6 +360,11 @@ void BRepMesh_ModelHealer::amplifyEdges()
+         aFacesToCheck.Add(aDEdge->GetPCurve(aPCurveIt)->GetFace());
+       }
+     }
++    // (The amplified edges' cusps untangled again.)
++    for (IMeshData::MapOfIFacePtr::Iterator aFaceIt(aFacesToCheck); aFaceIt.More(); aFaceIt.Next())
++    {
++      untangleCusps(aFaceIt.Value());
++    }
+ 
+     OSD_Parallel::ForEach(aFacesToCheck.cbegin(),
+                           aFacesToCheck.cend(),

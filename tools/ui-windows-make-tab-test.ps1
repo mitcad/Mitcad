@@ -5,24 +5,29 @@
 # check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
 # check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/print/ProfilePickerRows.cpp
 # check-all sources: app/print/SlicerMaterialRows.cpp app/print/MaterialsDialog.cpp app/print/MaterialMenuChoices.cpp
-# Input-driven Windows UI test of the Make tab (mitcad#1049) in the build VM
+# Input-driven Windows UI test of the Make workspace's tabs (mitcad#1049;
+# 3D Print, Laser and CNC since the owner's split of 18.11.2026) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-make-tab-test.sh on Linux, on its design: a sheet-metal plate
 # with its flat pattern (Body1) and a 40 x 30 x 10 block with a
 # counterbored hole (Body2) that sets Walls 5 of its own; the design prints
 # with the printer Bench and the process Standard.
-#   1. The tabs Solid, Build and Make; the Make tab's groups Materials,
-#      Annotate, 3D Print, CNC and Laser, their menus (CNC's commands
-#      listed, those that need a setup disabled). The Browser
-#      marks Body2 on the Make tab.
-#   2. The moved commands from the Make tab's buttons: Edit Materials...,
+#   1. The tabs Solid, Surface, Sheet Metal, Build, 3D Print, Laser, CNC
+#      and Manage (mitcad#1975); 3D Print's groups Printers and Prepare
+#      (every command a button), Laser's Export, CNC's Setup, 2D Milling,
+#      3D Milling, Turning and Toolpath, and on each Materials (the
+#      Material tool), Annotate and Inspect, their menus (CNC's commands
+#      listed, those that need a setup disabled). The Browser marks Body2
+#      on the 3D Print tab.
+#   2. The moved commands from their new places: Edit Materials... (the
+#      Manage tab's Materials group; run by a shortcut of the test's),
 #      Printers... and Processes... (mitcad#1135), Print Analysis, Send to Slicer and
-#      Export Flat Pattern... (its DXF written); Export Face as DXF... on
-#      Body2's top face.
+#      Export Flat Pattern... (its DXF written, from the Laser tab); Export
+#      Face as DXF... on Body2's top face.
 #   3. The Annotate group places each kind: Dimension and Note from their
 #      buttons (the note previewed before Add, then added where its preview
 #      was, mitcad#1097), Datum Label, Feature Control Frame, Hole Callout,
-#      Material and Process Note by shortcuts of the test's (their menu entries are
+#      Material Note and Process Note by shortcuts of the test's (their menu entries are
 #      in the Linux test: the input goes to the main window's places only).
 #   4. Body2's card on the Make tab: Walls 5 set on the body, typed 3 there,
 #      one Undo back to 5; the Make section inside the selection card, its
@@ -48,7 +53,7 @@
 #      the body's, copied into the design (under This design then), one
 #      undo step takes both back; Edit materials..., the picker's last row,
 #      opens the Materials window for the body.
-#   5. The Floating layout: the Make tab and Dimension from it.
+#   5. The Floating layout: the 3D Print tab and Dimension from it.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-make-tab-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -60,7 +65,7 @@ param(
 
 Ui-Init $App $Out $QtBin @{
   'make.datum_label' = 'Shift+F3'; 'make.frame' = 'Shift+F4'; 'make.hole_callout' = 'Shift+F5'
-  'make.material_note' = 'Shift+F6'; 'make.process_note' = 'Shift+F7' } -StepPause 0
+  'make.material_note' = 'Shift+F6'; 'make.process_note' = 'Shift+F7'; 'solid.materials' = 'Shift+F8' } -StepPause 0
 $work = Join-Path $script:UiOut 'files'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -201,26 +206,65 @@ Ui-ExpectLog "Opened $workLogged/make.mitcad" 'the design opened'
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 Ui-ExpectLog 'Browser Make markers: none' 'no markers on the Solid tab'
 
-Write-Host '--- 1. The Make tab and its groups'
-Ui-ExpectLog 'Ribbon tab MAKE at' 'the Make tab after Solid and Build'
+Write-Host "--- 1. The Make workspace's tabs and their groups"
+foreach ($tab in 'SOLID', 'SURFACE', 'SHEET METAL', 'BUILD', 'MAKE_PRINT', 'MAKE_LASER', 'MAKE_CNC', 'MANAGE') {
+  Ui-ExpectLog "Ribbon tab $tab at" "the $tab tab"
+}
+$annotate = 'Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material Note | Process Note | - | Annotations...'
+$inspect = 'Measure | Interference | Section Analysis | Physical Properties | Center of Mass | Add Comment'
 Ui-Mark
-Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
-Ui-ExpectNew 'Ribbon tab shown: MAKE' 'the Make tab shown'
-foreach ($group in 'MATERIALS', 'ANNOTATE', '3D PRINT', 'CNC', 'LASER') {
-  Ui-ExpectNew "Ribbon MAKE/$group at" "its $group group"
+Ui-Step 'the 3D Print tab'                 { Ui-ClickTab 'MAKE_PRINT' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_PRINT' 'the 3D Print tab shown'
+foreach ($group in 'SLICE', 'PRINTERS', 'PREPARE', 'MATERIALS', 'ANNOTATE', 'INSPECT') {
+  Ui-ExpectNew "Ribbon MAKE_PRINT/$group at" "its $group group"
 }
 Ui-ExpectNew 'Browser Make markers: Root/Bodies/Body2: Own print settings: Walls' 'Body2 marked'
-Group-Menu 'MAKE/MATERIALS' 'Edit Materials... | Material'
-Group-Menu 'MAKE/ANNOTATE' 'Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations...'
-Group-Menu 'MAKE/3D PRINT' 'Print Analysis | Send to Slicer | Printers... | Processes... | Plates...'
-Group-Menu 'MAKE/CNC' 'New Setup | - | Facing | Contour | Pocket | Adaptive Clearing | Rest Machining | Drill | 3D Roughing | Raster Finishing | Waterline Finishing | - | Generate | Simulate | Post Process... | - | Machines and Tools...'
-Group-Menu 'MAKE/LASER' 'Export Flat Pattern... | Export Face as DXF...'
+Group-Menu 'MAKE_PRINT/SLICE' 'Send to Slicer'
+Group-Menu 'MAKE_PRINT/PRINTERS' 'Printers... | Processes... | Plates...'
+Group-Menu 'MAKE_PRINT/PREPARE' 'Print Analysis'
+Group-Menu 'MAKE_PRINT/MATERIALS' 'Material'
+Group-Menu 'MAKE_PRINT/ANNOTATE' $annotate
+Group-Menu 'MAKE_PRINT/INSPECT' $inspect
+# Every command of 3D Print's own groups a button of its own (the owner,
+# 18.11.2026).
+foreach ($id in 'make.printers', 'make.processes', 'make.plates', 'inspect.print_analysis', 'make.print3d') {
+  Ui-ExpectLog "Ribbon button $id at" "$id a button on the 3D Print tab"
+}
+Ui-Mark
+Ui-Step 'the Laser tab'                    { Ui-ClickTab 'MAKE_LASER' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_LASER' 'the Laser tab shown'
+foreach ($group in 'EXPORT', 'MATERIALS', 'ANNOTATE', 'INSPECT') {
+  Ui-ExpectNew "Ribbon MAKE_LASER/$group at" "its $group group"
+}
+Group-Menu 'MAKE_LASER/EXPORT' 'Export Flat Pattern... | Export Face as DXF...'
+Group-Menu 'MAKE_LASER/ANNOTATE' $annotate
+Ui-Mark
+Ui-Step 'the CNC tab'                      { Ui-ClickTab 'MAKE_CNC' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_CNC' 'the CNC tab shown'
+foreach ($group in 'SETUP', '2D MILLING', '3D MILLING', 'TURNING', 'TOOLPATH', 'MATERIALS', 'ANNOTATE', 'INSPECT') {
+  Ui-ExpectNew "Ribbon MAKE_CNC/$group at" "its $group group"
+}
+Group-Menu 'MAKE_CNC/SETUP' 'New Setup | Machines and Tools...'
+Group-Menu 'MAKE_CNC/2D MILLING' 'Facing | Contour | Pocket | Adaptive Clearing | Rest Machining | Drill'
+Group-Menu 'MAKE_CNC/3D MILLING' '3D Roughing | Raster Finishing | Waterline Finishing'
+Group-Menu 'MAKE_CNC/TURNING' 'Turn Facing | Turn Roughing | Turn Finishing | Grooving | Parting Off | Threading'
+Group-Menu 'MAKE_CNC/TOOLPATH' 'Generate | Simulate | Post Process...'
+Group-Menu 'MAKE_CNC/INSPECT' $inspect
 
 Write-Host '--- 2. The moved commands from their new places'
+# Manage is Design's: that workspace chosen first.
+Ui-Step 'the Design workspace'             { Ui-Workspace 'DESIGN' }
 Ui-Mark
-Ui-Step 'Edit Materials...'                { Ui-ClickLogged 'Ribbon button solid.materials' }
+Ui-Step 'the Manage tab'                   { Ui-ClickTab 'MANAGE' }
+Ui-ExpectNew 'Ribbon tab shown: MANAGE' 'the Manage tab shown'
+Group-Menu 'MANAGE/MATERIALS' 'Edit Materials... | Edit Appearances...'
+Ui-Mark
+Ui-Step 'Edit Materials... (Shift+F8)'     { Ui-Key 'shift+F8' }
 Ui-ExpectNew 'Materials opened' 'the Materials window'
 Ui-Step 'close it (Escape)'                { Ui-FocusDialog '^Materials$'; Ui-Key 'Escape'; Ui-FocusMain }
+Ui-Mark
+Ui-Step 'the 3D Print tab'                 { Ui-ClickTab 'MAKE_PRINT' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_PRINT' 'the 3D Print tab shown again'
 Ui-Mark
 Ui-Step 'Printers...'                      { Ui-ClickLogged 'Ribbon button make.printers' }
 Ui-ExpectNew 'Printers opened' 'the Printers manager (mitcad#1135)'
@@ -239,6 +283,9 @@ Ui-Step 'Send to Slicer'                   { Ui-ClickLogged 'Ribbon button make.
 Ui-ExpectNew 'Command Send to Slicer started' 'Send to Slicer (once 3D Print)'
 Ui-Step 'cancel (Escape)'                  { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Send to Slicer cancelled' 'cancelled'
+Ui-Mark
+Ui-Step 'the Laser tab'                    { Ui-ClickTab 'MAKE_LASER' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_LASER' 'the Laser tab shown again'
 Ui-Mark
 Ui-Step 'Export Flat Pattern...'           { Ui-ClickLogged 'Ribbon button sheet.export_dxf' }
 Save-Path 'Export Flat Pattern' (Join-Path $work 'flat.dxf')
@@ -260,6 +307,9 @@ if (-not (Test-Path (Join-Path $work 'face.dxf'))) { Ui-Fail 'no face DXF' }
 Ui-Step 'clear the selection (Escape)'     { Ui-Key 'Escape' }
 
 Write-Host '--- 3. The Annotate group places each kind'
+Ui-Mark
+Ui-Step 'the 3D Print tab'                 { Ui-ClickTab 'MAKE_PRINT' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_PRINT' 'the 3D Print tab shown for Annotate'
 Annotate 'Ribbon button make.dimension' 'Dimension' $cbore
 Ui-ExpectNew 'Dimension Selection 1: 1 face' 'the round face picked'
 Ui-Step 'add (Enter)'                      { Ui-Key 'Return' }
@@ -295,7 +345,7 @@ Ui-ExpectNew 'Annotation kept: Frame1' 'the frame added'
 Annotate 'shift+F5' 'Hole Callout' $cbore
 Ui-Step 'add (Enter)'                      { Ui-Key 'Return' }
 Ui-ExpectNew 'Annotation kept: HoleCallout1' 'the hole callout added'
-Annotate 'shift+F6' 'Material' $top
+Annotate 'shift+F6' 'Material Note' $top
 Ui-Step 'add (Enter)'                      { Ui-Key 'Return' }
 Ui-ExpectNew 'Annotation kept: Material1' 'the material note added'
 Annotate 'shift+F7' 'Process Note' $top
@@ -359,7 +409,7 @@ Ui-Mark
 Ui-Step 'undo (Ctrl+Z)'                    { Ui-Key 'ctrl+z' }
 Ui-ExpectNew 'own: Walls = 4 (body Body1)' 'one undo step: 4 again'
 Ui-Mark
-Ui-Step 'the Solid tab'                    { Ui-ClickLogged 'Ribbon tab SOLID' }
+Ui-Step 'the Solid tab'                    { Ui-ClickTab 'SOLID' }
 Ui-ExpectNew 'Make card: none' 'no card on the Solid tab'
 Ui-ExpectNew 'Browser Make markers: none' 'no markers on the Solid tab'
 
@@ -387,8 +437,8 @@ function Printer-Choose {
 Ui-StartApp 'make-tab-pickers' @('--open', $pickers, '--no-native-dialogs')
 Ui-ExpectLog "Opened $workLogged/pickers.mitcad" 'the design without a printer opened'
 Ui-Mark
-Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
-Ui-ExpectNew 'Ribbon tab shown: MAKE' 'the Make tab shown'
+Ui-Step 'the 3D Print tab'                 { Ui-ClickTab 'MAKE_PRINT' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_PRINT' 'the 3D Print tab shown'
 Ui-Mark
 Ui-Step 'select Body1 in the Browser'      { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
 Ui-ExpectNew 'Make card: Body1: material ' 'Body1''s card'
@@ -434,8 +484,8 @@ Material-Item (Join-Path $library 'materials') 'shop_tpu' 'Shop TPU' 'TPU'
 Ui-StartApp 'make-tab-material' @('--open', $materialDesign, '--no-native-dialogs')
 Ui-ExpectLog "Opened $workLogged/project/material.mitcad" 'the box in the project opened'
 Ui-Mark
-Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
-Ui-ExpectNew 'Ribbon tab shown: MAKE' 'the Make tab shown'
+Ui-Step 'the 3D Print tab'                 { Ui-ClickTab 'MAKE_PRINT' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_PRINT' 'the 3D Print tab shown'
 Ui-Mark
 Ui-Step 'select Body1 in the Browser'      { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
 Ui-ExpectNew 'Make card: Body1: material Steel (default)' 'Body1 of the design''s default'
@@ -486,11 +536,15 @@ Write-Host 'ok   Edit materials... keeps the material'
 
 Write-Host '--- 5. Floating'
 Ui-StartApp 'make-tab-floating' @('--open', $design, '--chrome=floating')
-Ui-ExpectLog 'Ribbon tab MAKE at' 'the Make tab in the Floating layout'
+# The toolbar panel shows the Design workspace's tabs; Make is a workspace
+# of its own, chosen from the selector (mitcad#1990, Ui-ClickTab).
+foreach ($tab in 'MAKE_PRINT', 'MAKE_LASER', 'MAKE_CNC') {
+  Ui-ExpectLog "Ribbon tab $tab out of sight" "the $tab tab in the Make workspace, Floating"
+}
 Ui-Mark
-Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
-foreach ($group in 'MATERIALS', 'ANNOTATE', '3D PRINT', 'CNC', 'LASER') {
-  Ui-ExpectNew "Ribbon MAKE/$group at" "its $group group, Floating"
+Ui-Step 'the 3D Print tab'                 { Ui-ClickTab 'MAKE_PRINT' }
+foreach ($group in 'SLICE', 'PRINTERS', 'PREPARE', 'MATERIALS', 'ANNOTATE', 'INSPECT') {
+  Ui-ExpectNew "Ribbon MAKE_PRINT/$group at" "its $group group, Floating"
 }
 Ui-Mark
 Ui-Step 'Dimension'                        { Ui-ClickLogged 'Ribbon button make.dimension' }
@@ -498,4 +552,4 @@ Ui-ExpectNew 'Command Dimension started' 'Dimension from the Floating toolbar'
 Ui-Step 'cancel (Escape)'                  { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Dimension cancelled' 'cancelled'
 
-Ui-Finish 'the Make tab'
+Ui-Finish "the Make workspace's tabs"

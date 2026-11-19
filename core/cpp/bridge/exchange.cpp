@@ -14,6 +14,7 @@
 #include <TopoDS_Iterator.hxx>
 
 #include "mitcad/geometry/brep_import.hpp"
+#include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/guard.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/io/exchange.hpp"
@@ -58,8 +59,12 @@ std::vector<io::Body> read_bodies(const std::string& path, double unit_mm) {
     return bodies;
   }
   case io::Format::Step:
-  case io::Format::Iges:
-    return io::read_file(path);
+  case io::Format::Iges: {
+    // The transfer stops when the command's monitor is cancelled
+    // (mitcad#2032), as read_step_structure's.
+    geometry::CancelRange stop;
+    return io::read_file(path, stop.range());
+  }
   }
   return {};
 }

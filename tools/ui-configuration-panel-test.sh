@@ -325,10 +325,10 @@ export MITCAD_PROJECTS_DIR=$WORK/projects
 mkdir -p "$MITCAD_PROJECTS_DIR" "$UI_CONFIG/Mitcad"
 CONF=$UI_CONFIG/Mitcad/Mitcad.conf
 if grep -q '^\[projects\]$' "$CONF" 2> /dev/null; then
-  sed -i '/^\[projects\]$/,/^\[/{/^panel=/d}' "$CONF"
-  sed -i 's/^\[projects\]$/[projects]\npanel=true/' "$CONF"
+  sed -i '/^\[projects\]$/,/^\[/{/^panel=/d;/^panelTopBar=/d}' "$CONF"
+  sed -i 's/^\[projects\]$/[projects]\npanel=true\npanelTopBar=true/' "$CONF"
 else
-  printf '[projects]\npanel=true\n' >> "$CONF"
+  printf '[projects]\npanel=true\npanelTopBar=true\n' >> "$CONF"
 fi
 # The heights of the three cards: PH (Projects), CH and BH (heights).
 three_heights() {

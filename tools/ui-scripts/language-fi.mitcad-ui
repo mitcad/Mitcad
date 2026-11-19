@@ -21,7 +21,7 @@ expect-ever '^Language: fi [(]--language[)]$' 30
 wait-idle
 
 # 1. The tabs.
-expect-ribbon-labels Aloitus Solidi Rakenna Valmistus
+expect-ribbon-labels Aloitus Solidi Pinta Ohutlevy Rakenna 3D-tulostus Laser CNC Hallinta
 
 # 2. The English name in the command search.
 command tools.search

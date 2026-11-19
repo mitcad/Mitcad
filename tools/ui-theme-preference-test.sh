@@ -38,7 +38,9 @@ run() {
   export QT_QPA_PLATFORMTHEME=$2
   export MITCAD_TEST_THEME_DESKTOP_DARK=$3
   mkdir -p "$(dirname "$CONF")"
-  printf '[appearance]\ntheme=dark\n' > "$CONF"
+  # The Browser on its own card: the check measures its own background,
+  # not the view's light gradient between Rows.
+  printf '[appearance]\ntheme=dark\nbrowserBackground=card\n' > "$CONF"
   echo "--- $1"
   ui_start_app --ui=qt --no-mcp "--chrome=$4"
   for _ in $(seq 1 900); do

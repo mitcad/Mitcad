@@ -3,15 +3,30 @@
 
 #include <algorithm>
 #include <climits>
+#include <initializer_list>
 #include <tuple>
 
 #include <QChar>
 #include <QSettings>
 
+#include "CommandLayout.hpp"
+
 namespace mitcad::search {
 namespace {
 
 const char* kRecentCommandsKey = "commands/recent";
+
+// A caption without its mnemonic's "&" ("&Tools" is Tools; "&&" is "&").
+QString withoutMnemonic(const QString& text) {
+  QString plain;
+  for (qsizetype i = 0; i < text.size(); ++i) {
+    if (text.at(i) == QLatin1Char('&') && i + 1 < text.size()) {
+      ++i;
+    }
+    plain.append(text.at(i));
+  }
+  return plain;
+}
 
 QString withoutEllipsis(QString text) {
   if (text.endsWith(QStringLiteral("..."))) {
@@ -175,6 +190,118 @@ void rememberRecentCommand(const QString& id) {
   if (after != before) {
     QSettings().setValue(QLatin1String(kRecentCommandsKey), after);
   }
+}
+
+const std::vector<std::pair<QString, QStringList>>& otherNames() {
+  // Grouped as the toolbar is; plain function names, never a program's name.
+  static const std::vector<std::pair<QString, QStringList>> names = [] {
+    const auto row = [](const char* id, std::initializer_list<const char*> words) {
+      QStringList list;
+      for (const char* word : words) {
+        list.append(QString::fromLatin1(word));
+      }
+      return std::pair<QString, QStringList>(QString::fromLatin1(id), list);
+    };
+    return std::vector<std::pair<QString, QStringList>>{
+        // Solid
+        row("solid.parameters", {"change parameters", "parameter table", "variables"}),
+        row("solid.configurations", {"design table", "family table", "variants"}),
+        row("solid.materials", {"manage materials", "material browser", "physical material"}),
+        row("solid.appearances", {"manage appearances", "appearance browser"}),
+        row("solid.material", {"physical material", "assign material"}),
+        row("solid.appearance", {"assign appearance", "colour", "color"}),
+        row("solid.press_pull", {"push pull"}),
+        row("solid.move", {"move/copy", "transform"}),
+        row("solid.combine", {"join", "intersect", "cut body"}),
+        row("solid.hole", {"drill", "counterbore", "countersink"}),
+        row("solid.thread", {"cosmetic thread", "tap"}),
+        row("solid.emboss", {"deboss", "engrave"}),
+        row("solid.form", {"create form", "sculpt"}),
+        row("surface.stitch", {"knit", "sew"}),
+        row("sheet.flat_pattern", {"flat blank", "unfold"}),
+        // Assemble
+        row("assemble.joint", {"mate", "assembly constraint"}),
+        row("assemble.as_built_joint", {"joint in place"}),
+        row("assemble.derived_component", {"derive", "insert derive", "derived part", "derived body"}),
+        row("assemble.drive_joint", {"drive joints", "joint drive"}),
+        row("assemble.contact_set", {"contact sets", "enable contact", "enable contact sets"}),
+        row("insert.component", {"insert part", "place component"}),
+        // Construct, inspect, insert
+        row("construct.offset_plane", {"work plane", "datum plane", "reference plane"}),
+        row("construct.coordinate_system", {"ucs", "datum coordinate system"}),
+        row("inspect.section", {"section analysis", "section view"}),
+        row("inspect.interference", {"interference check", "clash detection"}),
+        row("inspect.properties", {"mass properties", "physical properties"}),
+        row("insert.image_reference", {"canvas", "attached canvas", "underlay", "background image"}),
+        row("insert.mesh", {"stl", "obj"}),
+        row("file.render_image", {"render", "rendering", "ray trace"}),
+        // Sketch
+        row("sketch.project", {"project geometry", "include", "use edges", "convert entities"}),
+        // Drawings
+        row("drawing.parts_list", {"bill of materials", "bom"}),
+        row("drawing.balloon", {"item number"}),
+        // Manage (mitcad#1982)
+        row("manage.recompute_all", {"compute all", "rebuild all", "regenerate all"}),
+        // Views and tools
+        row("view.fit", {"zoom extents"}),
+        row("view.named_view", {"saved view"}),
+        row("tools.preferences", {"options", "settings"}),
+    };
+  }();
+  return names;
+}
+
+QStringList withOtherNames(const QString& id, const QStringList& keywords) {
+  QStringList all = keywords;
+  for (const auto& [command, words] : otherNames()) {
+    if (command != id) {
+      continue;
+    }
+    for (const QString& word : words) {
+      if (!all.contains(word, Qt::CaseInsensitive)) {
+        all.append(word);
+      }
+    }
+  }
+  return all;
+}
+
+QStringList placeTexts(const CommandLayout& layout, const QString& id, const PlaceCaptions& captions) {
+  const auto ribbon = [&captions](const QString& key) { return captions.ribbon ? captions.ribbon(key) : key; };
+  const auto menu = [&captions](const QString& key) {
+    return withoutMnemonic(captions.menu ? captions.menu(key) : key);
+  };
+  const QString arrow = QStringLiteral(" › ");
+  QStringList groups;
+  QStringList menus;
+  // The home first, whatever order the user's layer gave the others.
+  const LayoutPlace home = layout.home(id);
+  if (!home.isEmpty()) {
+    groups.append(ribbon(home.tab) + arrow + ribbon(home.group));
+  }
+  for (const QString& place : layout.placesOf(id)) {
+    const QStringList keys = place.split(QLatin1Char('/'));
+    if (keys.size() < 2) {
+      continue;
+    }
+    if (keys.front() == QLatin1String("menu")) {
+      const QString text = captions.menuBar + arrow + menu(keys.at(1));
+      if (!menus.contains(text)) {
+        menus.append(text);
+      }
+      continue;
+    }
+    const QString text = ribbon(keys.at(0)) + arrow + ribbon(keys.at(1));
+    if (!groups.contains(text)) {
+      groups.append(text);
+    }
+  }
+  return groups + menus;
+}
+
+QString placeLine(const CommandLayout& layout, const QString& id, const PlaceCaptions& captions) {
+  const QStringList texts = placeTexts(layout, id, captions);
+  return texts.isEmpty() ? captions.nowhere : texts.join(QStringLiteral(", "));
 }
 
 } // namespace mitcad::search

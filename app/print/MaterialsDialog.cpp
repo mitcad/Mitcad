@@ -386,6 +386,18 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_class->setFixedWidth(160);
   form->addRow(tr("Class"), m_class);
   const int classRow = form->rowCount() - 1;
+  // The sheet process its sheet parts default to (mitcad#1939): By Class
+  // (the class's, named) or a profile of its own.
+  m_sheetProcess = new QComboBox;
+  m_sheetProcess->setObjectName(QStringLiteral("materialSheetProcess"));
+  m_sheetProcess->addItem(tr("By Class"), QString());
+  m_sheetProcess->addItem(tr("Metal"), QStringLiteral("metal"));
+  m_sheetProcess->addItem(tr("Board"), QStringLiteral("board"));
+  m_sheetProcess->addItem(tr("Laser Sheet"), QStringLiteral("laser_sheet"));
+  m_sheetProcess->setFixedWidth(160);
+  m_sheetProcess->setToolTip(tr("The process of this material's sheet parts: Board for cardboard and fluted plastic"));
+  form->addRow(tr("Sheet Process"), m_sheetProcess);
+  const int processRow = form->rowCount() - 1;
   auto* densityRow = new QHBoxLayout;
   m_density = new QLineEdit;
   // The same widths as the settings form's fields (mitcad#655).
@@ -462,18 +474,19 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_addPopover = new AppearancePopover(m_log + QStringLiteral(" add appearance"), this);
   m_form = new SettingsForm;
   m_form->setGeneralPage(general, tr("General"));
-  m_form->setGeneralNames({tr("Class"), tr("Density"), tr("Appearances"), tr("Young's modulus"),
+  m_form->setGeneralNames({tr("Class"), tr("Sheet Process"), tr("Density"), tr("Appearances"), tr("Young's modulus"),
                            tr("Poisson's ratio"), tr("Yield strength"), tr("Maximum service temperature"),
                            tr("Coefficient of thermal expansion"), tr("Extruder temperature"),
                            tr("Bed temperature")});
   // Search shows General's fields it finds and only those (mitcad#1228),
   // so a search such as "temperature" keeps the print settings found in
   // sight below them.
-  m_form->filterGeneral = [this, form, classRow, densityRowIndex, appearancesRowIndex](const QString& search) {
+  m_form->filterGeneral = [this, form, classRow, processRow, densityRowIndex, appearancesRowIndex](const QString& search) {
     const auto found = [&search](const QString& name) {
       return search.isEmpty() || name.contains(search, Qt::CaseInsensitive);
     };
     showFormRow(form, classRow, found(tr("Class")));
+    showFormRow(form, processRow, found(tr("Sheet Process")));
     showFormRow(form, densityRowIndex, found(tr("Density")));
     showFormRow(form, appearancesRowIndex, found(tr("Appearances")));
     m_properties->setSearch(search);
@@ -557,6 +570,14 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
     const QString chosen = m_class->itemData(index).toString();
     if (item != nullptr && !item->readOnly && chosen != item->materialClass) {
       edit({{QStringLiteral("class"), chosen}}, QStringLiteral("class = %1").arg(chosen));
+    }
+  });
+  connect(m_sheetProcess, &QComboBox::activated, this, [this](int index) {
+    const LibraryItem* item = current();
+    const QString chosen = m_sheetProcess->itemData(index).toString();
+    if (item != nullptr && !item->readOnly) {
+      edit({{QStringLiteral("sheet_process"), chosen.isEmpty() ? QJsonValue() : QJsonValue(chosen)}},
+           QStringLiteral("sheet process = %1").arg(chosen.isEmpty() ? QStringLiteral("by class") : chosen));
     }
   });
   connect(m_list, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
@@ -1075,6 +1096,7 @@ void MaterialsPanel::showCurrent() {
     showAppearances(QJsonObject(), false);
     m_properties->setMaterial(QJsonObject(), false, false);
     m_class->setCurrentIndex(-1);
+    m_sheetProcess->setCurrentIndex(-1);
     m_form->setValues({});
     return;
   }
@@ -1135,6 +1157,25 @@ void MaterialsPanel::showCurrent() {
   if (item->key() + QLatin1Char('|') + classShown != m_loggedClass) {
     m_loggedClass = item->key() + QLatin1Char('|') + classShown;
     qDebug().noquote() << QStringLiteral("%1 class: %2").arg(m_log, classShown);
+  }
+  // Its sheet process (mitcad#1939): its own, or By Class with the class's
+  // named (metal for Metal, laser sheet for Wood and General Plastic, else
+  // metal).
+  {
+    const QString own = text(fields, "sheet_process");
+    const QString cls = item->materialClass;
+    const QString byClass = cls == QStringLiteral("wood") || cls == QStringLiteral("plastic") ? tr("Laser Sheet")
+                                                                                           : tr("Metal");
+    const QSignalBlocker block(m_sheetProcess);
+    m_sheetProcess->setItemText(0, tr("By Class (%1)").arg(byClass));
+    const int index = m_sheetProcess->findData(own);
+    m_sheetProcess->setCurrentIndex(index < 0 ? 0 : index);
+    m_sheetProcess->setEnabled(editable);
+    const QString shown = m_sheetProcess->currentText();
+    if (item->key() + QLatin1Char('|') + shown != m_loggedProcess) {
+      m_loggedProcess = item->key() + QLatin1Char('|') + shown;
+      qDebug().noquote() << QStringLiteral("%1 sheet process: %2").arg(m_log, shown);
+    }
   }
   // Print settings only for an FDM plastic (mitcad#655, mitcad#1102):
   // metals, other plastics, resins and others have none to give a slicer;

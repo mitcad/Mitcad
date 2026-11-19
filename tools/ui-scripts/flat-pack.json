@@ -1,0 +1,5 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The flat-pack generator (mitcad#1939) for tools/ui-scripts/flat-pack.mitcad-ui: a box 200 x 120 x 80 (Body1)."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 200, "width": 120, "height": 80, "operation": "new_body"}}
+]

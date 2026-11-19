@@ -104,3 +104,6 @@ mod array_refs_1897_tests;
 // Acknowledged warnings: kept with undo and in the file, lapsing when the
 // warning changes or the feature fails (mitcad#1935).
 mod acknowledged_warnings_tests;
+// Recompute All: every feature evaluated again, without the cached
+// results (mitcad#1982).
+mod recompute_all_tests;

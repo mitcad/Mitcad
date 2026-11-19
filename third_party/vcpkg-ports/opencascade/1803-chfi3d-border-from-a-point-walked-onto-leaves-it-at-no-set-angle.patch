@@ -1,0 +1,62 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: at a corner whose set-back walked over a vertex (1801), the
+plate's border from the point on the edge walked onto, on the face that
+goes on along that edge, leaves the point at no set angle, so that the
+plate's face can be triangulated (mitcad#2018).
+
+The bent guide of 1801 with its bend radius at 24.5 or 25: the rounding of
+the inner sloped edge of the rib 1 degree from each end ends in a corner
+whose set-back walks over the inner rim's end vertex onto the pad's rim
+(0.11 along it), the plate's border on the tube's side crossing the bend's
+end edge just past the vertex. The border on the flat from the point on
+the pad's rim was a batten held at both ends to the angle of the sharp
+edge's direction there: it left the point back along the rim, over the
+crossing, and the plate there was a sliver 0.01 wide between it and the
+border along the rim, the crossing's vertex in it. The plate's surface is
+approximated within 0.04 (its edges' tolerances 0.05, its vertices' 0.08):
+BRepMesh's triangulation of that face came out empty ("a face could not be
+triangulated" on an STL export at a deviation of 0.01 and an angle of 10
+degrees, at 0.05 and 5 degrees; and at other settings from 20 to 28).
+
+- PerformMoreThreeCorner, in its connecting curves: where the corner walked
+  over a vertex, the batten from the point on the edge walked onto towards
+  the next sharp edge (not towards the tangent edge) has no angle at that
+  point (CalculBatten's constraint there off, as for a free border); its
+  other end keeps its angle. The border leaves the point towards its other
+  end, and the sliver and the vertex in it are gone.
+- Elsewhere nothing changes. No catch is added.
+
+Test: cli.fcstd_bend_reported, the reported bent guide with its bend
+radius set to 24.5 and 25 exported as STL at deviations 0.0005, 0.002, 0.01
+and 0.05 mm with an angle of 10 degrees.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index 7e752f18..286a60ac 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -3699,6 +3699,23 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+             {
+               contraint2 = false;
+             }
++            // (Walked over a vertex: the border from the point on the edge
++            // walked onto, on the face that goes on along it, leaves that
++            // point at no set angle. Held to the edge's direction, it left
++            // back along the edge over the crossing of the tangent edge, a
++            // sliver of the plate narrower than its tolerance about that
++            // vertex, and the plate's face could not be triangulated.)
++            if (walkonto >= 0)
++            {
++              if (ic == walkonto && icplus != walkcross)
++              {
++                contraint1 = false;
++              }
++              if (icplus == walkonto && ic != walkcross)
++              {
++                contraint2 = false;
++              }
++            }
+             CalculBatten(Asurf,
+                          TopoDS::Face(Fvive(ic, icplus)),
+                          xdir,

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -28,6 +29,7 @@
 #include <Geom_SurfaceOfRevolution.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <NCollection_DataMap.hxx>
+#include <OSD_Parallel.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -635,6 +637,34 @@ ShapePtr transform_shape(const Shape& shape, const Affine& map, const std::strin
 
 ShapePtr move_shape(const Shape& shape, const Affine& map, const std::string& rename) {
   return mapped(shape, map, rename, true);
+}
+
+std::vector<ShapePtr> transform_shapes(const std::vector<ShapePtr>& shapes, const std::vector<Affine>& maps) {
+  if (maps.size() != shapes.size()) {
+    throw std::invalid_argument("a transform for each shape is needed");
+  }
+  std::vector<ShapePtr> mapped_shapes(shapes.size());
+  std::vector<std::exception_ptr> errors(shapes.size());
+  OSD_Parallel::For(
+      0, static_cast<int>(shapes.size()),
+      [&](int i) {
+        const auto k = static_cast<std::size_t>(i);
+        try {
+          if (!shapes[k]) {
+            throw std::invalid_argument("no shape to transform");
+          }
+          mapped_shapes[k] = transform_shape(*shapes[k], maps[k]);
+        } catch (...) {
+          errors[k] = std::current_exception();
+        }
+      },
+      shapes.size() < 2);
+  for (const std::exception_ptr& error : errors) {
+    if (error) {
+      std::rethrow_exception(error);
+    }
+  }
+  return mapped_shapes;
 }
 
 } // namespace mitcad::geometry

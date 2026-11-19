@@ -15,6 +15,7 @@ use crate::features::{FeatureDef, ValueInput};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::sheet::flat::{self, FlatFailure, FlatPattern, FlatPatternDef};
+use crate::sheet::process::SheetProcess;
 use crate::sheet::{EdgeChange, FeatureWords, PanelId, SheetDomainRef, SheetReferenceSide};
 
 /// The last evaluation of each body's Flat Pattern, by its fingerprint. It
@@ -360,25 +361,30 @@ impl<K: Kernel> Document<K> {
             Ok(pattern) => pattern,
             Err(failure) => return Err(self.flat_refusal(body, failure)),
         };
-        let drawing = crate::sheet::flat_dxf::drawing(&pattern.regions, &pattern.bends, options)
+        // The layers of the sheet's process profile (mitcad#1939).
+        let options = crate::sheet::flat_dxf::FlatDxfOptions {
+            process: self.sheet_process_of_rules(pattern.developed.rules),
+            ..*options
+        };
+        let drawing = crate::sheet::flat_dxf::drawing(&pattern.regions, &pattern.bends, &options)
             .map_err(|e| {
-                // The walls it names by their features, the rest in words
-                // (mitcad#1639); the ids for agents.
-                let named = |feature: FeatureUid| self.flat_feature_name(feature);
-                let error =
-                    crate::notice::FeatureError::from_text(&crate::sheet::name_walls(&e, &named));
-                let detail = format!(
-                    "the Flat Pattern of {body}: {}",
-                    crate::notice::FeatureError::from_text(&e).agent_text()
-                );
-                told(
-                    match self.flat_body_name(body) {
-                        Some(name) => format!("the Flat Pattern of {name}: {}", error.message),
-                        None => format!("the Flat Pattern of this sheet: {}", error.message),
-                    },
-                    detail,
-                )
-            })?;
+            // The walls it names by their features, the rest in words
+            // (mitcad#1639); the ids for agents.
+            let named = |feature: FeatureUid| self.flat_feature_name(feature);
+            let error =
+                crate::notice::FeatureError::from_text(&crate::sheet::name_walls(&e, &named));
+            let detail = format!(
+                "the Flat Pattern of {body}: {}",
+                crate::notice::FeatureError::from_text(&e).agent_text()
+            );
+            told(
+                match self.flat_body_name(body) {
+                    Some(name) => format!("the Flat Pattern of {name}: {}", error.message),
+                    None => format!("the Flat Pattern of this sheet: {}", error.message),
+                },
+                detail,
+            )
+        })?;
         mitcad_dxf::write_file(&drawing, path, write)
             .map_err(|e| invalid(format!("cannot write {path}: {e}")))?;
         Ok((def, drawing))
@@ -529,6 +535,134 @@ impl<K: Kernel> Document<K> {
             .map_err(|e| crate::sheet::worded(&e, &|f| self.flat_feature_name(f)))
     }
 
+    /// The process profile of sheet rules (mitcad#1939): the one they name,
+    /// else the one their component's material class gives
+    /// ([`SheetProcess::from_class`]), else metal.
+    pub fn sheet_process_of_rules(&self, rules: FeatureUid) -> SheetProcess {
+        self.sheet_process_source(rules).0
+    }
+
+    /// The process profile of a body (mitcad#1939): its sheet rules', or
+    /// for a body that is no sheet its component's material's, else metal.
+    pub fn sheet_process_of_body(&self, body: BodyUid) -> SheetProcess {
+        if let Some(state) = self.last_result().sheets.get(&body) {
+            return self.sheet_process_of_rules(state.value.rules);
+        }
+        self.body_component(body)
+            .and_then(|component| self.component_process(component))
+            .unwrap_or_default()
+    }
+
+    /// A sketch's curves and text outlines as 3D polylines in its
+    /// component's coordinates (mitcad#1939: the marks of a cut sheet's part
+    /// and of a die line), construction curves left out; None for a
+    /// feature that is no evaluated sketch.
+    pub fn sketch_mark_polylines(&self, sketch: FeatureUid) -> Option<Vec<Vec<[f64; 3]>>> {
+        let output = self.sketch_output(sketch)?;
+        let construction: Vec<crate::ids::EntityUid> = match self.feature(sketch).map(|f| &f.def) {
+            Some(FeatureDef::Sketch(def)) => def
+                .entities
+                .iter()
+                .filter(|e| e.construction)
+                .map(|e| e.id)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let frame = output.frame;
+        let mut out = Vec::new();
+        for (id, curve) in &output.solved.curves {
+            if construction.contains(id) {
+                continue;
+            }
+            let (t0, t1) = curve.domain();
+            out.push(
+                curve
+                    .sample(t0, t1)
+                    .iter()
+                    .map(|p| frame.point(*p))
+                    .collect(),
+            );
+        }
+        for text in output.texts.iter() {
+            for contour in &text.contours {
+                for part in &contour.parts {
+                    let (t0, t1) = part.domain();
+                    out.push(
+                        part.sample(t0, t1)
+                            .iter()
+                            .map(|p| frame.point(*p))
+                            .collect(),
+                    );
+                }
+            }
+        }
+        Some(out)
+    }
+
+    /// The profile of sheet rules and where it comes from: `rules`,
+    /// `material` or `default`.
+    fn sheet_process_source(&self, rules: FeatureUid) -> (SheetProcess, &'static str) {
+        let Some(entry) = self.feature(rules) else {
+            return (SheetProcess::Metal, "default");
+        };
+        if let FeatureDef::SheetRules(def) = &entry.def
+            && let Some(process) = def.process
+        {
+            return (process, "rules");
+        }
+        self.component_process(entry.component)
+            .map_or((SheetProcess::Metal, "default"), |p| (p, "material"))
+    }
+
+    /// The profile a component's material class gives, if any.
+    fn component_process(&self, component: ComponentUid) -> Option<SheetProcess> {
+        let material = self.material(self.component_material(component)?)?;
+        crate::material::material_sheet_process(material)
+    }
+
+    /// The `sheet_process` query (mitcad#1939): the process profile of a
+    /// component's sheet part (the active component's when None): its
+    /// newest sheet rules at the marker, else its material's class; and the
+    /// commands the profiles filter, each available or not with the reason
+    /// in words. `rules` is null when the component has no sheet rules
+    /// (then nothing is filtered: every command is available).
+    pub fn sheet_process_json(&self, component: Option<ComponentUid>) -> Value {
+        let component = component.unwrap_or(self.state.assembly.active);
+        let rules = self
+            .features()
+            .take(self.marker())
+            .filter(|f| {
+                f.component == component
+                    && !f.suppressed
+                    && matches!(f.def, FeatureDef::SheetRules(_))
+            })
+            .last()
+            .map(|f| f.uid);
+        let (process, source) = match rules {
+            Some(rules) => self.sheet_process_source(rules),
+            None => self
+                .component_process(component)
+                .map_or((SheetProcess::Metal, "default"), |p| (p, "material")),
+        };
+        let mut commands = crate::sheet::process::commands_json(process);
+        if rules.is_none()
+            && let Some(list) = commands.as_array_mut()
+        {
+            for command in list {
+                *command = json!({"command": command["command"], "available": true});
+            }
+        }
+        json!({
+            "component": component,
+            "rules": rules,
+            "process": process.id(),
+            "label": process.label(),
+            "source": source,
+            "commands": commands,
+            "boards": crate::sheet::process::BOARD_PRESETS,
+        })
+    }
+
     /// The `sheet_bodies` query (mitcad#210): each sheet-metal body at the
     /// marker with its rules, its domains and its Flat Pattern's state, for
     /// the browser.
@@ -558,9 +692,9 @@ impl<K: Kernel> Document<K> {
                     value["reference_side"] = json!(def.reference_side);
                     value
                 });
-                let k = rules.map(|r| {
-                    let crate::features::sheet::Allowance::KFactor { k } = r.allowance;
-                    k
+                let k = rules.and_then(|r| match r.allowance {
+                    crate::features::sheet::Allowance::KFactor { k } => Some(k),
+                    _ => None,
                 });
                 json!({
                     "body": body,
@@ -571,6 +705,9 @@ impl<K: Kernel> Document<K> {
                     "thickness": rules.map(|r| r.thickness),
                     "bend_radius": rules.map(|r| r.bend_radius),
                     "k_factor": k,
+                    "allowance": rules.map(|r| r.allowance.kind()),
+                    "process": self.sheet_process_of_rules(state.rules).id(),
+                    "kerf": rules.map(|r| r.kerf.unwrap_or(0.0)),
                     "panels": panels,
                     "bends": state.bends.len(),
                     "open": state.opened.len(),

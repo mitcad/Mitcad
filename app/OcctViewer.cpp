@@ -29,6 +29,7 @@
 #include "framework/Diagnostics.hpp"
 #include "framework/OpeningEdges.hpp"
 #include "framework/TestSync.hpp"
+#include "framework/ViewGhosts.hpp"
 #include "mitcad/geometry/datum.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "view/CameraHeight.hpp"
@@ -174,7 +175,32 @@ const Quantity_Color kCenterlineColorDark = viewRole(ColorRole::SketchCenterline
 const Quantity_Color kSketchHaloDark = viewRole(ColorRole::SketchHalo, true);
 const Quantity_Color kSketchHaloLight = viewRole(ColorRole::SketchHalo, false);
 constexpr double kSketchLineWidth = 2.0;
-constexpr double kSketchHaloWidth = 6.0;
+// A pixel and a half on each side of the line (mitcad#2034; 2 px before,
+// which the view's multisampling softened into a blurred fringe). One pixel
+// is too little: the multisampling blends it with the line and the face
+// into a mid grey, and mitcad#302's light line over the default body in
+// the dark theme loses its dark edge.
+constexpr double kSketchHaloWidth = kSketchLineWidth + 3.0;
+// The halo of a feature's input lines on a dark background (mitcad#957).
+constexpr double kInputLineHaloWidth = 6.0;
+// A face darker than this relative luminance (linear light, 0 black to 1
+// white) gets the fully constrained curves' halo on a light background
+// (mitcad#2034). Their near-black line (SketchFixed, linear 0.08/0.09/0.11:
+// luminance about 0.09) has a contrast of (L + 0.05) / (0.09 + 0.05) with
+// a face of luminance L; below 0.37 that is less than 3:1, the least a
+// line needs to read against what is behind it. The default body
+// (luminance about 0.74) has over 5:1.
+constexpr double kSketchHaloFaceLuminance = 0.37;
+
+// The relative luminance of an sRGB colour, in linear light.
+double relativeLuminance(const QColor& color) {
+  const auto linear = [](double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+  return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF()) + 0.0722 * linear(color.blueF());
+}
+
+bool darkSketchFace(const QColor& face) {
+  return face.isValid() && relativeLuminance(face) < kSketchHaloFaceLuminance;
+}
 // The edited sketch through the bodies (mitcad#1762): its curves' and
 // points' copies about a third as strong as the entities, the curves
 // dashed. OCCT blends in linear light, where an alpha of 0.5 shows about
@@ -2365,9 +2391,8 @@ bool OcctViewer::isGhosted(const QString& occurrence) const {
   if (occurrence.isEmpty()) {
     return false;
   }
-  return std::any_of(m_ghosts.begin(), m_ghosts.end(), [&occurrence](const QString& ghost) {
-    return !ghost.isEmpty() && (occurrence == ghost || occurrence.startsWith(ghost + QLatin1Char('/')));
-  });
+  return std::any_of(m_ghosts.begin(), m_ghosts.end(),
+                     [&occurrence](const QString& ghost) { return ghostCovers(ghost, occurrence); });
 }
 
 void OcctViewer::setGhosts(const QStringList& occurrences) {
@@ -2392,10 +2417,14 @@ void OcctViewer::setGhosts(const QStringList& occurrences) {
     activatePicking(highlight);
   }
   m_context->ClearDetected(false);
+  QStringList labels;
+  for (const QString& ghost : m_ghosts) {
+    labels << ghostLabel(ghost);
+  }
   qDebug().noquote() << QStringLiteral("View ghosts: %1")
                             .arg(m_ghosts.isEmpty() ? QStringLiteral("none")
                                                     : QStringLiteral("%1 (%2 %3)")
-                                                          .arg(m_ghosts.join(QStringLiteral(", ")))
+                                                          .arg(labels.join(QStringLiteral(", ")))
                                                           .arg(ghosts)
                                                           .arg(ghosts == 1 ? QStringLiteral("body")
                                                                            : QStringLiteral("bodies")));
@@ -3049,6 +3078,12 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
       }
       if (look != m_sketchEntityLooks.end()) {
         updateSketchThrough(kept, look->second); // mitcad#1762
+        // The face under it took another appearance (mitcad#2034).
+        const bool darkFace = darkSketchFace(entity.faceColor);
+        if (darkFace != look->second.darkFace) {
+          look->second.darkFace = darkFace;
+          updateSketchHalo(kept, look->second);
+        }
       }
       m_sketchEntities.push_back(existing->second.second);
       m_sketchEntityKeys.emplace(key, existing->second);
@@ -3073,6 +3108,7 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
     look.reference = entity.reference;
     look.temporary = entity.temporary;
     look.spatial = entity.spatial;
+    look.darkFace = darkSketchFace(entity.faceColor);
     // Show points off (mitcad#1705, mitcad#1764): no marker, still pickable.
     look.hidden = sketchPointHidden(look);
     PickInfo info;
@@ -3093,17 +3129,7 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
     if (isPoint) {
       m_context->SetDisplayPriority(object, kSketchPointPriority);
     }
-    if (hasSketchHalo(look)) {
-      // In a layer of its own just before the top layer: at the same depth
-      // as the entity, whose line passes OCCT's depth test (less or equal)
-      // over it.
-      occ::handle<AIS_Shape> halo = new AIS_Shape(entity.shape);
-      halo->Attributes()->SetAutoTriangulation(false);
-      styleSketchHalo(halo, look);
-      display(halo, AIS_WireFrame, PickInfo(), false);
-      m_context->SetZLayer(halo, m_sketchHaloLayer);
-      m_sketchEntityHalos[object.get()] = halo;
-    }
+    updateSketchHalo(object, look);
     // The edited sketch's copy through the bodies (mitcad#1762).
     updateSketchThrough(object, look);
     m_sketchEntities.push_back(object);
@@ -3485,8 +3511,33 @@ void OcctViewer::refreshSketchHighlightLines() {
   }
 }
 
-bool OcctViewer::hasSketchHalo(const SketchEntityLook& look) {
-  return !look.point && !look.reference && !look.construction && (look.centerline || look.constrained);
+bool OcctViewer::hasSketchHalo(const SketchEntityLook& look) const {
+  return !look.point && !look.reference && !look.construction && (look.centerline || look.constrained) &&
+         (m_backgroundDark || look.darkFace);
+}
+
+void OcctViewer::updateSketchHalo(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) {
+  const auto found = m_sketchEntityHalos.find(object.get());
+  if (!hasSketchHalo(look)) {
+    if (found != m_sketchEntityHalos.end()) {
+      m_context->Remove(found->second, false);
+      m_sketchEntityHalos.erase(found);
+    }
+    return;
+  }
+  if (found != m_sketchEntityHalos.end()) {
+    styleSketchHalo(found->second, look);
+    m_context->Redisplay(found->second, false);
+    return;
+  }
+  // In a layer of its own just before the top layer: at the same depth as
+  // the entity, whose line passes OCCT's depth test (less or equal) over it.
+  occ::handle<AIS_Shape> halo = new AIS_Shape(object->Shape());
+  halo->Attributes()->SetAutoTriangulation(false);
+  styleSketchHalo(halo, look);
+  display(halo, AIS_WireFrame, PickInfo(), false);
+  m_context->SetZLayer(halo, m_sketchHaloLayer);
+  m_sketchEntityHalos[object.get()] = halo;
 }
 
 void OcctViewer::styleSketchHalo(const occ::handle<AIS_Shape>& halo, const SketchEntityLook& look) const {
@@ -3638,11 +3689,9 @@ void OcctViewer::restyleSketchEntities() {
     styleSketchEntity(object, look->second);
     m_context->Redisplay(object, false);
     updateSketchThrough(object, look->second);
-    const auto halo = m_sketchEntityHalos.find(object.get());
-    if (halo != m_sketchEntityHalos.end()) {
-      styleSketchHalo(halo->second, look->second);
-      m_context->Redisplay(halo->second, false);
-    }
+    // Made, restyled or taken away: on a light background only over a
+    // dark face (mitcad#2034).
+    updateSketchHalo(object, look->second);
   }
   logSketchHalos();
   if (!m_sketchEntities.empty()) {
@@ -4565,7 +4614,7 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
     // from the amber faces of their feature.
     occ::handle<AIS_Shape> halo = fineShape(highlight.shape, lines);
     drawWithoutMeshing(halo);
-    setEdgeStyle(halo, kSketchHaloDark, kSketchHaloWidth);
+    setEdgeStyle(halo, kSketchHaloDark, kInputLineHaloWidth);
     PickInfo haloInfo;
     haloInfo.item = highlight.item;
     haloInfo.highlight = true;
@@ -6307,6 +6356,46 @@ void OcctViewer::frameBox(const Bnd_Box& box) {
   requestFrame();
 }
 
+namespace {
+
+// The least move (pixels) that brings `shown` inside `free`, along each
+// axis; centred along one where it is larger.
+QPointF leastShiftInto(const QRectF& shown, const QRectF& free) {
+  const auto along = [](double low, double high, double freeLow, double freeHigh) {
+    if (high - low > freeHigh - freeLow) {
+      return (freeLow + freeHigh) / 2.0 - (low + high) / 2.0;
+    }
+    if (low < freeLow) {
+      return freeLow - low;
+    }
+    if (high > freeHigh) {
+      return freeHigh - high;
+    }
+    return 0.0;
+  };
+  return {along(shown.left(), shown.right(), free.left(), free.right()),
+          along(shown.top(), shown.bottom(), free.top(), free.bottom())};
+}
+
+} // namespace
+
+occ::handle<Graphic3d_Camera> OcctViewer::pannedCamera(const QPointF& shift) const {
+  if (height() <= 0) {
+    return {};
+  }
+  occ::handle<Graphic3d_Camera> moved = new Graphic3d_Camera();
+  moved->Copy(m_view->Camera());
+  const gp_XYZ extent = moved->ViewDimensions(moved->Distance());
+  const double perPixel = extent.Y() / height();
+  const std::optional<gp_Dir> right = crossedDir(moved->Direction(), moved->Up());
+  if (!right) {
+    return {};
+  }
+  const gp_Vec move = (gp_Vec(*right) * shift.x() - gp_Vec(moved->Up()) * shift.y()) * -perPixel;
+  moved->SetEyeAndCenter(moved->Eye().Translated(move), moved->Center().Translated(move));
+  return moved;
+}
+
 bool OcctViewer::bringClearOfPanels(const Bnd_Box& box, bool fit) {
   if (box.IsVoid() || (!fit && m_covered.empty()) || width() <= 0 || height() <= 0) {
     return false;
@@ -6322,33 +6411,14 @@ bool OcctViewer::bringClearOfPanels(const Bnd_Box& box, bool fit) {
     return true;
   }
   // The least move that brings it in (centred when it is larger).
-  const auto along = [](double low, double high, double freeLow, double freeHigh) {
-    if (high - low > freeHigh - freeLow) {
-      return (freeLow + freeHigh) / 2.0 - (low + high) / 2.0;
-    }
-    if (low < freeLow) {
-      return freeLow - low;
-    }
-    if (high > freeHigh) {
-      return freeHigh - high;
-    }
-    return 0.0;
-  };
-  const QPointF shift(along(shown.left(), shown.right(), free.left(), free.right()),
-                      along(shown.top(), shown.bottom(), free.top(), free.bottom()));
+  const QPointF shift = leastShiftInto(shown, free);
   if (std::abs(shift.x()) < 1.0 && std::abs(shift.y()) < 1.0) {
     return false;
   }
-  occ::handle<Graphic3d_Camera> moved = new Graphic3d_Camera();
-  moved->Copy(m_view->Camera());
-  const gp_XYZ extent = moved->ViewDimensions(moved->Distance());
-  const double perPixel = extent.Y() / height();
-  const std::optional<gp_Dir> right = crossedDir(moved->Direction(), moved->Up());
-  if (!right) {
+  const occ::handle<Graphic3d_Camera> moved = pannedCamera(shift);
+  if (moved.IsNull()) {
     return false; // no screen axes to move along (mitcad#773)
   }
-  const gp_Vec move = (gp_Vec(*right) * shift.x() - gp_Vec(moved->Up()) * shift.y()) * -perPixel;
-  moved->SetEyeAndCenter(moved->Eye().Translated(move), moved->Center().Translated(move));
   qDebug().noquote() << QStringLiteral("View moved %1,%2 px: the part clear of the panels")
                             .arg(qRound(shift.x()))
                             .arg(qRound(shift.y()));
@@ -6419,6 +6489,54 @@ bool OcctViewer::showInFreeArea(const Bnd_Box& box, const QString& what) {
                                  place(free.bottomRight()),
                                  free.contains(shown) ? QStringLiteral("inside") : QStringLiteral("outside"));
   return fitted;
+}
+
+bool OcctViewer::panClearOfCards(const Bnd_Box& box, const QString& what) {
+  if (box.IsVoid() || width() <= 0 || height() <= 0) {
+    return false;
+  }
+  // From where the view is going: an animation ended, a pending fit (a new
+  // design's framing) made.
+  settleCamera();
+  // The free area below the cube where the cube reaches into it, as
+  // showInFreeArea keeps it.
+  QRectF area = freeArea();
+  const QRectF cube = cubeArea();
+  if (m_context->IsDisplayed(m_orientationCube) && cube.intersects(area)) {
+    area.setTop(std::max(area.top(), cube.bottom() + 1.0));
+  }
+  if (area.height() < 0.3 * height()) {
+    area = freeArea(); // a low view keeps the cards' free area
+  }
+  const QRectF inside = area.adjusted(12, 12, -12, -12);
+  const QRectF shown = screenBox(box);
+  if (inside.isEmpty() || inside.contains(shown) || !shown.intersects(QRectF(0.0, 0.0, width(), height())) ||
+      shown.width() > inside.width() || shown.height() > inside.height()) {
+    return false;
+  }
+  const QPointF shift = leastShiftInto(shown, inside);
+  if (std::abs(shift.x()) < 1.0 && std::abs(shift.y()) < 1.0) {
+    return false;
+  }
+  const occ::handle<Graphic3d_Camera> moved = pannedCamera(shift);
+  if (moved.IsNull()) {
+    return false;
+  }
+  // In window coordinates, as the UI tests' other places.
+  const QPointF corner = mapTo(window(), QPoint(0, 0));
+  const QRectF placed = shown.translated(shift + corner);
+  const QRectF free = inside.translated(corner);
+  const auto place = [](const QPointF& at) {
+    return QStringLiteral("%1,%2").arg(qRound(at.x())).arg(qRound(at.y()));
+  };
+  qDebug().noquote() << QStringLiteral("View for %1: moved %2,%3 px; the box at %4 to %5, the area at %6 to %7")
+                            .arg(what)
+                            .arg(qRound(shift.x()))
+                            .arg(qRound(shift.y()))
+                            .arg(place(placed.topLeft()), place(placed.bottomRight()), place(free.topLeft()),
+                                 place(free.bottomRight()));
+  moveCamera(moved);
+  return true;
 }
 
 QRectF OcctViewer::screenBox(const Bnd_Box& box) const {

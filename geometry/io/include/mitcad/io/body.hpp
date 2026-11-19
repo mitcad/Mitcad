@@ -27,6 +27,14 @@ public:
   using std::runtime_error::runtime_error;
 };
 
+// A read stopped by its progress range's user break (mitcad#2032): a STEP
+// or IGES file's transfer stopped by the memory guard or the user's
+// cancel. Nothing of the file is given back.
+class Cancelled : public Error {
+public:
+  Cancelled() : Error("the operation was cancelled") {}
+};
+
 // Display colour as sRGB components in [0, 1].
 struct Color {
   double r = 0.0;

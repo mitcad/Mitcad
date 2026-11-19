@@ -1,0 +1,248 @@
+# SPDX-License-Identifier: MIT
+# The toolbar panel's workspace selector (mitcad#1990) through the real UI,
+# in the Floating layout of Windows and Linux, on a box with one drawing
+# (workspaces.json), in a 1024 x 768 window:
+#   0. No menu bar under the system's title bar: the window's menu bar
+#      hidden ("Menu bar hidden: Floating"), the top bar at the window's
+#      top (its titleRow at 0,0 in "Floating cards"), the ☰ of the menus
+#      at its left ("Menu bar button at"); the design's tab on the bar's
+#      centre line with Home ("Document tab shown at" and "Ribbon tab START
+#      at" within a pixel in y).
+#   1. The panel starts in Design: its tabs alone in the tab row (Make's
+#      out of sight: Make is a workspace of its own). The title row's Home shows the Start page without the panel
+#      (no workspace there); a picture of it (workspaces-start.png). A
+#      click on the design's tab leaves the page for Design's Solid tab,
+#      the panel back; a picture of it (workspaces-solid.png).
+#   2. Design -> Make from the selector's list (a click on the selector,
+#      the arrow keys, Enter; Make's entry names its tabs, 3D Print · Laser
+#      · CNC): Make's three tabs alone, 3D Print shown, Design's out of
+#      sight; a picture of each tab (workspaces-make-print.png,
+#      workspaces-make-laser.png, workspaces-make-cnc.png), CNC shown last.
+#   2b. Make -> Render: the Render tab alone, shown, the rendered view on
+#      where the render worker is there; a picture (workspaces-render.png).
+#   3. Render -> Drawing: the rendered view as it was before, the design's
+#      one drawing opens, its tab alone, its Sheet group (Sheet… and Add
+#      Revision…) on the panel ("Ribbon DRAWING/SHEET at": collapsed to its
+#      menu in a 1024 px window, so no "Drawing Sheet at" of the bar's
+#      button); a picture (workspaces-drawing.png). The left card is the
+#      Drawings card ("drawingsDock"), not the model's Browser, in a
+#      column of its own left of the drawing's bar and sheet ("Drawing
+#      column at", checked by the test's wrapper): Drawing1
+#      (open) with its sheet; a click on the sheet shows it, + Drawing asks
+#      Create Drawing (cancelled), its row's Rename names it Plan.
+#   4. Drawing -> Design (the selector's list names Design, Make and Render
+#      while the drawing's tab is alone): the drawing closes, Design's tabs
+#      come back with the Solid tab shown, Make's out of sight.
+#   4b. Design -> Make -> Design: Make opens on the tab shown last there
+#      (CNC), Design on its Solid tab.
+#   5. An 820 px wide window: the Solid tab's last groups, which do not fit
+#      even collapsed, go into the more menu at the end of the row; its menu
+#      lists them; a picture (workspaces-narrow.png). In a 1024 px window
+#      again the » goes.
+# Each switch logs "Ribbon workspace: <name> (tabs ...)". Run by
+# tools/ui-workspaces-test.sh (Linux) and tools/ui-windows-workspaces-test.ps1
+# (Windows), which read the pictures from MITCAD_TEST_WORK.
+expect-ever 'View area' 30
+window-resize 1024 768
+wait-idle
+expect-ever '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$' 30
+expect-ever '^Ribbon workspace at ' 30
+expect-ever '^Ribbon tab SOLID at ' 30
+expect-ever '^Ribbon tab MAKE_PRINT out of sight$' 30
+expect-ever '^Ribbon tab START at ' 30
+expect-ever '^Document tab shown at ' 30
+expect-ever '^Menu bar button at ' 30
+expect-ever '^Menu bar hidden: Floating$' 30
+expect-ever '^Floating cards: .*; titleRow 0,0 ' 30
+expect-ever '^Ribbon group DRAWING/SHEET buttons: drawing.edit_sheet, drawing.add_revision$' 30
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+wait-idle
+
+# The top bar's items on one centre line: the design's tab (its block) as
+# high as Home's centre within a pixel (the tab's block once reached the
+# bar's top edge while the buttons were centred).
+capture homeY '^Ribbon tab START at \d+,(\d+)$'
+capture tabY '^Document tab shown at \d+,(\d+)$'
+expect-near ${tabY} ${homeY} 0 1
+
+# 1. The Start page from Home, without the panel; the design's tab leads
+# back to Solid.
+sleep 300
+mark
+click-logged '^Ribbon tab START at '
+wait-log '^Ribbon tab shown: START$'
+wait-log '^Start page shown$'
+wait-log '^Ribbon panel hidden [(]Start[)]$'
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/workspaces-start.png'
+mark
+click-logged '^Document tab shown at '
+wait-log '^Start page left by the design.s tab$'
+wait-log '^Ribbon tab shown: SOLID$'
+wait-log '^Start page hidden$'
+wait-log '^Ribbon panel shown$'
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/workspaces-solid.png'
+
+# 2. Design -> Make.
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry MAKE at '
+wait-log '^Ribbon workspace entry MAKE tabs: 3D Print · Laser · CNC$'
+screenshot '${MITCAD_TEST_WORK}/workspaces-list.png'
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: MAKE$'
+wait-log '^Ribbon workspace: MAKE [(]tabs MAKE_PRINT, MAKE_LASER, MAKE_CNC[)]$'
+wait-log '^Ribbon tab shown: MAKE_PRINT$'
+wait-idle
+wait-log '^Ribbon tab MAKE_PRINT at '
+wait-log '^Ribbon tab MAKE_LASER at '
+wait-log '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab SOLID out of sight$'
+wait-log '^Ribbon MAKE_PRINT/PRINTERS at '
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/workspaces-make-print.png'
+mark
+click-logged '^Ribbon tab MAKE_LASER at '
+wait-log '^Ribbon tab shown: MAKE_LASER$'
+wait-idle
+wait-log '^Ribbon MAKE_LASER/EXPORT at '
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/workspaces-make-laser.png'
+mark
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+wait-idle
+wait-log '^Ribbon MAKE_CNC/SETUP at '
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/workspaces-make-cnc.png'
+
+# 2b. Make -> Render.
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [(]current[)] [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry RENDER at '
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: RENDER$'
+wait-log '^Ribbon tabs: RENDER [(]shown RENDER[)]$'
+wait-log '^Ribbon workspace: RENDER [(]tabs RENDER[)]$'
+wait-log '^Workspace RENDER: the rendered view (on|not available)$'
+wait-idle
+wait-log '^Ribbon tab RENDER: its own row$'
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/workspaces-render.png'
+
+# 3. Render -> Drawing: the design's drawing opens.
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [|] Render [(]current[)] [|] Drawing$'
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: DRAWING$'
+wait-log '^Workspace RENDER left: the rendered view off$'
+wait-log '^Workspace DRAWING: opened D1$'
+wait-log '^Ribbon tabs: DRAWING [(]shown DRAWING[)]$'
+wait-log '^Ribbon workspace: DRAWING [(]tabs DRAWING[)]$'
+wait-idle
+wait-log '^Ribbon DRAWING/SHEET at '
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/workspaces-drawing.png'
+
+# 3b. The Drawings card in place of the Browser's: the design's drawing
+# with its sheet under it, the open one marked; a click on the sheet shows
+# it; + Drawing asks Create Drawing (cancelled here); Rename from the
+# drawing's row menu renames it in the list.
+expect-ever '^Drawings card: Drawing1 [(]open, sheet 1 of 1[)]$' 30
+wait-log '^Drawings card Drawing1 at ' 30
+wait-log '^Drawings card Drawing1/[^ ]+ at ' 30
+wait-log '^Drawings card add at ' 30
+expect-ever '^Floating cards: (.*; )?drawingsDock ' 30
+wait-idle
+mark
+click-logged '^Drawings card Drawing1/[^ ]+ at '
+wait-log '^Drawings card chose D1 sheet 1$'
+wait-idle
+mark
+click-logged '^Drawings card add at '
+wait-log '^Drawings card: Create Drawing$'
+wait-log '^Create Drawing dialog opened$'
+focus-dialog '^Create Drawing$'
+key Escape
+focus-main
+wait-log '^Create Drawing cancelled$'
+wait-idle
+mark
+context-menu-logged '^Drawings card Drawing1 at ' 'Rename'
+wait-log '^Context menu: Open [|] Rename [|] Delete [|] Create Drawing…$'
+wait-log '^Drawings card rename D1$'
+key Ctrl+a
+type Plan
+key Return
+wait-log '^Renamed Drawing1 to Plan$'
+wait-log '^Drawings card: Plan [(]open, sheet 1 of 1[)]$'
+wait-log '^Drawings card Plan at ' 30
+wait-idle
+
+# 4. Drawing -> Design: the drawing closes.
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [|] Render [|] Drawing [(]current[)]$'
+key Up
+key Up
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Workspace DESIGN: the drawing closed$'
+wait-log '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$'
+wait-log '^Ribbon tab shown: SOLID$'
+wait-idle
+wait-log '^Ribbon tab SOLID at '
+wait-log '^Ribbon tab MAKE_PRINT out of sight$'
+
+# 4b. Design -> Make: the tab shown last there (CNC); then Design again.
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: MAKE$'
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [(]current[)] [|] Render [|] Drawing$'
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Ribbon tab shown: SOLID$'
+wait-idle
+
+# 5. The groups that do not fit even collapsed in the more menu (the
+# driver's smallest window: 820 px).
+mark
+window-resize 820 768
+wait-idle
+wait-log '^Ribbon more SOLID: [A-Z]'
+wait-log '^Ribbon more SOLID at '
+sleep 300
+screenshot '${MITCAD_TEST_WORK}/workspaces-narrow.png'
+mark
+click-logged '^Ribbon more SOLID at '
+wait-log '^Ribbon more menu SOLID: [A-Z]'
+key Escape
+wait-idle
+mark
+window-resize 1024 768
+wait-idle
+wait-log '^Ribbon more SOLID: none$'
+expect-never 'TestDriver: FAIL'

@@ -62,7 +62,7 @@ function Round([string]$Layout, [string]$Chrome, [string]$Place) {
   Pins-Saved '<none>' "${Layout}: the default is not written"
 
   # 2. Measure pinned from its row in SOLID > INSPECT, by the keys.
-  Ui-Step 'the SOLID tab'                  { Ui-ClickLogged 'Ribbon tab SOLID' }
+  Ui-Step 'the SOLID tab'                  { Ui-ClickTab 'SOLID' }
   Ui-Mark
   Ui-Step 'the INSPECT menu'               { Ui-ClickLogged 'Ribbon SOLID/INSPECT' }
   Ui-ExpectNew 'Ribbon menu SOLID/INSPECT: Measure' "${Layout}: the INSPECT menu opened, Measure first"
@@ -80,7 +80,7 @@ function Round([string]$Layout, [string]$Chrome, [string]$Place) {
 
   # 3. Measure from the bar in the BUILD workspace.
   Ui-Mark
-  Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+  Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
   Ui-ExpectNew 'Ribbon tab shown: BUILD' "${Layout}: the BUILD workspace"
   Ui-Mark
   Ui-Step 'Measure (bar)'                  { Ui-ClickLogged 'Navigation bar Measure' }

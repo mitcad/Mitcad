@@ -52,6 +52,14 @@ public:
   void setEnabled(bool enabled);
   void setDocumentVisible(bool visible);
   bool isEnabled() const { return m_enabled; }
+  // Pause live / Resume of the Render workspace (mitcad#2013): the worker
+  // stops refining (its "pause") and the last frame stays; resumed, it
+  // renders on. Logged as "Rendered view paused" and "Rendered view
+  // resumed".
+  void setPaused(bool paused);
+  bool isPaused() const { return m_paused; }
+  // The samples a view is refined to (MITCAD_RENDER_SAMPLES, else 64).
+  static int liveSamples();
 
   // The document's render settings (the model's `render_settings` query,
   // mitcad#47) and the folder of its file (relative image paths are in
@@ -72,6 +80,9 @@ public:
 signals:
   // The mode ended by itself (the worker died).
   void stopped();
+  // A frame shows in the view (mitcad#2013: the Render workspace's live
+  // line): its size in pixels, its samples of `total`.
+  void frameShown(int width, int height, int samples, int total);
   // The picked render worker gave way to the shipped one (mitcad#1332):
   // a message for the status bar.
   void workerFallback(const QString& text);
@@ -113,6 +124,7 @@ private:
   QTimer* m_messageTimer;
   bool m_enabled = false;
   bool m_documentVisible = true;
+  bool m_paused = false; // Pause live (mitcad#2013)
   bool m_ready = false;
   bool m_scenePending = false;
   // Scene updates: their sequence number, the mesh files the worker has not

@@ -164,6 +164,11 @@ fn placed_json(placed: &Placed) -> Value {
         value["set"] = json!(placed.set);
         value["count"] = json!(placed.set.len());
     }
+    // Members along sketch lines (mitcad#1965).
+    if !placed.members.is_empty() {
+        value["members"] = json!(placed.members);
+        value["count"] = json!(placed.members.len());
+    }
     if let Some((fits, reason)) = &placed.fits {
         value["fits"] = json!(fits);
         value["reason"] = if reason.is_empty() {
@@ -338,6 +343,44 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                         Ok(value) => value,
                         Err(error) => return Ok(json!({"problems": [error.to_string()]})),
                     };
+                    // Members along sketch lines (mitcad#1965): each one's
+                    // frame at its end A and its length, the corners square.
+                    if input.lines.is_some() {
+                        match self.line_inputs(&input) {
+                            Ok(members) => {
+                                let active = self.host_placement();
+                                let mut frames = Vec::new();
+                                let mut lengths = Vec::new();
+                                for member in &members {
+                                    let plan = match self.preview_place(member) {
+                                        Ok(plan) => plan,
+                                        Err(e) => return Ok(problems(e)),
+                                    };
+                                    let world = active.after(&plan.placement);
+                                    let end_a = plan
+                                        .mounts
+                                        .get("end_a")
+                                        .map_or([0.0; 3], |t| t.translation);
+                                    frames.push(frame_json(&mitcad_model::internal::build::frame(
+                                        world.apply_point(end_a),
+                                        world.apply_vector(mitcad_model::internal::build::X),
+                                        world.apply_vector(mitcad_model::internal::build::Z),
+                                    )));
+                                    lengths.push(match &plan.length {
+                                        LengthPlan::Value(_, v) => json!(v),
+                                        LengthPlan::Bound { first, .. } => json!(first),
+                                        LengthPlan::None => Value::Null,
+                                    });
+                                }
+                                value["lines"] = json!({
+                                    "count": frames.len(),
+                                    "frames": frames,
+                                    "lengths": lengths,
+                                });
+                            }
+                            Err(e) => value = problems(e),
+                        }
+                    }
                     // A spacing set (mitcad#478): its members' frames.
                     if let Some(spacing) = &input.spacing {
                         match self.plan_set(&input, spacing) {
@@ -549,6 +592,25 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
         // share them but for their lengths.
         let mut evaluations = Vec::new();
         let mut shapes = match self.preview_input(fields)? {
+            // Members along sketch lines (mitcad#1965): each one, its
+            // corners square; run from its frame's start as placed.
+            PreviewInput::Place(input) if input.lines.is_some() => {
+                let mut shapes = Vec::new();
+                for member in self.line_inputs(&input)? {
+                    let plan = self.preview_place(&member)?;
+                    let shown = PlaceInput {
+                        flip: false,
+                        ..member
+                    };
+                    shapes.extend(self.placing_preview_bodies(
+                        &shown,
+                        &plan,
+                        None,
+                        &mut evaluations,
+                    )?);
+                }
+                shapes
+            }
             PreviewInput::Place(input) => match &input.spacing {
                 Some(spacing) => {
                     let set = self.plan_set(&input, spacing)?;
@@ -747,13 +809,28 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                 part["gap"] = json!(info.record.gap);
                 // Its offset from `from`, as `build_edit`'s `at.offset`
                 // takes it (mitcad#1885).
-                part["offset"] = json!(mitcad_model_build::side_offset(self, info.component));
+                // On a plane or a face (mitcad#2046): its offset along the
+                // normal, as `build_edit`'s `at.offset` takes it there.
+                let ground = mitcad_model_build::ground_offset(self, info.component);
+                part["offset"] = json!(
+                    mitcad_model_build::side_offset(self, info.component).or(ground)
+                );
+                part["ground"] = json!(ground.is_some());
                 // A member along an edge (mitcad#1814): its edge frame,
                 // whose definition has the edge, the face and the offsets,
                 // and how it lies.
                 part["along"] = match mitcad_model_build::along_of(self, info.component) {
                     Some(along) => {
-                        json!({"feature": along.frames, "joint": along.joint, "lie": along.lie})
+                        let mut value = json!({"feature": along.frames, "joint": along.joint, "lie": along.lie});
+                        // Along a sketch line (mitcad#1965).
+                        if let Some(line) = along.line {
+                            value["line"] = json!({
+                                "align": line.align.as_str(),
+                                "rotate": line.rotate,
+                                "flip": line.reversed,
+                            });
+                        }
+                        value
                     }
                     None => Value::Null,
                 };

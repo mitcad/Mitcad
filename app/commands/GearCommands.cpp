@@ -188,9 +188,6 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
   def.name = QObject::tr("Gear");
   def.icon = QStringLiteral("gear");
   def.tooltip = QObject::tr("A spur, helical, herringbone, ring, rack or bevel gear with involute teeth");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("machine");
-  def.subgroup = QStringLiteral("Machine Elements");
   def.keywords = {QStringLiteral("spur"),        QStringLiteral("helical"), QStringLiteral("herringbone"),
                   QStringLiteral("rack"),        QStringLiteral("pinion"),  QStringLiteral("bevel"),
                   QStringLiteral("ring"),        QStringLiteral("internal"), QStringLiteral("involute"),

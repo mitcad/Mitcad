@@ -119,6 +119,13 @@ int languageTests() {
           QStringLiteral("%n annotations"));
     CHECK(plurals.translate("mitcad::AppearanceDialog", "Used by %n body(ies)", nullptr, 3) ==
           QStringLiteral("Used by %n bodies"));
+    // The Render workspace's check (mitcad#2013): its pronouns agree too.
+    const char* hidden =
+        "%n hidden body(ies) will not be in the image. Show them in the Browser if they belong in it.";
+    CHECK(plurals.translate("RenderReadyCheck", hidden, nullptr, 1) ==
+          QStringLiteral("%n hidden body will not be in the image. Show it in the Browser if it belongs in it."));
+    CHECK(plurals.translate("RenderReadyCheck", hidden, nullptr, 2) ==
+          QStringLiteral("%n hidden bodies will not be in the image. Show them in the Browser if they belong in it."));
     CHECK(plurals.translate("QObject", "Extrude").isEmpty());
     // Not a language to choose: English is listed once, as itself.
     int englishes = 0;

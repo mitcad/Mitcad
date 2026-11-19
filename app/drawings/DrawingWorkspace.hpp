@@ -26,9 +26,12 @@
 //
 // It is a child of the 3D view and covers all of it, edge to edge
 // (mitcad#1008): its bar and sheet start below the rows that float over the
-// view's top (OcctViewer::overlayInsets), the bar's controls beside a card
-// at the view's side (the Floating layout's browser), and the sheet goes on
-// under that card, fitted beside it; so it shows the same in every layout.
+// view's top (OcctViewer::overlayInsets) and right of a card at the view's
+// left side (the Floating layout's Drawings card, mitcad#1990), which thus
+// stands in a column of its own, its top level with the bar's; a card at
+// the right side narrows the bar's controls. So it shows the same in
+// every layout. Logs "Drawing column at x,y beside card x,y WxH" (or
+// "beside no card") when it changes.
 // While it is open the window shows the ribbon's DRAWING tab and, in the
 // Floating layout, no card but the browser (MainWindow).
 //
@@ -134,6 +137,10 @@ public:
   // lower right while the drawing is open (mitcad#1209).
   QWidget* sheetView() const;
   QString drawing() const { return m_drawing; }
+  // The sheet shown (0-based), and another one shown as a click on its tab
+  // shows it (the Drawing workspace's Drawings card, mitcad#1990).
+  int sheet() const { return m_sheet; }
+  void chooseSheet(int index) { switchSheet(index); }
   // The model changed (a command, undo, another design): the sheet is
   // asked for again; the workspace closes when its drawing is gone. From
   // the projection cache when it holds every view; otherwise drawn in a
@@ -155,9 +162,15 @@ public:
   // written. The drawing's name.
   QStringList writeSheetsSvg(const QString& folder, QString& error);
   QString name() const { return m_name; }
-  // Add Revision (the bar's button and the command drawing.add_revision,
-  // mitcad#707 phase 4): asks for its description, date and author.
+  // Add Revision (the command drawing.add_revision, on the ribbon's
+  // DRAWING tab with setRibbonTools, else the bar's button; mitcad#707
+  // phase 4): asks for its description, date and author.
   void addRevision();
+  // Sheet… (the command drawing.edit_sheet, on the ribbon's DRAWING tab
+  // with setRibbonTools, else the bar's button; a cut sheet's Material…
+  // stays the bar's): the sheet's size, projection, units, template and
+  // title block.
+  void editSheetSettings() { editSheet(); }
   // A cut sheet's Add Parts… (mitcad#853): the bodies of its component to
   // add as parts (those selected in the model chosen first) and how many
   // of each.
@@ -177,9 +190,11 @@ public:
   bool cutLabels() const { return m_cutLabels; }
 
   // The window's ribbon has the tools (mitcad#1008): its DRAWING tab (CUT
-  // SHEET for a cut sheet) holds Close Drawing, the tools' groups and
-  // Export, so the bar is one row (the drawing's name, the sheets, +,
-  // Sheet…, Add Revision…). `buttonOf` finds a control there, by a
+  // SHEET for a cut sheet) holds Close Drawing, Sheet… and Add Revision…
+  // (its Sheet group, mitcad#1990), the tools' groups and Export, so the
+  // bar is one row (the drawing's name, the sheets, +, the window's
+  // commands; a cut sheet's Material… too). "Drawing Sheet at" and
+  // "Drawing Add Revision at" are the ribbon's buttons then. `buttonOf` finds a control there, by a
   // command's id or a group's "DRAWING/EXPORT", for the logged places
   // ("Drawing tool Base View at x,y" is the ribbon's button); null when it
   // is not in sight. Unset (the AppKit frontend, which has no DRAWING tab
@@ -196,6 +211,8 @@ public:
 
 signals:
   void closed();
+  // Another sheet shown (its tab, the Drawings card; mitcad#1990).
+  void sheetShown(int index);
   // The tool on (its id, "drawing.base_view"), or none (empty): the
   // ribbon's buttons show it checked.
   void toolChanged(const QString& id);
@@ -504,6 +521,7 @@ private:
   QFormLayout* m_form = nullptr;
   QString m_loggedButtons;
   QString m_loggedTitle;
+  QString m_loggedColumn; // place
   QString m_loggedRevisions;
   QString m_loggedModelItems;
   // The views' own line styles and the pens their lines take, as logged

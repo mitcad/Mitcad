@@ -67,4 +67,23 @@ bool showProfilesOnOpen() { return QSettings().value(QLatin1String(kShowProfiles
 
 void saveShowProfilesOnOpen(bool on) { QSettings().setValue(QLatin1String(kShowProfilesSetting), on); }
 
+// Project the face's edges into a sketch on a face (mitcad#2051).
+namespace {
+
+const char* const kProjectFaceSetting = "sketch/projectFaceOnCreate";
+
+} // namespace
+
+bool projectFaceOnCreate() {
+  const QSettings settings;
+  if (settings.contains(QLatin1String(kProjectFaceSetting))) {
+    return settings.value(QLatin1String(kProjectFaceSetting)).toBool();
+  }
+  return qgetenv("MITCAD_SKETCH_PROJECT_FACE").trimmed() != "0";
+}
+
+void saveProjectFaceOnCreate(bool on) { QSettings().setValue(QLatin1String(kProjectFaceSetting), on); }
+
+void resetProjectFaceOnCreate() { QSettings().remove(QLatin1String(kProjectFaceSetting)); }
+
 } // namespace mitcad::sketch

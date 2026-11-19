@@ -117,9 +117,9 @@ focus_window() { ui_focus_dialog '^Annotations$'; }
 # annotate downs "Name": the Make tab's Annotate group (mitcad#1049): its
 # menu's entry that many down, started.
 annotate() {
-  ui_step "the Make tab"                   ui_click_logged "Ribbon tab MAKE"
-  ui_step "open the Annotate menu"         ui_click_logged "Ribbon MAKE/ANNOTATE"
-  ui_expect_new "Ribbon menu MAKE/ANNOTATE: " "the Annotate menu"
+  ui_step "the 3D Print tab"               ui_click_tab "MAKE_PRINT"
+  ui_step "open the Annotate menu"         ui_click_logged "Ribbon MAKE_PRINT/ANNOTATE"
+  ui_expect_new "Ribbon menu MAKE_PRINT/ANNOTATE: " "the Annotate menu"
   xdotool key --delay 80 --repeat "$1" Down
   ui_key Return
   ui_expect_new "Command $2 started" "$2 started"
@@ -135,7 +135,7 @@ ui_step "fit (F6)"                         ui_key F6
 
 echo "--- Dimensions from the Make tab (mitcad#1049)"
 ui_mark
-ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
 ui_expect_new "Ribbon button make.dimension at" "the Make tab's Dimension"
 ui_step "Dimension"                        ui_click_logged "Ribbon button make.dimension"
 ui_expect_new "Command Dimension started" "Dimension started"

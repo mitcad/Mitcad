@@ -27,6 +27,8 @@
 #include "build/BuildModel.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/Icons.hpp"
+#include "framework/Ribbon.hpp"
+#include "framework/CommandLayout.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "sketch/SketchSurface.hpp"
@@ -40,16 +42,19 @@ namespace {
 enum class Kind { Solid, Build, Construct, Inspect, Make };
 
 Kind kindOf(const CommandDef& def) {
-  if (def.tab == QStringLiteral("BUILD")) {
+  // By its home in the default layout (mitcad#1951): what kind of command
+  // it is does not change when the user moves it.
+  const LayoutPlace home = defaultHome(def.id);
+  if (home.tab == QStringLiteral("BUILD")) {
     return Kind::Build;
   }
-  if (def.tab == QStringLiteral("MAKE")) {
+  if (Ribbon::workspaceOfTab(home.tab) == QLatin1String("MAKE")) { // 3D Print, Laser, CNC
     return Kind::Make;
   }
-  if (def.group == QStringLiteral("CONSTRUCT")) {
+  if (home.group == QStringLiteral("CONSTRUCT")) {
     return Kind::Construct;
   }
-  if (def.group == QStringLiteral("INSPECT")) {
+  if (home.group == QStringLiteral("INSPECT")) {
     return Kind::Inspect;
   }
   return Kind::Solid;
@@ -214,7 +219,8 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
     if (kind == Kind::Build && !allParts) {
       continue;
     }
-    fitting[static_cast<int>(kind)].append({def.get(), def->completedBy(selection)});
+    fitting[static_cast<int>(kind)].append(
+        {def.get(), def->completedBy(selection, defaultHome(def->id).group == QStringLiteral("CREATE"))});
   }
   // `key` names the submenu in the log, "Context menu Solid: A | More" and
   // "Context menu Solid More: B | C".

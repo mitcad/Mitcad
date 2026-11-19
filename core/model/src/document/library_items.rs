@@ -955,6 +955,7 @@ impl<K: Kernel> Document<K> {
             }
             (None, None) => (
                 Material {
+                    sheet_process: None,
                     id: String::new(),
                     name: String::new(),
                     density: 1.0,

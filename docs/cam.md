@@ -1,7 +1,8 @@
 # CAM: toolpaths for CNC milling
 
 MitCad's CAM (mitcad#1013) turns bodies and sketches into toolpaths and
-writes them as G-code for the controller of a CNC router or mill. This
+writes them as G-code for the controller of a CNC router or mill, and
+turns parts on a 2-axis lathe ([Turning](#turning)). This
 page is the design: what was learnt from the open-source CAM projects,
 the scope by phases, the data model, the machine model with its
 collision zones and tool changers, the post-processors, simulation, the
@@ -15,7 +16,8 @@ Contents: [Open-source CAM](#open-source-cam) ·
 [Machine model](#machine-model) · [Tool changers](#tool-changers) ·
 [Spindle assembly](#spindle-assembly) ·
 [Operations](#operations) · [Post-processors](#post-processors) ·
-[Simulation and checks](#simulation-and-checks) · [API](#api) ·
+[Simulation and checks](#simulation-and-checks) · [Turning](#turning) ·
+[API](#api) ·
 [UI](#ui) · [Crates](#crates) · [Implemented](#implemented) ·
 [Open questions](#open-questions) · [Next steps](#next-steps)
 
@@ -121,7 +123,7 @@ are listed again under [Open questions](#open-questions).
 2. **The model and the app:** setups, the tool library and machines in
    the design and the project, operations from faces, sketches and the
    stock through the api, toolpaths drawn in the 3D view, the CNC group
-   on the Make tab, posting to a file.
+   on the Make tab (the CNC tab since 18.11.2026), posting to a file.
 3. **Better 2.5-axis:** ramps and helix entries, lead in and out, holding
    tabs, rest machining (what a bigger tool left), adaptive (constant
    engagement) clearing, chamfers and V-carving, engraving of text,
@@ -134,6 +136,15 @@ are listed again under [Open questions](#open-questions).
    ball and bull cutters.
 6. **Later:** 4th axis (indexed, then wrapped), probing cycles, tool
    wear and breakage checks, a feeds and speeds calculator.
+7. **Turning (mitcad#1869, GitHub mitcad/Mitcad#346):** 2-axis (X-Z)
+   lathes: the lathe machine model, facing, roughing and finishing of
+   outside diameters and bores, grooving, parting off and threading from
+   the bodies' revolved profile, constant surface speed under a spindle
+   limit, the Fanuc turning dialect with G71, G70 and G76, the program
+   check and the simulation of the turned section ([Turning](#turning)).
+   Later: C-axis indexing and live tools (G12.1/G112 polar, G7.1/G107
+   cylindrical interpolation, the C-axis mode and brake codes), Y-axis
+   milling, a tilting B head; the lathe's axes are kept for them.
 
 ## Data model
 
@@ -761,6 +772,111 @@ shared two-operation program in `post/tests.rs`.
   through a pyramid of the highest node per block, nearest first, and
   the flutes' contacts at a rapid come from the simulation.
 
+## Turning
+
+Turning on a 2-axis (X-Z) lathe (mitcad#1869): Rust in
+`core/cam/src/turning/`, the document's side in
+`core/model/src/document/cam/turning.rs`, the API in
+[commands.md](../core/model-api/src/commands.md), "CAM: turning on a
+lathe".
+
+- **The lathe** is a machine with lathe data (`turning::Lathe`): the
+  turret's stations (a tool's number is its station), the chuck's
+  diameter and jaw length, and the axes it has beyond X and Z (a C axis,
+  live tools, Y, a tilting B; kept, not used yet). The machine's travel,
+  spindle limits, feeds, zones and park keep their meaning in the
+  lathe's axes: X is the controlled point's distance from the spindle
+  axis (a radius), Z runs along the spindle, positive away from the
+  chuck. The turret is the tool changer.
+- **Coordinates:** everything is in the plane through the spindle axis,
+  `[x, z]` with x a radius; the work zero is on the axis at the part's
+  face. Drawn with Z to the right and X up (the upper half, the usual
+  programming view), a clockwise arc is G2. The post writes X as a
+  diameter.
+- **Tools** (`TurningTool`): a turning insert, a boring bar (its bar's
+  diameter must fit the stock's bore), a grooving insert (outside or
+  inside, its width), a parting blade (its width), a threading insert
+  (its angle, outside or inside); each with its nose radius and the
+  deepest it cuts. The **controlled point** is the insert's imaginary
+  tip, where the operator touches off; the nose radius is compensated in
+  our code (G40), as Decision 3 has it for milling. A grooving or
+  parting insert is controlled at its corner towards the chuck.
+- **The profile** (`TurnPart`): the setup's bodies cut by the plane
+  through the axis, its half on the work X side: the outside from the
+  face to the back and the bore from its mouth, chains of lines and arcs.
+  A tool cutting towards the chuck follows the **envelope**: grooves are
+  bridged at their higher side (grooving cuts them), a wall that leans
+  back towards the face becomes a shoulder. The tool's path is the
+  envelope offset by the nose radius (cavalier_contours, arcs kept), moved
+  to the imaginary tip; a contour that ends along Z goes on by the nose
+  radius so that the nose clears the part's end.
+- **Operations:** facing (passes along X from outside the stock to the
+  centre), roughing (passes along Z at most the depth of cut deep,
+  backing off at 45 degrees, then once along the contour leaving the
+  stock to leave in X and Z: what G71 does), finishing (once along the
+  contour), grooving (plunges at most 80 % of the insert's width apart,
+  with pecks), parting off (a plunge to the axis with pecks), threading
+  (passes the square root of their number deep, none shallower than the
+  smallest, then the finishing passes, as G76 takes them; radial infeed
+  in the written-out moves).
+- **The spindle:** a constant surface speed (G96, m/min) under a limit
+  (G50), or a constant speed (G97); threading always at a constant
+  speed. Feeds are per revolution (G99).
+- **The post** (`turning::post`): one driver and a thin dialect per
+  controller (`TurningPost`), as Decision 5 has it. The driver writes the
+  tape marks, the program number, the experimental notice, the tools,
+  the dialect's header, per operation the tool change at the change
+  position, the spindle (the limit when it changes), the coolant and the
+  moves; X a diameter, arcs with I (a radius) and K from the start to the
+  centre, unchanged words left out, every length with its decimal point.
+  With `canned_cycles` a roughing toolpath is written as G71 with the
+  finished contour as its blocks (the first in X alone, the finishing
+  feed on them), a finishing of the same contour as G70 over those blocks
+  and threading as the two-block G76 (when the insert's angle is one the
+  control takes); otherwise the moves (G32 for threads).
+
+| | Fanuc (turning) |
+|---|---|
+| Id | `fanuc_turning` (Series 0i-TF, 31i-B, G-code system A) |
+| Header | `%`, `O1000 (NAME)`, `G21 G18 G40 G99`, `G54` |
+| Tool change | `G0 X Z` (the change position), `T0101` (station and offset) |
+| Spindle | `G50 S` limit, `G96 S M3` (m/min) or `G97 S M3` (rpm) |
+| Coolant | `M8`, `M9` |
+| Cycles | `G71 U R` / `G71 P Q U W F`, `G70 P Q`, `G76 P(m)(r)(a) Q R` / `G76 X Z P Q F` |
+| End | `M9`, the change position, `M5`, `M30`, `%` |
+| File | `.nc` |
+
+- **The program check** (`check_program`): the written program read back
+  as a Fanuc lathe control reads it: every length with its decimal point
+  (else the control reads it in its smallest steps), G99 before a feed,
+  a G50 spindle limit before G96, no threading at a constant surface
+  speed, the cycles' blocks there and (for G71) running one way in X with
+  the first in X alone, no word it does not know; the moves read back (X
+  halved) and the cycles with their lines. `cam_post` refuses a program
+  it does not pass.
+- **The lathe check** (`check_lathe`): the station on the turret, the
+  spindle's speed or limit within the spindle's, a feed (per revolution
+  times the speed where the tool is) within the machine's, the travel, the
+  zones and the chuck (no tool behind its jaws' face), one finding per
+  operation and kind, in words.
+- **The simulation** (`simulate_turning`): the stock's section through
+  the axis on a row of nodes along Z, each the ring between an inner and
+  an outer radius; each tool takes away what its insert covers (the
+  nose's circle and its edge behind it, a grooving or parting insert's
+  width), threads take nothing (the crest stays in any section). It
+  gives the material left over the part, the places a tool cut into it
+  and the rapids that cut. *Simulate* draws the section as the program
+  leaves it revolved about the spindle axis (a band between the nodes
+  where a radius changes, rings where the material starts and ends) with
+  the summary in words.
+- **Tests** (`core/cam/src/turning/`): the exact Fanuc program of a pin
+  (facing, G71, G70), a shaft with shoulders, a relief groove, an M20
+  thread and a bore through every operation, posted with and without
+  cycles and with line numbers, the program check (and the moves read
+  back within the program's digits), the lathe check (a chuck the
+  parting blade runs into) and the simulation (no rapid into the stock,
+  no cut into the part).
+
 ## API
 
 Commands and queries of `core/model-api` (`api/cam.rs`), documented in
@@ -789,11 +905,13 @@ api's rules: a message in words.
 
 ## UI
 
-- The **CNC** group on the **Make** tab ([UI
-  conventions](ui-conventions.md#ui-surfaces)): *New Setup*, *Facing*,
-  *Contour*, *Pocket*, *Adaptive Clearing*, *Rest Machining*, *Drill*,
-  *3D Roughing*, *Raster Finishing*, *Waterline Finishing*, *Generate*, *Simulate*, *Post Process…*, *Machines and Tools…*
-  (app/COMMANDS.md, "The CNC group").
+- The **CNC** tab of the **Make** workspace ([UI
+  conventions](ui-conventions.md#ui-surfaces)): Setup (*New Setup*,
+  *Machines and Tools…*), 2D Milling (*Facing*, *Contour*, *Pocket*,
+  *Adaptive Clearing*, *Rest Machining*, *Drill*), 3D Milling (*3D
+  Roughing*, *Raster Finishing*, *Waterline Finishing*), Turning and
+  Toolpath (*Generate*, *Simulate*, *Post Process…*) (app/COMMANDS.md,
+  "The CNC group").
 - The **browser** shows a *CAM* folder with the setups and their
   operations (state: up to date, out of date, failed, suppressed); a
   double click edits the operation in its command panel.
@@ -816,7 +934,7 @@ api's rules: a message in words.
 
 | Crate | Holds |
 |---|---|
-| `core/cam` (`mitcad-cam`) | Tools, the tool library, outlines, toolpaths, operations, the machine model and check, the post-processors. No model, no OCCT. |
+| `core/cam` (`mitcad-cam`) | Tools, the tool library, outlines, toolpaths, operations, the machine model and check, the post-processors; turning (`turning/`). No model, no OCCT. |
 | `core/model` | The setups and operations in the design file, their references, out-of-date marks (phase 2). |
 | `core/model-api` | The commands and queries above (phase 2). |
 | `app/` | The CNC group, the panels, the toolpath display (phase 2). |

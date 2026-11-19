@@ -149,6 +149,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>%n profile(s), one on each line</source>
+        <translation>
+            <numerusform>%n profile, one on each line</numerusform>
+            <numerusform>%n profiles, one on each line</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>%1, %2: %n member(s)</source>
         <translation>
             <numerusform>%1, %2: %n member</numerusform>
@@ -237,6 +244,44 @@
         <translation>
             <numerusform>Import %n file into this design as a component, or as a new design?</numerusform>
             <numerusform>Import %n files into this design as components, or each as a new design?</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n constraint(s)</source>
+        <translation>
+            <numerusform>%n constraint</numerusform>
+            <numerusform>%n constraints</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n dimension(s)</source>
+        <translation>
+            <numerusform>%n dimension</numerusform>
+            <numerusform>%n dimensions</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n degree(s) of freedom left</source>
+        <translation>
+            <numerusform>%n degree of freedom left</numerusform>
+            <numerusform>%n degrees of freedom left</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>RenderReadyCheck</name>
+    <message numerus="yes">
+        <source>%n hidden body(ies) will not be in the image. Show them in the Browser if they belong in it.</source>
+        <translation>
+            <numerusform>%n hidden body will not be in the image. Show it in the Browser if it belongs in it.</numerusform>
+            <numerusform>%n hidden bodies will not be in the image. Show them in the Browser if they belong in it.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n shown body(ies) have no appearance of their own and render in the default look.</source>
+        <translation>
+            <numerusform>%n shown body has no appearance of its own and renders in the default look.</numerusform>
+            <numerusform>%n shown bodies have no appearance of their own and render in the default look.</numerusform>
         </translation>
     </message>
 </context>
@@ -824,6 +869,16 @@ What is not sent within %n seconds is sent the next time the project opens.</num
     </message>
 </context>
 <context>
+    <name>mitcad::RenderWorkspace</name>
+    <message numerus="yes">
+        <source>%1 and %n more</source>
+        <translation type="unfinished">
+            <numerusform></numerusform>
+            <numerusform></numerusform>
+        </translation>
+    </message>
+</context>
+<context>
     <name>mitcad::ReportCenter</name>
     <message numerus="yes">
         <source>%n more crash(es) before it are not offered.</source>
@@ -931,6 +986,16 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>Exported %1 (%n sheet%2).</numerusform>
             <numerusform>Exported %1 (%n sheets%2).</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::drawings::DrawingsPanel</name>
+    <message numerus="yes">
+        <source>%1: %n sheet(s)</source>
+        <translation type="unfinished">
+            <numerusform>%1: %n sheet</numerusform>
+            <numerusform>%1: %n sheets</numerusform>
         </translation>
     </message>
 </context>

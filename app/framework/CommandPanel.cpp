@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <QAbstractScrollArea>
+#include <QAbstractTextDocumentLayout>
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -31,9 +32,11 @@
 #include <QLineEdit>
 #include <QStyle>
 #include <QStyleOptionComboBox>
+#include <QTextDocument>
 #include <QStylePainter>
 #include <QListWidget>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QPoint>
 #include <QPointer>
 #include <QPushButton>
@@ -324,7 +327,57 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Along the Walls (Face Turns)"), QT_TRANSLATE_NOOP("Choice", "Draft"),
     // commands/SheetCommands.cpp: a flange on several edges' Miter (mitcad#1872).
     QT_TRANSLATE_NOOP("Choice", "Bisect"), QT_TRANSLATE_NOOP("Choice", "Earlier Edge Runs Past"),
-    QT_TRANSLATE_NOOP("Choice", "Later Edge Runs Past")};
+    QT_TRANSLATE_NOOP("Choice", "Later Edge Runs Past"),
+    // The Miter's labels since (mitcad#1872), BUILD's Linear Component and
+    // Profile placements, and the sheet process profiles' rules, crease
+    // rows and standard boxes (mitcad#1939).
+    QT_TRANSLATE_NOOP("Choice", "Face normal: out of the picked face"),
+    QT_TRANSLATE_NOOP("Choice", "Along -X"), QT_TRANSLATE_NOOP("Choice", "Along -Y"),
+    QT_TRANSLATE_NOOP("Choice", "Along -Z (hanging)"),
+    QT_TRANSLATE_NOOP("Choice", "By clicks: on a plane, a face, a side or an end"),
+    QT_TRANSLATE_NOOP("Choice", "Along sketch lines: a profile on each line"),
+    QT_TRANSLATE_NOOP("Choice", "Centered on the line"),
+    QT_TRANSLATE_NOOP("Choice", "On top of the sketch plane"),
+    QT_TRANSLATE_NOOP("Choice", "Under the sketch plane"),
+    QT_TRANSLATE_NOOP("Choice", "Corner: left, on top"), QT_TRANSLATE_NOOP("Choice", "Corner: right, on top"),
+    QT_TRANSLATE_NOOP("Choice", "Corner: left, under"), QT_TRANSLATE_NOOP("Choice", "Corner: right, under"),
+    QT_TRANSLATE_NOOP("Choice", "Earlier Face Runs Past"),
+    QT_TRANSLATE_NOOP("Choice", "Later Face Runs Past"), QT_TRANSLATE_NOOP("Choice", "Metal"),
+    QT_TRANSLATE_NOOP("Choice", "Board"), QT_TRANSLATE_NOOP("Choice", "Laser Sheet"),
+    QT_TRANSLATE_NOOP("Choice", "K-Factor"), QT_TRANSLATE_NOOP("Choice", "Bend Allowance"),
+    QT_TRANSLATE_NOOP("Choice", "Bend Deduction"), QT_TRANSLATE_NOOP("Choice", "Crease Table"),
+    QT_TRANSLATE_NOOP("Choice", "Kerf Bend"), QT_TRANSLATE_NOOP("Choice", "F"),
+    QT_TRANSLATE_NOOP("Choice", "E"), QT_TRANSLATE_NOOP("Choice", "B"), QT_TRANSLATE_NOOP("Choice", "C"),
+    QT_TRANSLATE_NOOP("Choice", "A"), QT_TRANSLATE_NOOP("Choice", "EB"), QT_TRANSLATE_NOOP("Choice", "BC"),
+    QT_TRANSLATE_NOOP("Choice", "Any"), QT_TRANSLATE_NOOP("Choice", "Along the Flutes"),
+    QT_TRANSLATE_NOOP("Choice", "Across the Flutes"), QT_TRANSLATE_NOOP("Choice", "Either Side"),
+    QT_TRANSLATE_NOOP("Choice", "Inside the Fold"), QT_TRANSLATE_NOOP("Choice", "Outside the Fold"),
+    QT_TRANSLATE_NOOP("Choice", "Deduction"), QT_TRANSLATE_NOOP("Choice", "Allowance"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0201 Slotted Box"),
+    QT_TRANSLATE_NOOP("Choice", "ECMA A20 Reverse Tuck End"),
+    QT_TRANSLATE_NOOP("Choice", "Corrugated C flute 4 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Corrugated B flute 3 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Corrugated E flute 1.5 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Corrugated BC double wall 7 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Folding carton 0.5 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Corrugated polypropylene 3 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Corrugated polypropylene 4 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Corrugated polypropylene 5 mm"),
+    // commands/MeshToolsCommands.cpp: Decimate's target, Remove Region's
+    // selection and Fit Surface's kinds (mitcad#1871).
+    QT_TRANSLATE_NOOP("Choice", "Triangle Count"), QT_TRANSLATE_NOOP("Choice", "Tolerance"),
+    QT_TRANSLATE_NOOP("Choice", "Lasso"), QT_TRANSLATE_NOOP("Choice", "Brush"),
+    QT_TRANSLATE_NOOP("Choice", "Cone"), QT_TRANSLATE_NOOP("Choice", "B-Spline"),
+    // commands/BuildCommands.cpp: Profile's Method and its alignment on
+    // sketch lines (mitcad#1965).
+    QT_TRANSLATE_NOOP("Choice", "By clicks: on a plane, a face, a side or an end"),
+    QT_TRANSLATE_NOOP("Choice", "Along sketch lines: a profile on each line"),
+    QT_TRANSLATE_NOOP("Choice", "Centered on the line"), QT_TRANSLATE_NOOP("Choice", "On top of the sketch plane"),
+    QT_TRANSLATE_NOOP("Choice", "Under the sketch plane"), QT_TRANSLATE_NOOP("Choice", "Corner: left, on top"),
+    QT_TRANSLATE_NOOP("Choice", "Corner: right, on top"), QT_TRANSLATE_NOOP("Choice", "Corner: left, under"),
+    QT_TRANSLATE_NOOP("Choice", "Corner: right, under"),
+    // commands/SheetCommands.cpp: Convert to Sheet Metal's Miter (mitcad#1949).
+    QT_TRANSLATE_NOOP("Choice", "Earlier Face Runs Past"), QT_TRANSLATE_NOOP("Choice", "Later Face Runs Past")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -411,15 +464,16 @@ void styleToggle(QToolButton* button, const QColor& accent) {
 #else
   button->setStyleSheet(QStringLiteral(
       "QToolButton { border: 1px solid rgba(128, 128, 128, 70); background: rgba(128, 128, 128, 25);"
-      " border-radius: 7px; padding: 1px; }"
+      " border-radius: %2px; padding: 1px; }"
       "QToolButton:hover { background: rgba(128, 128, 128, 55); }"
       "QToolButton:pressed { background: rgba(128, 128, 128, 90); }"
       "QToolButton:checked { border: 1px solid %1; background: rgba(128, 128, 128, 55); }")
-                            .arg(accent.name()));
+                            .arg(accent.name())
+                            .arg(kControlRadius));
 #endif
 }
 
-// The selection button: a capsule that is filled with the accent colour
+// The selection button: a control of the control radius, filled with the accent colour
 // while its input is the one that takes the picks, its text and border in
 // the error colour while picks of it are gone (mitcad#1780).
 void styleSelect(QPushButton* button, const QColor& accent, const QColor& accentText, const QColor& error) {
@@ -431,22 +485,67 @@ void styleSelect(QPushButton* button, const QColor& accent, const QColor& accent
       "QPushButton:checked { border: 1px solid %1; background: %1; color: %2; }"
       "QPushButton[missing=\"true\"]:!checked { border: 1px solid %4; color: %4; }")
                             .arg(accent.name(), accentText.name())
-                            .arg(uiRoomSize(26) / 2)
+                            .arg(kControlRadius)
                             .arg(error.name()));
 }
 
 // The text fields: rounded with a subtle fill like the combo boxes next to
 // them, and the accent colour as the focus ring (QMacStyle's own ring does not
 // follow a style sheet). The selection colours stay the palette's.
-void styleLineEdit(QLineEdit* edit, const QColor& accent, const QColor& error) {
-  edit->setStyleSheet(QStringLiteral(
-      "QLineEdit { border: 1px solid rgba(128, 128, 128, 70); background: rgba(128, 128, 128, 25);"
-      " border-radius: 7px; padding: 3px 6px; min-height: 18px; }"
-      "QLineEdit:focus { border: 1.5px solid %1; }"
-      "QLineEdit[invalid=\"true\"] { border: 1px solid %2; }"
-      "QLineEdit:disabled { background: rgba(128, 128, 128, 12); }")
-                          .arg(accent.name(), error.name()));
+// The style sheet of a text field of the given class and padding, shared by
+// the one-line and the several-line fields.
+QString textFieldStyleSheet(const QString& widget, const QString& box, const QColor& accent, const QColor& error) {
+  return QStringLiteral("%1 { border: 1px solid rgba(128, 128, 128, 70); background: rgba(128, 128, 128, 25);"
+                        " border-radius: %5px; %2 }"
+                        "%1:focus { border: 1.5px solid %3; }"
+                        "%1[invalid=\"true\"] { border: 1px solid %4; }"
+                        "%1:disabled { background: rgba(128, 128, 128, 12); }")
+      .arg(widget, box, accent.name(), error.name())
+      .arg(kControlRadius);
 }
+
+void styleLineEdit(QLineEdit* edit, const QColor& accent, const QColor& error) {
+  edit->setStyleSheet(textFieldStyleSheet(QStringLiteral("QLineEdit"), QStringLiteral("padding: 3px 6px; min-height: 18px;"),
+                                          accent, error));
+}
+
+// A text field of several lines as the text fields are styled.
+void styleLinesEdit(QPlainTextEdit* edit, const QColor& accent, const QColor& error) {
+  edit->setStyleSheet(
+      textFieldStyleSheet(QStringLiteral("QPlainTextEdit"), QStringLiteral("padding: 1px 3px;"), accent, error));
+}
+
+// A text field of several lines (InputDef::multiLine, mitcad#2029: Edit
+// Text's Text), as the note and formula editors are: three lines tall,
+// growing with its content up to eight and scrolling beyond. Enter starts
+// a new line; Tab moves to the next field (the panel's filter steps the
+// fields, and the box itself does not take a tab character).
+class LinesEdit : public QPlainTextEdit {
+public:
+  static constexpr int kFewestLines = 3;
+  static constexpr int kMostLines = 8;
+
+  explicit LinesEdit(const QString& text) : QPlainTextEdit(text) {
+    setTabChangesFocus(true);
+    setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(document()->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this,
+            [this] { fit(); });
+    fit();
+  }
+
+private:
+  // The height of the lines it shows: QPlainTextEdit's document size is
+  // its count of laid out lines.
+  void fit() {
+    const int lines = std::clamp(static_cast<int>(std::ceil(document()->size().height())), kFewestLines, kMostLines);
+    const int height = lines * fontMetrics().lineSpacing() + static_cast<int>(std::ceil(2 * document()->documentMargin())) +
+                       2 * frameWidth() + 6;
+    if (height != maximumHeight() || height != minimumHeight()) {
+      setFixedHeight(height);
+    }
+  }
+};
 
 // What a drop-down's closed field shows of its chosen option.
 QString shownChoiceText(const QComboBox* combo) {
@@ -941,13 +1040,17 @@ void CommandPanel::applyControlStyles() {
   m_result->setFrameShape(QFrame::NoFrame);
   m_result->setMargin(10);
   m_result->setStyleSheet(QStringLiteral(
-      "QLabel { background: rgba(128, 128, 128, 18); border: none; border-radius: 10px; }"));
+      "QLabel { background: rgba(128, 128, 128, 18); border: none; border-radius: %1px; }")
+                              .arg(kControlRadius));
   for (const auto& row : m_rows) {
     if (row->select != nullptr) {
       styleSelect(row->select, accent, accentText, errorColor(palette()));
     }
     if (row->edit != nullptr) {
       styleLineEdit(row->edit, accent, errorColor(palette()));
+    }
+    if (row->lines != nullptr) {
+      styleLinesEdit(row->lines, accent, errorColor(palette()));
     }
     if (auto* toggle = qobject_cast<QToolButton*>(row->check); toggle != nullptr && !row->input->disclosure) {
       styleToggle(toggle, accent);
@@ -959,11 +1062,12 @@ void CommandPanel::applyControlStyles() {
       // A tile: rounded like the fields, the accent colour as its focus ring.
       row->tile->setStyleSheet(QStringLiteral(
           "QToolButton { border: 1px solid rgba(128, 128, 128, 70); background: rgba(128, 128, 128, 25);"
-          " border-radius: 7px; }"
+          " border-radius: %2px; }"
           "QToolButton:hover { background: rgba(128, 128, 128, 55); }"
           "QToolButton:pressed { background: rgba(128, 128, 128, 90); }"
           "QToolButton:focus { border: 1.5px solid %1; }")
-                                   .arg(accent.name()));
+                                   .arg(accent.name())
+                                   .arg(kControlRadius));
     }
   }
 }
@@ -1081,6 +1185,21 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
   }
   case InputDef::Type::Value:
   case InputDef::Type::Text: {
+    if (input.type == InputDef::Type::Text && input.multiLine) {
+      // A box of several lines (mitcad#2029): Enter a new line, Ctrl+Enter
+      // OK (eventFilter), Tab the next field.
+      auto* lines = new LinesEdit(scope.text(input.id));
+      lines->setToolTip(input.tooltip.isEmpty() ? tr("Enter starts a new line; %1 is OK")
+                                                      .arg(QKeySequence(Qt::CTRL | Qt::Key_Return)
+                                                               .toString(QKeySequence::NativeText))
+                                                : input.tooltip);
+      connect(lines, &QPlainTextEdit::textChanged, this,
+              [this, key, lines] { emit textEdited(key, lines->toPlainText()); });
+      lines->installEventFilter(this);
+      row.lines = lines;
+      field = lines;
+      break;
+    }
     row.edit = new QLineEdit(scope.text(input.id));
     row.edit->setCursorPosition(0); // a long expression from its start
     if (input.type == InputDef::Type::Value) {
@@ -1762,6 +1881,14 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
   }
   case InputDef::Type::Value:
   case InputDef::Type::Text:
+    if (row.lines != nullptr) {
+      // Its text set without a textEdited of its own.
+      if (row.lines->toPlainText() != scope.text(id)) {
+        const QSignalBlocker blocker(row.lines);
+        row.lines->setPlainText(scope.text(id));
+      }
+      break;
+    }
     if (row.edit->text() != scope.text(id)) {
       row.edit->setText(scope.text(id));
       if (!row.edit->hasFocus()) {
@@ -2116,6 +2243,13 @@ void CommandPanel::updateNote(Row& row) {
     row.edit->style()->polish(row.edit);
   } else if (row.edit != nullptr) {
     setErrorStyleSheet(row.edit, error ? QStringLiteral("border: 1px solid %1;") : QString());
+  }
+  if (row.lines != nullptr && chromeStyle() == ChromeStyle::Floating) {
+    row.lines->setProperty("invalid", error);
+    row.lines->style()->unpolish(row.lines);
+    row.lines->style()->polish(row.lines);
+  } else if (row.lines != nullptr) {
+    setErrorStyleSheet(row.lines, error ? QStringLiteral("border: 1px solid %1;") : QString());
   }
 }
 
@@ -2521,6 +2655,7 @@ QPoint CommandPanel::placeOf(const QWidget* widget) {
 const QWidget* CommandPanel::placedWidget(const Row& row) {
   return row.select != nullptr  ? static_cast<QWidget*>(row.select)
          : row.edit != nullptr  ? static_cast<QWidget*>(row.edit)
+         : row.lines != nullptr ? static_cast<QWidget*>(row.lines)
          : row.combo != nullptr ? static_cast<QWidget*>(row.combo)
          : row.table != nullptr ? static_cast<QWidget*>(row.table)
          : row.check != nullptr ? static_cast<QWidget*>(row.check)
@@ -2754,6 +2889,31 @@ bool CommandPanel::eventFilter(QObject* watched, QEvent* event) {
   default:
     break;
   }
+  if ((event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) &&
+      qobject_cast<QPlainTextEdit*>(watched) != nullptr) {
+    // A box of several lines (mitcad#2029): Enter is its own, a new line,
+    // not the window's OK; Ctrl+Enter is OK (not Finish Sketch).
+    const auto* key = static_cast<const QKeyEvent*>(event);
+    const bool enter = key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
+    const Qt::KeyboardModifiers held = key->modifiers() & ~Qt::KeyboardModifiers(Qt::KeypadModifier);
+    if (enter && (held == Qt::NoModifier || held == Qt::ShiftModifier || held == Qt::ControlModifier) &&
+        event->type() == QEvent::ShortcutOverride) {
+      event->accept();
+      return true;
+    }
+    if (enter && held == Qt::ShiftModifier) {
+      // A plain line break, as Enter gives (the box's own is a line
+      // separator).
+      static_cast<QPlainTextEdit*>(watched)->insertPlainText(QStringLiteral("\n"));
+      return true;
+    }
+    if (enter && held == Qt::ControlModifier) {
+      qDebug().noquote() << QStringLiteral("Panel %1: Ctrl+Enter in a text box is OK").arg(m_def.name);
+      // After the key, not inside the box's own event: OK may end the panel.
+      QTimer::singleShot(0, this, [this] { emit accepted(); });
+      return true;
+    }
+  }
   if (event->type() == QEvent::KeyPress && watched->isWidgetType()) {
     // Tab and Shift+Tab step through the panel's own fields (mitcad#1181);
     // with Ctrl, Alt or Cmd held the key is not ours.
@@ -2798,6 +2958,9 @@ bool CommandPanel::eventFilter(QObject* watched, QEvent* event) {
 QWidget* CommandPanel::tabStop(const Row& row) {
   if (row.edit != nullptr) {
     return row.edit;
+  }
+  if (row.lines != nullptr) {
+    return row.lines;
   }
   if (row.tile != nullptr) {
     return row.tile;

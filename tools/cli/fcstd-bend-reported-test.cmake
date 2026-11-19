@@ -43,6 +43,15 @@ cmake_minimum_required(VERSION 3.24)
 # (mitcad#2020). Before, the corner plates' surfaces beyond their faces
 # took it to y = 31.57 at 24.5 mm.
 #
+# The designs at 24.5, 25 and 32 mm are saved into WORK and exported as STL
+# at deviations of 0.0005, 0.002, 0.01 and 0.05 mm with an angle of 10
+# degrees, and at the finest settings (0.002 mm with 5 degrees, 0.0005 and
+# 0.002 mm with 2 degrees): every face meshes. Before OCCT port patch 1803
+# the plate of the corner whose set-back walks over the inner rim's end
+# could not be triangulated at 0.01 mm (25) or 0.05 mm (24.5), and before
+# patch 1804 the other corners' plates at the finest settings ("a face
+# could not be triangulated").
+#
 # cmake -DCLI=<mitcad-cli> -DWORK=<folder> -P fcstd-bend-reported-test.cmake
 
 foreach(var CLI WORK)
@@ -197,16 +206,16 @@ endfunction()
 
 import(before)
 import(after --set "BendRadius=50 mm")
-import(smaller --set "BendRadius=32 mm")
+import(smaller --set "BendRadius=32 mm" --save "${WORK}/bend-32.mitcad")
 set(lower_radii 30 25 24 20)
 set(states before after smaller)
 foreach(radius IN LISTS lower_radii)
-  import(r${radius} --set "BendRadius=${radius} mm")
+  import(r${radius} --set "BendRadius=${radius} mm" --save "${WORK}/bend-${radius}.mitcad")
   list(APPEND states r${radius})
 endforeach()
 # 24.5 mm for the box's largest y (mitcad#2020); not on the volume line's
 # list, whose arithmetic is in whole millimetres.
-import(r24_5 --set "BendRadius=24.5 mm")
+import(r24_5 --set "BendRadius=24.5 mm" --save "${WORK}/bend-24.5.mitcad")
 list(APPEND states r24_5)
 
 # The profile follows the radius: 5 mm further along -x.
@@ -304,4 +313,25 @@ foreach(radius IN LISTS lower_radii)
   endif()
 endforeach()
 
-message(STATUS "ok   the bend follows its radius: the profile and the body move 5 mm, every feature rebuilds at 20, 24, 24.5, 25, 30, 32, 45 and 50 mm, nothing skipped, the body within its pads and its volume on the line, its box within the guide at 24.5 and 25 mm")
+# Every face of the body meshes at 24.5, 25 and 32 mm: an STL export at
+# deviations of 0.0005, 0.002, 0.01 and 0.05 mm with an angle of 10 degrees
+# (mitcad#2018), at 0.002 mm with 5 degrees and at 0.0005 and 0.002 mm with
+# 2 degrees (mitcad#2022). Before OCCT port patch 1803 the plate of the
+# corner whose set-back walks over the inner rim's end could not be
+# triangulated at 10 degrees; before patch 1804 the other corners' plates
+# could not at the finest settings.
+foreach(radius 24.5 25 32)
+  foreach(setting 0.0005:10 0.002:10 0.01:10 0.05:10 0.002:5 0.0005:2 0.002:2)
+    string(REPLACE ":" ";" pair "${setting}")
+    list(GET pair 0 deviation)
+    list(GET pair 1 angle)
+    execute_process(COMMAND "${CLI}" export "${WORK}/bend-${radius}.mitcad" "${WORK}/bend-${radius}.stl"
+                            --deviation ${deviation} --angle ${angle}
+                    RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE err)
+    if(NOT status EQUAL 0)
+      message(FATAL_ERROR "the bend radius ${radius} mm: the STL export at a deviation of ${deviation} mm and an angle of ${angle} degrees fails (${status}):\n${err}")
+    endif()
+  endforeach()
+endforeach()
+
+message(STATUS "ok   the bend follows its radius: the profile and the body move 5 mm, every feature rebuilds at 20, 24, 24.5, 25, 30, 32, 45 and 50 mm, nothing skipped, the body within its pads and its volume on the line, its box within the guide at 24.5 and 25 mm, its faces meshed at 24.5, 25 and 32 mm down to the finest settings")

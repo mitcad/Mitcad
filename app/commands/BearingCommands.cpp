@@ -139,9 +139,6 @@ CommandDef bearingCommand(const CommandContext& context) {
   def.name = QObject::tr("Bearing");
   def.icon = QStringLiteral("bearing");
   def.tooltip = QObject::tr("A ball bearing printed in one piece, or one for bought airsoft balls");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("machine");
-  def.subgroup = QStringLiteral("Machine Elements");
   def.keywords = {QStringLiteral("printable bearing"), QStringLiteral("print in place"),
                   QStringLiteral("ball bearing"),      QStringLiteral("roller bearing"),
                   QStringLiteral("airsoft"),           QStringLiteral("608"),

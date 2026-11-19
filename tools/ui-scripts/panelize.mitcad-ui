@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+# Panelize (mitcad#2005, app/COMMANDS.md "Panelize") on the design
+# panelize.json makes: a box 600 x 400 x 300 (Body1, F1.b0) made a cabinet
+# of 18 mm panels in three steps, the order deciding the joints.
+#   1. The sides: the left face (seen from the left) and the right face
+#      (seen from the right); Left and Right, 400 x 300 x 18 each
+#      (2160000 mm3), the box between them left.
+#   2. The back: Back, 564 x 300 x 18 (3045600 mm3), between the sides.
+#   3. The top and bottom with Remove Remainder: Top and Bottom, 564 x 382
+#      x 18 each (3878064 mm3); the block inside goes.
+# Run by tools/ui-panelize-test.sh (Linux),
+# tools/ui-windows-panelize-test.ps1 (Windows) and
+# tools/ui-macos-panelize-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle 30
+
+# 1. The sides.
+mark
+command solid.panelize
+wait-log '^Command Panelize started' 30
+wait-idle
+command view.left
+wait-idle 30
+click-pick 'face F1[.]b0/F1:side3'
+wait-log '^Panelize Faces: 1 face' 30
+command view.right
+wait-idle 30
+click-pick 'face F1[.]b0/F1:side1'
+wait-log '^Panelize Faces: 2 faces' 30
+wait-log '^Preview Panelize: ok' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/panelize-sides-preview.png'
+mark
+key Return
+wait-log '^Added panelize of 2 face[(]s[)]' 60
+wait-idle 60
+capture left 'New body Left [(]F2[.]b0[)]: volume ([0-9.]+) mm3' 30
+expect-near ${left} 2160000 1e-6 0.01
+capture right 'New body Right [(]F2[.]b1[)]: volume ([0-9.]+) mm3' 30
+expect-near ${right} 2160000 1e-6 0.01
+capture rest 'Body Body1 [(]F1[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${rest} 67680000 1e-6 0.01
+expect-ever '^Timeline Panelize1 at ' 30
+
+# 2. The back.
+mark
+command solid.panelize
+wait-log '^Command Panelize started' 30
+wait-idle
+command view.back
+wait-idle 30
+click-pick 'face F1[.]b0/F1:side2'
+wait-log '^Panelize Faces: 1 face' 30
+wait-log '^Preview Panelize: ok' 60
+wait-idle 60
+mark
+key Return
+wait-log '^Added panelize of 1 face[(]s[)]' 60
+wait-idle 60
+capture back 'New body Back [(]F3[.]b0[)]: volume ([0-9.]+) mm3' 30
+expect-near ${back} 3045600 1e-6 0.01
+
+# 3. The top and bottom with Remove Remainder: nothing of the box is left.
+mark
+command solid.panelize
+wait-log '^Command Panelize started' 30
+wait-idle
+command view.top
+wait-idle 30
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Panelize Faces: 1 face' 30
+command view.bottom
+wait-idle 30
+click-pick 'face F1[.]b0/F1:bottom'
+wait-log '^Panelize Faces: 2 faces' 30
+click-logged '^Panel Panelize input remove_remainder at '
+wait-log '^Preview Panelize: ok' 60
+wait-idle 60
+command view.iso
+wait-idle 30
+screenshot '${MITCAD_TEST_WORK}/panelize-ends-preview.png'
+mark
+key Return
+wait-log '^Added panelize of 2 face[(]s[)]' 60
+wait-idle 60
+capture top 'New body Top [(]F4[.]b0[)]: volume ([0-9.]+) mm3' 30
+expect-near ${top} 3878064 1e-6 0.01
+capture bottom 'New body Bottom [(]F4[.]b1[)]: volume ([0-9.]+) mm3' 30
+expect-near ${bottom} 3878064 1e-6 0.01
+wait-log '^Removed body Body1 [(]F1[.]b0[)]' 30
+command view.fit
+wait-idle 30
+screenshot '${MITCAD_TEST_WORK}/panelize-cabinet.png'
+expect-never 'Recompute failed|The document was read while a job computes it|TestDriver: FAIL'

@@ -98,7 +98,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "lie": object("How a member by two points lies about its axis"),
                 "spacing": object("The member repeated as a spacing set; the reference's Spacing sets"),
                 "grade": text("The part's own grade (a timber member's)"),
-                "along": object("A member along a straight edge, lying on a face beside it; the reference's Members along an edge")
+                "along": object("A member along a straight edge, lying on a face beside it, or along one sketch line; the reference's Members along an edge"),
+                "lines": object("One member along each picked sketch line ({\"curves\": [sketch lines or sketches], \"chain\", \"align\", \"corners\"}), the corners mitered and butted; the reference's Along sketch lines")
             },
             "required": ["part"],
             "examples": [
@@ -126,7 +127,7 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "to": object("A member by two points: its end again"),
                 "lie": object("A member by two points: its lie again"),
                 "frame": object("The timber frame it is in, laid out again with these fields"),
-                "along": object("A member along an edge: its edge, face and offsets"),
+                "along": object("A member along an edge: its edge, face and offsets; along a sketch line also its align"),
                 "shared_mitre": {"type": "string", "enum": ["a", "b"], "description": "On its own: the shared miter at this end with the profile end it meets, as a corner placement makes"}
             },
             "required": ["component"],

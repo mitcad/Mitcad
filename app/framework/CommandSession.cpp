@@ -5091,6 +5091,17 @@ bool CommandSession::commit() {
     if (!m_host.runCommands(built.def.value(QStringLiteral("commands")).toArray(), label)) {
       return false;
     }
+    // A model command that edits a feature (mitcad#1939: Flat Pack,
+    // Standard Box): the timeline rolled forward again, and its roll-back,
+    // the change and the roll-forward one undo step, as a feature's edit.
+    if (m_markerMoved && !m_editUid.isEmpty() && m_startDepth >= 0) {
+      rollForward();
+      if (undoDepth() > m_startDepth + 1) {
+        m_host.runCommand({{QStringLiteral("cmd"), QStringLiteral("merge_undo")},
+                           {QStringLiteral("depth"), m_startDepth},
+                           {QStringLiteral("label"), label}});
+      }
+    }
     if (m_def.describe) {
       qDebug().noquote() << m_def.describe(m_state, m_host);
     }

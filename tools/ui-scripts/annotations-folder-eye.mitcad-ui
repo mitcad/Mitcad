@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+# The Browser's Annotations folder's eye (mitcad#2041), on the design of
+# annotations-folder-eye.json: a block with Offset1, Offset2 and Offset3
+# between its top and bottom faces, Offset2 hidden by its own light bulb.
+#   1. The folder's eye hides every annotation: none drawn in the view,
+#      none picked where one was; one undo step `Hide Annotations`, the
+#      row greyed, the annotations' own light bulbs as they were. Undo
+#      shows them again.
+#   2. Hidden again and shown: the same two drawn, Offset2 still hidden.
+#   3. Hidden and saved: the design keeps it (the wrapper checks the file
+#      with annotations-folder-eye-check.json, and
+#      annotations-folder-eye-reopen.mitcad-ui opens it again).
+# Run by tools/ui-annotations-folder-eye-test.sh (Linux),
+# tools/ui-windows-annotations-folder-eye-test.ps1 (Windows) and
+# tools/ui-macos-annotations-folder-eye-test.sh (macOS).
+wait-idle
+command view.fit
+wait-idle
+expect-ever '^Annotations drawn: Offset1 = [^|]+ [|] Offset3 = '
+expect-ever '^Annotation label Offset1 at '
+expect-ever '^Browser eye Root/Annotations at '
+expect-never '^Annotations drawn: .*Offset2'
+
+# A click on Offset1's text picks it while it is drawn.
+mark
+click-logged '^Annotation label Offset1 at '
+wait-log '^Annotation picks highlighted: Offset1'
+
+# 1. Hidden by the folder's eye.
+mark
+click-logged '^Browser eye Root/Annotations at '
+wait-log '^Visibility Root/Annotations: hidden$'
+wait-log '^Annotations drawn: none$'
+wait-log '^Annotations folder: hidden$'
+wait-log '^Browser row colours: [^,]+, (.*; )?hidden #[0-9a-f]{6}: [^;]*Root/Annotations'
+# The annotations' own light bulbs as they were.
+expect-no-log '^Annotations: .*Offset1 offset [(]hidden[)]'
+# Nothing to pick where Offset1's text was.
+mark
+click-logged '^Annotation label Offset1 at '
+sleep 500
+wait-idle
+expect-no-log '^Annotation picks highlighted: Offset1'
+expect-no-log '^Annotations drawn: Offset'
+mark
+command edit.undo
+wait-log '^Undo: Hide Annotations$'
+wait-log '^Annotations drawn: Offset1 = [^|]+ [|] Offset3 = '
+wait-log '^Annotations folder: shown$'
+expect-no-log '^Annotations drawn: .*Offset2'
+
+# 2. Hidden again and shown by the eye: the same two drawn.
+mark
+click-logged '^Browser eye Root/Annotations at '
+wait-log '^Visibility Root/Annotations: hidden$'
+wait-log '^Annotations drawn: none$'
+mark
+click-logged '^Browser eye Root/Annotations at '
+wait-log '^Visibility Root/Annotations: shown$'
+wait-log '^Annotations drawn: Offset1 = [^|]+ [|] Offset3 = '
+wait-log '^Browser row colours: (?!.*Root/Annotations)'
+expect-no-log '^Annotations drawn: .*Offset2'
+
+# 3. Hidden and saved.
+mark
+click-logged '^Browser eye Root/Annotations at '
+wait-log '^Visibility Root/Annotations: hidden$'
+wait-log '^Annotations drawn: none$'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

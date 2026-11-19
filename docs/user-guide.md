@@ -12,8 +12,9 @@ goes with your release (a development build opens the newest one).
 The window has the toolbar at the top and the browser
 on the left. The timeline is at the bottom and the command panel is on
 the right. The orientation cube is in the top right corner of the view.
-The toolbar has tabs (Solid, and Sketch in sketch mode) and groups
-(Create, Modify, Assemble, Construct, Inspect, Insert, Select). A click
+The toolbar has tabs (Solid, Surface, Sheet Metal, Build, Make, Manage,
+and Sketch in sketch mode) and groups (on Solid: Create, Modify,
+Assemble, Construct, Inspect, Insert, Render, Select). A click
 on a group's name opens a menu of all its commands. **S** opens command
 search: type the start of a command's name and press Enter.
 
@@ -33,6 +34,7 @@ search: type the start of a command's name and press Enter.
   - [Layouts](#layouts)
   - [Messages and their history](#messages-and-their-history)
   - [Quick access](#quick-access)
+  - [Boost development](#boost-development)
   - [View and navigation](#view-and-navigation)
   - [Selection](#selection)
   - [Command panels](#command-panels)
@@ -40,13 +42,16 @@ search: type the start of a command's name and press Enter.
 - [Commands and shortcuts](#commands-and-shortcuts)
   - [Shortcuts](#shortcuts)
   - [The Solid tab](#the-solid-tab)
+  - [The Surface and Sheet Metal tabs](#the-surface-and-sheet-metal-tabs)
+  - [The Manage tab](#the-manage-tab)
   - [The context menu](#the-context-menu)
 - [Make](#make)
-  - [The Make tab](#the-make-tab)
+  - [The Make tabs](#the-make-tabs)
   - [Annotate](#annotate)
   - [Laser cutting](#laser-cutting)
+  - [Sheet parts by material and process](#sheet-parts-by-material-and-process)
   - [CNC machining](#cnc-machining)
-  - [The selected body on the Make tab](#the-selected-body-on-the-make-tab)
+  - [The selected body on the Make tabs](#the-selected-body-on-the-make-tabs)
 - [Create features](#create-features)
   - [Extrude](#extrude)
   - [Thin Extrude](#thin-extrude)
@@ -70,6 +75,7 @@ search: type the start of a command's name and press Enter.
   - [Shell](#shell)
   - [Dogbone](#dogbone)
   - [Fill Cavity](#fill-cavity)
+  - [Panelize](#panelize)
   - [Tangent Chain](#tangent-chain)
   - [Cutting across components](#cutting-across-components)
   - [Inspect: Measure, Annotations and Section Analysis](#inspect-measure-annotations-and-section-analysis)
@@ -82,6 +88,7 @@ search: type the start of a command's name and press Enter.
   - [Constraints](#constraints)
   - [Projections](#projections)
   - [Equal Spacing](#equal-spacing)
+  - [Auto Constrain](#auto-constrain)
   - [Text, fonts and QR codes](#text-fonts-and-qr-codes)
   - [Selection in sketch mode](#selection-in-sketch-mode)
   - [Copy, Cut and Paste](#copy-cut-and-paste)
@@ -117,6 +124,7 @@ search: type the start of a command's name and press Enter.
   - [The rendered view](#the-rendered-view)
   - [Lights](#lights)
   - [Render Image](#render-image)
+  - [The Render workspace](#the-render-workspace)
   - [Render device](#render-device)
 - [Components and assemblies](#components-and-assemblies)
   - [Components](#components)
@@ -150,6 +158,7 @@ search: type the start of a command's name and press Enter.
   - [Envelope](#envelope)
   - [Form](#form)
   - [Convert Mesh](#convert-mesh)
+  - [Mesh tools for reverse engineering](#mesh-tools-for-reverse-engineering)
   - [Sheet metal](#sheet-metal)
   - [Mortise and Tenon](#mortise-and-tenon)
 - [Files and projects](#files-and-projects)
@@ -277,7 +286,9 @@ with several), or **Assistants unavailable** with a struck-through dot
 `--no-mcp`). When you have blocked an assistant in its menu, the indicator
 says so as well: **No assistant · 1 blocked** or **1 connected · 1
 blocked**. It is in the title row of the Floating layout, in the status
-bar of the Docked layout.
+bar of the Docked layout. In the title bar row of Windows and Linux it is
+a small plug icon with the dot on its corner and a ˅; the text is in its
+tooltip and at the top of its menu.
 Its tooltip gives the details, with the window's instance id and port.
 
 With no assistant connected, a click on the indicator opens **Connect AI
@@ -622,11 +633,13 @@ text fields (on macOS the menu bar's menus keep the system's size). **Font** cho
 **System** (the default) or any font installed on the computer, at the
 Text size. These too take effect when MitCad starts again.
 
-The toolbar's buttons show their icons only; the name of each is in its
-tooltip. To see a short name under every icon, choose **Preferences ›
-Display › Toolbar labels › Labels under icons** (**Icons only** is the
-default); it applies at once, in both layouts. Long names are shortened
-(Create Sketch shows Sketch), and the labels grow with the Icon size. The
+In the Floating layout on Windows and Linux every toolbar button shows a
+short name under its icon; elsewhere the buttons show their icons only,
+and the name of each is in its tooltip. **Preferences › Display ›
+Toolbar labels** chooses **Labels under icons** or **Icons only** for
+every layout; it applies at once. Long names are shortened
+(Create Sketch shows Sketch, 2-Point Rectangle shows Rectangle, Edit
+Parameters… shows Parameters), and the labels grow with the Icon size. The
 toolbar becomes a little higher, and in a narrow window its groups still
 fold to their names from the right.
 
@@ -636,7 +649,8 @@ other keys that differ on macOS.
 
 ### The Start tab
 
-**Start** is the first tab of the toolbar, before Solid, Build and Make.
+**Start** is the first tab of the toolbar, before Solid, Surface, Sheet
+Metal, Build, Make and Manage.
 MitCad starts on it, and you can go back to it at any time. Its page
 covers the view:
 
@@ -718,34 +732,94 @@ The menus are in the menu bar at the top of the screen; **Show the menu
 bar in the window** on the Display page of Settings shows them under
 the title bar too (off by default).
 
-**Hide the menu bar (Windows and Linux).** Clear **Show the menu bar** on
-the Display page of Preferences to give the view the menu bar's height,
-in either layout. The menus are then under the ☰ button at the left, before
-Undo and Redo (in the title bar row of the Floating layout, at the start
-of the toolbar in the Docked layout). Press and release Alt to show the
-menu bar and go to its File menu, or press Alt with a menu's underlined
-letter (Alt+F for File). The menu bar goes away again when its menu
-closes or when you press Esc. The menus' shortcuts work while the bar is hidden. Select **Show
-the menu bar** to show it again.
+**The menus in the Floating layout (Windows and Linux).** There is no
+menu bar under the window's title bar: the title bar row has the menus.
+**File** opens the File menu, **?** the Help menu, and the ☰ button at
+the row's left has all the menus (File, Edit, View, Tools, Window and
+Help) as submenus. Alt with a menu's underlined letter opens it there
+(Alt+F File, Alt+E Edit, Alt+V View, Alt+T Tools, Alt+H Help), and Alt
+alone opens the ☰ menu; the arrow keys and Enter go on from there. The
+menus' shortcuts work as always.
 
-In the Floating layout only the menu bar is a bar at the top (on macOS
-the system's menu bar), and the 3D view starts directly below it. The
-title bar row floats over the top of the view without a card. Its
-controls and the design's name each have a small box of their own.
-Each of the toolbar's groups is a card of its own in a row below the
-title bar row. A click, a drag or the wheel between and beside these
-cards works in the view.
+**Hide the menu bar (Docked layout).** Clear **Show the menu bar** on
+the Display page of Preferences to give the view the menu bar's height.
+The menus are then under the ☰ button at the start of the toolbar,
+before Undo and Redo. Press and release Alt to show the menu bar and go
+to its File menu, or press Alt with a menu's underlined letter (Alt+F
+for File). The menu bar goes away again when its menu closes or when you
+press Esc. The menus' shortcuts work while the bar is hidden. Select
+**Show the menu bar** to show it again.
+
+In the Floating layout nothing is above the 3D view on Windows and Linux
+(on macOS the system's menu bar is at the top of the screen). On Windows
+and Linux the title bar row is one flat bar across the top of the view,
+and the toolbar is one panel below it, across the window. On a
+Mac the title bar row floats over the top of the view without a card;
+its controls each have a small box of their own, and a click, a drag or
+the wheel between and beside them works in the view.
 
 The other cards always start below the bar and the floating rows, at
 any window size. The parts of the Floating layout are:
 
-- **Title bar row:** Undo and Redo, the workspace tabs as a segmented
-  control, the quick-access group (see [Quick access](#quick-access)),
-  the design's name and the command search. Under it the toolbar's
-  groups are capsules. A click on
-  a group's name opens a menu of all its commands. In a narrow window
-  the groups at the right show only their names.
-  Finish Sketch is in the toolbar and the Sketch Palette while editing a sketch.
+- **Title bar row (Windows and Linux):** the window's one top row, a flat
+  bar. At the left the ☰ of the menus, **Home** (shows the Start page),
+  **File** (the File menu) and **Save**, then Undo and Redo. Then the **design tabs**: each
+  open design is a flat tab with its name (• marks unsaved changes) and
+  its ×, the one shown on a filled block; click a tab to show its
+  design, drag it to reorder or to another window, right-click it for
+  Close, Close Others, Close All, Show in Folder and Move to New Window.
+  The **+** after them makes a new design. At the right end of the free
+  space the quick-access group's buttons once you have added commands to
+  it (see [Quick access](#quick-access)), the project indicator and the
+  assistant indicator as small icons with a ˅ (their text is in their
+  tooltips and at the top of their menus), the chat panel's button, then
+  **Preferences**, **?** (the Help menu) and the version. The window's
+  title shows the design's name too.
+- **Toolbar panel (Windows and Linux):** under the title bar row, across
+  the window. At its left the **workspace selector**, a block with the
+  workspace's icon, its name and *Workspace ˅*; beside it a card. The
+  card's first row has the workspace's tabs as plain names, the one
+  shown on a filled block of the accent color, the **+** of the tabs'
+  menu, and at its right end the command search. Under them are the
+  shown tab's groups side by side, divided by thin lines, each with its
+  name and ˅ under it. A click on a group's name opens a menu of all its
+  commands. Each button has a short label under its icon; **Toolbar
+  labels** on the Display page of Preferences turns them off (**Icons
+  only**). In a narrow window the groups at the right collapse, the last
+  one first: each shows only its first command's icon over its name and
+  ˅, and a click on either opens its menu. When even the collapsed groups
+  do not fit, the last ones move into a **»** menu at the end of the row,
+  each as a submenu of its commands. The Start page has no workspace: the
+  toolbar panel is hidden over it, and a click on the design's tab in the
+  title bar row goes back to the design.
+- **Workspaces (Windows and Linux):** a click on the workspace selector
+  lists the workspaces, each with a line on what it is for and its tabs;
+  click one to switch (or use the arrow keys and Enter). **Design** has
+  the Solid, Surface, Sheet Metal, Build and Manage tabs. **Make** has a
+  tab for each manufacturing method, **3D Print · Laser · CNC**, each
+  with materials, annotations and inspection; it opens on 3D Print, or on
+  the Make tab you used last.
+  **Render** has the Render tab: its stages **1 Look**, **2 Light**,
+  **3 Frame** and **4 Output** with **Render** and **Cancel**, and the
+  groups **Look** (Appearance and Edit Appearances), **Environment**
+  (Render Environment), **View** (the Rendered view) and **Output** (Render
+  Image); choosing it turns the Rendered view on, and leaving it brings
+  back the view you had before ([The Render workspace](#the-render-workspace)).
+  **Drawing** opens the design's drawing: the only one at once, one of
+  several from a menu (with **Create Drawing…** after them), and with
+  none the Create Drawing dialog; while a drawing is open its tab is the
+  only one, with **Sheet…** and **Add Revision…** in its Sheet group and
+  **Print** beside its exports, and choosing Design, Make or Render
+  closes it.
+  Every workspace works on the same design; only the toolbar's tabs
+  change. The selector is locked while
+  you edit a sketch. Home shows the Start page from any workspace.
+- **Title bar row (macOS):** Undo and Redo, the workspace tabs as a
+  segmented control, the quick-access group, the design's name in the
+  middle and the command search. Under it the toolbar's groups are
+  capsules.
+- Finish Sketch is in the toolbar and the Sketch Palette while editing a
+  sketch.
 - **Cards:** the Browser (upper left, collapsible), the Command panel
   (upper right, only while it has content to show) and the Timeline
   (along the bottom) float over the 3D view. The Projects panel, when
@@ -771,8 +845,7 @@ any window size. The parts of the Floating layout are:
   zoom).
 
   Only the boxes belong to the Browser. Its scroll bar is at the left,
-  beside the rows. The change applies at once. Rows is the default on
-  Windows and Linux, Card on macOS.
+  beside the rows. The change applies at once. Card is the default.
 - **The Browser's width.** With **Rows**, the Browser widens to show the
   longest name in sight in full, and narrows again. It grows up to
   **Rows at most** (Preferences › Display, beside Browser background, a percentage of the
@@ -785,7 +858,7 @@ any window size. The parts of the Floating layout are:
   as folders close.
 - **Messages** show in a band right above the Timeline, as wide as it.
   Refer to [Messages and their history](#messages-and-their-history).
-  Update and remote notices show in a card under the toolbar's groups. MitCad does not show the remote's
+  Update and remote notices show in a card under the toolbar. MitCad does not show the remote's
   state. The remote's commands are in File › Project.
 - **Settings** on macOS (MitCad › Settings, Cmd+,) is a window with the
   same pages as Preferences elsewhere, in the same list. Changes apply at
@@ -801,9 +874,9 @@ In the Docked layout the panels are docks: the Browser, the Timeline, the
 Command panel and, when shown, the Projects, Configuration and Chat
 panels. To hide a dock, click the × on its title row (it shows while the
 pointer is over the row), or right-click a dock's title row and clear the
-dock's name in the menu. To show it again, choose it in the View menu:
-View › Browser, View › Timeline, View › Projects, View › Command or
-View › Chat. The Configuration panel shows while the design has options
+dock's name in the menu. To show it again, choose it in the View menu's
+Panels submenu: View › Panels › Browser, Timeline, Projects, Command or
+Chat (Comments… is there too). The Configuration panel shows while the design has options
 and cannot be hidden. The Command panel grows with the Text size and
 Icon size, so the Sketch Palette fits it; to make it wider, drag its left
 edge. MitCad remembers the width for the next start. In the Floating
@@ -850,27 +923,42 @@ same history.
 ### Quick access
 
 The quick-access group holds one-click buttons for the commands you use
-most. In the Floating layout it is in the title bar row, after the
-workspace tabs. In the Docked layout it is in the toolbar's row of tabs,
+most. In the Floating layout it is in the title bar row, at the right
+end of the free space after the design tabs, just before the project
+indicator or Preferences. On Windows and Linux the bar's own Save, **+**
+(New Design) and Preferences stand for those commands there: the group
+does not show them a second time. On a Mac it is right after the workspace
+tabs. In the Docked layout it is in the toolbar's row of tabs,
 after the tabs. It stays on every tab, in sketch mode and while a drawing is open.
 
-By default the group has New Design…, Open…, Save, Print…, Design
-Properties… and Preferences… (MitCad › Settings… on macOS), when your
-version of MitCad has them. The tooltip of a button names the command and
-its shortcut. A command that you cannot use now is shown dimmed, and its
-tooltip tells why. For example, Save is dimmed while the design has no
-unsaved changes.
+In the Floating layout of Windows and Linux the group is empty at first
+and is not shown at all, its ⋮ neither: the bar already has the File
+menu, Save, **+** and Preferences. It appears as soon as you add a
+command to it, and goes away again when you take the last one out. In
+the Docked layout and on a Mac the group has New Design…, Open…, Save,
+Print…, Design Properties… and Preferences… (MitCad › Settings… on
+macOS) by default, when your version of MitCad has them. If you have
+chosen commands before, you keep them in every layout. The tooltip of a
+button names the command and its shortcut. A command that you cannot use
+now is shown dimmed, and its tooltip tells why. For example, Save is
+dimmed while the design has no unsaved changes.
 
-To choose the commands, click the ⋮ at the end of the group, or
-right-click the group. The menu lists the commands of the File, Edit,
-View and Tools menus. Each command with a check mark is shown in the
-group, in the order of the menus. Click a command to add it to the group
-or to remove it. **Reset to Default** brings back the default set.
-MitCad keeps your choice for the next start.
+To add a command, right-click its toolbar button, or open the menu of its
+row in a group's menu (its ⋮, a right-click or the Menu key), or
+right-click it in the command search, and choose **Add to Quick
+Access**. **Remove from Quick Access** in the same menus takes it out.
+You can also click the ⋮ at the end of the group, or right-click the
+group. That menu lists the commands of the File, Edit, View and Tools
+menus, and then the commands you added from the toolbar or the search.
+Each command with a check mark is shown in the group: those of the menus
+in the order of the menus, the others after them in the order you added
+them. Click a command to add it to the group or to remove it. **Reset to
+Default** brings back the default set (in the Floating layout of Windows
+and Linux, an empty group). MitCad keeps your choice for the next start.
 
-When the title bar row is too narrow for the group and the whole name of
-the design, the group shows only its ⋮. Its menu then lists the group's
-commands first.
+When the title bar row has no room for all of the group's buttons (on a
+Mac: for the group and the whole name of the design), the group shows
+only its ⋮. Its menu then lists the group's commands first.
 
 If you do not need the group, you can hide it. Choose **Hide Quick-Access
 Toolbar** at the end of the group's menu, or clear **Show quick-access
@@ -879,6 +967,18 @@ on macOS). The group, its ⋮ too, goes away at once, and the row closes up.
 To show it again, select **Show quick-access toolbar**. The group comes
 back with the commands you chose before. To find the setting, you can also
 search for "quick access".
+
+### Boost development
+
+MitCad is free. If you want to support its development, click **Boost
+development**, the pink button with a rocket at the right of the top
+bar (left of the project indicator). In the Docked layout it is at the
+right end of the toolbar's row of tabs. It opens the MitCad page on
+Ko-fi in your web browser.
+
+The small **×** on the button hides it. To show it again, select **Show
+the Boost development button** in Tools › Preferences › Display.
+MitCad keeps your choice for the next start.
 
 ### View and navigation
 
@@ -1047,7 +1147,10 @@ choice. It changes only what the view shows: exported meshes (STL, 3MF,
 OBJ, Send to Slicer) and the model itself stay the same.
 
 The **View menu** has the standard views, Look At, Fit, the camera, the
-display styles, the background, Grid and Snaps, and the named views.
+display styles, the background, Grid and Snaps, and the named views. Its
+**Panels** submenu shows and hides the panels: Projects, Browser,
+Timeline, Command (Docked), Chat and Comments…. Export Snapshot… is in the
+File menu, beside Export….
 The display styles are Shaded, Shaded with Visible Edges Only, Shaded
 with Hidden Edges, Wireframe and Wireframe with Hidden Edges. Named
 views are stored in the design. MitCad remembers the settings.
@@ -1105,7 +1208,7 @@ commands you use all the time:
 - **Snap to Grid** turns grid snap in sketches on or off.
 - **Edit Parameters**, after a line at the end of the bar, opens the
   parameter table in every workspace (Solid, Build, Make and the others)
-  and in a sketch, so that you do not have to go to Solid › Modify for
+  and in a sketch, so that you do not have to go to the Manage tab for
   it. Refer to [Parameters and expressions](#parameters-and-expressions).
   While a drawing is open, the same button is in the drawing's bar,
   after **Add Revision…**. It is the first of the commands pinned to the
@@ -1206,24 +1309,29 @@ settings:
   standard view, Look At, Orthographic, Perspective or Lock Rotation, or
   None.
 
-The tab also shows whether MitCad found a 3D mouse. MitCad needs no
-driver from the device's maker:
+The tab shows whether MitCad found a 3D mouse and names the 3DxWare
+route when it is in use.
 
-- On Windows, MitCad reads the device directly. If the maker's driver
-  is installed, set it to send nothing of its own to MitCad, so that the
-  view does not move twice.
-- On Linux, MitCad uses the spacenavd service. Install and start
-  spacenavd; MitCad finds it also when it starts later.
-- On macOS, MitCad reads the device directly. If the maker's driver is
-  installed and running, it can keep the device to itself; then quit
-  the driver to use the device in MitCad.
+- On Windows, MitCad uses the installed 3DxWare driver through SiApp
+  when a driver device is available. Otherwise it reads HID through Raw
+  Input. If the driver profile also sends wheel or keyboard commands,
+  turn off those assignments for MitCad.
+- On Linux, MitCad tries the spacenavd socket first. If it is unavailable
+  in an X11 session, MitCad can receive Magellan events from the installed
+  3DxWare service. A Qt session using the native Wayland backend uses the
+  spacenavd socket.
+- On macOS, MitCad uses IOKit for direct HID input. If 3DxWare holds
+  the device exclusively, MitCad tries the client framework installed
+  with the driver. macOS library validation can block that framework in
+  a hardened signed build. If the device still shows as in use, quit
+  the driver and toggle **Use a 3D mouse** to reopen the device.
 
 If the view jumps or an axis moves it the wrong way, turn on the
 [debug log](#debug-log), move the cap along one axis at a time, and
 attach the log to your report. After each motion the log says which
 axis moved most and what the design does for it in Object mode, so you
-can compare it with what you did with the cap; on Windows it also shows
-what the device sends.
+can compare it with what you did with the cap. On Windows the Raw Input
+route also logs the HID reports.
 
 ### Selection
 
@@ -1299,9 +1407,9 @@ can take the selection. The other buttons depend on what you select:
 
 A command is shown only when it can use all of the selection. When no
 command can use it, for example a mix of a face and a profile, the row
-is hidden. The Make tab has no Create row: the card shows the selected
+is hidden. The Make tabs have no Create row: the card shows the selected
 body's Make section there instead
-([The selected body on the Make tab](#the-selected-body-on-the-make-tab)).
+([The selected body on the Make tabs](#the-selected-body-on-the-make-tabs)).
 
 ### Command panels
 
@@ -1463,7 +1571,9 @@ right-click the row, or choose the row with the arrow keys and press the
 Menu key (Shift+F10). Its menu has **Pin to Toolbar**, **Pin to
 Navigation Bar** (the navigation bar in [View and navigation](#view-and-navigation)) and
 **Change Keyboard Shortcut…**, which opens Tools › Keyboard Shortcuts at
-that command (press Enter and the new key). A command you pin shows as a
+that command (press Enter and the new key), and last **Add to Quick
+Access** (see [Quick access](#quick-access)). A right-click on a toolbar
+button opens the same menu. A command you pin shows as a
 button in its own group, after the group's own buttons: Draft pinned from
 the Modify menu is a button in the Modify group, Sweep a button in the
 Create group. The group's menu still lists the command. The pinned
@@ -1479,11 +1589,50 @@ buttons you pinned in it go first, the last one first, so that pinning a
 command never hides its group's own buttons. A folded pinned command is
 still in the group's menu.
 
+**Tabs and the toolbar's buttons.** Right-click a tab, or click the **+**
+after the last tab: the menu lists Solid, Surface, Sheet Metal, Build,
+Make and Manage with ticks. Clear a tick to hide a tab you do not use (a
+user who never makes surfaces hides Surface), and tick it again to bring
+it back; every tab is shown at first, and Start and the tabs of a sketch
+or a drawing are always there. **Customize Toolbar…** in the same menu
+(and in each command row's menu, after Change Keyboard Shortcut…) lists
+every command of the tab under its group, each with a check box: ticked,
+the command has a button on the toolbar; clear the tick to take a button
+away, tick it to give a command one. In a submenu one command is the
+button (Rectangles shows the one ticked). **Reset Toolbar** puts the tab
+back as MitCad has it: its buttons, the commands you moved or added and
+your pins on that tab; the other tabs, the menus and the hidden tabs stay.
+MitCad keeps the hidden tabs and the toolbar's changes with the rest of
+your layout (Preferences › Display › Restore Default Layout undoes them
+all).
+
+**Removing a group's buttons and moving groups.** Right-click a button
+of a group (Revolve in Create, say), or open its row's menu in the
+group's menu, and choose **Remove from Toolbar**: the button goes, and
+the command stays in the group's menu, where its row's menu then offers
+**Show on Toolbar** to bring it back. Right-click a group's name for its
+own menu: **Show on Toolbar ▸** lists the buttons you removed from that
+group (on macOS this is the way back, as the group menus there have no
+row menus), and **Move Group Left** and **Move Group Right** move the
+group among the tab's groups: to have Inspect right after Modify on the
+Solid tab, right-click Inspect's name and choose Move Group Left until it
+is there. The menu bar keeps its order, and in a narrow window the groups
+still collapse in their usual turn (by group, not by where you moved
+them): a group you moved to the left collapses as early as before, and
+Create stays the last. A group whose buttons are all removed
+still shows its name, which opens its menu; a submenu whose button you
+removed (Pattern, for example) shows as a button that opens the submenu.
+The Select group's filters are not commands and stay. Removed buttons
+and the groups' order are kept across sessions with the rest of your
+layout, go with Preferences › Export Settings and Import Settings, and
+**Reset Toolbar** of the tab or Restore Default Layout brings them back
+as MitCad has them.
+
 ### Shortcuts
 
 | Command | Key | Action |
 |---|---|---|
-| Command Search | S | Find a command by its name or by a keyword |
+| Command Search | S | Find a command by its name or by a keyword; each result shows where the command sits on the toolbar or in the menu bar |
 | New Design, Open, Close | Ctrl+N, Ctrl+O, Ctrl+W | New Design makes a new design. In the current project, which the Projects panel names, the design belongs to that project ([Versions](#versions)). Outside projects it is an untitled design. Open opens a design, or imports a file as a new design. Close closes the design |
 | New Project, Open Project, Open from Cloud, Project Settings | | In File › Project. Make, open, clone or configure a Local or Cloud project ([Versions](#versions)) |
 | Projects | | Show or hide the Projects panel ([Versions](#versions)) |
@@ -1496,7 +1645,7 @@ still in the group's menu.
 | Undo, Redo | Ctrl+Z, Ctrl+Y | Undo or redo. This includes a dimension change and a drag of the timeline marker |
 | Fit | F6 | Fit the design to the view. If something is selected, Fit shows the selection. If some bodies are isolated, Fit shows only the isolated bodies |
 | OK, Cancel | Enter, Esc | Accept or cancel a command. Esc also clears the selection |
-| Repeat | Enter | With no command running and outside sketches, start the last command again, as Repeat in the context menu does. Its panel starts with the settings of that command's last OK (the appearance, operation, distance and so on); only the selections are empty. Not while you type in a field, rename a row or work in a list: there Enter keeps its own meaning |
+| Repeat | Enter | With no command running and outside sketches, start the last command again, as Repeat in the context menu does. Its panel starts with the settings of that command's last OK (the appearance, operation, distance and so on); only the selections are empty. Not while you type in a field, rename a row or work in a list: there Enter keeps its own meaning. Repeat also has a row of its own in Tools › Keyboard Shortcuts, with no key: give it another key there, Space for example. That key repeats the same way, only in the 3D view, and a field, a list, a check box or a button with the focus still gets it as before |
 | Hide the preview | Hold Ctrl (Cmd) | While a feature command's panel is open: hide its preview while you pick its inputs, and show it again on release ([Command panels](#command-panels)) |
 | Create Sketch | Alt+S (Option+S) | Select a plane or a planar face, or select it before the command. Available outside a sketch |
 | Finish Sketch | Ctrl+Enter | Go back to the 3D view. Esc never leaves a sketch unless you turn on Esc leaves an unchanged sketch in Preferences › Sketch: then Esc does the same as Finish Sketch when it has nothing else to cancel and you changed nothing in the sketch, and a new sketch that is still empty is removed |
@@ -1541,10 +1690,11 @@ commands of the Build tab (frames of slot profiles) are in [Build
 tab](#build-tab). The other commands of the Solid tab are listed below,
 in menu order.
 
-**Create:** the menu has sections with lines between them, and two
+**Create:** the menu has sections with lines between them, and three
 submenus.
 
-- Create Sketch
+- New Component ([Components and assemblies](#components-and-assemblies)) and
+  Create Sketch
 - From profiles:
   - Extrude ([Extrude](#extrude), [Thin Extrude](#thin-extrude))
   - Revolve
@@ -1556,32 +1706,39 @@ submenus.
 - On the faces of a body:
   - Hole ([Hole](#hole))
   - Thread ([Thread](#thread))
-  - Plastic Feature ([Plastic part features](#plastic-part-features))
 - Primitives:
   - Box, Cylinder, Sphere, Torus, Coil ([Placing a feature](#placing-a-feature))
-  - Helix ([Helix](#helix))
   - Pipe
-  - Intersection Curve ([Intersection Curve](#intersection-curve))
-  - Helix Curve ([Helix Curve](#helix-curve))
 - Patterns ([Patterns](#patterns)):
   - Pattern › Rectangular Pattern, Circular Pattern, Pattern on Path,
     Pattern at Points
   - Mirror
-- Envelope ([Envelope](#envelope))
-- Form ([Form](#form))
-- Flex ([Flex](#flex))
+  - Thicken ([Surface modeling](#surface-modeling))
+- Curves ›
+  - Helix ([Helix](#helix))
+  - Intersection Curve ([Intersection Curve](#intersection-curve))
+  - Helix Curve ([Helix Curve](#helix-curve))
+- Other features:
+  - Plastic Feature ([Plastic part features](#plastic-part-features))
+  - Envelope ([Envelope](#envelope))
+  - Form ([Form](#form))
+  - Flex ([Flex](#flex))
 - Machine Elements ›
   - Gear ([Gears](#gears))
+  - Gear Pair, Belt Drive ([Gear Pair and Belt Drive](#gear-pair-and-belt-drive))
   - Pulley ([Pulleys](#pulleys))
   - Bearing ([Printable bearings](#printable-bearings))
-  - Gear Pair, Belt Drive ([Gear Pair and Belt Drive](#gear-pair-and-belt-drive))
 
 The toolbar has buttons for Create Sketch, Extrude, Revolve and Hole. The
 command search finds every command by its name, also the commands in the
 submenus.
 
-The other long menus have sections with lines between them too, and no
-submenus.
+Some commands show in more than one place: New Component is also in
+Assemble, Thicken also on the Surface tab, Material and Appearance also
+on the Manage tab. It is the same command in each place, with the same
+shortcut.
+
+The other long menus have sections with lines between them too.
 
 **Modify:**
 
@@ -1601,23 +1758,21 @@ submenus.
 - Bodies:
   - Combine
   - Split Body
+  - Panelize ([Panelize](#panelize))
   - Scale
   - Convert Mesh ([Convert Mesh](#convert-mesh))
+  - Mesh › Mesh Section, Repair Mesh, Decimate Mesh, Remove Region,
+    Segment Mesh, Fit Surface ([Mesh tools for reverse
+    engineering](#mesh-tools-for-reverse-engineering))
 - Moving: Move/Copy, Align
-- Joinery:
+- Joinery ›
   - Dogbone ([Dogbone](#dogbone))
   - Mortise and Tenon ([Mortise and Tenon](#mortise-and-tenon))
 - The look:
   - Material ([Materials](#materials))
   - Appearance ([Appearances](#appearances))
-  - Edit Appearances ([Appearances](#appearances))
-- Parameters:
-  - Edit Parameters ([Parameters and
-    expressions](#parameters-and-expressions))
-  - Configurations ([Configurations](#configurations))
 
-The toolbar has buttons for Press Pull, Fillet, Chamfer, Shell and
-Combine.
+The toolbar has buttons for Press Pull, Fillet, Chamfer and Shell.
 
 Fillet, Chamfer, Shell, Draft and Replace Face obey the *Tangent Chain*
 option ([Tangent Chain](#tangent-chain)).
@@ -1630,27 +1785,6 @@ option is on, the view shows the tool as the split uses it: an orange,
 see-through surface across the bodies, a little past their edges. It
 shows where the cut runs and which bodies it goes through. Turn the
 option off, and the view shows only the face that you selected.
-
-**Sheet Metal** ([Sheet metal](#sheet-metal)):
-
-- The rules: Sheet Rules, Edit Sheet Rules
-- Making sheets: Face, Flange
-- Bends: Bend, Fold, Corner Relief
-- Edges and corners: Corner Round, Corner Chamfer, Sheet Cut
-- Flat: Unfold, Refold, Flat Pattern, Show Flat Pattern
-
-The toolbar has buttons for Face, Flange, Bend, Unfold and Flat Pattern.
-
-**Surface** ([Surface modeling](#surface-modeling)):
-
-- From profiles: Surface Extrude, Surface Revolve, Surface Sweep, Surface
-  Loft, Surface Helix
-- From edges: Patch, Ruled Surface, Boundary Surface, Blend Surface
-- Changing a surface: Extend, Trim, Untrim, Offset Surface
-- Quality: Match Surface, Fair Surface, Reverse Normal
-- Bodies: Stitch, Unstitch, Thicken
-
-The toolbar has buttons for Surface Extrude, Patch, Trim and Thicken.
 
 **Assemble:** everything that builds an assembly ([Joints and
 constraints](#joints-and-constraints), [Motion studies and contact
@@ -1667,14 +1801,15 @@ sets](#motion-studies-and-contact-sets), [Motion links](#motion-links)):
   - Drive Joint
   - Motion Link
   - Contact Set
+  - Let It Hang
   - Animate Joint
   - Motion Study
-- Inserting components: Insert Component, Insert from Library
 
-The toolbar has buttons for New Component, Joint, Assembly Constraint and
-Insert Component.
+The toolbar has buttons for New Component, Joint and Assembly
+Constraint.
 
-**Construct:** a section for each kind.
+**Construct:** a section for each kind. The Surface and Sheet Metal tabs
+show the same group.
 
 - Planes: Offset Plane, Plane at Angle, Tangent Plane, Midplane, Plane
   Through Two Edges / Three Points / Edge and Point, Plane Tangent to
@@ -1739,16 +1874,72 @@ corner square (or an end dot) and choose **Reset Size**.
 
 **Inspect:** Measure, Interference, Section Analysis ([Inspect: Measure,
 Annotations and Section
-Analysis](#inspect-measure-annotations-and-section-analysis)), Physical
-Properties, Center of Mass ([Physical Properties and Center of
-Mass](#physical-properties-and-center-of-mass)).
+Analysis](#inspect-measure-annotations-and-section-analysis)), Print
+Analysis ([Print Analysis](#print-analysis), also on the 3D Print tab),
+Physical Properties, Center of Mass ([Physical Properties and Center of
+Mass](#physical-properties-and-center-of-mass)), Add Comment. The Make
+tabs show the same group, and Measure is in the Inspect group of the
+Sketch tab too. To flip or hide a section you made, right-click its row
+under *Analysis* in the Browser: **Flip Section Analysis**, or **Hide**.
 
-**Insert:** Insert Mesh, Insert DXF, Import.
+**Insert:** Insert Component, Insert from Library, then Insert Mesh,
+Insert DXF, Insert SVG, From an Open Design, Component from Web, Import
+and Image Reference. The toolbar has buttons for Insert Component,
+Insert Mesh and Insert DXF. To calibrate an image reference, right-click
+its row in the Browser: **Calibrate Image Reference**.
 
 **Render:** Render Image ([Render Image](#render-image)). Everything about
-making the design, by manufacturing method, is on the Make tab
-([Make](#make)): Edit Materials, Print Analysis, Send to Slicer and
-Export Flat Pattern moved there.
+making the design, by manufacturing method, is on the Make tabs
+([Make](#make)).
+
+### The Surface and Sheet Metal tabs
+
+Surfaces and sheet metal have tabs of their own, after Solid. Each tab
+starts with **Create Sketch** and ends with the Solid tab's **Construct**
+and **Select** groups, so that you can make sketches and planes and
+choose what to select without going back to Solid.
+
+**Surface** ([Surface modeling](#surface-modeling)):
+
+- **Create:** Create Sketch; from profiles: Surface Extrude, Surface
+  Revolve, Surface Sweep, Surface Loft, Surface Helix; from edges: Patch,
+  Ruled Surface, Boundary Surface, Blend Surface; Offset Surface. Buttons:
+  Create Sketch, Surface Extrude and Patch.
+- **Modify:** Trim, Untrim, Extend; Stitch, Unstitch, Reverse Normal;
+  Match Surface, Fair Surface; Thicken. Buttons: Trim and Thicken.
+
+**Sheet Metal** ([Sheet metal](#sheet-metal)):
+
+- **Create:** Create Sketch; Face, Flange, Convert to Sheet Metal; Bend,
+  Fold; Sheet Cut. Buttons: Create Sketch, Face, Flange and Bend.
+- **Modify:** Corner Relief, Corner Round, Corner Chamfer; Unfold,
+  Refold, Flat Pattern, Show Flat Pattern; Export Flat Pattern (also on
+  the Laser tab). Buttons: Unfold and Flat Pattern.
+- **Rules:** Sheet Rules (a button) and Edit Sheet Rules, also on the
+  Manage tab.
+
+### The Manage tab
+
+The **Manage** tab, after Make's tabs, holds what belongs to the whole design
+rather than to its shapes:
+
+| Group | Commands |
+|---|---|
+| **Parameters** | **Edit Parameters…** ([Parameters and expressions](#parameters-and-expressions)) |
+| **Configurations** | **Configurations…** ([Configurations](#configurations)) |
+| **Materials** | **Edit Materials…** ([Materials](#materials)), **Edit Appearances…** ([Appearances](#appearances)) |
+| **Rules** | **Sheet Rules**, **Edit Sheet Rules** ([Sheet metal](#sheet-metal)), **Plastic Rules** (Plastic Feature on its Plastic Rule type) |
+| **Design** | **Recompute All** (every feature computed again), **Units…** (the design's length unit), **Design Properties…** ([Properties](#properties)) |
+
+Every command of the tab has a button of its own (Edit Sheet Rules, which
+opens the same panel as Sheet Rules on the selected sheet's rules, is in
+the Rules menu). The **Material** and **Appearance** tools, which give
+bodies a material or a look, are in Solid › Modify; Material is also on
+the Make tabs.
+
+Edit Parameters and Configurations are also in the Edit menu, Edit
+Parameters on the navigation bar too, and Design Properties in the File
+menu.
 
 ### The context menu
 
@@ -1790,31 +1981,46 @@ of these:
 
 ## Make
 
-Everything about making a design is on the **Make** tab: the materials,
-the annotations a workshop reads, and a group for each manufacturing
-method. The tab is always there, after Solid and Build. Work through it
-from left to right: choose the materials, annotate, then send the design
-to the machine.
+Everything about making a design is in the **Make** workspace, one tab
+for each manufacturing method: **3D Print**, **Laser** and **CNC**. Each
+tab starts with its method's groups and ends with the same **Materials**,
+**Annotate** and **Inspect** groups, so that the materials and the
+annotations a workshop reads are at hand whichever way the part is made.
+In the Floating layout of Windows and Linux choose **Make** in the
+workspace selector of the toolbar panel ([Layouts](#layouts)); its entry
+reads *3D Print · Laser · CNC*. It opens on 3D Print, or on the Make tab
+you used last; **Design** goes back to modeling. In the Docked layout the
+three tabs stand after Build. Work through a tab from left to right:
+prepare the part, choose its material, annotate, then send it to the
+machine.
 
-### The Make tab
+### The Make tabs
+
+| Tab | Groups and commands |
+|---|---|
+| **3D Print** | **Slice**: **Send to Slicer** ([Sending bodies to a slicer](#sending-bodies-to-a-slicer)), first on the tab. **Printers**: **Printers…**, **Processes…** ([Print settings](#print-settings)) and **Plates…** ([Print plates](#print-plates)). **Prepare**: **Print Analysis** ([Print Analysis](#print-analysis)). Every one a button of its own |
+| **Laser** | **Export**: **Export Flat Pattern…** ([Sheet metal](#sheet-metal)) and **Export Face as DXF…** ([Laser cutting](#laser-cutting)), both buttons |
+| **CNC** | **Setup**: **New Setup**, **Machines and Tools…**. **2D Milling**: **Facing**, **Contour**, **Pocket**, **Adaptive Clearing**, **Rest Machining**, **Drill**. **3D Milling**: **3D Roughing**, **Raster Finishing**, **Waterline Finishing**. **Turning**: **Turn Facing**, **Turn Roughing**, **Turn Finishing**, **Grooving**, **Parting Off**, **Threading**. **Toolpath**: **Generate**, **Simulate**, **Post Process…** ([CNC machining](#cnc-machining)) |
+
+On every Make tab, after the method's groups:
 
 | Group | Commands |
 |---|---|
-| **Materials** | **Edit Materials…** ([Materials](#materials)), **Material**: the Material tool, as in Solid › Modify ([Materials](#materials)) |
-| **Annotate** | **Dimension**, **Note**, **Datum Label**, **Feature Control Frame**, **Hole Callout**, **Material**, **Process Note**, then **Annotations…** ([Annotate](#annotate)) |
-| **3D Print** | **Print Analysis** ([Print Analysis](#print-analysis)), **Send to Slicer** ([Sending bodies to a slicer](#sending-bodies-to-a-slicer)), **Printers…** and **Processes…** ([Print settings](#print-settings)), **Plates…** ([Print plates](#print-plates)) |
-| **CNC** | **New Setup**, **Facing**, **Contour**, **Pocket**, **Adaptive Clearing**, **Rest Machining**, **Drill**, **3D Roughing**, **Raster Finishing**, **Waterline Finishing**, **Generate**, **Simulate**, **Post Process…**, **Machines and Tools…** ([CNC machining](#cnc-machining)) |
-| **Laser** | **Export Flat Pattern…** ([Sheet metal](#sheet-metal)), **Export Face as DXF…** ([Laser cutting](#laser-cutting)) |
+| **Materials** | **Material**: the Material tool, as in Solid › Modify ([Materials](#materials)) |
+| **Annotate** | **Dimension**, **Note**, **Datum Label**, **Feature Control Frame**, **Hole Callout**, **Material Note**, **Process Note**, then **Annotations…** ([Annotate](#annotate)) |
+| **Inspect** | the Solid tab's Inspect group: **Measure**, **Interference**, **Section Analysis**, **Physical Properties**, **Center of Mass**, **Add Comment** |
 
-Each command has one place on the toolbar: Edit Materials came from the
-Modify group, Print Analysis from the Inspect group and Export Flat
-Pattern from the Sheet Metal group of the Solid tab. *Send to Slicer* is
-the command that was called *3D Print*. Their keyboard shortcuts stay as
-they were, and the command search finds them all. Render Image stays on
-the Solid tab, in its Render group.
+A group's caption opens a menu of all its commands, the ones without a
+button too. Print Analysis is also in the Solid tab's Inspect group, and
+Export Flat Pattern on the Sheet Metal tab; Edit Materials is on the
+Manage tab.
+*Send to Slicer* is the command that was called *3D Print*. Keyboard
+shortcuts are the same wherever a command shows, and the command search
+finds them all. Render Image is in the Render workspace (its Output
+stage); the Solid tab has no Render group.
 
 Right-click a body or a face: the context menu's **Make** submenu has the
-Make tab's commands that take it.
+Make tabs' commands that take it.
 
 ### Annotate
 
@@ -1850,7 +2056,7 @@ any annotation whose pick is gone.
 
 **Export Face as DXF…** writes the outline of a flat part for a laser,
 waterjet or plasma cutter. Select a planar face of the body, choose the
-command in the Laser group (or right-click the face and choose it there)
+command on the Laser tab (or right-click the face and choose it there)
 and save the file. With no planar face selected, the command opens its
 panel: click the face there and choose **Export**. MitCad looks at the body square to that face from
 outside and writes its outline at 1:1 in the design's length unit, or in
@@ -1862,9 +2068,70 @@ sheet-metal part, **Export Flat Pattern…** writes its unfolded flat
 pattern with its bend lines, for the same cutters. To lay several parts out on a sheet of
 material, make a cut sheet ([Drawings](#drawings)).
 
+### Sheet parts by material and process
+
+A sheet part's **process** says what it is made of and how it is made;
+choose it in **Sheet Rules** with the rest of its rules:
+
+- **Metal** folds with a bend allowance. Give it as a **K-Factor**, or as
+  the **Bend Allowance** or **Bend Deduction** you measured on a 90° test
+  bend.
+- **Board** (cardboard, corrugated board, folding carton, fluted
+  plastic sheet such as corrugated polypropylene) folds at creases. Give
+  the **Crease Table** (the flute and the measured deduction of a 90°
+  crease), or a measured **Bend Deduction**: a nearly sharp crease can
+  have a deduction close to 0, which no K-factor gives. To calibrate,
+  fold a sample, measure it and enter what you measured.
+- **Laser Sheet** (plywood, MDF, acrylic) is not folded: make each plate
+  a body of the sheet's thickness and join them with **Finger Joint**,
+  **T-Nut Slot** or **Mortise and Tenon**. **Kerf** is the width the
+  laser's beam takes away.
+
+The Sheet Metal tab offers the commands of the part's process and dims
+the others; hover over a dimmed command to read why.
+
+**Finger Joint** joins plates that meet at an edge with alternating
+fingers: select the plates (two, or all the plates of a box), give the
+finger width (about 2 to 3 times the thickness) and the clearance each
+finger has in its slot. Draw each plate to the outside of its edges, so
+that two plates overlap at a corner, or let one plate's end touch the
+other's face. **T-Nut Slot** cuts a slot with a pocket for the nut from a
+plate's end face and the screw's hole in the plate it meets. A cut sheet
+can compensate for the laser's kerf (its **Kerf**: outer outlines move out,
+holes in, by half of it) and can lay its parts out by itself (nesting).
+
+**Kerf Bend** makes a living hinge in laser sheet: draw a line across the
+plate, choose the slit lattice (slit length, the gap between slits, the
+distance between rows, the slit width, which is the laser's kerf) and the
+angle. MitCad bends the plate with its neutral surface in the middle and
+at least the radius the lattice allows, and its Flat Pattern carries the
+slits to cut across the bend.
+
+**Flat Pack** turns a box into a laser-cut box: pick the box, give the
+sheet's thickness and the finger width, and MitCad makes its six plates
+with finger joints at every edge and lays them out on a cut sheet, ready
+to export for the laser.
+
+For board, **Standard Box** makes a box of a standard style (FEFCO 0201
+slotted box, ECMA A20 reverse tuck end) from its inside size and the
+board, folded with its creases and glue flap, and **Export Die Line…**
+writes its blank for a cutting table (DXF with cut and crease layers) or
+as a PDF. **Glue Flap** adds a flap along a board sheet's edge. A fold
+whose inside is on the board's back is a reverse crease; the die line
+draws it on a layer of its own.
+
+To engrave or score lines on a laser-cut part or a die line, draw them in a
+sketch on the part's face and give that sketch to the cut sheet's part (or
+the die line) as an engrave or score mark. A material can say which
+process its sheet parts use (board for cardboard or fluted plastic), so
+new sheet rules in a component of that material take it. A standard box
+keeps its options: double-click its rules in the timeline to change its
+size or board, and the box follows. Double-click a Flat Pack to change its
+thickness or fingers. Glue Flap tapers the flap's ends.
+
 ### CNC machining
 
-The **CNC** group turns bodies and sketches into toolpaths for a CNC
+The **CNC** tab turns bodies and sketches into toolpaths for a CNC
 router or mill and writes them as G-code for the machine's controller
 (grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4 and
 LinuxCNC). The setups and operations are kept with the design, not on
@@ -1956,9 +2223,9 @@ machined where that placement puts them. A component placed twice is
 picked in the placement you want: the same face picked in each placement
 is two outlines.
 
-### The selected body on the Make tab
+### The selected body on the Make tabs
 
-On the Make tab, select one body (or a face of it): the card on the right
+On the Make tabs, select one body (or a face of it): the card on the right
 shows its **Make** section under the selection, where the other tabs show
 the Create row. Its rows go from the widest choice to the body's own:
 
@@ -2020,7 +2287,7 @@ body. The Properties window
 ([Properties](#properties)) shows all the print settings and edits them
 on any level.
 
-In the Browser, on the Make tab, a small dot after a body's name marks a
+In the Browser, on the Make tabs, a small dot after a body's name marks a
 body whose material or print settings differ from its component's: a
 material of its own, or print values set on the body. Point at the dot
 to see what differs. The other tabs do not show the dots.
@@ -2128,8 +2395,17 @@ in Profiles. The face's whole area goes along the face's own normal,
 holes included. This also applies to a slanted face. A positive
 distance goes out of the material, and MitCad selects Join for you. A
 negative distance, or Flip, goes into the material (Cut). New Body is
-also available. Two sides, symmetric distances and a start offset from
-the face work as for profiles. Tapers, To Object and All do not work.
+also available. Two sides, symmetric distances, tapers and a start
+offset from the face work as for profiles. To Object and All work too.
+To Object ends the extrusion at a plane, a face, a body, a point or a
+line, also of the same body. For example, to make a stepped block level,
+select the lower step's top face, set Extent to To Object, click the
+higher step's top face and keep Extend at To Selected Face. With Join,
+the block becomes one level body. An Offset ends it beyond the object
+(a negative one ends it before). All goes through all bodies, for
+example to cut the face's shape through the whole part with Flip. The
+Start offers Profile Plane and Offset only, because the extrusion of a
+face starts at the face.
 
 This works on any body, also on a body imported without its history.
 The extrusion keeps its reference to the face. When an earlier feature
@@ -2263,7 +2539,7 @@ a Start Transition of 90° turn the profiles two and three quarter turns
 in all. When you edit a helix, its flat ends stay as they were unless
 you change them.
 
-**Surface Helix** (the Surface group) moves sketch curves the same way
+**Surface Helix** (the Surface tab) moves sketch curves the same way
 and makes surfaces. The curves can be open, for example a line, an arc
 or a chain of curves. A line that starts at the axis makes a helicoid, a
 helical surface such as the face of a screw conveyor. Select the curves
@@ -3092,6 +3368,14 @@ also offers to edit that feature instead, for example **Edit Revolve1
 Instead**. It opens the feature at the value that moves the end, so no
 new feature is made.
 
+On the free end of a profile or a timber member that the Build tab
+placed, Continue offers to edit its length instead, for example **Edit
+Profile 30x30 B8 L=1000 Instead**. It opens **Derived Component** at its
+Length. OK changes the part's length, so its cut length, the cut list and
+its name follow, and Undo takes it back in one step. The end it is placed
+from, and an end whose length is bound to a face or an edge, offer no
+such edit.
+
 A double-click on a Press Pull's timeline item opens the same panel.
 
 ### Move Face
@@ -3359,6 +3643,39 @@ feature also fails, in words, when it finds no closed pocket below the
 cap, or when the seed face is not inside one. The body keeps its name,
 and the fill follows when you change the body or move the cap.
 
+### Panelize
+
+**Panelize** (MODIFY, after Split Body) turns a box into panels, as for a
+cabinet. It splits the planar faces you pick off a body as panels of one
+thickness: each panel is the face pushed into the body by the thickness.
+What is left of the body stays one body, and the next Panelize works on
+it. So you make a cabinet step by step, and the order of the steps decides
+the joints: a panel made first runs through the corners.
+
+- *Faces*: planar faces of one body, one panel each.
+- *Thickness*: the panels' thickness (18 mm by default). It can be a
+  parameter, so that one change resizes every panel.
+- *Result*: *Bodies*, or *Components*: each panel in a component of its
+  own.
+- *Remove Remainder*: removes what is left of the body after this step,
+  such as the block inside a cabinet on the last step.
+
+A cabinet from a box: first the two sides, then the back, then the top
+and bottom with Remove Remainder. The sides then run the full height and
+depth, the back fits between the sides, and the top and bottom fit
+between the sides and in front of the back.
+
+Faces that meet at an edge cannot be panelized in the same step, because
+their panels would overlap at the corner. The feature then fails with "the
+panels of two faces overlap", and the two faces are painted when you move
+the pointer over the message. Pick one of them in a later step.
+
+The panels are named after the side they face: Left, Right, Front, Back,
+Bottom and Top, along the component's axes, otherwise Panel 1, Panel 2 and
+so on. With Result Components the components take the same names. The
+panels take the body's material, and they follow when you change the
+body, the faces or the thickness.
+
 ### Tangent Chain
 
 *Tangent Chain* is an option of Fillet, Chamfer, Shell, Draft and
@@ -3368,6 +3685,16 @@ Shell, Draft and Replace Face also take the faces that are joined to a
 selected face through smooth edges. The hover then shows the whole
 chain before the click. With the option off, the hover shows only the
 edge or the face under the pointer.
+
+With the option off, Fillet and Chamfer round or bevel only the selected
+edges, also where an edge continues smoothly into one you did not
+select, such as a straight edge that runs into a rounded corner. There
+the rounding or bevel runs out over the next edge: it gets shallower
+along that edge and ends just before the edge's far end. The edges after
+it stay sharp. Where the next edge is too short for that, the rounding
+or bevel ends flat at the corner. Fillets with a variable, asymmetric,
+spline or curvature continuous size cannot run out: for them, turn
+Tangent Chain on or select the whole chain.
 
 ### Cutting across components
 
@@ -3443,7 +3770,7 @@ face*, with its *Diameter*, *Radius*, *Area*, *Length*, *Volume*,
 group's title to fold it. Right-click a value and choose *Copy* to copy
 its number and unit. At the bottom is the history. *Close* (or Enter or
 Esc) closes the panel. Measure only measures: to keep a measurement in
-the design, use *Dimension* on the Make tab ([Annotate](#annotate)).
+the design, use *Dimension* on a Make tab ([Annotate](#annotate)).
 
 The *Selection Filter* of the Measure panel says what a click picks.
 With *Faces, Edges and Vertices* (the default), the bodies come first:
@@ -3481,7 +3808,7 @@ also when you close and open Measure again. It is not saved with the
 design. A row whose geometry is gone is gray.
 
 **Annotations.** To keep a measurement in the design, use *Dimension*
-in the Annotate group of the Make tab ([Annotate](#annotate)): pick one
+in the Annotate group of a Make tab ([Annotate](#annotate)): pick one
 or two faces, edges, vertices or construction geometry and click *Add*.
 The measurement becomes an *annotation*: a dimension drawn in the view
 as on a drawing
@@ -3494,7 +3821,7 @@ arrow to the pick and a text of one or more lines; *Datum Label*,
 *Feature Control Frame* and *Hole Callout* are below. *Annotations…*
 opens the Annotations window.
 
-**Hole callouts.** Choose *Hole Callout* in the Annotate group of the
+**Hole callouts.** Choose *Hole Callout* in the Annotate group of a
 Make tab and pick a hole — its wall, its counterbore's or countersink's
 face, or its rim — then click *Add*. MitCad writes the hole as a drawing does, from the hole
 feature, in the symbols of ISO 129-1: how many holes the feature has
@@ -3509,7 +3836,7 @@ drawing, select it in the Annotations window and click *Add Frame…*.
 
 **Datum labels and feature control frames.** For geometric tolerances
 (ISO 1101), choose *Datum Label* or *Feature Control Frame* in the
-Annotate group of the Make tab and pick one face, edge, construction
+Annotate group of a Make tab and pick one face, edge, construction
 plane or construction axis (not a vertex or a point: they mark a
 feature). *Datum Label* adds a *datum label*: a
 letter in a square on a leader that ends in a filled triangle on the
@@ -3634,8 +3961,9 @@ stood on a vertex, a point or a whole body, MitCad asks you to pick the
 face, edge or axis its leader points at first.
 
 The **Annotations** window (*View › Annotations…*, *Annotations…* in
-the Annotate group of the Make tab, or the browser's *Annotations*
-folder) lists every
+the Annotate group of a Make tab, or the browser's *Annotations*
+folder; the folder's eye hides or shows them all in the view, see
+[Browser](#browser)) lists every
 annotation: name, kind, value, tolerance, own text, color, group and
 whether it is shown. Search it, filter it by kind or group, and sort it
 by any column. Select several rows to change their color, group,
@@ -3655,7 +3983,7 @@ with dimensions kept from the view needs this version of MitCad: Keep
 stores the plane and the places you saw them in, which older versions do
 not read.
 
-*View › Export Snapshot* saves a picture of the view, 2 or 4 times as
+*File › Export Snapshot* saves a picture of the view, 2 or 4 times as
 large as the view or a width in pixels, optionally with a transparent
 background, with the shown annotations drawn over it: all of them, none,
 or the shown annotations of one group. *Render Image* also draws the
@@ -3866,6 +4194,19 @@ distance or turn on Flip to go towards the back. A sketch that you edit
 again keeps the orientation it was made with, also a sketch on XZ made
 in an earlier version, which opens from the back.
 
+A new sketch on a planar face of a body starts with the outline of the
+face. MitCad projects the face's edges into it as **Project** does with
+*Projection Link* on, so the outline follows the face when the body
+changes. You can draw on the outline, constrain to it, or convert it
+with **Convert to Sketch Geometry** to edit it. The outline is part of
+the step that makes the sketch: one undo removes both. A sketch on an
+origin plane, a construction plane or a curved face starts empty. To
+start sketches on faces empty, turn off **Project the face's edges into
+a sketch on a face** in the Sketch page of Tools › Preferences (MitCad ›
+Settings on macOS). The face's edges then still bound the sketch's
+profiles. **Redefine Sketch Plane** keeps the outline as a projection of
+the old face.
+
 While you edit a sketch, the timeline at the bottom shows the sketch's
 own work steps instead, in the order you made them: one icon for each
 time you used a tool. A Project of a chain of edges, a rectangle with its
@@ -3913,15 +4254,18 @@ another plane, or offset the sketch off the face, and only the sketch's
 own regions remain. A feature using a lost face-bounded profile reports
 the missing profile so that you can select a replacement.
 
-The Sketch tab has three groups:
+The Sketch tab's main groups:
 
 - Create: the sketch curve tools (refer to [Sketch curve tools](#sketch-curve-tools))
-- Modify: fillet, chamfer, Trim, Extend, Offset, Move/Copy, Edit
-  Pattern, Edit Offset, Edit Text, construction, center line,
-  Convert to Sketch Geometry, Delete, Cut, Copy and Paste (refer to
-  [Copy, Cut and Paste](#copy-cut-and-paste))
+- Modify: fillet, chamfer, Trim, Extend, Offset, Move/Copy,
+  construction, center line, Convert to Sketch Geometry and Edit
+  Parameters. Edit Pattern, Edit Offset and Edit Text are on the
+  right-click menu of a pattern, an offset or a text and open with a
+  double-click; Delete, Cut, Copy and Paste are on the right-click menu
+  and their keys (refer to [Copy, Cut and Paste](#copy-cut-and-paste))
 - Constraints: the constraint buttons (refer to
   [Constraints](#constraints))
+- Inspect: Measure
 
 A text (or a QR code) moves after you make it: select it as an object
 of Move/Copy, drag it when it is selected (its anchor point snaps to
@@ -3934,6 +4278,13 @@ freedom, the options, your most used sketch tools and the constraint
 buttons. The options are construction, signed distances, snap to grid,
 options to show dimensions, constraints, points and profiles, Hide
 Above Sketch and Look At.
+
+*Construction (X)* does what X does. With sketch curves selected (and
+no tool running), a click makes them construction geometry, or normal
+geometry again when all of them already are, as one undo step; the box
+shows their state: checked when all are construction, partly checked
+when only some are. With nothing selected it sets whether new geometry
+is construction geometry.
 
 *Show points* draws the end points, center points and sketch points.
 Turn it off to read a dense sketch more easily: the points are then not
@@ -4049,9 +4400,12 @@ The colors of the geometry tell its state:
 MitCad draws fully constrained geometry dark, or light on a dark
 background. This also applies to the sketches shown when you do not
 edit a sketch. Thus one look tells you which sketches are fully
-constrained. Fully constrained curves and center lines have a thin
-outline in the background's tone: dark under light lines, light under
-dark lines. Thus they stay readable where they cross a body's face. When
+constrained. On a dark background, fully constrained curves and center
+lines have a thin dark outline under their light lines, so that they stay
+readable where they cross a light body's face. On a light background
+their dark lines have no outline, except in a sketch on a dark face (the
+face's appearance, or else its body's): there they have a thin light
+outline. When
 you drag a point or a curve, it moves as far as the constraints permit.
 When you drag one of several selected curves or points, the whole
 selection moves together and keeps its shape, as far as fixed geometry
@@ -4144,7 +4498,7 @@ The Create menu of the Sketch tab groups the sketch curve tools:
 | Other Geometry | Ellipse, the polygons, the slots and the splines |
 | Text | Text, QR Code |
 | Patterns | Rectangular Pattern, Circular Pattern and Mirror |
-| References | Project, Intersect, Clean Up Projections, Clean Up Stale Projections and Project Again (references from the bodies) |
+| Project / Include | Project, Intersect, Clean Up Projections, Clean Up Stale Projections and Project Again (references from the bodies) |
 | Sketch Dimension | Sketch Dimension |
 
 On the toolbar, Point and Sketch Dimension are buttons. Point has no
@@ -4489,7 +4843,12 @@ dropped.
 **Convert to Sketch Geometry** is in Modify and in the context menu of
 projected geometry. It makes the selected projected curves and points
 ordinary sketch geometry. They become free, and they no longer follow
-their source. Projected curves that you do not convert can also use a
+their source. It also takes a profile: click inside a projected outline
+to select its profile, then convert. MitCad converts the projected
+curves on the profile's boundary, also those of its holes. A profile
+that the face of a sketch on a face bounds converts too: MitCad projects
+the face's edges that bound it and converts them in the same step. A
+profile of ordinary sketch curves only has nothing to convert. Projected curves that you do not convert can also use a
 corner of a converted curve. Such a corner stays projected, and the
 converted curve stays joined to it. If you select a copy that Offset
 made, all the copies of that offset become ordinary sketch geometry and
@@ -4955,7 +5314,13 @@ Projected geometry obeys these rules:
   follows the face, for example when you change the radius of the
   cylinder.
 - **Convert to Sketch Geometry** makes projected geometry ordinary
-  sketch geometry (refer to [Sketch curve tools](#sketch-curve-tools)).
+  sketch geometry, also the projected outline of a selected profile
+  (refer to [Sketch curve tools](#sketch-curve-tools)).
+- A new sketch on a planar face starts with the face's outline as a
+  linked projection, unless you turn that off in the preferences (refer
+  to [Sketch mode](#sketch-mode)). The outline lies on the face's edges
+  that bound the sketch's profiles; the profiles are the same with it
+  as without it.
 - Project has selection rows of its own while it runs (refer to
   [Selection in sketch mode](#selection-in-sketch-mode)).
 
@@ -4978,7 +5343,7 @@ also select the sketches of other components.
   body edges: a circle becomes an ellipse, and a line across the angle
   becomes shorter.
 
-**Intersect** (Create › References) adds the curves where the sketch
+**Intersect** (Create › Project / Include) adds the curves where the sketch
 plane cuts the bodies and faces that you select. It adds points where
 the sketch plane crosses the edges that you select. For a body, MitCad
 cuts every face of the body. For example, a sketch through a shaft gets
@@ -5011,7 +5376,7 @@ available.
   other sketches' curves and points (refer to
   [Selection in sketch mode](#selection-in-sketch-mode)).
 
-**Clean Up Projections** (Create › References) removes projected curves
+**Clean Up Projections** (Create › Project / Include) removes projected curves
 that repeat another curve, and projected lines that lie on another
 line. It keeps their constraints and dimensions on the curve that
 stays. *Merge Overlapping Lines* also takes a projected line that lies
@@ -5024,7 +5389,7 @@ that no longer match their source and that nothing uses. It trims the
 projected curves that the profiles still use. It unlinks the
 projections that cannot follow.
 
-**Project Again** (Create › References) repairs a linked projection
+**Project Again** (Create › Project / Include) repairs a linked projection
 that no longer follows its source, for example after the source face
 changed its shape. It projects the source again and moves the
 constraints and dimensions of the old curves to the new curves that
@@ -5091,12 +5456,64 @@ constraint.
 Copies of a sketch pattern are spaced by the pattern. Change them with
 Edit Pattern.
 
+### Auto Constrain
+
+**Auto Constrain** (Constraints) makes a sketch fully constrained in
+one step. Use it on a sketch that has few constraints or none: an
+imported DXF drawing, a sketch drawn without the auto constraints, or a
+sketch whose constraints you deleted. It works on the selected curves
+and points. When nothing is selected, it works on the whole sketch.
+
+First, MitCad adds the relations that the geometry already has. Then it
+adds dimensions for what is still free:
+
+1. **Relations.** Curve ends at the same place are joined. MitCad then
+   looks for points at the middle of a line or on a curve, smooth
+   (tangent) joins of lines and arcs, equal radii, horizontal and
+   vertical lines, collinear, perpendicular and parallel lines, equal
+   lengths, concentric circles and arcs, points symmetric about a
+   construction line or an axis, and points at the origin or on an axis.
+2. **Dimensions.** The sizes come first: line lengths, radii and
+   diameters, and the angle between two lines that meet at an angle
+   that is not 90 degrees. Then the positions: the horizontal and
+   vertical distance of a point from the origin, and the angle of a line
+   to the x axis when the shape can still turn. Each dimension has the
+   value that the geometry has now, so nothing moves. The values are
+   placed next to their curves.
+
+The panel has two tolerances. **Length Tolerance** (0.01 mm) is how far
+apart two places can be and still count as one place. It is also how far
+MitCad can move a point to make a relation true. **Angle Tolerance**
+(0.5 degrees) is how far from horizontal, vertical, perpendicular or
+parallel a line can be. A relation that would move a point more than the
+length tolerance is not added. MitCad also does not add a relation or a
+dimension that the others already set, or one that conflicts with them.
+
+Clear **Dimensions** to add only the relations, or clear **Relations**
+to add only the dimensions. The panel tells you what the command adds
+and how many degrees of freedom are left. OK adds it all as one step,
+so one Undo removes it.
+
 ### Text, fonts and QR codes
 
 Text letters are profiles: the letters are regions, and their openings
 are holes. The copies of sketch patterns follow their originals. Edit
 Text, Edit Pattern and Edit Offset change texts, patterns and offsets
 later.
+
+**Text in a frame:** a click with the **Text** tool places a text that
+starts there. A drag draws a frame. A text in a frame breaks its lines
+at spaces to fit the frame's width, so a long text that you type fits
+the frame. A word wider than the frame stays whole on a line of its
+own. The lines follow the height, the font, the alignment and the
+frame: drag a corner of the frame and the text fits the new width. A
+text that is taller than its frame keeps its top and runs on below the
+frame. Nothing is cut off or scaled.
+
+In Edit Text, **Text** has several lines. Enter starts a new line, and
+Ctrl+Enter (Cmd+Enter on macOS) or **OK** applies the change. Tab
+moves to the next field. **Wrap in Frame** is shown for a text in a
+frame. Turn it off to keep each line of the text on one line.
 
 A double-click on a text opens Edit Text, and so does **Edit Text** in
 the context menu of a right-clicked text. Zoomed in, a click inside a
@@ -5226,8 +5643,8 @@ You can copy sketch geometry from one sketch to another sketch, or to
 another place in the same sketch. Select points, curves and texts, then
 use **Copy** (Ctrl+C) or **Cut** (Ctrl+X). Cut also deletes the
 selection. Open the sketch that gets the geometry and use **Paste**
-(Ctrl+V). The three commands are in the Modify menu of the Sketch tab and
-in the context menu.
+(Ctrl+V). The three commands, and Delete, are in the Edit menu and in the
+context menu.
 
 Paste shows the geometry at the pointer. The pointer holds the base
 point, shown as a dot: the first point of the item that you selected
@@ -5792,7 +6209,9 @@ a change of the eye. A sketch hides by itself when a feature first uses
 it. The sketch shows again when you delete the last feature that uses
 it. The eye has priority over this automatic behavior. A 3D sketch
 stays shown when a Pipe or a Sweep uses it, so that you can see and edit
-the route. A planar sketch's menu also has **Show Dimensions**, a check
+the route. A sketch that you project or intersect into another sketch
+stays as it is, so that you can pick more of its curves in the same
+**Project**. A planar sketch's menu also has **Show Dimensions**, a check
 item that draws the sketch's dimensions in the view while the sketch is
 shown and not open (refer to the sketch palette's options in
 [Sketch mode](#sketch-mode)).
@@ -5810,6 +6229,16 @@ the folders' eyes; in a project they are yours alone, as **View › Show**
 is. A design saved before keeps every folder on. To turn on or off the
 eyes of all the items in a folder, right-click the folder and choose
 **Show All** or **Hide All**; Show All also turns on the folder's eye.
+
+The **Annotations** folder has the same eye. Turn it off to hide all the
+design's annotations in the view; they can then not be clicked or
+dragged there. The annotations that you hid in the Annotations window
+stay hidden when you turn the folder on again. The row turns gray while
+the view shows no annotation. Each click is one Undo step (**Hide
+Annotations**, **Show Annotations**), and the design saves it. Drawings
+are not changed by it: they bring in the annotations that are shown in
+the Annotations window. *View › Export Snapshot* is a picture of the
+view, so it has no annotations while the folder is off.
 
 While **Isolate** is on, the eyes of bodies and components show what
 the view shows. A row that only Isolate hides has a dimmed, closed eye.
@@ -6106,8 +6535,9 @@ Browser shows it in the row **Design Settings › Units**. A number that
 you type without a unit is in this unit. For example, `1` in a design in
 inches is 1 in (25.4 mm).
 
-To change the unit of the open design, double-click the Units row, or
-use **Change Active Units**. The change is one undo step.
+To change the unit of the open design, double-click the Units row, use
+**Change Active Units**, or select **Manage › Design › Units…**. The
+change is one undo step.
 
 Every length that you type is read in the unit of the design: the value
 fields of the sketch tools (a rectangle's width, a circle's diameter), a
@@ -6412,7 +6842,7 @@ gear, for example its **Module**, **Teeth**, **Pressure Angle** and
 **Face Width**, are also parameters. You can type expressions into
 them, and you can change them later in the parameters.
 
-**Edit Parameters.** Open **Edit Parameters** from the Modify group,
+**Edit Parameters.** Open **Edit Parameters** from the Manage tab,
 from the Edit menu, or with its button at the end of the navigation bar
 at the bottom of the view, which is there in every workspace and in
 sketches (in a drawing, in the drawing's bar). It lists the user parameters and the model
@@ -6947,8 +7377,8 @@ Parameters first.
 
 ### 2. Make the options
 
-1. Open **Configurations…** from the Modify group of the Solid tab (beside
-   **Edit Parameters**) or from **Edit › Configurations…**. The window
+1. Open **Configurations…** from the Manage tab (beside **Edit
+   Parameters**) or from **Edit › Configurations…**. The window
    has the tabs **Options**, **Rows**, **Rules** and **Bindings**. Each tab
    starts with a line that says what it is for; the Options tab's says
    "Options are the choices a user of this design makes, such as Color or
@@ -7421,8 +7851,9 @@ rendered view, its lights, Render Image and the render device.
 
 ### Appearances
 
-The **Modify** group of the Solid tab holds the **Appearance** tool and
-**Edit Appearances**. Assigning is the tool's; the **Appearances**
+The **Appearance** tool is at the end of Solid › Modify; **Edit
+Appearances** is in the Materials group of the Manage tab. Assigning
+is the tool's; the **Appearances**
 window that Edit Appearances opens manages the library and assigns
 nothing.
 
@@ -7545,7 +7976,7 @@ in this design". You cannot change
 the built-in materials: the editor says *Built-in*, with a lock and a
 **Duplicate** button beside it. Duplicate one and change the copy.
 
-**Material** (Solid › Modify, and Make › Materials) gives bodies a
+**Material** (Solid › Modify, also in the Make tabs' Materials group) gives bodies a
 material. Its panel has a picker button with the material's swatch and
 name: click it and choose in the picker, which lists **Default** (no
 material of its own), the design's materials and those of the libraries
@@ -7571,7 +8002,7 @@ the picker below a line, does the same on the material the picker button
 shows: the Materials manager opens on it, and once you close the manager
 the picker offers what you made or changed there.
 
-**Edit Materials** (Make › Materials) opens the **Materials** manager,
+**Edit Materials** (Manage › Materials) opens the **Materials** manager,
 which manages the materials and assigns none. Its list groups the
 materials by where they live: **This design**, **This project** (in a
 project), **My library** and **Built-in**, each with its count (refer to
@@ -7875,7 +8306,7 @@ outside closes it. The printers are grouped by vendor ("Bambu Lab",
 refer to [Processes by printer](#print-settings)): the processes of the
 chosen printer first, then the others under their printers, those for
 any printer last under **Any printer** (the Process drop-downs of the
-Make tab's body card and of Property Sets list them the same way, the
+Make tabs' body card and of Property Sets list them the same way, the
 body's or the level's printer first). Each row of the picker says on
 the right where it comes from: **This design**, **This
 project**, **My library**, **Built-in** (the groups of the Printers and
@@ -7895,7 +8326,7 @@ beside it.
 
 The **Process** row shows the process the bodies you send print with,
 which is also what the 3MF file gets: a process set on a body (for
-example on the Make tab's body card) comes before its component's and
+example on the Make tabs' body card) comes before its component's and
 before the design's. When the bodies print with different processes,
 the row reads **Per body**; hover over it to see each process with its
 bodies. A process chosen in the row is set where the shown one comes
@@ -7947,8 +8378,8 @@ you send.
 
 **Edit printers and processes.** In **Send to Slicer**, open the
 Printer or Process picker and choose its last row, **Edit printers…** or
-**Edit processes…**, or use **Printers…** or **Processes…** (Make › 3D
-Print). The **Printers** and the **Processes** managers are two windows,
+**Edit processes…**, or use **Printers…** or **Processes…** (3D Print ›
+Printers). The **Printers** and the **Processes** managers are two windows,
 which work as the Materials manager: the list on the left, grouped by
 where the items live (**This design**, **This project** in a project,
 **My library**, **Built-in**, each with its count, refer to [Where print
@@ -8135,7 +8566,7 @@ and library materials (the filaments) cannot be deleted, but they can be
 hidden: select one and click **Hide** beside Delete, or right-click it
 and choose **Hide**. A hidden item is no longer listed in the managers
 or offered in any picker (the printer and process of Send to Slicer,
-the Make tab and Property Sets, the Material tool and the Material
+the Make tabs and Property Sets, the Material tool and the Material
 menus). It
 is hidden on this computer only, for all your designs; designs and
 projects do not change. A design that already uses a hidden item keeps
@@ -8170,7 +8601,8 @@ first. They work with or without a design open. With no design open
 (the empty *Untitled* window MitCad starts with), the managers list **My
 library** (and **This project**, when a project is open) and
 **Built-in**, and work on them alone: the window's design does not
-change. The Make tab's Edit Materials…, Printers… and Processes… open
+change. The Manage tab's Edit Materials… and the 3D Print tab's Printers…
+and Processes… open
 the same managers with This design first. Type "My library" in the
 command search to find them all.
 
@@ -8355,6 +8787,10 @@ The Size of a light makes its shadows softer as it grows. For a point
 or spot light, Size is the diameter of its ball. For an area light,
 Size is its width or the diameter of its disc.
 
+Position and Direction each have three fields under their name, X, Y
+and Z. The fields have no arrow buttons: type a value, or turn the
+mouse wheel or press the Up and Down arrow keys over a field to step it.
+
 A light that *Follows the camera* has its place and direction relative
 to the camera. The x axis points to the right, the y axis up and the z
 axis toward you. Thus the light moves with the view.
@@ -8364,12 +8800,17 @@ axis toward you. Thus the light moves with the view.
 1. Click **Aim at Face**.
 2. Click a face in the view.
 
-The light goes the given distance out along the normal of the face.
+The light goes the Aim distance out along the normal of the face.
 Then it shines at the point that you clicked. Press Esc to cancel.
+**At Camera**, beside it, puts the light at the camera, shining where
+the camera looks.
 
 ### Render Image
 
-**Render Image** is in the Render group of the Solid tab and also in View › Visual Style.
+**Render Image** is in the Render workspace (the Render button at the
+right of its stages, and its Output stage; see
+[The Render workspace](#the-render-workspace)) and also in View › Visual
+Style.
 It renders the current view, or a named view, to an image file. It uses
 the settings of the rendered view: the render environment, the lights
 and the render device.
@@ -8393,6 +8834,94 @@ dialog shows the image as it refines, the samples and the time left.
 **Render** is the default button. **Cancel** stops the render; Escape or
 **Close** also stops a pending or running render and closes the dialog.
 **Save…** writes the finished image. MitCad saves these choices with the design too.
+
+### The Render workspace
+
+The **Render** workspace (Windows and Linux: choose **Render** in the
+workspace selector of the toolbar panel) is where the images of the design
+are made. Its four stages, **1 Look › 2 Light › 3 Frame ›
+4 Output**, are the tabs of the toolbar while it is chosen, in the order
+of the work, and
+**Render** and **Cancel** are at the right of that row, beside the search
+field. Under the stages the actions are groups of buttons as on the
+other tabs of the toolbar, each button with its name under it: the
+**Live** group first, then the groups of the stage shown. Click the name
+of a group (with ˅) to see all its commands in a menu.
+While the workspace is open, the Browser, the timeline and the command
+panel give way to the workspace's own panels: the stage's list at the
+left, the settings of what you choose in it at the right, both as tall as
+there is room, and the **Shots** bar at the bottom (click a shot to look
+through it). Each stage is one task with its own list and its own
+settings, and choosing something in a list never takes you to another
+stage. Each panel has one title: at the left the list's (**Appearances**,
+**Lights**, **Shots**, **Shots to Render**), at the right what you chose
+(the picked body's look, the environment or a light, a shot, the output).
+Its parts are headings that you click to fold them. The panels come back
+when you choose another workspace.
+
+The view shows the rendered view while the workspace is open. It refines
+as you work, and the name of the **Live** group says how far it got, for
+example *Live · 512 × 384 · 16/16*. **Pause** stops the refining; the
+same button then reads **Resume** and goes on. The next button chooses
+the render method from its menu: **GPU where available** or **CPU** (as
+in Preferences, see [Render device](#render-device)). When you leave the workspace, the
+view shows again as it did before.
+
+**1 Look** gives the bodies their appearances. Choose what you pick in
+the view with **Body**, **Face** or **Component** in the **Pick** group
+and pick it: the settings at the right name it and show its
+appearance. Then click an appearance in the **Appearances** library at
+the left to give it that one. The library has a search field, the tabs **In Design** (the
+appearances the design uses or keeps), **Library**, **Recent** and ★
+(the favorites), and filters such as Metal, Plastic, Paint and Glass. A right-click on an appearance adds it to
+the favorites or removes it. **Paint** (in the **Look** group) gives the
+chosen appearance to each body, face or component that you click;
+**Pick Up** takes the appearance
+of the next one that you click, and then paints with it. **Edit
+Appearances…** opens the appearances themselves ([Appearances](#appearances)).
+
+**2 Light** holds the settings of Render Environment
+([The rendered view](#the-rendered-view), [Lights](#lights)) in the
+workspace. The list at the left holds the **Environment** (with its kind,
+for example *Studio*) and the **Lights**, each with an eye that turns it
+on or off; **Add Light** in the **Light** group adds one (choose its
+kind in its menu). Click the Environment or a light to show its settings
+at the right, titled with its name. **Reset Environment** in the same
+group gives the environment its default settings. Render Environment's own window stays for the
+other tabs.
+
+**3 Frame** chooses the camera of the image. The list at the left holds
+the shots, the cameras kept for the images: **Save Shot** in the
+**Frame** group saves the camera of the view as a shot, **Rename…**
+under the list renames the chosen shot, **Delete** removes it, and a
+click on a shot looks through it. Under the shots are the saved views;
+click one to look through it. The settings at the right are the chosen
+shot's camera. **Look Through** in the Frame group looks through the
+chosen shot, and **Update Shot to View** gives it the camera of the view
+as it is now. MitCad saves the shots with the design.
+
+**4 Output** lists at the left what **Render** renders: *The View* or a
+shot; click one to choose it. The settings at the right hold every
+setting of Render Image ([Render Image](#render-image)):
+the camera (the view, a shot or a saved view), the size, the aspect, the
+samples, the time limit, denoising, the format, the JPEG quality, a
+transparent background and the annotations. **Render** renders the image
+of the chosen shot, or of the view when no shot is chosen. The image
+refines in the view itself, and **Save…** writes it when it is done.
+**Render All Shots** in the **Output** group renders each shot one after the other and saves the
+images into the folder that you choose (the folder of the design when you
+choose none), named after the design and the shot. It says how many render
+and wait, and lists the results.
+
+**Ready to render** (the first part of the settings) checks the design
+before an image is made: bodies that are hidden and are not in the image,
+bodies without an appearance of their own, an HDR image that cannot be
+found, and for Render All Shots the shots and the folder. **Check Now**
+in the Output group shows its findings. Render and Render
+All Shots check first, and do not start when the image cannot be made.
+
+Each change in the workspace is a step of Undo. The workspace never
+changes the geometry of the design.
 
 ### Render device
 
@@ -8480,10 +9009,12 @@ commands are:
 - Assembly Constraint
 - Contact Set
 - Motion Link
+- Let It Hang
 - Animate Joint
 - Motion Study
-- Insert Component
-- Insert from Library
+
+Insert Component and Insert from Library are in the Insert group of the
+Solid tab.
 
 This chapter tells how components, joints, constraints, properties,
 motion studies and motion links work. Refer to [Motion studies and
@@ -8940,15 +9471,15 @@ selection starts from empty space, or with Shift held.
 
 ### Flexible subassemblies
 
-A subassembly is a component with components and joints of its own,
-such as a hinge with its arm. Where it is placed, it is rigid: its parts
-stay as its own joints put them, and a joint of the assembly moves the
-whole subassembly.
+A subassembly is a component with components in it, such as a hinge
+with its arm, or a gantry with a carriage and two joiners. Where it is
+placed, it is rigid: its parts stay as the subassembly places them, and
+a joint of the assembly moves the whole subassembly.
 
 Make one placement **Flexible** to let its parts move in the assembly.
 Right-click its row in the Browser and select **Flexible**. The entry is
-there when the component has joints of its own. Select it again to make
-the placement rigid.
+there when the component has components in it or joints of its own.
+Select it again to make the placement rigid.
 
 In a flexible placement:
 
@@ -8956,8 +9487,30 @@ In a flexible placement:
   subassembly's own joints, for example the arm turns on its hinge.
 - A joint of the assembly can join a part inside it. The part then moves
   along the subassembly's joints so that both joints hold.
+- A part that the subassembly's own joints, rigid groups and grounding
+  do not place is free: a joint of the assembly places that part alone.
+  For example, each joiner of a gantry with no joints of its own can be
+  joined rigidly to its own rail carriage; the joiners move, the
+  gantry's carriage stays. Parts in a rigid group of the subassembly
+  move together. A free part with no joint of the assembly on it stays
+  where the subassembly places it, and moves only through joints: drag
+  it along a joint of the assembly. The degrees of freedom of the
+  assembly list the free parts, so that loose parts show; tie them with
+  a rigid group or joints where they belong together. When the joint of
+  the assembly on a free part goes with what it is joined to (you delete
+  that component, or the feature the joint is on with its dependents),
+  the part stays where the joint left it, as a component of the
+  assembly does. A Move in the subassembly's timeline that moves a free
+  part moves it from there too: edit the Move and the part follows;
+  suppress or delete it and the part goes back to where it was before
+  the Move.
 - Motion links and contact sets of the assembly reach the parts inside
   it.
+
+Placements made flexible in a design saved by MitCad 0.63.0 or earlier
+keep their positions: there, a joint of the assembly on a part the
+subassembly's joints do not place still moves the whole placement. Make
+the placement rigid and flexible again to free its parts.
 
 Each flexible placement keeps its own values of the subassembly's
 joints. Other placements of the same component stay as they are, unless
@@ -9204,6 +9757,16 @@ timeline. You can edit it with the Solid tab's commands, for example a
 hole sketched on a profile, or a cut. MitCad saves it in the design and
 opens it again as it was.
 
+A placed part is named after its designation, for example *Profile 30x30
+B8 L=1000*; a second one of the same length is *Profile 30x30 B8 L=1000
+(1)*. While the name is this automatic one, it follows the part: when its
+length changes (typed, bound to a face that moves, along an edge whose
+offsets change, or a formula whose parameter changes) or you choose
+another row, the name takes the new designation in the same step. One
+Undo takes back both. A name you give the part stays as you gave it.
+Renaming a part does not change its length; change the length with
+Length or Derived Component.
+
 The components come from MitCad's component library. To get the library, add it
 and fetch it in Tools › Libraries, or use Update in Browse Components.
 Each component lists its supplier and part number. A component placed once stays in
@@ -9247,8 +9810,8 @@ origin.
   middle of the face, and its sides line up with the face's longest
   straight edge. **Direction** becomes **Face normal**: the profile runs
   out of the face, square to it. On the bottom face of a machine's leg,
-  it runs down and continues the leg. **Rotate** turns it on the face in
-  90 degree steps. The preview shows where it goes before you place it.
+  it runs down and continues the leg. The preview shows where it goes
+  before you place it.
 - On a plane, two clicks: the first one selects the plane. Click the
   icon of one of the origin's planes or of a construction plane, or its
   row in the Browser (**XY**, **XZ** or **YZ** in the Origin folder).
@@ -9258,6 +9821,14 @@ origin.
   of a table whose corner is at the origin. Before that click, Enter
   places it at the plane's origin, and Esc deselects the plane. Other
   planes and faces take no click until then.
+
+On a plane or a face, **Offset** moves the profile off it, square to
+it. A positive offset goes to the side the face faces, a negative one
+into it. A standing profile then starts that far from the face, and a
+lying one is lifted off it. **Rotate** turns the profile about its own
+axis, at any angle. On a flat face it stays centered, its sides turned
+from the face's longest edge. The preview shows both. Enter at the
+origin has neither. Later, **Placement** (Modify) changes both.
 
 The view shows the origin's planes when the eye of the Origin folder is
 on; else use the Origin folder's rows in the Browser.
@@ -9358,6 +9929,32 @@ on:
 - *On a profile's side*
 - *On a profile's end*
 - *On a plane*: to place a profile as the first one again
+
+**Along sketch lines** makes a whole frame from a sketch. Draw the
+frame's lines in a sketch (a planar sketch or a 3D sketch). In Profile,
+set **Method** to *Along sketch lines*. Then click the sketch lines, or
+select the sketch in the Browser for all its lines. Turn on **Chain** to
+add the lines joined to the ones you click, end to end. Each straight
+line gets one profile of the selected component, cut to the line's
+length. **Place** places them all as one step.
+
+- Each profile follows its line. When you move a line or change its
+  length in the sketch, its profile moves and changes length with it.
+- **Align** sets how the section sits on the line: centered (the
+  default), on top of the sketch's plane or under it, or with a corner
+  on the line. **Rotate** turns each profile about its line in 90
+  degree steps. **Flip** runs each one from the line's other end.
+- With **Corners** on (the default), MitCad treats the corners. Where
+  two lines meet at their ends (an L), both profiles get a shared miter,
+  and their outer corners meet. Where a line ends on another line (a T),
+  the profile on it stops at the other profile's side (a butt). Where
+  three or more lines meet at one point, the ends stay square. You can
+  change each corner afterwards with **Ends** and the **Miter** tools. To
+  end a profile at a face instead, use **Length** with *To a face you
+  pick*.
+- Construction lines are left out when you select a whole sketch.
+  MitCad places profiles along straight lines only: a selection with an
+  arc, a circle or a spline is refused, and the panel says why.
 
 The profile's length runs to the profile in its way and stays bound to
 it. When that profile moves, the length follows. The preview highlights
@@ -9482,6 +10079,12 @@ the two ways above.
 
 **Flip** and **Rotate 90°** apply to the components you select. Enter turns
 them again.
+
+**Placement** moves a component without placing it again. Pick it. On a
+profile's side or a rail, it shows its **Offset** and **From**. On a
+plane or a face, it shows its **Offset** off it and its **Rotate**.
+Change them, and OK moves the component in one step. A component placed
+otherwise has its place in its joint: edit that with **Joint**.
 
 **Move/Copy** (Solid tab, **M**) moves a placed component. Click it in the
 view, then start Move/Copy, or click it in Move/Copy. Each placed
@@ -9815,7 +10418,7 @@ assemblies*.
 
 ### Surface modeling
 
-The Surface group of the Solid tab makes surface bodies. A surface body
+The Surface tab makes surface bodies. A surface body
 has faces but no volume. Later features fill, sew, trim and thicken
 surface bodies. [Patch, Stitch and Thicken](#patch-stitch-and-thicken)
 describes three of the group's features. This section describes the
@@ -9939,7 +10542,7 @@ The details are in
 
 A surface body is a body of faces without a volume. Examples are a
 surface loft, imported surfaces, and a face that you deleted without a
-healed gap. Three features of the Surface group of the Solid tab fill
+healed gap. Three features of the Surface tab fill
 surface bodies, sew them together and make them solid: **Patch**,
 **Stitch** and **Thicken**. The model's commands and the `.solidcraft`
 import also make these features. [Surface modeling](#surface-modeling)
@@ -10020,6 +10623,9 @@ moulded plastic parts. Its **Type** selects the feature:
   smallest draft, and the smallest and largest wall. Under More, the
   values are the knife edge, the reveal height and the thickness
   variation.
+
+**Manage › Rules › Plastic Rules** opens Plastic Feature with its type
+set to Plastic Rule.
 
 A boss, a rest and a groove name a plastic rule. The rule is the newest
 one before the feature, or None. Where the feature's own draft or gap is
@@ -10732,9 +11338,68 @@ Scripts, `mitcad-cli run` and MCP make the same feature
 example `{"type": "mesh_convert", "body": "F3.b0", "mode": "faceted",
 "tolerance": 0.01}`. The `.solidcraft` import makes analytic ones.
 
+### Mesh tools for reverse engineering
+
+A scanned part, or a mesh downloaded as an STL, OBJ or 3MF file, can be
+the start of a new design: cut it into sketches to draw over, clean it,
+split it into its flat and round regions and put surfaces on them. The
+tools are in the **Mesh** submenu of the Modify group of the Solid tab,
+after Convert Mesh. Each starts with the mesh body, picked in the view or
+in the browser.
+
+Repair Mesh, Decimate Mesh, Remove Region, Segment Mesh and Fit Surface
+are features in the timeline, as Convert Mesh is. Each makes new bodies
+and leaves the mesh body as it was; the mesh body is hidden (show it
+again with its light bulb), and if you delete the feature you are where
+you were. What the feature did is shown with it in the timeline, for
+example "Removed 48 triangles; filled 1 hole".
+
+- **Mesh Section** cuts the mesh by a plane into a new sketch: pick the
+  plane (an origin or construction plane, or a flat face). The section
+  becomes lines, arcs and circles, each within the **Tolerance** (0.05
+  mm) of the cut. With **Sections** above 1 you get that many sketches,
+  **Spacing** apart, on parallel planes: a stack of profiles to loft or
+  to measure. The curves belong to the sketch: they do not change when
+  the mesh does. Draw over them, constrain them, extrude them.
+- **Repair Mesh** makes a clean copy: corners closer than the **Weld
+  Tolerance** (0.01 mm) become one, triangles without area or lying on
+  another go, edges of more than two triangles are made ordinary, every
+  triangle is turned to face the same way as its neighbors (out of a
+  closed mesh), and with **Fill Holes** each hole up to **Largest Hole**
+  across (10 mm) is closed with new triangles. The timeline says in words
+  what was fixed, or that the mesh needed no repair.
+- **Decimate Mesh** makes a lighter copy: **Keep (%)** of the triangles
+  (50 % by default), or as few as stay within a **Tolerance** of the
+  mesh. The outline, the rims of holes and every edge sharper than the
+  **Sharp Edge Angle** (30°) stay where they are.
+- **Remove Region** deletes triangles. With **Lasso**, click round them
+  in the view: three clicks or more make the lasso, the preview shows the
+  mesh without them, and Backspace takes the last click back. Only the
+  triangles that face you go, unless you select **Through**. With
+  **Brush**, click on the mesh: the triangles within the **Brush Radius**
+  of each click go. Select **Fill Hole** to close the hole with new
+  triangles.
+- **Segment Mesh** splits the mesh into regions by its curvature: where
+  neighboring triangles turn by more than the **Angle** (20°) a new
+  region starts. A region within the **Tolerance** (0.05 mm) of a plane
+  is a plane, of a cylinder a cylinder, and the rest free-form regions.
+  Each region is a mesh body of its own that you can select, hide or
+  color.
+- **Fit Surface** puts a surface on a region (pick a body that Segment
+  Mesh made): a plane, a cylinder, a cone, a sphere or a B-spline surface.
+  **Auto** takes the simplest one within the **Tolerance**. The result is
+  a surface body to build on: extend it, trim it, thicken it or use its
+  face as a sketch plane. The timeline says what was fitted and how close
+  the mesh lies to it, for example "Fitted a cylinder of radius 10.002
+  mm; the mesh lies within 0.012 mm of it".
+
+Scripts, `mitcad-cli run` and MCP use the same features and the
+`mesh_section` command
+([commands.md](../core/model-api/src/commands.md#mesh-tools-for-reverse-engineering)).
+
 ### Sheet metal
 
-The Sheet Metal group holds the commands for sheet metal bodies: Face, Flange,
+The Sheet Metal tab holds the commands for sheet metal bodies: Face, Flange,
 Bend, Fold, corners, cuts, reliefs, Unfold, Refold and the Flat Pattern
 ([app/COMMANDS.md](../app/COMMANDS.md#sheet-metal)). This section
 describes the sheet rules, the Flat Pattern export, and the options of
@@ -10880,7 +11545,7 @@ that adds material across a bend makes the body an ordinary solid; the
 sheet tools after it and the Flat Pattern row in the Browser say which
 feature did so.
 
-Three sheet features have no panel yet. You make them through the
+Two sheet features have no panel yet. You make them through the
 model's commands (scripts, `mitcad-cli run`, MCP) and by the
 `.solidcraft` import:
 
@@ -10889,21 +11554,34 @@ model's commands (scripts, `mitcad-cli run`, MCP) and by the
   the radius of the rules. The sheet is as wide as you say along the
   normal of the sketch. Select the side on which the material lies and
   the direction of the width.
-- **Convert to Sheet Metal** makes a body a sheet. A plate of the
-  thickness of the rules becomes a sheet of one panel from the face you
-  select. If you also select bend edges, the flat faces reached across
-  those edges become panels bent at those edges. Thus a thin-walled
-  channel or bracket keeps its walls, and a solid block becomes the
-  sheet of its outer faces. MitCad refuses faces that meet at an edge
-  that is not a bend.
 - **Perforate** cuts a field of round holes over a whole sheet, on a
   staggered or a square grid. A margin keeps the holes clear of the
   edges, the cut-outs and the bends of the sheet. The holes are real:
   the Flat Pattern, its DXF file and every measurement have them.
 
-All three features keep the body a sheet. The sheet unfolds, refolds and
-has a Flat Pattern like any other sheet. The details are in
-`sheet-metal.md` in the docs folder, a developer document.
+**Convert to Sheet Metal** (SHEET METAL group) makes a body a sheet.
+Model the part as a solid, for example a tray: a base and four walls,
+the base inclined for drainage if you want. In the panel, select the
+**Face** that stays where it is (the outer face of the base), then the
+**Bend Edges**: the edges where the faces bend (the edges around the
+base). The flat faces reached across those edges become panels with the
+thickness of the rules behind them, bent at those edges. Every other
+edge between two of those faces becomes a rip: the faces are cut apart
+there, the **Corner Gap** between them (the thickness of the rules
+unless you set your own). **Miter** says how the faces meet at a rip:
+on the plane between them, or one running past the other. You can also
+pick **Rip Edges** yourself; each must lie between two converted faces.
+**Rules** picks the sheet rules, or makes new ones; **Own Bend Radius**
+replaces the radius of the rules. A wall whose ends are not square to
+its bend converts too: a vertical side wall on an inclined base. Its
+bend ends where its corner lets it. Without bend edges, a plate of the
+thickness of the rules becomes a sheet of one panel. The preview shows
+the sheet while you pick.
+
+Contour Flange, Convert to Sheet Metal and Perforate keep the body a
+sheet. The sheet unfolds, refolds and has a Flat Pattern like any other
+sheet. The details are in `sheet-metal.md` in the docs folder, a
+developer document.
 
 **Mirror** and the patterns copy a sheet body as a sheet. A copy that is
 a new body takes the sheet tools: Fold, Flange, Cut and the Flat Pattern
@@ -10993,7 +11671,10 @@ single-file design: MitCad stores its imported bodies inside the file.
 In a project, MitCad stores the imported bodies in the project's folder
 instead (refer to [Versions](#versions)).
 
-A `*` in the window title shows that the design has unsaved changes.
+A `*` in the window title shows that the design has unsaved changes,
+and so does a `•` after the design's name on its tab when several designs
+share a window. On a Mac, the title bar row shows **Edited** under the
+design's name.
 **New**, **Open** and the close of a design ask about unsaved changes
 first. If another program changed the file after you opened it, **Save**
 asks before it writes over the file. If you open a file that is not a
@@ -11258,7 +11939,9 @@ The **Projects panel** (View › Projects) lists your projects, their
 folders and their designs. It is on the left above the Browser. On a
 Mac, it is a card above the Browser. It is hidden until you show it
 (File › Open from Project opens a project's design without it); MitCad
-then remembers whether you show or hide it.
+then remembers whether you show or hide it. In the Floating layout of
+Windows and Linux it is hidden until you show it in that layout, whatever
+the other layouts remember.
 
 ```
 github.com/acme/gripper     (cloud) ↑2
@@ -12591,8 +13274,8 @@ clicks on the geometry.
 **Calibrate an image.** To set the image to its real size, measure
 between two points on it:
 
-1. Choose **Calibrate Image Reference** from the toolbar, or from the
-   image row's context menu.
+1. Choose **Calibrate Image Reference** from the image row's context
+   menu, or find it with the command search.
 2. Click two points on the image whose distance you know, for example
    the two ends of a dimension line on a scanned drawing. After the first
    click, a line follows the pointer from the first point.
@@ -12667,7 +13350,7 @@ dome of meters, gets a little coarser mesh instead of millions of
 triangles. Faces smaller than approximately 15 cm are not affected. A
 custom deviation applies to every face.
 
-**Send to Slicer** (Make › 3D Print) sends the selected bodies, or every
+**Send to Slicer** (3D Print › Slice) sends the selected bodies, or every
 visible body, to a slicer ([3D printing](#3d-printing)).
 
 #### The unit of a DXF file
@@ -13452,7 +14135,7 @@ Existing features and imported numeric values keep their stored values.
 
 #### Sending bodies to a slicer
 
-**Send to Slicer** (Make › 3D Print; once called 3D Print) sends bodies to a slicer. The slicer can be Bambu Studio,
+**Send to Slicer** (3D Print › Slice, the tab's first button; once called 3D Print) sends bodies to a slicer. The slicer can be Bambu Studio,
 OrcaSlicer, PrusaSlicer, UltiMaker Cura or any program that opens files
 given on its command line.
 
@@ -13460,8 +14143,8 @@ The panel starts with the selected bodies in **Bodies**. A selected
 face, edge or vertex stands for its body. A component's occurrence
 selected in the browser stands for the bodies shown in it. If nothing
 is selected, the panel starts with every visible solid body and mesh
-body. On the Make tab, **Send to Slicer** in the selected body's card
-([The selected body on the Make tab](#the-selected-body-on-the-make-tab))
+body. On the Make tabs, **Send to Slicer** in the selected body's card
+([The selected body on the Make tabs](#the-selected-body-on-the-make-tabs))
 starts it with that body alone. MitCad highlights the bodies that it will send. While the panel
 is open, click a body in the view to add it or to remove it. A window
 selection adds several bodies.
@@ -13696,8 +14379,8 @@ the log say *automatic* for such a face.
 #### Print plates
 
 A design can carry its print plates, so that the slicer gets them laid
-out and ready to print, every time you send. **Plates…** (Make › 3D
-Print) opens a panel of the design's plates:
+out and ready to print, every time you send. **Plates…** (3D Print ›
+Printers) opens a panel of the design's plates:
 
 1. **Add Plate** adds a plate (*Plate 1*, *Plate 2*, …) and chooses it in
    **Plate**. The chosen plate is drawn beside the design: its bed's
@@ -13751,7 +14434,7 @@ per plate. It never writes over a file that is already there.
 
 #### Print Analysis
 
-**Print Analysis** (Make › 3D Print) shows where a body will print badly before
+**Print Analysis** (3D Print › Prepare) shows where a body will print badly before
 you send it to a slicer. It also estimates the weight, the filament and
 the cost. It changes no body, no feature and no export.
 
@@ -13949,9 +14632,17 @@ edge to edge, and the toolbar shows the **Drawing** tab with the
 drawing's tools instead of Solid and Build. Above the sheet, one row
 shows the drawing's name, its sheets as tabs, **+**, **Sheet…**,
 **Add Revision…** and **Edit Parameters…**, which opens the design's
-parameter table over the drawing; the drawing follows each change. The browser stays, so you can open another drawing
-from it; in the Floating layout the other cards (the timeline, the
-Projects card, the Command card) are hidden while the drawing is open.
+parameter table over the drawing; the drawing follows each change. In
+the Floating layout the **Drawings** card takes the place of the
+browser while the drawing is open: it lists the drawings of the design,
+each with its sheets under it. The open drawing is in bold and the
+sheet that you see is selected. Click a drawing to open it, or a sheet
+to show it. A right-click on a drawing has Open, Rename, Delete and
+Create Drawing…; **+ Drawing** under the list creates a drawing. The
+other cards (the timeline, the Projects card, the Command card) are
+hidden while the drawing is open, and the browser comes back when you
+close it. In the Docked layout the browser stays, so you can open
+another drawing from it.
 **Close Drawing**, the first button of the Drawing tab, shows the 3D
 view again, with Solid and Build back and the tab you opened the drawing
 from shown; only Close Drawing closes the drawing. Esc
@@ -14731,7 +15422,7 @@ guide that explains its settings.
 | **Textures** | The *Local Folders* of the texture sources. *Allow texture sources on the internet* | [Textures](#textures) |
 | **AI Assistants** | Connect AI Assistant…, and the folders that an AI assistant connected through MCP can save to and open from | [mcp.md](mcp.md) |
 | **Fonts** | The folders of font files that the font chooser of Edit Text lists | [Text, fonts and QR codes](#text-fonts-and-qr-codes) |
-| **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default). **Esc leaves an unchanged sketch**: on or off (off by default; see Finish Sketch in [Shortcuts](#shortcuts)). **Show profiles when a sketch opens**: on or off (on by default; see [Sketch mode](#sketch-mode)) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
+| **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default). **Esc leaves an unchanged sketch**: on or off (off by default; see Finish Sketch in [Shortcuts](#shortcuts)). **Show profiles when a sketch opens**: on or off (on by default; see [Sketch mode](#sketch-mode)). **Project the face's edges into a sketch on a face**: on or off (on by default; see [Sketch mode](#sketch-mode)) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
 | **Assembly** | **When the picks are in another component than the active one**: Ask (the default), Use the component that holds both, or Keep the active component | [Joints and constraints](#joints-and-constraints) |
 
 **Taking your settings to another computer.** **Export Settings…**, beside
@@ -14753,9 +15444,10 @@ file from a newer MitCad is refused: update MitCad first.
 **Layout.** The **Layout** setting of the Display page selects how the
 window is arranged. **Docked** puts the panels in docks around the 3D
 view. **Floating** puts the panels as cards over a full-window 3D view.
-Floating is the default. On Windows and Linux, only the menu bar stays
-above the view. The title row floats over the view, and the toolbar's
-groups float as cards. Refer to [Layouts](#layouts).
+Floating is the default. On Windows and Linux nothing stays above the
+view: the title row is a flat bar over the view's top with the menus,
+and the toolbar floats under it as one panel with the workspace selector
+at its left. Refer to [Layouts](#layouts).
 
 The layout takes effect when MitCad starts. After a change, MitCad asks
 if it must restart now. **Restart Now** closes the window as a quit
@@ -14874,6 +15566,14 @@ hold. The Cache page also opens it. It shows:
 
 It has **Clear Memory**, **Clear Disk** and **Export Report**. The
 report is JSON, or text when you give it a `.txt` name.
+
+**Manage › Design › Recompute All** computes every feature of the design
+again from the start, without the results that the caches keep. Use it
+when you think that a kept result is out of date. A progress window
+shows when it takes long, and Cancel leaves the design as it was. When a
+feature fails, the status line says why. When the new results change a
+measured value, such as a driven dimension, Recompute All is one undo
+step.
 
 ### Updates
 

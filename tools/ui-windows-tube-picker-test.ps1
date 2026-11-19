@@ -152,7 +152,7 @@ function Search([string]$Text) {
 }
 
 Ui-StartApp 'tube-picker'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 
 Write-Host "--- 1. Profile's part picker"
 Ui-Mark

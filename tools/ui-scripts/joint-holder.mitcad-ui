@@ -18,6 +18,15 @@
 #   4. Tube's and Frame's faces selected before Joint starts (mitcad#1864):
 #      the same question before the panel opens; Make it in the root, OK
 #      mounts Roller whole. Undo takes it back.
+#   5. The root active, picks inside one sub-assembly (mitcad#2027,
+#      GitHub mitcad/Mitcad#457): Carrier:1 (O6) has a body of its own and
+#      the parts Pin:1 (O6/O7) and Bush:1 (O6/O8). Joint's Origin A on
+#      Pin ghosts only Pin's own body, not Carrier with Bush; Origin B on
+#      Bush asks to make the joint in Carrier, which holds both, and OK
+#      makes it there. Undo takes it back. The same with Origin A on
+#      Carrier's own body (only that body a ghost) and Origin B on Pin. Then
+#      As-Built Joint's Component A on Pin and B on Bush, and one Assembly
+#      Constraint row from Pin to Bush: the same ghost and question.
 # Run by tools/ui-joint-holder-test.sh (Linux),
 # tools/ui-windows-joint-holder-test.ps1 (Windows) and
 # tools/ui-macos-joint-holder-test.sh (macOS).
@@ -196,4 +205,131 @@ command edit.undo
 expect-log '^Undo: '
 wait-idle
 expect-undo-depth ${start} 0
+
+# 5. The root active, both picks inside Carrier (mitcad#2027): side A's
+#    ghost covers only its own occurrence's bodies until B is picked, and
+#    the holder question comes after B.
+mark
+click-logged '^Browser radio Root at '
+wait-log '^Activated Root$'
+wait-idle
+# (The activation is a step of its own to undo: the depths below count
+# from after it.)
+capture-undo-depth root
+command view.fit
+wait-idle
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F14[.]b0/F14:end[(][^ ]* in O6/O7 at '
+wait-log '^Joint Origin A: 1 face' 30
+wait-log '^View ghosts: only O6/O7 [(]1 body[)]$' 30
+wait-idle 30
+expect-no-log '^View ghosts: O6 '
+click-pick 'face F16[.]b0/F16:end[(][^ ]* in O6/O8 at '
+wait-log '^Joint component asked: The two picks are in Pin and in Bush[.] .*Make it in Carrier, which holds both[?] [[]Make it in Carrier, Keep .+[]]$' 30
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Make it in Carrier$'
+wait-log '^Joint component answer: make it in Carrier$'
+focus-main
+wait-log '^Panel Joint holder: C[0-9]+$'
+wait-log '^Joint Origin B: 1 face' 30
+wait-log '^View ghosts: none$' 30
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-no-log '^Panel Joint error: '
+mark
+button '^OK$'
+wait-log '^Added joint Joint[0-9]+ [(]rigid[)]: .*; made in Carrier, which holds the picks$' 30
+wait-idle
+expect-undo-depth ${root} 1
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle
+expect-undo-depth ${root} 0
+
+# Origin A on Carrier's own body: only that body a ghost, Pin pickable.
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F12[.]b0/F12:end[(][^ ]* in O6 at '
+wait-log '^Joint Origin A: 1 face' 30
+wait-log '^View ghosts: only O6 [(]1 body[)]$' 30
+wait-idle 30
+click-pick 'face F14[.]b0/F14:end[(][^ ]* in O6/O7 at '
+wait-log '^Joint component asked: .*Make it in Carrier, which holds both[?] ' 30
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Make it in Carrier$'
+wait-log '^Joint component answer: make it in Carrier$'
+focus-main
+wait-log '^Panel Joint holder: C[0-9]+$'
+wait-log '^Joint Origin B: 1 face' 30
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-no-log '^Panel Joint error: '
+mark
+button '^OK$'
+wait-log '^Added joint Joint[0-9]+ [(]rigid[)]: .*; made in Carrier, which holds the picks$' 30
+wait-idle
+expect-undo-depth ${root} 1
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle
+expect-undo-depth ${root} 0
+
+# As-Built Joint: Component A on Pin, B on Bush.
+mark
+command assemble.as_built_joint
+expect-log '^Command As-Built Joint started'
+wait-idle
+click-logged '^Body F14[.]b0 in O6/O7 at '
+wait-log '^As-Built Joint Component A: 1 component' 30
+wait-log '^View ghosts: only O6/O7 [(]1 body[)]$' 30
+wait-idle 30
+click-logged '^Body F16[.]b0 in O6/O8 at '
+wait-log '^As-Built Joint component asked: The two picks are in Pin and in Bush[.] .*Make it in Carrier, which holds both[?] ' 30
+focus-dialog '^Component for the As-Built Joint$|^The two picks are in '
+button '^Make it in Carrier$'
+wait-log '^As-Built Joint component answer: make it in Carrier$'
+focus-main
+wait-log '^Panel As-Built Joint holder: C[0-9]+$'
+wait-log '^As-Built Joint Component B: 1 component' 30
+wait-log '^Preview As-Built Joint: ok' 60
+wait-idle 30
+mark
+key Escape
+wait-log '^Command As-Built Joint cancelled'
+wait-idle
+
+# Assembly Constraint: a row's Geometry 1 on Pin, Geometry 2 on Bush.
+mark
+command assemble.constraint
+expect-log '^Command Assembly Constraint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F14[.]b0/F14:end[(][^ ]* in O6/O7 at '
+wait-log '^Assembly Constraint Geometry 1: 1 face' 30
+wait-log '^View ghosts: only O6/O7 [(]1 body[)]$' 30
+wait-idle 30
+click-pick 'face F16[.]b0/F16:end[(][^ ]* in O6/O8 at '
+wait-log '^Assembly Constraint component asked: The two picks are in Pin and in Bush[.] .*Make it in Carrier, which holds both[?] ' 30
+focus-dialog '^Component for the Assembly Constraint$|^The two picks are in '
+button '^Make it in Carrier$'
+wait-log '^Assembly Constraint component answer: make it in Carrier$'
+focus-main
+wait-log '^Panel Assembly Constraint holder: C[0-9]+$'
+wait-log '^Assembly Constraint Geometry 2: 1 face' 30
+wait-log '^Preview Assembly Constraint: ok' 60
+wait-idle 30
+mark
+key Escape
+wait-log '^Command Assembly Constraint cancelled'
+wait-idle
+expect-undo-depth ${root} 0
 expect-never 'TestDriver: FAIL'

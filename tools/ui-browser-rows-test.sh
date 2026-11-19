@@ -3,8 +3,8 @@
 # check-all sources: app/browser app/framework app/view tools/cli
 # The Browser's Rows background in the Floating layout (mitcad#419), through
 # the real UI, on a 200 x 200 mm plate zoomed in until it fills the view:
-#   - Floating by default (mitcad#429); the Browser starts on its card (set
-#     in the settings: Rows is the default on Linux, mitcad#429).
+#   - Floating by default (mitcad#429); the Browser starts on its card (the
+#     default since mitcad#1990, also set in the settings).
 #   - Preferences > Display > Browser background: Rows, applied at once and
 #     saved (appearance/browserBackground); a place beside the rows, inside
 #     the card's old rectangle, is logged.
@@ -54,7 +54,7 @@ JSON
 # to the timeline. The Browser on its card, for the choice of Rows (the
 # default on Linux, mitcad#429).
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[view]\nnavigationScheme=middle-orbit\n[projects]\npanel=false\n[appearance]\nbrowserBackground=card\n' \
+printf '[view]\nnavigationScheme=middle-orbit\n[projects]\npanel=false\npanelTopBar=false\n[appearance]\nbrowserBackground=card\n' \
   > "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 # count_new "text": how many lines logged since the mark contain the text.

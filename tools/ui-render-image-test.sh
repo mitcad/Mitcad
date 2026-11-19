@@ -84,10 +84,10 @@ ui_start_app --open "$WORK/block.mitcad" --no-native-dialogs
 ui_expect_log "Opened $WORK/block.mitcad" "the block opened"
 ui_step "hide the layout grid" ui_command "Layout Grid"
 
-echo "--- Render Image, from the Solid tab's Render group (mitcad#175, mitcad#1070)"
-ui_expect_log "Ribbon SOLID/RENDER at" "the Render group is in the ribbon"
-ui_step "open the Render menu" ui_click_logged "Ribbon SOLID/RENDER"
-ui_step "Render Image (first entry)" ui_key Down Return
+echo "--- Render Image, from the command search (mitcad#175; the Solid tab has no Render group: its home is the Render workspace)"
+grep -F "Ribbon SOLID/RENDER at" "$UI_LOG" && ui_fail "a Render group on the Solid tab"
+echo "ok   no Render group on the Solid tab"
+ui_step "Render Image (search)" ui_command "Render Image"
 ui_expect_log "Render image dialog opened" "the dialog opened"
 ui_focus_dialog '^Render Image$'
 ui_expect_log "Render image field output.width at" "the dialog logs its fields"

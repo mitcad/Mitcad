@@ -27,7 +27,7 @@ focus-main
 # The Make tab's card of the selected body.
 mark
 native-choice native.workspaces Make
-expect-log '^Ribbon tab shown: MAKE$'
+expect-log '^Ribbon tab shown: MAKE_PRINT$'
 native-expand native.modelTree
 native-select native.model.body:F1.b0@
 expect-log '^Make card: Body1: .*printer Slicer default \(default\); process Standard \(component Root\)'

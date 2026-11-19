@@ -16,3 +16,5 @@ mod sheet_ui_tests;
 // A Bill of Materials' Kind and BOM Structure, the Sheet Metal list and
 // Flat Pattern parts on cut sheets (mitcad#1980).
 mod bom_kind_tests;
+// Sheet process profiles and allowance methods (mitcad#1939).
+mod sheet_process_tests;

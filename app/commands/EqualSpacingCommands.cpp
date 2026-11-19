@@ -43,8 +43,6 @@ CommandDef spacingCommand(const char* id, const QString& name) {
   def.icon = QStringLiteral("equal-spacing");
   def.kind = CommandDef::Kind::Feature;
   def.mode = CommandDef::Mode::Sketch;
-  def.tab = QStringLiteral("SKETCH");
-  def.group = QStringLiteral("CONSTRAINTS");
   def.sketchCommand = true;
   def.keywords = {QStringLiteral("constraint"), QStringLiteral("spacing"), QStringLiteral("pitch"),
                   QStringLiteral("distribute")};

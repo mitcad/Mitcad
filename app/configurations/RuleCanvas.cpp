@@ -660,13 +660,18 @@ RulePalette::RulePalette(QWidget* parent) : QTreeWidget(parent) {
   }
   setToolTip(QStringLiteral("Drag a block onto the rule, or choose one and press Enter to put it at the focus"));
   expandAll();
-  // Every entry in sight: the palette is as tall as its rows (the window
-  // grows to it), so that nothing has to be scrolled to.
+  // Every entry in sight: the palette asks to be as tall as its rows (the
+  // window opens to it where the screen has room), so that nothing has to
+  // be scrolled to. Its minimum is a few rows: on a low screen the window
+  // can be shorter and the palette scrolls (mitcad#2036).
+  constexpr int kMinimumRows = 4;
+  const int rowHeight = fontMetrics().height() + 6;
   int rows = 0;
   for (QTreeWidgetItemIterator it(this); *it != nullptr; ++it) {
     ++rows;
   }
-  setMinimumHeight((fontMetrics().height() + 6) * rows + 2 * frameWidth());
+  m_fullHeight = rowHeight * rows + 2 * frameWidth();
+  setMinimumHeight(rowHeight * std::min(rows, kMinimumRows) + 2 * frameWidth());
   setMinimumWidth(150);
   connect(this, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item) {
     const QString id = item != nullptr ? item->data(0, kIdRole).toString() : QString();
@@ -675,6 +680,12 @@ RulePalette::RulePalette(QWidget* parent) : QTreeWidget(parent) {
     }
   });
   connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { logPlaces(); });
+}
+
+QSize RulePalette::sizeHint() const {
+  QSize hint = QTreeWidget::sizeHint();
+  hint.setHeight(std::max(m_fullHeight, minimumHeight()));
+  return hint;
 }
 
 RuleCanvas* RulePalette::canvas() const { return m_canvas.data(); }

@@ -107,6 +107,10 @@ void registerBearingCommands(CommandRegistry& registry, const CommandContext& co
 void registerEqualSpacingCommands(CommandRegistry& registry, sketch::SketchController& controller);
 bool dimensionEqualSpacing(sketch::SketchController& controller);
 
+// Auto Constrain in sketches (mitcad#2019, AutoConstrainCommands.cpp): the
+// relations the geometry has, then dimensions for what is left free.
+void registerAutoConstrainCommands(CommandRegistry& registry, sketch::SketchController& controller);
+
 // SURFACE (mitcad#455, SurfaceCommands.cpp), in the menu's sections
 // (mitcad#1778): Surface Extrude, Surface Revolve, Surface Sweep, Surface
 // Loft; Patch, Ruled Surface, Boundary Surface, Blend Surface; Extend,
@@ -193,5 +197,10 @@ CommandDef letItHangCommand(const CommandContext& context, LetItHangHooks hooks)
 // The panel's Start pinned and End pinned set (a click on an end's handle
 // in the view); false when they were so already.
 bool setLetItHangEnds(CommandState& state, bool start, bool end);
+
+// Sheet parts by material and process (mitcad#1939, SheetProcessCommands.cpp):
+// Finger Joint, T-Nut Slot, Kerf Bend, Flat Pack, Glue Flap and Standard Box,
+// each offered by the part's process profile.
+void registerSheetProcessCommands(CommandRegistry& registry, const CommandContext& context);
 
 } // namespace mitcad

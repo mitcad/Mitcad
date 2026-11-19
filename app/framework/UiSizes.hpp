@@ -37,6 +37,14 @@ inline constexpr int kUiSizeMaximum = 200;
 inline constexpr int kUiSizeStep = 5;
 inline constexpr int kDefaultUiSize = 100;
 
+// The corner radii (mitcad#1990, docs/ui-conventions.md "Corners"): one for
+// every card and bar (the top bar's pills, the toolbar panel's card and its
+// workspace block, the side cards, the bottom bars, the Docked panels, the
+// Start page's backdrop), never more than half its height, and one for the
+// buttons, chips, tabs, fields and selected rows inside them.
+inline constexpr int kCardRadius = 10;
+inline constexpr int kControlRadius = 6;
+
 namespace ui_sizes_detail {
 // This run's Text size and Icon size in percent (applyTextAndIconSize).
 inline int textPercent = kDefaultUiSize;

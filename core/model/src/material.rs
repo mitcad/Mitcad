@@ -95,6 +95,11 @@ pub struct Material {
     /// out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<MaterialClass>,
+    /// The sheet process profile its sheet parts default to (mitcad#1939:
+    /// board for cardboard, corrugated board and fluted plastic sheet);
+    /// none: the one its class gives ([`material_sheet_process`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_process: Option<crate::sheet::process::SheetProcess>,
     /// Its version in its library (counts up with each change there).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
@@ -650,6 +655,10 @@ pub struct MaterialChange {
     /// The class (mitcad#655).
     #[serde(default)]
     pub class: Option<MaterialClass>,
+    /// The sheet process profile its sheet parts default to (mitcad#1939);
+    /// null takes it away (the class's then).
+    #[serde(default, deserialize_with = "some")]
+    pub sheet_process: Option<Option<crate::sheet::process::SheetProcess>>,
     #[serde(default, deserialize_with = "some")]
     pub version: Option<Option<u32>>,
     #[serde(default, deserialize_with = "some")]
@@ -813,6 +822,9 @@ impl MaterialChange {
         if let Some(class) = self.class {
             material.class = Some(class);
         }
+        if let Some(process) = self.sheet_process {
+            material.sheet_process = process;
+        }
         // With print settings it is an FDM plastic all the same: stored as
         // `plastic`, which older versions read (mitcad#1102).
         if let Some(class) = material.class {
@@ -902,6 +914,7 @@ pub fn built_in() -> &'static [Material] {
                     .map(|(_, a, f)| (*a, *f))
                     .unwrap_or((None, None));
                 Material {
+                    sheet_process: None,
                     id: m.id.to_owned(),
                     name: m.name.to_owned(),
                     density: m.density,
@@ -944,6 +957,15 @@ const METALS: [&str; 7] = [
 
 /// The built-in resins (mitcad#1102).
 const RESINS: [&str; 1] = ["resin_standard"];
+
+/// The sheet process profile a material's sheet parts default to
+/// (mitcad#1939): its own `sheet_process`, else the one its class gives
+/// (metal for Metal, laser sheet for Wood and General Plastic), else none.
+pub fn material_sheet_process(material: &Material) -> Option<crate::sheet::process::SheetProcess> {
+    material
+        .sheet_process
+        .or_else(|| crate::sheet::process::SheetProcess::from_class(material_class(material)))
+}
 
 /// A material's class (mitcad#655, mitcad#1102): with print settings
 /// (filament values, a slicer's own keys or variants per printer) an FDM

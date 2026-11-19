@@ -14,3 +14,6 @@ mod cam_tests;
 
 // The stock simulation (mitcad#1013, phase 3).
 mod simulate_tests;
+
+// Turning on a lathe (mitcad#1869).
+mod turning_tests;

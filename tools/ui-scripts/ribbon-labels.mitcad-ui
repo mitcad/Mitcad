@@ -2,7 +2,10 @@
 # Preferences › Display › Toolbar labels (mitcad#1936, GitHub
 # mitcad/Mitcad#356), run in the layout the wrapper starts (Floating and
 # Docked):
-#   1. Icons only by default.
+#   1. The default: Labels under icons in the Floating layout of Windows
+#      and Linux (its toolbar panel, mitcad#1990), Icons only elsewhere;
+#      the wrapper gives the option's index as MITCAD_TEST_LABELS_DEFAULT.
+#      Icons only chosen, the start of the next steps.
 #   2. Labels under icons: the rows grow by the labels' height, the SOLID
 #      tab's Create group shows Sketch, Extrude, Revolve and Hole under its
 #      icons, and in a wide window the groups that do not fit collapse
@@ -20,13 +23,21 @@ mark
 click-logged '^Ribbon tab SOLID at '
 wait-idle
 
-# 1. Icons only by default.
+# 1. The default, then Icons only.
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property ribbonLabels currentIndex ${MITCAD_TEST_LABELS_DEFAULT}
+qt-choice ribbonLabels 'Icons only'
+key Return
+focus-main
+wait-idle
+sleep 300
+
+# 2. Labels under icons.
 mark
 command tools.preferences.display
 focus-dialog '^(Preferences|Settings)$'
 expect-widget-property ribbonLabels currentIndex 0
-
-# 2. Labels under icons.
 qt-choice ribbonLabels 'Labels under icons'
 key Return
 focus-main

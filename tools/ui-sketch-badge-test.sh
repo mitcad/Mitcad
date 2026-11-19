@@ -58,7 +58,7 @@ JSON
 # No Projects card: the Browser's card has the column from the rows down
 # to the timeline. The Browser on its card.
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[projects]\npanel=false\n[appearance]\nbrowserBackground=card\n' > "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[projects]\npanel=false\npanelTopBar=false\n[appearance]\nbrowserBackground=card\n' > "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 # card_rect name: "x y width height" of the card in the last "Floating
 # cards:" line (window coordinates).
@@ -144,7 +144,10 @@ echo "ok   no 'degree(s)' anywhere in the log"
 
 echo "--- The pointer in the view: its place above the badge, clear of the cards too"
 ui_mark
-ui_step "pointer into the view"         xdotool mousemove $(ui_view_at 60 50)
+# Left of the orientation cube: the Sketch Palette's card reaches up to the
+# rows, so the cube stands left of it, below the toolbar panel (mitcad#1990),
+# where it covers the view's middle in a small window.
+ui_step "pointer into the view"         xdotool mousemove $(ui_view_at 40 55)
 ui_expect_new "Sketch pointer x " "the pointer's place logged"
 ui_sync
 expect_clear "the pointer in the view"

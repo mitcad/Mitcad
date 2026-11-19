@@ -83,22 +83,22 @@ function Frame-Of-Four([string]$Cmd, [string]$Key, [string]$Part, [string]$L1, [
 
 Write-Host '--- 1. A frame of four timber members, mitred'
 Ui-StartApp 'timber-frame'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Frame-Of-Four 'Timber' 'F4' 'Timber 48x98 test' '400' '300'
 
 Write-Host '--- 2. A frame of four slot profiles, mitred, the last one through the first'
 Ui-StartApp 'timber-profile-frame'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Frame-Of-Four 'Profile' 'F3' 'Profile 20 test' '200' '150' -Through
 
 Write-Host '--- 3. A frame of four timber members, the last one typed to the first one''s outer side'
 Ui-StartApp 'timber-typed-frame'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Frame-Of-Four 'Timber' 'F4' 'Timber 48x98 test' '400' '300' -Typed
 
 Write-Host '--- 4. A board on the ground rests on it; one standing on its top face lies as it does'
 Ui-StartApp 'timber-lie'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Timber (F4)'                    { Ui-Key 'F4' }
 Ui-ExpectNew 'Command Timber started' 'Timber started'

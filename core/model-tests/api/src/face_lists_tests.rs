@@ -450,7 +450,7 @@ fn bodies_give_their_boxes_and_a_split_leaves_both_pieces_boxes() {
                "tool": {"type": "origin_plane", "plane": "yz", "offset": 10}}}),
     );
     let piece = format!("{}.b0", split["uid"].as_str().unwrap());
-    // What MCP's snapshots read (`mitcad_mcp::SNAPSHOT_QUERIES`).
+    // What MCP's snapshot after a command reads (`mitcad_mcp::snapshot_queries`).
     let bodies = query(
         &doc,
         json!({"query": "bodies", "versions": true, "bbox": true}),
@@ -471,6 +471,17 @@ fn bodies_give_their_boxes_and_a_split_leaves_both_pieces_boxes() {
     assert!(bodies.iter().all(|b| b["version"].is_string()));
     // Without the other properties.
     assert!(bodies[0].get("volume").is_none());
+    // mitcad#2021: no box of a body the caller has at its version (MCP's
+    // snapshot after a command); a body at another version, or one the
+    // caller does not name, gets its box.
+    let known = query(
+        &doc,
+        json!({"query": "bodies", "versions": true, "bbox": true,
+               "bbox_known": {"F1.b0": bodies[0]["version"], piece.as_str(): "00"}}),
+    );
+    let known = known.as_array().unwrap();
+    assert!(known[0].get("bbox").is_none(), "{known:?}");
+    assert_eq!(known[1]["bbox"], bodies[1]["bbox"]);
 }
 
 /// mitcad#1587: edges by the radius of their circle and by the surfaces

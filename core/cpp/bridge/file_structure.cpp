@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/io/step.hpp"
 #include "mitcad_bridge/kernel/file_structure.h"
@@ -48,7 +49,11 @@ StructureInstance instance_of(const io::StepAssembly::Instance& instance) {
 } // namespace
 
 FileStructure read_step_structure(rust::Str path, bool keep_assembly, ShapeList& shapes) {
-  io::StepRead read = io::read_step_structured(std::string(path), keep_assembly);
+  // The transfer stops when the command's monitor is cancelled (the
+  // memory guard, the user's cancel; mitcad#2032), when the model reads
+  // the file under it (Kernel::interruptible); the parsing cannot.
+  geometry::CancelRange stop;
+  io::StepRead read = io::read_step_structured(std::string(path), keep_assembly, stop.range());
   FileStructure out;
   out.assembly = read.assembly.has_value();
   if (!read.assembly) {

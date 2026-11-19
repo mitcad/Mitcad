@@ -208,7 +208,7 @@ picture() {
     ui_step "the cards again"              ui_click_logged "Start page view Cards"
     ui_expect_new "Start page view: cards" "the cards"
     ui_mark
-    ui_step "the Solid tab"                ui_click_logged "Ribbon tab SOLID"
+    ui_step "the Solid tab"                ui_click_tab "SOLID"
     ui_expect_new "Start page hidden" "the page left"
     shot "$name-solid"
   fi

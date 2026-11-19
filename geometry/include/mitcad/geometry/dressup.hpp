@@ -14,11 +14,20 @@
 // chain of a fillet stops where its edges turn although the faces go on
 // tangentially across a shallow crease, unless the next edge is selected
 // (port patch 0180, mitcad#241); the rounding then ends at that vertex, cut
-// by the face beyond the crease. A set with
-// `tangent_chain` false whose chain
-// reaches an edge that no set selects therefore fails with an "unsupported:"
-// message, as do options OCCT lacks (see the model's fillet and
-// chamfer features); the importer then falls back to the stored body.
+// by the face beyond the crease. A set with `tangent_chain` false whose
+// chain reaches an edge that no set selects is built over the whole chain
+// and kept over its selected edges only (src/runout_dressup.hpp,
+// mitcad#2037): where a selected edge meets the next edge, the rounding or
+// bevel runs out over that edge, shallower by a depth growing linearly
+// with the length along it, gone just before its far vertex; where the
+// next edge is shorter than the dressup is wide, or the run-out does not
+// build, it ends flat in the plane normal to the edge at the vertex. Those
+// faces are named <feature>:runout(<edge>) and
+// <feature>:runout_end(<vertex>). Constant and chord length fillets and
+// chamfers do this; other fillet sizes, and a set where neither builds,
+// fail with an "unsupported:" message, as do options OCCT lacks (see the
+// model's fillet and chamfer features); the importer then falls back to
+// the stored body.
 //
 // The contours go to OCCT in the order the sets list their edges: where two
 // roundings of a face narrower than both cannot be one blend, the later

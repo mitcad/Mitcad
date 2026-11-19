@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
 // 3D mice on macOS (mitcad#951): the device's HID values through IOKit's
 // HID Manager, matched as a multi-axis controller (HID usage page 1, usage
-// 8), on the main run loop that Qt runs. No vendor framework: its client
-// framework and headers are under a proprietary licence
-// (docs/development.md#licence-policy). The vendor's driver, when it is
-// installed and running, may hold the device for itself; then no values
-// reach Mitcad (docs/user-guide.md says so). The axes are HID's, as on
+// 8), on Qt's main run loop. If the 3DxWare driver has taken exclusive
+// access, use its separately installed client framework. The axes are HID's, as on
 // Windows (SpaceMouseDevice.hpp maps them); input counts only while Mitcad
 // is the active application. IOKit gives each axis's value on its own, so
 // how a device splits its reports (mitcad#1034) does not matter here.
 
 #include "../SpaceMouseDevice.hpp"
+
+#include "SpaceMouse3DxWare.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -20,6 +19,7 @@
 #include <vector>
 
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QDebug>
 #include <QGuiApplication>
 #include <QStringList>
@@ -80,7 +80,18 @@ public:
     }
   }
 
-  QString name() const override { return QStringLiteral("IOKit HID"); }
+  QString name() const override {
+    if (m_driver) {
+      return m_driver->name();
+    }
+    return QStringLiteral("IOKit HID");
+  }
+
+  QString unavailableStatus() const override {
+    return m_exclusive ? QCoreApplication::translate("mitcad::SpaceMouseController",
+                                                    "The 3D mouse is in use by another application.")
+                       : QString();
+  }
 
   bool start(QString& device) override {
     m_manager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
@@ -128,17 +139,57 @@ public:
       names.append(entry.second);
     }
     device = names.join(QStringLiteral(", "));
+    m_exclusive = opened == kIOReturnExclusiveAccess;
+    if (m_exclusive) {
+      return tryDriver(device);
+    }
     return true;
   }
 
 private:
+  static QString driverLabel(const QString& device) {
+    return QCoreApplication::translate("mitcad::SpaceMouseController", "%1 via 3DxWare").arg(device);
+  }
+
+  bool tryDriver(QString& device) {
+    m_driver = create3DxWareSpaceMouseBackend(device);
+    m_driver->acceptsInput = acceptsInput;
+    m_driver->motion = motion;
+    m_driver->button = button;
+    m_driver->connection = [this](bool present, const QString& label) {
+      if (connection) {
+        connection(present, driverLabel(label));
+      }
+    };
+    QString driverDevice;
+    const bool connected = m_driver->start(driverDevice);
+    if (!m_driver->isListening()) {
+      m_driver.reset();
+      return false;
+    }
+    if (connected) {
+      device = driverLabel(device);
+    }
+    return connected;
+  }
+
   static void matched(void* context, IOReturn, void*, IOHIDDeviceRef device) {
     auto* self = static_cast<HidBackend*>(context);
     if (self->m_devices.count(device) != 0) {
       return;
     }
-    const QString label = deviceName(device);
+    QString label = deviceName(device);
     self->m_devices[device] = label;
+    if (self->m_driver) {
+      return;
+    }
+    if (self->m_devices.size() == 1) {
+      const IOReturn opened = IOHIDDeviceOpen(device, kIOHIDOptionsTypeNone);
+      self->m_exclusive = opened == kIOReturnExclusiveAccess;
+      if (self->m_exclusive && !self->tryDriver(label)) {
+        return;
+      }
+    }
     if (self->connection) {
       self->connection(true, label);
     }
@@ -152,6 +203,9 @@ private:
     }
     const QString label = found->second;
     self->m_devices.erase(found);
+    if (self->m_driver) {
+      return;
+    }
     self->m_t = {};
     self->m_r = {};
     if (self->m_moving && self->motion) {
@@ -168,6 +222,9 @@ private:
   }
 
   void input(IOHIDValueRef value) {
+    if (m_driver) {
+      return;
+    }
     const IOHIDElementRef element = IOHIDValueGetElement(value);
     const std::uint32_t page = IOHIDElementGetUsagePage(element);
     const std::uint32_t usage = IOHIDElementGetUsage(element);
@@ -199,6 +256,8 @@ private:
     }
   }
 
+  std::unique_ptr<SpaceMouse3DxWareBackend> m_driver;
+  bool m_exclusive = false;
   IOHIDManagerRef m_manager = nullptr;
   std::map<IOHIDDeviceRef, QString> m_devices;
   std::array<int, 3> m_t{};

@@ -21,8 +21,16 @@ struct QuickAccessSettings {
   // the menus' order (quickAccessShown).
   QStringList chosen;
 
-  // New, Open, Save, Print, Design Properties and Preferences.
+  // New, Open, Save, Print, Design Properties and Preferences; none in the
+  // top bar of the Floating layout on Windows and Linux (setTopBarDefaults,
+  // mitcad#1990), whose own buttons are the File menu, Save, the + for a
+  // new design and Preferences: there the group is empty until the user
+  // adds commands, and hidden while it is (QuickAccessGroup).
   static QStringList defaults();
+  // The top bar's defaults from now on (the window sets it before the group
+  // reads the settings); off at first.
+  static void setTopBarDefaults(bool topBar);
+  static bool topBarDefaults();
   static QString settingsKey();
 
   // The settings' choice, or the defaults when there is none.
@@ -35,6 +43,15 @@ struct QuickAccessSettings {
 
   // Checks or unchecks a command; false when nothing changed.
   bool setChosen(const QString& id, bool on);
+
+  // Whether the settings' choice has the command.
+  static bool isChosen(const QString& id);
+  // Adds a command to the settings' choice or removes it (a command's Add
+  // to Quick Access and Remove from Quick Access, the group's menu), saved
+  // at once, logged ("Quick access added view.look_at") and told to every
+  // group (QuickAccessNotifier::commandsChanged); false when nothing
+  // changed.
+  static bool choose(const QString& id, bool on);
 
   // Whether the group shows at all (mitcad#1189, Preferences › Display ›
   // Show quick-access toolbar, and the group's Hide Quick-Access Toolbar):
@@ -50,7 +67,8 @@ struct QuickAccessSettings {
 
 // Tells the group in either layout, the AppKit toolbar's group and an open
 // Settings window that the group was shown or hidden (saveVisible), from
-// Preferences or the group's own menu. Plain Qt Core.
+// Preferences or the group's own menu, and the groups that a command was
+// added or removed (choose). Plain Qt Core.
 class QuickAccessNotifier : public QObject {
   Q_OBJECT
 
@@ -59,6 +77,8 @@ public:
 
 signals:
   void visibilityChanged(bool visible);
+  // The choice of commands changed (QuickAccessSettings::choose).
+  void commandsChanged();
 };
 
 // The commands the group shows: those of `chosen` that are in `available`

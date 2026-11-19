@@ -200,8 +200,6 @@ void MainWindow::registerComponentWebCommand() {
   web.tooltip = tr("Opens a browser whose downloads come into the design as components");
   web.kind = CommandDef::Kind::Action;
   web.mode = CommandDef::Mode::Model;
-  web.tab = QStringLiteral("SOLID");
-  web.group = QStringLiteral("INSERT");
   web.keywords = {QStringLiteral("web"),      QStringLiteral("browser"), QStringLiteral("download"),
                   QStringLiteral("supplier"), QStringLiteral("step"),    QStringLiteral("internet"),
                   QStringLiteral("model"),    QStringLiteral("part")};
@@ -222,7 +220,6 @@ void MainWindow::registerComponentWebCommand() {
   test.tooltip = QStringLiteral("For tests: brings in MITCAD_TEST_WEB_FILE as Component from Web does");
   test.kind = CommandDef::Kind::Action;
   test.mode = CommandDef::Mode::Model;
-  test.tab.clear();
   test.run = [this, testFile] {
     const QString file = QFileInfo(testFile).fileName();
     const WebFileCheck check = checkWebFileName(file);

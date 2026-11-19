@@ -225,11 +225,11 @@ $kept = New-Object System.Collections.Generic.List[string]
 $group = ''
 foreach ($line in $lines) {
   if ($line -match '^\[(.*)\]$') { $group = $Matches[1] }
-  elseif ($group -eq 'projects' -and $line -match '^panel=') { continue }
+  elseif ($group -eq 'projects' -and $line -match '^panel(TopBar)?=') { continue }
   $kept.Add($line)
-  if ($line -eq '[projects]') { $kept.Add('panel=true') }
+  if ($line -eq '[projects]') { $kept.Add('panel=true'); $kept.Add('panelTopBar=true') }
 }
-if (-not $kept.Contains('[projects]')) { $kept.Add('[projects]'); $kept.Add('panel=true') }
+if (-not $kept.Contains('[projects]')) { $kept.Add('[projects]'); $kept.Add('panel=true'); $kept.Add('panelTopBar=true') }
 Set-Content -Encoding ascii $ini $kept
 
 function Three-HeightsAre([int]$Projects, [int]$Config, [int]$Browser) {

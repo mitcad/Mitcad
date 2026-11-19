@@ -50,4 +50,16 @@ void saveEscLeavesUnchangedSketch(bool on);
 bool showProfilesOnOpen();
 void saveShowProfilesOnOpen(bool on);
 
+// "Project the face's edges into a sketch on a face" (mitcad#2051, GitHub
+// mitcad/Mitcad#426, settings "sketch/projectFaceOnCreate"), on by default:
+// Create Sketch on a planar face of a body asks `sketch.create` for
+// `project_face`, so the sketch starts with the face's outline as a linked
+// projection, in the same undo step. Unsaved, off while
+// MITCAD_SKETCH_PROJECT_FACE is 0 (the UI test libraries set it, so that
+// their sketches on faces start empty as their steps expect).
+bool projectFaceOnCreate();
+void saveProjectFaceOnCreate(bool on);
+// No saved value (Restore Defaults): the default above applies again.
+void resetProjectFaceOnCreate();
+
 } // namespace mitcad::sketch

@@ -92,6 +92,28 @@ cut by its rim at a crease (patch 0160) is the same construction, exact, and
 is left as it is (`geometry` test "rounding over a hole with a rounded
 rim").
 
+### 0871-chfi3d-stripe-end-curve-follows-a-run-walked-again
+
+From mitcad#1858: a reported nut design whose closed chain of 38 edges,
+rounded with 5, closed on itself along an edge of tolerance 4.79 mm.
+`ChFi3d_MakeExtremities` makes a periodic stripe's end curve from its first
+piece's first section, and its parameter curve on the last piece's surface
+as a line between that piece's contacts at its end. 0870's
+`KeepFacesAcrossTangentEdges` runs later in `Compute`; where a run ends at
+the stripe's last piece (or starts at its first), the pieces are replaced
+by three on a newly walked surface with parameters of its own (the
+section's parameter running to 28.7 where it ran to 1.22), and the old line
+on it lay off the curve by up to the section's length. Where the run holds
+an end piece, `KeepFaceAcrossTangentEdge` now makes that end's parameter
+curve again on the new piece's surface (`endPCurveOnPiece`), the line
+between its contacts as `ChFi3d_MakeExtremities` makes it, and raises the
+curve's tolerance to what it reached; the 3D curve stays, the run being
+walked again between the same sections. Runs inside a stripe are
+unchanged. Test: `geometry.port.0871`, a stadium-shaped block whose top
+is a strip 2 wide in front of and behind a hole with a rounded rim, its
+top's outer rim rounded with 3, the chain started from either side of a
+run (before: tolerances of 4.33 and 174 mm, the second solid not valid).
+
 ## 0880: a start across a strip the ball cannot touch
 
 The patch 0880 starts a rounding along an edge of a strip the ball cannot

@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+# Profile along sketch lines (mitcad#1965), on build-lines.json (Sketch1, a
+# rectangle 600 x 400 of four lines from the origin) with the profile
+# library the runner makes (a 20 mm square profile, centered on its axis):
+#   1. Profile, Method Along sketch lines: the panel waits for the lines.
+#   2. Sketch1 picked whole from the Browser: four profiles previewed along
+#      the lines (600, 400, 600, 400 mm, the corners square in the
+#      preview); Place makes them in one undo step, each 20 mm longer (10 mm
+#      past each corner to its outer corner) and mitered at 45 degrees at
+#      both ends.
+#   3. The right line moved 200 mm out in the sketch: its profile follows,
+#      the bottom and the top ones 200 mm longer, the miters kept.
+# Run by tools/ui-build-lines-test.sh (Linux),
+# tools/ui-windows-build-lines-test.ps1 (Windows) and
+# tools/ui-macos-build-lines-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+expect-ever '^Browser [^ ]+/Sketches/Sketch1 at '
+
+# 1. Profile, Method Along sketch lines.
+mark
+command build.profile
+wait-log '^BUILD profile starts with ' 60
+wait-idle
+mark
+qt-choice input_profile_how 'Along sketch lines: a profile on each line'
+wait-log '^Message band: hint Profile: select lines[.]' 30
+wait-idle
+
+# 2. Sketch1 whole from the Browser: four profiles, Place in one undo step.
+mark
+click-logged '^Panel Profile input lines_pick at '
+wait-idle
+mark
+click-logged '^Browser [^ ]+/Sketches/Sketch1 at '
+wait-log '^BUILD profile along sketch lines: .*F1.* picked$' 30
+wait-log '^Inspect Profile: along sketch lines: 4 profile[(]s[)], lengths 600[.]0, 400[.]0, 600[.]0, 400[.]0 mm .*align center, rotate 0, flip off, corners on' 60
+wait-idle
+capture-undo-depth start
+mark
+key Return
+wait-log '^Placed Slot profile test as .* length along sketch lines; 4 profile[(]s[)] along sketch lines' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number bottom '{"query": "build_parts"}' parts.0.length
+expect-near ${bottom} 620
+capture-model-number right '{"query": "build_parts"}' parts.1.length
+expect-near ${right} 420
+capture-model-number cut '{"query": "build_parts"}' parts.0.ends.a.angle
+expect-near ${cut} 0.785398
+capture-model-number cut '{"query": "build_parts"}' parts.3.ends.b.angle
+expect-near ${cut} 0.785398
+key Escape
+wait-idle
+
+# 3. The right line 200 mm out: its profile follows, the others longer.
+mark
+model-command '{"cmd": "edit_feature", "uid": "F1", "def": {"type": "sketch", "plane": "xy", "entities": [{"id": "p1", "type": "point", "at": [0, 0]}, {"id": "p2", "type": "point", "at": [800, 0]}, {"id": "p3", "type": "point", "at": [800, 400]}, {"id": "p4", "type": "point", "at": [0, 400]}, {"id": "c5", "type": "line", "start": "p1", "end": "p2"}, {"id": "c6", "type": "line", "start": "p2", "end": "p3"}, {"id": "c7", "type": "line", "start": "p3", "end": "p4"}, {"id": "c8", "type": "line", "start": "p4", "end": "p1"}]}}'
+wait-idle 60
+capture-model-number bottom '{"query": "build_parts"}' parts.0.length
+expect-near ${bottom} 820
+capture-model-number top '{"query": "build_parts"}' parts.2.length
+expect-near ${top} 820
+capture-model-number right '{"query": "build_parts"}' parts.1.length
+expect-near ${right} 420
+capture-model-number cut '{"query": "build_parts"}' parts.0.ends.b.angle
+expect-near ${cut} 0.785398
+expect-never 'TestDriver: FAIL'

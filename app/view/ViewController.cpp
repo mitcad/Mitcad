@@ -59,12 +59,14 @@
 #include "../browser/BrowserBackground.hpp"
 #include "../browser/DocumentHost.hpp"
 #include "../drawings/DrawingPreferences.hpp"
+#include "../framework/CommandLayout.hpp"
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/NoticeLevel.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "../framework/AppSettings.hpp"
 #include "../framework/AppTheme.hpp"
+#include "../framework/BoostButton.hpp"
 #include "../framework/Language.hpp"
 #include "../print/MaterialProperties.hpp"
 #include "../framework/CachePreferences.hpp"
@@ -586,7 +588,6 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
 void ViewController::registerCommands() {
   const auto add = [this](const char* id, const QString& name, const char* icon, std::function<void()> run,
                           const QStringList& keywords = {}, const QString& tooltip = QString(),
-                          const char* ribbonGroup = nullptr, const char* ribbonTab = "SOLID",
                           const QKeySequence& shortcut = QKeySequence()) {
     CommandDef def;
     def.shortcut = shortcut;
@@ -595,13 +596,6 @@ void ViewController::registerCommands() {
     def.icon = QString::fromLatin1(icon);
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Any;
-    def.tab.clear(); // the View menu, the command search and shortcuts
-    if (ribbonGroup != nullptr) {
-      // Also a button of the tab's group (SOLID unless given).
-      def.tab = QString::fromLatin1(ribbonTab);
-      def.group = QString::fromLatin1(ribbonGroup);
-      def.pinned = true;
-    }
     def.keywords = keywords;
     def.keywords << QStringLiteral("view");
     def.tooltip = tooltip;
@@ -623,13 +617,13 @@ void ViewController::registerCommands() {
   add("view.home", tr("Home"), "home", [this] {
     qDebug() << "View home";
     m_viewer.goHome();
-  }, {QStringLiteral("home view")}, tr("The home view of the whole design"), nullptr, "SOLID",
+  }, {QStringLiteral("home view")}, tr("The home view of the whole design"),
       QKeySequence(Qt::Key_Home));
   for (const StandardView& view : kStandardViews) {
     const QString key = QString::fromLatin1(view.key);
     add(qPrintable(QStringLiteral("view.%1").arg(key)), QCoreApplication::translate("View", view.command),
         "orientation-cube", [this, key] { showStandardView(key); }, {QStringLiteral("standard view"), key},
-        QCoreApplication::translate("View", view.tooltip), nullptr, "SOLID", QKeySequence(view.shortcut));
+        QCoreApplication::translate("View", view.tooltip), QKeySequence(view.shortcut));
   }
   add("view.look_at", tr("Look At"), "look-at", [this] { m_lookAt(); }, {QStringLiteral("normal to")},
       tr("Looks straight at the selected plane, planar face or sketch"));
@@ -655,7 +649,6 @@ void ViewController::registerCommands() {
     def.icon = QString::fromLatin1(turn.icon);
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Any;
-    def.tab.clear(); // the command search and shortcuts
     def.keywords = {QStringLiteral("view"), QStringLiteral("turn"), QStringLiteral("rotate"),
                     QStringLiteral("orbit"), QStringLiteral("arrow key")};
     def.tooltip = tr("Turns the 3D view by the arrow key step");
@@ -693,7 +686,7 @@ void ViewController::registerCommands() {
     add("file.render_image", tr("Render Image…"), "render-image", [this] { showRenderImage(); },
         {QStringLiteral("render"), QStringLiteral("image"), QStringLiteral("picture"), QStringLiteral("png"),
          QStringLiteral("jpeg"), QStringLiteral("exr"), QStringLiteral("photo"), QStringLiteral("cycles")},
-        tr("Renders the view or a named view to an image file at a chosen size and quality"), "RENDER");
+        tr("Renders the view or a named view to an image file at a chosen size and quality"));
   }
   add("view.component_colors", tr("Component Colors"), "visual-style", [this] {
     m_settings.componentColors = !m_settings.componentColors;
@@ -763,7 +756,7 @@ void ViewController::registerCommands() {
   add("view.annotations", tr("Annotations…"), "measure", [this] { m_host.openAnnotations(); },
       {QStringLiteral("annotation"), QStringLiteral("dimension"), QStringLiteral("measurement"),
        QStringLiteral("tolerance"), QStringLiteral("note"), QStringLiteral("leader"), QStringLiteral("fit")},
-      tr("Lists, filters and edits the dimensions and notes kept in the design"), "ANNOTATE", "MAKE");
+      tr("Lists, filters and edits the dimensions and notes kept in the design"));
   add("view.named_view", tr("New Named View"), "named-view", [this] { saveNamedView(QString(), false); },
       {QStringLiteral("save view"), QStringLiteral("camera")}, tr("Saves the current view in the design"));
   add("view.set_home", tr("Set Current View as Home"), "home",
@@ -792,7 +785,6 @@ void ViewController::registerCommands() {
   preferences.icon = QStringLiteral("settings");
   preferences.kind = CommandDef::Kind::Action;
   preferences.mode = CommandDef::Mode::Any;
-  preferences.tab.clear();
   preferences.keywords = {QStringLiteral("options"), QStringLiteral("settings")};
   preferences.tooltip = tr("General, navigation, display, cache, cloud, updates and other settings");
   preferences.run = [this] { showPreferences(); };
@@ -834,100 +826,69 @@ void ViewController::registerCommands() {
   m_registry.add(overview);
 }
 
-void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
+void ViewController::prepareMenuActions() {
+  // The View, Tools and Help menus are the command layout's (mitcad#1951,
+  // MainWindow::buildMenuBar): here their actions become checkable, the
+  // exclusive ones grouped, and the roles set.
   const auto action = [this](const QString& id) { return m_registry.action(id); };
   const auto checkable = [this, &action](const QString& id, QActionGroup* group = nullptr) {
     QAction* a = action(id);
+    if (a == nullptr) {
+      return;
+    }
     a->setCheckable(true);
     if (group != nullptr) {
       group->addAction(a);
     }
     m_checks.insert(id, a);
-    return a;
   };
-  QMenu* standard = view->addMenu(themeIcon(QStringLiteral("orientation-cube")), tr("Standard Views"));
-  standard->addAction(action(QStringLiteral("view.home")));
-  for (const StandardView& entry : kStandardViews) {
-    standard->addAction(action(QStringLiteral("view.%1").arg(QString::fromLatin1(entry.key))));
-  }
-  view->addAction(action(QStringLiteral("view.look_at")));
-  QMenu* camera = view->addMenu(themeIcon(QStringLiteral("perspective")), tr("Camera"));
   auto* projection = new QActionGroup(this);
-  camera->addAction(checkable(QStringLiteral("view.orthographic"), projection));
-  camera->addAction(checkable(QStringLiteral("view.perspective"), projection));
-  view->addAction(checkable(QStringLiteral("view.anaglyph"))); // mitcad#1449
-  QMenu* styles = view->addMenu(themeIcon(QStringLiteral("visual-style")), tr("Visual Style"));
+  checkable(QStringLiteral("view.orthographic"), projection);
+  checkable(QStringLiteral("view.perspective"), projection);
+  checkable(QStringLiteral("view.anaglyph")); // mitcad#1449
   auto* styleGroup = new QActionGroup(this);
   for (const StyleEntry& entry : kStyles) {
-    styles->addAction(checkable(QString::fromLatin1(entry.id), styleGroup));
+    checkable(QString::fromLatin1(entry.id), styleGroup);
   }
   if (m_render != nullptr) {
-    styles->addSeparator();
-    styles->addAction(checkable(QStringLiteral("view.rendered")));
-    styles->addAction(action(QStringLiteral("view.render_environment")));
-    styles->addAction(action(QStringLiteral("file.render_image")));
+    checkable(QStringLiteral("view.rendered"));
   }
-  QMenu* environment = view->addMenu(themeIcon(QStringLiteral("environment")), tr("Environment"));
   // Show: the origins, construction geometry and sketches of the whole
   // design (mitcad#1287, MainWindowVisibility.cpp, which keeps their check
   // marks as the design has them).
-  QMenu* kinds = view->addMenu(themeIcon(QStringLiteral("eye")), tr("Show"));
-  kinds->setObjectName(QStringLiteral("viewShowMenu"));
   for (const char* id : {"view.show_origins", "view.show_construction", "view.show_sketches"}) {
     if (QAction* kind = action(QString::fromLatin1(id))) {
       kind->setCheckable(true);
-      kinds->addAction(kind);
     }
   }
-  view->addAction(checkable(QStringLiteral("view.sketches_through"))); // mitcad#1931
-  view->addAction(checkable(QStringLiteral("view.selection_through"))); // mitcad#1956
-  view->addAction(checkable(QStringLiteral("view.component_colors")));
-  view->addAction(checkable(QStringLiteral("view.build_volume")));
+  checkable(QStringLiteral("view.sketches_through")); // mitcad#1931
+  checkable(QStringLiteral("view.selection_through")); // mitcad#1956
+  checkable(QStringLiteral("view.component_colors"));
+  checkable(QStringLiteral("view.build_volume"));
   auto* backgrounds = new QActionGroup(this);
   for (const BackgroundEntry& entry : kBackgrounds) {
-    environment->addAction(checkable(QString::fromLatin1(entry.id), backgrounds));
+    checkable(QString::fromLatin1(entry.id), backgrounds);
   }
-  if (m_render != nullptr) {
-    environment->addSeparator();
-    environment->addAction(action(QStringLiteral("view.render_environment")));
-  }
-  QMenu* grid = view->addMenu(themeIcon(QStringLiteral("grid")), tr("Grid and Snaps"));
-  grid->addAction(checkable(QStringLiteral("view.grid")));
-  grid->addAction(checkable(QStringLiteral("view.snap_grid")));
-  grid->addAction(action(QStringLiteral("view.grid_settings")));
-  QMenu* named = view->addMenu(themeIcon(QStringLiteral("named-view")), tr("Named Views"));
-  named->addAction(action(QStringLiteral("view.named_view")));
-  named->addAction(action(QStringLiteral("view.set_home")));
-  named->addAction(action(QStringLiteral("view.reset_home")));
-  view->addAction(action(QStringLiteral("view.annotations")));      // mitcad#702
+  checkable(QStringLiteral("view.grid"));
+  checkable(QStringLiteral("view.snap_grid"));
   // The comments for AI agents and their pins (mitcad#1119,
   // MainWindowComments.cpp, which keeps Comment Pins' check after this):
   // Comment Pins checked as the setting says, before the navigation bar
   // takes the action.
-  if (QAction* comments = action(QStringLiteral("view.comments"))) {
-    view->addAction(comments);
-  }
   if (QAction* pins = action(QStringLiteral("view.comment_pins"))) {
     pins->setCheckable(true);
     pins->setChecked(commentPinsShown());
-    view->addAction(pins);
   }
-  view->addAction(action(QStringLiteral("view.export_snapshot"))); // mitcad#649
   // Lock Rotation (mitcad#1910), in no menu: checked as the 3D mouse's
   // rotation is locked now (the window's SpaceMouseController sets it).
   if (QAction* lock = action(spaceMouseLockRotationCommand())) {
     lock->setCheckable(true);
   }
-  view->addSeparator();
   // PreferencesRole: "Settings..." (Cmd+,) in the application menu on macOS,
   // where the Tools menu then has no separator before it.
-  QAction* preferences = action(QStringLiteral("tools.preferences"));
-  preferences->setMenuRole(QAction::PreferencesRole);
-#ifndef Q_OS_MACOS
-  tools->addSeparator();
-#endif
-  tools->addAction(preferences);
-  help->addAction(action(QStringLiteral("help.shortcuts")));
+  if (QAction* preferences = action(QStringLiteral("tools.preferences"))) {
+    preferences->setMenuRole(QAction::PreferencesRole);
+  }
   apply();
 }
 
@@ -1114,8 +1075,20 @@ void ViewController::setRenderSettings(const QJsonObject& settings, const QStrin
   }
 }
 
+void ViewController::closeRenderWindows() {
+  if (m_renderEnvironment && m_renderEnvironment->isVisible()) {
+    m_renderEnvironment->hide();
+  }
+  if (m_renderImage && m_renderImage->isVisible()) {
+    m_renderImage->reject(); // a render it runs stops
+  }
+}
+
 void ViewController::showRenderImage() {
   if (m_render == nullptr) {
+    return;
+  }
+  if (showInRenderWorkspace && showInRenderWorkspace(QStringLiteral("output"))) {
     return;
   }
   if (!m_renderImage) {
@@ -1133,6 +1106,9 @@ void ViewController::showRenderImage() {
 
 void ViewController::showRenderEnvironment() {
   if (m_render == nullptr) {
+    return;
+  }
+  if (showInRenderWorkspace && showInRenderWorkspace(QStringLiteral("light"))) {
     return;
   }
   if (!m_renderEnvironment) {
@@ -1854,6 +1830,26 @@ void ViewController::showPreferences(const QString& page) {
   } else {
     connect(dialog.get(), &QDialog::accepted, profilesOnOpen, applyShowProfilesOnOpen);
   }
+  // Project the face's edges into a sketch on a face (mitcad#2051), on by
+  // default: Create Sketch on a planar face starts with the face's outline.
+  auto* projectFace = new QCheckBox(tr("Project the face's &edges into a sketch on a face"));
+  projectFace->setObjectName(QStringLiteral("projectFaceOnCreate"));
+  projectFace->setChecked(sketch::projectFaceOnCreate());
+  projectFace->setToolTip(tr("A new sketch on a planar face starts with the face's outline, linked to the face"));
+  control(sketchForm, projectFace);
+  const auto applyProjectFace = [projectFace] {
+    const bool on = projectFace->isChecked();
+    if (on == sketch::projectFaceOnCreate()) {
+      return;
+    }
+    sketch::saveProjectFaceOnCreate(on);
+    qDebug().noquote() << QStringLiteral("Preferences: project the face's edges into a sketch on a face %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(projectFace, &QCheckBox::toggled, host, saving(applyProjectFace));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, projectFace, applyProjectFace);
+  }
   groups.insert(QStringLiteral("sketch"), sketchBox);
   // Suppliers (mitcad#950): the region of the product links and the shops
   // the Supplier filters start with. Saved when the dialog is accepted, at
@@ -2523,11 +2519,24 @@ void ViewController::showPreferences(const QString& page) {
   ribbonLabels->setToolTip(tr("Shows a short name under the icon of each toolbar button"));
   auto* ribbonLabelsLabel = new QLabel(tr("Toolbar labels:"));
   ribbonLabelsLabel->setBuddy(ribbonLabels);
+  // Restore Default Layout (mitcad#1951): the user's changes to where the
+  // commands sit (the command layout's user layer) and the toolbar's pins
+  // removed, at once in every window.
+  auto* restoreLayout = new QPushButton(tr("Restore Default Layout"));
+  restoreLayout->setObjectName(QStringLiteral("restoreDefaultLayout"));
+  restoreLayout->setToolTip(tr("Puts every toolbar and menu command back where MitCad has it"));
+  restoreLayout->setAutoDefault(false);
+  connect(restoreLayout, &QPushButton::clicked, restoreLayout, [] {
+    CommandLayoutStore::instance().restoreDefault();
+    qDebug().noquote() << QStringLiteral("Preferences: layout restored to the default");
+  });
   auto* toolbarRow = new QHBoxLayout;
   toolbarRow->addWidget(quickAccess);
   toolbarRow->addSpacing(12);
   toolbarRow->addWidget(ribbonLabelsLabel);
   toolbarRow->addWidget(ribbonLabels);
+  toolbarRow->addSpacing(12);
+  toolbarRow->addWidget(restoreLayout);
   toolbarRow->addStretch(1);
   if (window != nullptr) {
     // macOS sizes a check box a few pixels short of its text (as control()).
@@ -2565,12 +2574,58 @@ void ViewController::showPreferences(const QString& page) {
   // The menu bar (mitcad#1620, Windows and Linux): shown by default;
   // cleared, it is hidden in either layout, a ☰ button before Undo and Redo
   // opens its menus, and Alt shows it until its menu closes (MenuBarReveal).
-  if (MenuBarSettings::offered()) {
+  // Not offered in the Floating layout there, whose top bar holds the menus
+  // and never shows the menu bar (mitcad#1990).
+  // The Boost development button (mitcad#1990): shown by default, hidden
+  // by its own ×; offered where the window has it (the Floating top bar of
+  // Windows and Linux, the Docked toolbar), beside Show the menu bar where
+  // that is offered too (Preferences fits a 768 px high screen).
+  QCheckBox* boostShown = nullptr;
+  if (chromeStyle() == ChromeStyle::Docked || floatingTopCards()) {
+    boostShown = new QCheckBox(tr("Show the Boost development button"));
+    boostShown->setObjectName(QStringLiteral("boostVisible"));
+    boostShown->setChecked(BoostSettings::loadVisible());
+    boostShown->setToolTip(tr("The button at the toolbar's right that supports MitCad on Ko-fi"));
+    if (window != nullptr) {
+      // macOS sizes a check box a few pixels short of its text (as control()).
+      boostShown->ensurePolished();
+      boostShown->setMinimumWidth(boostShown->sizeHint().width() + 8);
+    }
+    const auto applyBoost = [boostShown] {
+      if (BoostSettings::saveVisible(boostShown->isChecked())) {
+        qDebug().noquote() << QStringLiteral("Preferences: Boost development button %1")
+                                  .arg(boostShown->isChecked() ? QStringLiteral("shown") : QStringLiteral("hidden"));
+      }
+    };
+    if (window != nullptr) {
+      connect(boostShown, &QCheckBox::toggled, host, saving(applyBoost));
+      // The Settings window stays open: the button's own × unchecks it
+      // there too.
+      connect(&BoostNotifier::instance(), &BoostNotifier::visibilityChanged, boostShown, [boostShown](bool visible) {
+        const QSignalBlocker blocker(boostShown);
+        boostShown->setChecked(visible);
+      });
+    } else {
+      connect(dialog.get(), &QDialog::accepted, boostShown, applyBoost);
+    }
+  }
+  if (MenuBarSettings::offered() && !(chromeStyle() == ChromeStyle::Floating && floatingTopCards())) {
     auto* menuBarShown = new QCheckBox(tr("Show the m&enu bar"));
     menuBarShown->setObjectName(QStringLiteral("menuBarVisible"));
     menuBarShown->setChecked(MenuBarSettings::loadShown());
     menuBarShown->setToolTip(tr("Off: the menus are under the ☰ button before Undo, and Alt shows them"));
-    control(display, menuBarShown);
+    if (boostShown != nullptr) {
+      // Both on one row.
+      auto* checksRow = new QHBoxLayout;
+      checksRow->addWidget(menuBarShown);
+      checksRow->addSpacing(12);
+      checksRow->addWidget(boostShown);
+      checksRow->addStretch(1);
+      control(display, checksRow);
+      boostShown = nullptr;
+    } else {
+      control(display, menuBarShown);
+    }
     const auto applyMenuBar = [menuBarShown] {
       if (MenuBarSettings::saveShown(menuBarShown->isChecked())) {
         qDebug().noquote() << QStringLiteral("Preferences: menu bar %1")
@@ -2582,6 +2637,9 @@ void ViewController::showPreferences(const QString& page) {
     } else {
       connect(dialog.get(), &QDialog::accepted, menuBarShown, applyMenuBar);
     }
+  }
+  if (boostShown != nullptr) {
+    control(display, boostShown);
   }
 #if defined(Q_OS_MACOS) && !defined(MITCAD_MAC_UI)
   // The window's own File, Edit, ... menu bar (experiment/macos-shared-qt-ui):
@@ -3622,8 +3680,8 @@ void ViewController::showShortcutOverview() {
     if (sequences.isEmpty()) {
       continue;
     }
-    const QString group = def->tab.isEmpty() ? tr("General")
-                                             : QStringLiteral("%1 / %2").arg(def->tab, def->group);
+    const LayoutPlace home = commandLayout().home(def->id);
+    const QString group = home.isEmpty() ? tr("General") : QStringLiteral("%1 / %2").arg(home.tab, home.group);
     QTreeWidgetItem*& parent = groups[group];
     if (parent == nullptr) {
       parent = section(group);

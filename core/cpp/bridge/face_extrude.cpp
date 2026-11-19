@@ -7,13 +7,16 @@
 
 #include <gp_Dir.hxx>
 
+#include "bridge/profile_feature.hpp"
 #include "mitcad/geometry/face_extrude.hpp"
 #include "mitcad_bridge/kernel/face_extrude.h"
 
 namespace mitcad::bridge {
 
 std::shared_ptr<geometry::Shape> extrude_face(rust::Str feature, const geometry::Shape& body, rust::Str face,
-                                              rust::Str key, const FaceExtrusion& extrusion) {
+                                              rust::Str key, const FaceExtrusion& extrusion,
+                                              const TargetInput& target1, const TargetInput& target2,
+                                              const ShapeList& bodies) {
   geometry::FaceExtrudeSpec spec;
   spec.feature = std::string(feature);
   spec.face = std::string(face);
@@ -21,8 +24,14 @@ std::shared_ptr<geometry::Shape> extrude_face(rust::Str feature, const geometry:
   spec.reversed = extrusion.reversed;
   spec.start_offset = extrusion.start;
   spec.distance1 = extrusion.side1;
-  if (extrusion.two_sides) {
+  // A side up to a target (mitcad#2033) has no distance.
+  spec.target1 = target_of(target1, bodies);
+  spec.target2 = target_of(target2, bodies);
+  if (extrusion.two_sides && !spec.target2) {
     spec.distance2 = extrusion.side2;
+  }
+  if (spec.target2 && !extrusion.two_sides) {
+    throw std::invalid_argument("a target of side two without two sides");
   }
   // A direction of its own and the sides' tapers (mitcad#541).
   if (extrusion.has_direction) {

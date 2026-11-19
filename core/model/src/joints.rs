@@ -1069,6 +1069,12 @@ pub struct JointsState {
     /// values there, where they hold (and those of flexible occurrences
     /// nested in it, mitcad#1805).
     pub flex_values: FlexValues,
+    /// Per occurrence the Move features before the marker moved, their
+    /// motions one after another (mitcad#2025): a free part of a flexible
+    /// occurrence is moved by them from where that occurrence keeps it
+    /// (`move_free_parts`), so its kept placement is where it is before
+    /// them.
+    pub free_moves: BTreeMap<OccurrenceUid, Transform>,
 }
 
 /// Where an occurrence inside flexible occurrences is placed
@@ -1960,7 +1966,13 @@ pub(crate) fn solve_in<S>(
     }
     let result = mechanism.system.solve(&RigidOptions::default());
     if !result.is_ok() {
-        return Err(solve_error(state, &mechanism, &result));
+        return Err(solve_error(
+            state,
+            &mechanism,
+            &result,
+            component,
+            &joints.groups,
+        ));
     }
     let (changes, flexed) = mechanism.changes(&done.placements, &joints.flexed);
     let mut moved: Vec<OccurrenceUid> = changes
@@ -2041,7 +2053,10 @@ pub(crate) fn unit_of(
 /// joints move it: with those the component's rigid groups join to it.
 /// None when an occurrence of the chain is not flexible, when the unit is
 /// grounded in the component (it stays with the flexible occurrence) and
-/// when no joint of the component in effect has a side on it.
+/// when no joint of the component in effect has a side on it, unless the
+/// last flexible occurrence has free parts (mitcad#2016): then a unit no
+/// joint of the component is on is free in the parent too, which the
+/// parent's joints place alone.
 pub(crate) fn flex_unit(
     assembly: &Assembly,
     joints: &JointsState,
@@ -2065,15 +2080,108 @@ pub(crate) fn flex_unit(
     {
         return None;
     }
+    let free_parts = o.flexible.as_ref().is_some_and(|f| f.free_parts);
+    (free_parts || joined_in(joints, o.component, &members)).then(|| Unit {
+        under: within.to_vec(),
+        members,
+    })
+}
+
+/// Whether a joint of `component` in effect (its own, not one brought in
+/// through a flexible occurrence) has a side on one of `members`, a unit
+/// of occurrences placed in it.
+pub(crate) fn joined_in(
+    joints: &JointsState,
+    component: ComponentUid,
+    members: &BTreeSet<OccurrenceUid>,
+) -> bool {
     let on = |path: &[OccurrenceUid]| path.first().is_some_and(|f| members.contains(f));
     joints
         .active
         .iter()
-        .any(|j| j.component == o.component && j.under.is_empty() && (on(&j.a) || on(&j.b)))
-        .then(|| Unit {
-            under: within.to_vec(),
-            members,
-        })
+        .any(|j| j.component == component && j.under.is_empty() && (on(&j.a) || on(&j.b)))
+}
+
+/// Where the free parts of flexible occurrences are before the timeline's
+/// joints solve (mitcad#2016): the placements drags kept
+/// ([`crate::assembly::Flex::placements`]) that still apply, as
+/// [`Flexed`] entries, so that a joint's solve starts from them as it
+/// starts from an occurrence's own placement.
+pub(crate) fn kept_flexed(assembly: &Assembly) -> Flexed {
+    let mut flexed = Flexed::new();
+    for o in &assembly.occurrences {
+        let Some(flex) = &o.flexible else {
+            continue;
+        };
+        for kept in &flex.placements {
+            if !assembly.flex_path_holds(o.uid, &kept.path) {
+                continue;
+            }
+            let Some((part, through)) = kept.path.split_last() else {
+                continue;
+            };
+            let mut chain = vec![o.uid];
+            chain.extend_from_slice(through);
+            flexed.insert((chain, *part), kept.transform);
+        }
+    }
+    flexed
+}
+
+/// A Move feature's motions of occurrences (`changes`, with its rigid
+/// groups) carried to the free parts of flexible occurrences (mitcad#2025):
+/// where a flexible occurrence has a moved occurrence as a free part of its
+/// own (kept by a drag or by the joints that placed it going, or placed by
+/// a joint of the parent before the Move), the Move moves it from there,
+/// as it moves the occurrence's own placement, which the component's
+/// other occurrences show. So a free part kept somewhere follows the Move
+/// as it is edited, and goes back where it is kept when the Move is
+/// suppressed or deleted. Each moved occurrence's motions are kept in
+/// [`JointsState::free_moves`].
+pub(crate) fn move_free_parts(
+    assembly: &Assembly,
+    joints: &mut JointsState,
+    changes: &[PlacementChange],
+) {
+    for change in changes {
+        let PlacementChange::Move(o, by) = change else {
+            continue;
+        };
+        let before = joints
+            .free_moves
+            .get(o)
+            .copied()
+            .unwrap_or(Transform::IDENTITY);
+        joints.free_moves.insert(*o, by.after(&before));
+        let free: Vec<FlexKey> = joints
+            .flexed
+            .keys()
+            .filter(|(chain, part)| part == o && free_part(assembly, joints, chain, *part))
+            .cloned()
+            .collect();
+        for key in free {
+            if let Some(at) = joints.flexed.get_mut(&key) {
+                *at = by.after(at);
+            }
+        }
+    }
+}
+
+/// Whether `part` is a free part of the last flexible occurrence of
+/// `chain` (mitcad#2016): it has free parts, and no joint of its component
+/// is on the part or on what a rigid group of the component ties to it.
+pub(crate) fn free_part(
+    assembly: &Assembly,
+    joints: &JointsState,
+    chain: &[OccurrenceUid],
+    part: OccurrenceUid,
+) -> bool {
+    let Some(last) = chain.last().and_then(|o| assembly.occurrence(*o)) else {
+        return false;
+    };
+    last.flexible.as_ref().is_some_and(|f| f.free_parts)
+        && flex_unit(assembly, joints, chain, part)
+            .is_some_and(|unit| !joined_in(joints, last.component, &unit.members))
 }
 
 /// The units under the flexible occurrences placed in `component` that
@@ -2266,8 +2374,18 @@ fn fighting(
 /// rows work against each other, by the names the timeline shows, and what
 /// to do (free a motion, remove one of them, drive only one of them), the
 /// joints painted as its places; the detail for agents names the driven
-/// motions the contradiction holds.
-fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) -> String {
+/// motions the contradiction holds. A rigid group of `component`, or of a
+/// flexible occurrence's component, that ties together what the joints
+/// that work against each other move is named among them, its parts
+/// painted (mitcad#2016: a joint of the parent against an inner rigid
+/// group).
+fn solve_error(
+    state: &DocState,
+    mechanism: &Mechanism,
+    result: &RigidResult,
+    component: ComponentUid,
+    groups: &[(FeatureUid, ComponentUid, Vec<OccurrenceUid>)],
+) -> String {
     let name = |j: JointId| {
         let (uid, row) = mechanism.relation(j);
         relation_name(state, uid, row)
@@ -2284,7 +2402,7 @@ fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) ->
             joints.extend(&c.involved);
             targets.extend(&c.targets);
         }
-        let involved: Vec<String> = joints
+        let mut involved: Vec<String> = joints
             .iter()
             .map(|j| {
                 let text = name(*j);
@@ -2308,8 +2426,19 @@ fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) ->
                 }
             })
             .collect();
+        let (mut names, mut places) = fighting(state, mechanism, joints.iter().copied());
+        for (name, more) in tying_groups(state, mechanism, component, groups, &joints) {
+            if !names.contains(&name) {
+                involved.push(name.clone());
+                names.push(name);
+            }
+            for place in more {
+                if !places.contains(&place) {
+                    places.push(place);
+                }
+            }
+        }
         let detail = format!("over-constrained: {} cannot all hold", list(&involved));
-        let (names, places) = fighting(state, mechanism, joints.iter().copied());
         // A joint held at a driven value among them: driving only one of
         // them may let the others hold.
         let driven = targets
@@ -2330,11 +2459,18 @@ fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) ->
         };
         crate::notice::said_at(message, detail, places)
     } else {
-        let (names, places) = fighting(
-            state,
-            mechanism,
-            mechanism.joints.iter().map(|(_, _, _, id)| *id),
-        );
+        let all: BTreeSet<JointId> = mechanism.joints.iter().map(|(_, _, _, id)| *id).collect();
+        let (mut names, mut places) = fighting(state, mechanism, all.iter().copied());
+        for (name, more) in tying_groups(state, mechanism, component, groups, &all) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+            for place in more {
+                if !places.contains(&place) {
+                    places.push(place);
+                }
+            }
+        }
         let what = if mechanism.joints.iter().any(|(_, row, _, _)| row.is_some()) {
             "the joints and constraints"
         } else {
@@ -2359,6 +2495,63 @@ fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) ->
         };
         crate::notice::said_at(message, detail, places)
     }
+}
+
+/// The rigid groups that tie together the occurrences of a body the
+/// solver's `joints` join (mitcad#2016): each group's name and its parts
+/// as places, from `component` (through the flexible occurrences the body
+/// is under).
+fn tying_groups(
+    state: &DocState,
+    mechanism: &Mechanism,
+    component: ComponentUid,
+    groups: &[(FeatureUid, ComponentUid, Vec<OccurrenceUid>)],
+    joints: &BTreeSet<JointId>,
+) -> Vec<(String, Vec<crate::notice::NoticePlace>)> {
+    let assembly = &state.assembly;
+    let bodies: BTreeSet<BodyId> = mechanism
+        .sides
+        .iter()
+        .filter(|(j, _, _)| joints.contains(j))
+        .flat_map(|(_, a, b)| [*a, *b])
+        .flatten()
+        .collect();
+    let mut out: Vec<(String, Vec<crate::notice::NoticePlace>)> = Vec::new();
+    for body in bodies {
+        let Some((unit, _)) = mechanism.units.get(body.0 as usize) else {
+            continue;
+        };
+        if unit.members.len() < 2 {
+            continue;
+        }
+        let holder = match unit.under.last() {
+            None => component,
+            Some(o) => match assembly.occurrence(*o) {
+                Some(o) => o.component,
+                None => continue,
+            },
+        };
+        for (uid, c, members) in groups {
+            if *c != holder || !members.iter().any(|m| unit.members.contains(m)) {
+                continue;
+            }
+            let Some(entry) = state.features.iter().find(|f| f.uid == *uid) else {
+                continue;
+            };
+            let places = members
+                .iter()
+                .filter_map(|m| {
+                    let mut path = unit.under.clone();
+                    path.push(*m);
+                    occurrence_place(assembly, component, &path)
+                })
+                .collect();
+            if !out.iter().any(|(name, _)| *name == entry.name) {
+                out.push((entry.name.clone(), places));
+            }
+        }
+    }
+    out
 }
 
 fn freedom(m: Motion) -> Freedom {
@@ -2410,6 +2603,8 @@ pub(crate) struct Mechanism {
     /// The solver's joints and constraint rows: their features, rows and
     /// the flexible occurrences they are brought in through.
     pub joints: Vec<MechanismJoint>,
+    /// The bodies each solver's joint or constraint row joins.
+    pub sides: Vec<(JointId, Option<BodyId>, Option<BodyId>)>,
 }
 
 /// A joint or constraint row of a [`Mechanism`]: its feature, its row, the
@@ -2439,6 +2634,7 @@ impl Mechanism {
             system: RigidSystem::new(),
             units: Vec::new(),
             joints: Vec::new(),
+            sides: Vec::new(),
         };
         let groups = &state.groups;
         if all_units {
@@ -2478,6 +2674,7 @@ impl Mechanism {
                 mechanism
                     .joints
                     .push((joint.uid, joint.row, joint.under.clone(), id));
+                mechanism.sides.push((id, a, b));
                 continue;
             }
             let id = mechanism
@@ -2512,6 +2709,7 @@ impl Mechanism {
             mechanism
                 .joints
                 .push((joint.uid, None, joint.under.clone(), id));
+            mechanism.sides.push((id, a, b));
         }
         // Motion links (mitcad#466) between joints of the mechanism; a link
         // whose joint is left out (its sides move together) couples

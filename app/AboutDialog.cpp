@@ -10,6 +10,7 @@
 
 #include <Standard_Version.hxx>
 
+#include "framework/AppSettings.hpp"
 #include "platform/MacChrome.hpp"
 
 namespace mitcad {
@@ -17,13 +18,13 @@ namespace mitcad {
 void showAboutDialog(QWidget* parent) {
   // The program's name as people read it; the application name stays
   // "Mitcad", as the settings and data folders are keyed on it (mitcad#822).
-  const QString name = QStringLiteral("MitCad");
+  const QString name = programName();
   // OCCT's version is the one the program was built against, Qt's the one
   // it runs with.
   const QString occt = QString::fromLatin1(OCC_VERSION_COMPLETE);
   const QString qt = QString::fromLatin1(qVersion());
   // What the About box says besides the name and version.
-  const QString body =
+  QString body =
       QStringLiteral("<p>%1</p>")
           .arg(QObject::tr("A parametric desktop CAD application with a history-based modeling workflow.")) +
       QStringLiteral("<p>%1</p>")
@@ -42,6 +43,13 @@ void showAboutDialog(QWidget* parent) {
       QStringLiteral("<p>%1</p>")
           .arg(QObject::tr("Qt is used under the GNU LGPL v3 (<a href=\"https://www.gnu.org/licenses/lgpl-3.0.html\">"
                            "gnu.org/licenses/lgpl-3.0.html</a>)."));
+#if defined(Q_OS_MACOS)
+  body += QStringLiteral("<p>3D input device development tools and related technology are provided "
+                         "under license from 3Dconnexion. © 3Dconnexion 1992 - 2018. All rights reserved.</p>");
+#elif defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+  body += QStringLiteral("<p>3D input device development tools and related technology are provided "
+                         "under license from 3Dconnexion. © 3Dconnexion 1992 - 2025. All rights reserved.</p>");
+#endif
 #ifdef MITCAD_MAC_UI
   // The standard About panel shows the name and version itself.
   Q_UNUSED(parent);

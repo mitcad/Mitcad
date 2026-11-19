@@ -493,7 +493,7 @@ ui_start_app --no-native-dialogs
 echo "--- 1. The BUILD tab"
 ui_expect_log "Ribbon tab BUILD at" "the BUILD tab beside SOLID"
 ui_mark
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_expect_new "Ribbon BUILD/PROFILE at" "its PROFILE group"
 ui_expect_new "Ribbon BUILD/OUTPUT at" "its OUTPUT group"
 
@@ -661,7 +661,7 @@ ui_stop_app
 
 # The rest on a design with only its root, the active component.
 ui_start_app --open "$WORK/start.mitcad" --no-native-dialogs
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 
 echo "--- 3. Profile: a frame of four"
 ui_mark
@@ -1023,7 +1023,7 @@ g "$LIB" tag v1.1.0
 "$CLI" library fetch "$LIB" > /dev/null || ui_fail "library fetch of v1.1.0"
 ui_start_app --open "$FILE" --no-native-dialogs
 ui_expect_log "Opened $FILE" "reopened"
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 # expect_picker_place TEXT description: the picker logged where TEXT is
 # since the mark ("Part picker tile <part> at x,y; in the picker x,y").
 expect_picker_place() { ui_expect_new "$1 at " "$2"; }
@@ -1344,7 +1344,7 @@ design "$WORK/plane.mitcad" << 'EOF'
   "corner": [250, 250], "length": 100, "width": 100, "height": 40, "operation": "new_body"}}]
 EOF
 ui_start_app --open "$WORK/plane.mitcad" --no-native-dialogs
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 # The origin shown first, so that the fit takes in it and the block.
 ui_show_origin
 ui_step "fit the view (F6)"                ui_key F6
@@ -1455,7 +1455,7 @@ ui_stop_app
 # (Enter, at its origin) is grounded; Move moves it 100 mm, and it stays
 # grounded there (the panel says so instead of refusing).
 ui_start_app --no-native-dialogs
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_mark
 ui_step "Profile (command search)"         ui_command "Profile"
 ui_expect_new "BUILD profile adds to Component1 (a ground placement)" "a new design: adds to Component1"
@@ -1511,7 +1511,7 @@ echo "--- 12. Middle of Gap: a profile centred in a free stretch of a side"
 # "middle of gap", marked as the snap taken), From Middle of Gap, Offset
 # 0, and the profile is placed there.
 ui_start_app --open "$WORK/start.mitcad" --no-native-dialogs
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_mark
 ui_step "Profile (command search)"         ui_command "Profile"
 ui_expect_new "Command Profile started" "Profile started"
@@ -1579,7 +1579,7 @@ design "$WORK/split.mitcad" << 'EOF'
   "corner": [150, -50], "length": 100, "width": 100, "height": 100, "operation": "new_body"}}]
 EOF
 ui_start_app --open "$WORK/split.mitcad" --no-native-dialogs
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_show_origin
 ui_step "fit the view (F6)"                ui_key F6
 ui_mark
@@ -1659,7 +1659,7 @@ echo "--- 14. In line with another profile: a profile on a side lines up with on
 # puts the new profile's center plane on the cross member's: its near
 # face at 405, its far face (30 wide) 165 from end B, the nearer end.
 ui_start_app --open "$WORK/start.mitcad" --no-native-dialogs
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_mark
 ui_step "Profile (command search)"         ui_command "Profile"
 ui_expect_new "Command Profile started" "Profile started"

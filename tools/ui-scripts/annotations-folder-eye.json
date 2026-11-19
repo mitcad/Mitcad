@@ -1,0 +1,23 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The Browser's Annotations folder's eye (mitcad#2041): a 20 x 20 x 10 block (Sketch1 F1, Extrude1 F2, its body F2.b0) with three offsets between its top and bottom faces, Offset1-Offset3, Offset2 hidden by its own light bulb."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_annotation", "name": "Offset1", "kind": "offset",
+    "a": {"body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    "b": {"body": "F2.b0", "face": "F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    "view": {"direction": [0, 1, 0], "up": [0, 0, 1]}},
+  {"cmd": "add_annotation", "name": "Offset2", "kind": "offset", "visible": false,
+    "a": {"body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    "b": {"body": "F2.b0", "face": "F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    "view": {"direction": [0, 1, 0], "up": [0, 0, 1]}},
+  {"cmd": "add_annotation", "name": "Offset3", "kind": "offset",
+    "a": {"body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    "b": {"body": "F2.b0", "face": "F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    "view": {"direction": [1, 0, 0], "up": [0, 0, 1]}},
+  {"expect": {"query": {"query": "annotations"},
+    "result": [{"name": "Offset1", "visible": true}, {"name": "Offset2", "visible": false},
+               {"name": "Offset3", "visible": true}]}}
+]

@@ -417,9 +417,6 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host) {
   def.name = QObject::tr("Gear Pair");
   def.icon = QStringLiteral("gear");
   def.tooltip = QObject::tr("Two gears that mesh between two axes at a ratio");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("machine");
-  def.subgroup = QStringLiteral("Machine Elements");
   def.keywords = {QStringLiteral("gear"), QStringLiteral("mesh"), QStringLiteral("ratio"), QStringLiteral("transmission"),
                   QStringLiteral("centre distance"), QStringLiteral("center distance")};
   def.sketchCommand = true;
@@ -588,9 +585,6 @@ CommandDef beltDriveCommand(const CommandContext& context) {
   def.name = QObject::tr("Belt Drive");
   def.icon = QStringLiteral("pulley");
   def.tooltip = QObject::tr("Two timing belt pulleys between two axes at a ratio, with the belts that fit");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("machine");
-  def.subgroup = QStringLiteral("Machine Elements");
   def.keywords = {QStringLiteral("pulley"), QStringLiteral("timing belt"), QStringLiteral("belt"),
                   QStringLiteral("ratio"), QStringLiteral("GT2"), QStringLiteral("HTD")};
   def.sketchCommand = true;

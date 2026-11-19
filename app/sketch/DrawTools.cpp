@@ -14,6 +14,7 @@
 #include "LineArcs.hpp"
 #include "SketchController.hpp"
 #include "SketchTool.hpp"
+#include "TextCommands.hpp"
 #include "ToolSupport.hpp"
 
 namespace mitcad::sketch {
@@ -3170,7 +3171,8 @@ private:
 };
 
 // Text: a click places a text that starts there; a drag draws its
-// frame (a construction rectangle the text fills, multi-line). Then the
+// frame (a construction rectangle the text fills, its lines wrapped to the
+// frame's width, mitcad#2029). Then the
 // text and its height are typed; Enter adds it. Font, style, alignment,
 // angle and a path are set in the Edit Text panel (double-click the text).
 class TextTool : public SketchTool {
@@ -3224,16 +3226,9 @@ public:
     SketchOp op(m_c);
     QJsonObject cmd = op.command(QStringLiteral("sketch.add_text"));
     cmd.insert(QStringLiteral("text"), content);
-    if (m_framed) {
-      // The frame from its lower left corner; the text at its top.
-      const V2 lo{std::min(m_at.x, m_diagonal.x), std::min(m_at.y, m_diagonal.y)};
-      const V2 hi{std::max(m_at.x, m_diagonal.x), std::max(m_at.y, m_diagonal.y)};
-      cmd.insert(QStringLiteral("frame"),
-                 QJsonObject{{QStringLiteral("corner"), xy(lo)}, {QStringLiteral("diagonal"), xy(hi)}});
-      cmd.insert(QStringLiteral("valign"), QStringLiteral("top"));
-    } else {
-      cmd.insert(QStringLiteral("at"), xy(m_at));
-    }
+    // A frame's text at its top, wrapped to its width (mitcad#2029); a
+    // click's at its point.
+    insertNewTextPlace(cmd, m_at, m_diagonal, m_framed);
     cmd.insert(QStringLiteral("height"), height);
     QJsonObject result;
     m_placed = false;

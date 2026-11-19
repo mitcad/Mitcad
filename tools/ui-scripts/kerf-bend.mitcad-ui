@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Kerf Bend, a living hinge (mitcad#1939; app/COMMANDS.md "Sheet process
+# profiles"), on kerf-bend.json (a 3 mm plywood strip 200 x 50, 30000
+# mm3, kerf-bent across its middle as SheetFold1):
+#   1. SheetFold1 edited from the timeline opens in Kerf Bend (not Fold),
+#      its slit lattice loaded.
+#   2. Row Pitch 2: the lattice's least radius grows (13.5 mm), the strip
+#      keeps its volume (the neutral surface in the middle).
+# Run by tools/ui-kerf-bend-test.sh (Linux),
+# tools/ui-windows-kerf-bend-test.ps1 (Windows) and
+# tools/ui-macos-kerf-bend-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+expect-model-bodies 1 30000
+
+# 1. The kerf bend opens in its own panel.
+mark
+dblclick-logged '^Timeline SheetFold1 at '
+wait-log '^Editing F5 with Kerf Bend$' 30
+wait-log '^Preview Kerf Bend: ok' 60
+wait-idle
+expect-input-text slit_pitch '^1[.]5'
+
+# 2. Rows 2 mm apart.
+mark
+type-in '^Panel Kerf Bend input slit_pitch at ' '2'
+wait-log '^Preview Kerf Bend: ok' 60
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited F5' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 30000

@@ -74,7 +74,7 @@ foreach ($layout in @('docked', 'floating')) {
   Ui-LogLines | Where-Object { $_ -match '^(Design chrome|Window context menu): ' } |
     ForEach-Object { Write-Host "     $_" }
   if ($layout -eq 'docked') {
-    Ui-ExpectLog 'Window context menu: Browser | ' "docked: the right-click on the ribbon's tab row opened the window's menu"
+    Ui-ExpectLog 'Window context menu: Browser | ' "docked: the right-click on the free end of the ribbon's tab row opened the window's menu"
   }
   Ui-ExpectLog 'Placed Bar 20 test as ' "${layout}: a member placed with Build > Profile"
   Ui-ExpectLog 'Document window created: window-2 ' "${layout}: a second design"

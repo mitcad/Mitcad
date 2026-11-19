@@ -15,11 +15,23 @@ namespace mitcad {
 // (docs/naming.md, mitcad#822), so that an installation keeps its settings,
 // libraries and autosaves; the CLI's shared library cache expects the same
 // folders (app/tests/library_paths.cpp).
-inline QString storedApplicationName() { return QStringLiteral("Mitcad"); }
+inline QString storedApplicationName() {
+#ifdef MITCAD_3DXWARE_PREVIEW
+  return QStringLiteral("MitCad 3DxWare Test");
+#else
+  return QStringLiteral("Mitcad");
+#endif
+}
 
 // The program's name as people read it (docs/naming.md): what --version
 // prints before the version (app/main.cpp).
-inline QString programName() { return QStringLiteral("MitCad"); }
+inline QString programName() {
+#ifdef MITCAD_3DXWARE_PREVIEW
+  return storedApplicationName();
+#else
+  return QStringLiteral("MitCad");
+#endif
+}
 
 // The application's general settings (Preferences, General), kept in the
 // user's settings (autosave/enabled, autosave/minutes). Minutes, like every
@@ -136,6 +148,11 @@ struct ProjectsSettings {
   // The user's last show or hide of the panel; none before the first
   // (mitcad#151: the panel then shows when a project is configured).
   std::optional<bool> panelShown;
+  // The same choice in the Floating layout's top bar of Windows and Linux
+  // (mitcad#1990, the setting projects/panelTopBar): there the panel is
+  // hidden until it is shown in that layout (the owner, 17.11.2026: it was
+  // in the way), whatever the other layouts chose.
+  std::optional<bool> panelShownTopBar;
   // The panel's width as the user dragged it (mitcad#529; the settings
   // projects/cardWidth and projects/dockWidth): the Floating card's and
   // the Docked panel's; 0 none (the default width).

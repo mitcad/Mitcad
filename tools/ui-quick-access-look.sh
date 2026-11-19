@@ -3,7 +3,8 @@
 # The quick-access group (mitcad#1090): a one-off visual check, not a
 # recurring test (its name is not ui-*-test.sh, so no check picks it up).
 # The screen is saved with the group in the Floating layout's title row
-# (after the workspace tabs) and the Docked toolbar (after its tabs),
+# (at the free part's right end, before the indicators and the search
+# field: mitcad#1989) and the Docked toolbar (after its tabs),
 # on the light and the dark theme (Qt's GTK platform theme,
 # MITCAD_TEST_COLOR_SCHEME), with the default commands and View > Look At
 # added (quickAccess/commands in the settings), on a saved plate whose Save
@@ -12,7 +13,7 @@
 #   <dir>/quick-access-docked-light.png    <dir>/quick-access-docked-dark.png
 #   <dir>/quick-access-menu-<layout>-light.png  the group's menu open, its
 #                                          View submenu shown
-#   <dir>/quick-access-folded-light.png    Floating in a 760 px wide window:
+#   <dir>/quick-access-folded-light.png    Floating in a 600 px wide window:
 #                                          the group folded into its ⋮
 # and the app's logs as <dir>/<name>.log.
 #
@@ -79,7 +80,7 @@ picture() {
     ui_key Escape Escape
     if [ "$layout" = floating ]; then
       ui_mark
-      ui_step "a narrow window"            xdotool windowsize "$UI_WINDOW" 760 800
+      ui_step "a narrow window"            xdotool windowsize "$UI_WINDOW" 600 800
       ui_expect_new "Quick access folded" "folded"
       xdotool mousemove 5000 5000
       ui_sync

@@ -121,7 +121,7 @@ echo "ok   the project is made"
 # The panel shown at the start, as for a user who turned it on (mitcad#1020:
 # hidden until then).
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[projects]\npanel=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[projects]\npanel=true\npanelTopBar=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 ui_start_display
 

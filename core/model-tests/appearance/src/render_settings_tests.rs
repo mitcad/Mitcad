@@ -59,7 +59,8 @@ fn a_new_document_has_the_default_settings() {
             "output": {"width": 1920, "height": 1080, "aspect": "view", "samples": 128,
                        "time_limit": 0.0, "denoise": true, "transparent": false,
                        "format": "png", "quality": 90},
-            "lights": []
+            "lights": [],
+            "shots": []
         })
     );
 }

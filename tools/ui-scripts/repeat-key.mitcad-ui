@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: MIT
+# The command Repeat's own key (mitcad#2052) on repeat-key.json (a 30 x 20
+# mm rectangle in an unused Sketch1, F1):
+#   1. Extrude by E with the rectangle, 10 mm, Enter in its field is OK.
+#   2. No key bound (the default): Space in the 3D view repeats nothing.
+#   3. Keyboard Shortcuts: Repeat has a row of its own (3D View) with no
+#      key; Space recorded for it, OK saves it.
+#   4. Space in the focused 3D view: Repeat Extrude, logged with its key;
+#      Space again while the repeated Extrude's panel is open starts
+#      nothing (Repeat is not available there); Esc cancels it.
+#   5. In a sketch Space starts nothing.
+#   6. The browser has the keys: Space with its tree focused is the tree's,
+#      and typed into a rename it is a space in the name; neither repeats.
+# Run by tools/ui-repeat-key-test.sh (Linux),
+# tools/ui-windows-repeat-key-test.ps1 (Windows) and
+# tools/ui-macos-repeat-key-test.sh (macOS).
+wait-idle 30
+command view.fit
+wait-idle
+
+# 1. Extrude by E, Enter in its panel is OK.
+focus-widget modelView
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile'
+type-in '^Panel Extrude input distance at ' '10'
+wait-log '^Preview Extrude: ok' 30
+mark
+key Return
+wait-log '^Added extrude \(New Body\), distance 10' 30
+wait-idle 30
+
+# 2. No key of its own yet: Space is nobody's.
+focus-widget modelView
+mark
+key space
+wait-idle
+expect-no-log '^Repeat |^Command Extrude started'
+
+# 3. Keyboard Shortcuts: Repeat's row has no key; Space given to it.
+mark
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+focus-widget shortcutSearch
+type Repeat
+key Down
+wait-log '^Keyboard Shortcuts row: Repeat \| 3D View \| \(none\)$'
+key Return
+wait-log '^Keyboard Shortcuts recording: Repeat \| 3D View$'
+key space
+wait-log '^Keyboard Shortcuts key: Repeat \| 3D View = Space$'
+focus-widget shortcutSearch
+key Return
+wait-log '^Keyboard Shortcuts saved$'
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+expect-no-log '^Keyboard Shortcuts conflict'
+
+# 4. Space in the 3D view repeats Extrude and says so; not while its
+# panel is open; Esc cancels the repeated command.
+focus-widget modelView
+mark
+key space
+wait-log '^Repeat Extrude \(Space\)$'
+wait-log '^Command Extrude started'
+wait-idle
+focus-widget modelView
+mark
+key space
+wait-idle
+expect-no-log '^Repeat |^Command Extrude started'
+mark
+key Escape
+wait-log '^Command Extrude cancelled'
+wait-idle
+
+# 5. In a sketch Space starts nothing.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+focus-widget modelView
+mark
+key space
+wait-idle
+expect-no-log '^Repeat |^Command Extrude started'
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+
+# 6. The browser's tree and a rename keep Space.
+click-logged '^Browser Root/Bodies at '
+key Right
+click-logged '^Browser Root/Bodies/Body1 at '
+# The tree given the keys as the click gives them to a user. With native
+# glass (Windows) the browser's card is a tool window of its own, which a
+# synthetic click does not activate: the keys would stay with the 3D view.
+focus-widget modelBrowserTree
+mark
+key space
+wait-idle
+expect-no-log '^Repeat |^Command Extrude started'
+focus-main
+dblclick-logged '^Browser Root/Bodies/Body1 at '
+expect-tree-rename Body1
+mark
+type Plate
+key space
+type X
+key Return
+expect-log '^Renamed Body1 to Plate X$'
+wait-idle
+expect-no-log '^Repeat |^Command Extrude started'
+expect-never 'TestDriver: FAIL'

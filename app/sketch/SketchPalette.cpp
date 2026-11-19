@@ -30,6 +30,7 @@
 #include <initializer_list>
 #include <utility>
 
+#include "../framework/CommandLayout.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/Command.hpp"
 #include "../framework/GlassCard.hpp"
@@ -217,8 +218,11 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     optionLayout->addWidget(box);
     return box;
   };
+  // As X (mitcad#2040): with sketch curves selected it converts them and
+  // shows their state, partly checked when mixed; otherwise it is the mode
+  // for new geometry.
   m_construction = check(tr("Construction (X)"), QStringLiteral("paletteConstruction"),
-                         tr("New geometry is construction geometry: not in profiles"));
+                         tr("Selected curves become construction geometry, as X does; else new geometry does"));
   m_signed = check(tr("Signed distances"), QStringLiteral("paletteSignedDistances"),
                    tr("Sketch Dimension makes horizontal and vertical distances signed"));
   m_grid = check(tr("Snap to grid"), QStringLiteral("paletteGrid"),
@@ -291,7 +295,18 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   m_lookAt = lookAt;
   layout->addWidget(options.box);
 
-  connect(m_construction, &QCheckBox::toggled, &m_c, &SketchController::setConstruction);
+  connect(m_construction, &QCheckBox::clicked, this, [this](bool on) {
+    if (m_c.selectedConstruction() != SketchController::SelectedConstruction::NoCurves) {
+      // The selection converted as X does, one undo step; the mode for new
+      // geometry stays.
+      qDebug().noquote() << QStringLiteral("Palette: Construction (X) clicked for the selected curves");
+      m_c.toggleConstruction();
+    } else {
+      m_c.setConstruction(on);
+    }
+    // A click never leaves the box partly checked: it shows the state again.
+    refreshConstruction();
+  });
   connect(m_signed, &QCheckBox::toggled, &m_c, &SketchController::setSignedDistances);
   connect(m_grid, &QCheckBox::toggled, &m_c, &SketchController::setGridSnap);
   connect(m_dimensions, &QCheckBox::toggled, &m_c, &SketchController::setShowDimensions);
@@ -418,6 +433,8 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
 
   connect(&m_c, &SketchController::changed, this, &SketchPalette::refresh);
   connect(&m_c, &SketchController::optionsChanged, this, &SketchPalette::refresh);
+  // The Construction (X) box shows the selection's state (mitcad#2040).
+  connect(&m_c, &SketchController::viewRefreshed, this, &SketchPalette::refreshConstruction);
   connect(&m_c, &SketchController::toolChanged, this, [this](const QString& name) {
     // Keep the actionable hint readable with the ordinary text palette;
     // the tool's bold name supplies the visual hierarchy.
@@ -425,6 +442,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
                                  : tr("<b>%1</b><br>Esc ends the tool; Enter accepts typed values.")
                                        .arg(name.toHtmlEscaped()));
     refreshSpatial();
+    refreshConstruction(); // a running tool takes the mode for new geometry
   });
   refresh();
 }
@@ -481,35 +499,45 @@ void SketchPalette::styleButton(QToolButton* button) const {
 }
 
 bool SketchPalette::isCreateTool(const CommandDef& def) {
-  return def.tab == QStringLiteral("SKETCH") && def.mode == CommandDef::Mode::Sketch &&
+  // A tool of the SKETCH tab's CREATE or MODIFY group in the default
+  // layout (mitcad#1951).
+  const LayoutPlace home = defaultHome(def.id);
+  return home.tab == QStringLiteral("SKETCH") && def.mode == CommandDef::Mode::Sketch &&
          def.kind != CommandDef::Kind::Action &&
-         (def.group == QStringLiteral("CREATE") || def.group == QStringLiteral("MODIFY"));
+         (home.group == QStringLiteral("CREATE") || home.group == QStringLiteral("MODIFY"));
 }
+
+namespace {
+
+// A place's command ids in its menu's order, a submenu's where it is.
+void appendCommands(const std::vector<LayoutEntry>& entries, QStringList* ids) {
+  for (const LayoutEntry& entry : entries) {
+    if (entry.kind == LayoutEntry::Kind::Command) {
+      ids->append(entry.id);
+    } else if (entry.kind == LayoutEntry::Kind::Submenu) {
+      appendCommands(entry.entries, ids);
+    }
+  }
+}
+
+} // namespace
 
 QStringList SketchPalette::createCandidates(const CommandRegistry& registry) {
   static const QStringList groups = {QStringLiteral("CREATE"), QStringLiteral("MODIFY")};
   QStringList ids;
   for (const QString& group : groups) {
-    // As Ribbon::createGroup orders a group's menu: registration order, a
-    // subgroup's commands together where its first command is.
-    QList<std::pair<QString, QStringList>> entries; // subgroup, ids
-    for (const auto& def : registry.commands()) {
-      if (def->group != group || !isCreateTool(*def) || registry.action(def->id) == nullptr) {
-        continue;
-      }
-      const QString& subgroup = def->subgroup;
-      const auto same =
-          std::find_if(entries.begin(), entries.end(), [&subgroup](const std::pair<QString, QStringList>& entry) {
-            return !subgroup.isEmpty() && entry.first == subgroup;
-          });
-      if (same != entries.end()) {
-        same->second.append(def->id);
-      } else {
-        entries.append(std::make_pair(subgroup, QStringList{def->id}));
-      }
+    // As the ribbon's group menu orders them (the default layout).
+    const LayoutGroup* entries = CommandLayoutStore::instance().defaults().group(QStringLiteral("SKETCH"), group);
+    if (entries == nullptr) {
+      continue;
     }
-    for (const std::pair<QString, QStringList>& entry : entries) {
-      ids += entry.second;
+    QStringList placed;
+    appendCommands(entries->entries, &placed);
+    for (const QString& id : std::as_const(placed)) {
+      const CommandDef* def = registry.find(id);
+      if (def != nullptr && def->id == id && !ids.contains(id) && isCreateTool(*def) && registry.action(id) != nullptr) {
+        ids.append(id);
+      }
     }
   }
   return ids;
@@ -731,7 +759,7 @@ void SketchPalette::refresh() {
     const QSignalBlocker block(box);
     box->setChecked(on);
   };
-  set(m_construction, m_c.construction());
+  refreshConstruction();
   set(m_signed, m_c.signedDistances());
   set(m_grid, m_c.gridSnap());
   set(m_dimensions, m_c.showDimensions());
@@ -746,6 +774,42 @@ void SketchPalette::refresh() {
   refreshSpatial();
   // Undo may have taken the tool's entities back.
   refreshAuto();
+}
+
+void SketchPalette::refreshConstruction() {
+  using Selected = SketchController::SelectedConstruction;
+  const Selected selected = m_c.selectedConstruction();
+  Qt::CheckState state = Qt::Unchecked;
+  QString line;
+  switch (selected) {
+  case Selected::NoCurves:
+    state = m_c.construction() ? Qt::Checked : Qt::Unchecked;
+    line = QStringLiteral("new geometry %1").arg(m_c.construction() ? QStringLiteral("on") : QStringLiteral("off"));
+    break;
+  case Selected::None:
+    line = QStringLiteral("selection off");
+    break;
+  case Selected::All:
+    state = Qt::Checked;
+    line = QStringLiteral("selection on");
+    break;
+  case Selected::Mixed:
+    state = Qt::PartiallyChecked;
+    line = QStringLiteral("selection mixed");
+    break;
+  }
+  {
+    const QSignalBlocker block(m_construction);
+    // Partly checked only to show a mixed selection: a click goes on to
+    // checked and the next refresh takes the third state away again.
+    m_construction->setTristate(state == Qt::PartiallyChecked);
+    m_construction->setCheckState(state);
+  }
+  if (line != m_loggedConstruction) {
+    m_loggedConstruction = line;
+    // "Sketch Palette construction: selection mixed", for UI tests.
+    qDebug().noquote() << QStringLiteral("Sketch Palette construction: %1").arg(line);
+  }
 }
 
 void SketchPalette::refreshSpatial() {

@@ -266,7 +266,7 @@ fn an_inner_part_of_a_flexible_occurrence_drags_alone() {
 }
 
 #[test]
-fn only_a_component_with_joints_can_be_flexible() {
+fn only_a_component_with_components_in_it_can_be_flexible() {
     let mut doc = Document::new(MockKernel::default());
     let (_, plain) = doc
         .create_component(Some("Plain"), Transform::IDENTITY, false)
@@ -275,9 +275,20 @@ fn only_a_component_with_joints_can_be_flexible() {
     assert!(
         refused
             .to_string()
-            .contains("Plain:1 cannot be flexible: Plain has no joints of its own to move"),
+            .contains("Plain:1 cannot be flexible: Plain has no components in it to move"),
         "{refused}"
     );
+    // One with a component in it and no joints of its own can
+    // (mitcad#2016).
+    let (assembly, holder) = doc
+        .create_component(Some("Holder"), Transform::IDENTITY, true)
+        .unwrap();
+    doc.create_component(Some("Part"), Transform::IDENTITY, false)
+        .unwrap();
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    assert_ne!(assembly, ComponentUid::ROOT);
+    doc.set_occurrence_flexible(holder, true).unwrap();
+    assert!(doc.is_flexible(holder));
 }
 
 #[test]

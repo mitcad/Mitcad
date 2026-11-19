@@ -2621,7 +2621,15 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
   const auto length = [&sheet, &snapshot](const char* key) {
     return lengthInUnit(sheet.value(QLatin1String(key)).toDouble(), snapshot.lengthUnit);
   };
-  const QString kFactor = QString::number(sheet.value(QStringLiteral("k_factor")).toDouble(), 'g', 6);
+  // Another allowance method than a K-factor (mitcad#1939) is named.
+  const QJsonValue k = sheet.value(QStringLiteral("k_factor"));
+  const QString allowance = sheet.value(QStringLiteral("allowance")).toString();
+  const QString kFactor =
+      k.isDouble() ? QStringLiteral("K %1").arg(QString::number(k.toDouble(), 'g', 6))
+                   : (allowance == QStringLiteral("crease_table")     ? tr("crease table")
+                      : allowance == QStringLiteral("kerf_bend")      ? tr("kerf bend")
+                      : allowance == QStringLiteral("bend_deduction") ? tr("bend deduction")
+                                                                      : tr("bend allowance"));
   BrowserNode node;
   node.type = BrowserNode::Type::SheetRules;
   node.uid = rules;
@@ -2629,12 +2637,12 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
   node.occurrence = body.occurrence;
   node.component = body.component;
   node.featureType = QStringLiteral("sheet_rules");
-  node.name = QStringLiteral("%1 (%2, R %3, K %4)")
+  node.name = QStringLiteral("%1 (%2, R %3, %4)")
                   .arg(sheet.value(QStringLiteral("rules_name")).toString(rules), length("thickness"),
                        length("bend_radius"), kFactor);
   QTreeWidgetItem* row =
       addRow(bodyRow, node, QStringLiteral("sheet-rules"),
-             tr("Sheet rules %1: thickness %2, bend radius %3, K-factor %4")
+             tr("Sheet rules %1: thickness %2, bend radius %3, %4")
                  .arg(sheet.value(QStringLiteral("rules_name")).toString(rules), length("thickness"),
                       length("bend_radius"), kFactor));
   if (!shown) {
@@ -3041,22 +3049,31 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
 
   // Annotations (mitcad#702; the measurement objects of mitcad#649): one
   // folder row that opens the Annotations window, where they are listed
-  // and edited; its tooltip counts them and the broken ones.
+  // and edited; its tooltip counts them and the broken ones. Its eye is
+  // the folder's own (mitcad#2041), as the Bodies folder's (mitcad#1771):
+  // off, the view draws none of them, their own light bulbs (the
+  // Annotations window's) as they are; on, each follows its own. Greyed
+  // while the view draws none of them.
   if (!snapshot.measurements.isEmpty()) {
     BrowserNode folder;
     folder.type = BrowserNode::Type::Measurements;
     folder.component = rootNode.uid;
     folder.name = tr("Annotations");
+    folder.hasEye = true;
+    folder.visible = snapshot.annotationsShown();
     // One whose picks are on features after the timeline marker is rolled
     // back with them (mitcad#1756: a sketch edited), not broken.
     int broken = 0;
     int rolledBack = 0;
+    bool anyShown = false;
     for (const QJsonValue& value : snapshot.measurements) {
       const QJsonObject annotation = value.toObject();
       if (annotation.value(QStringLiteral("rolled_back")).toBool()) {
         ++rolledBack;
       } else if (annotation.contains(QStringLiteral("error"))) {
         ++broken;
+      } else {
+        anyShown = anyShown || annotation.value(QStringLiteral("visible")).toBool(true);
       }
     }
     const int count = static_cast<int>(snapshot.measurements.size());
@@ -3078,7 +3095,13 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       // A broken annotation is a warning (mitcad#1040): the warning's
       // badge and colour.
       item->setIcon(kName, QIcon(new LinkedIconEngine(item->icon(kName), noticeIcon(NoticeLevel::Warning))));
+    }
+    if (broken > 0 && folder.visible) {
       setNameRole(item, noticeTextRole(NoticeLevel::Warning));
+    } else if (!folder.visible || !anyShown) {
+      // Hidden by its eye, or every one hidden by its own light bulb: the
+      // view draws none, the row greyed as a Bodies folder's (mitcad#2041).
+      setNameRole(item, ColorRole::TextHidden);
     }
   }
 

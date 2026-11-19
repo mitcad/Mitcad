@@ -5,7 +5,9 @@
 //! body, the face followed through upstream edits, undo, redo and a saved
 //! design, the automatic operation, and the refusals: a face that is gone,
 //! not planar or of a mesh body fails the feature without another profile
-//! taken, and options a face's extrusion has not are refused.
+//! taken, and options a face's extrusion has not are refused. The extents
+//! of sketch profiles (mitcad#2033): up to an object (a face of the same
+//! body or another, a plane) with an offset, and through all.
 
 use serde_json::{Value, json};
 
@@ -13,7 +15,7 @@ use mitcad_model::datum::SurfaceGeometry;
 use mitcad_model::exchange::{BaseInput, ImportBody};
 use mitcad_model::features::SketchPlane;
 use mitcad_model::ids::{BodyUid, FeatureUid};
-use mitcad_model::test_support::{Block, block, def, num};
+use mitcad_model::test_support::{Block, block, def, extrude, num};
 use mitcad_model::testing::{MockKernel, MockShape};
 use mitcad_model::{Document, FeatureStatus};
 use mitcad_model_api::DocumentApi;
@@ -460,8 +462,8 @@ fn options_a_face_extrusion_has_not_are_refused() {
     let mut thin = base.clone();
     thin["thin"] = json!({"location": "side1", "thickness": 1});
     refused(&mut b.doc, thin, "no thin walls");
-    let through = face_extrusion(b.body, &top, json!({"type": "through_all"}), "cut");
-    refused(&mut b.doc, through, "goes a distance");
+    // Through all and up to an object are a face's extents too
+    // (mitcad#2033); a start object is not: the face is where it starts.
     let mut from_object = base.clone();
     from_object["start"] = json!({"type": "object", "object": {"type": "plane", "plane": "xy"}});
     refused(&mut b.doc, from_object, "starts at the face");
@@ -555,4 +557,311 @@ fn a_curved_face_extrudes_along_a_direction_only() {
     b.doc.edit_feature(uid, &def(along)).unwrap();
     let why = error(&b.doc, uid);
     assert!(why.contains("is not planar"), "{why}");
+}
+
+// The extents of sketch profiles (mitcad#2033).
+
+/// A stepped block: the block 20 high with a step on its right half joined
+/// 30 high from the sketch plane. The lower step's top (`top`), the higher
+/// step's top (`higher`).
+fn stepped() -> (Block, String, String) {
+    let mut b = block();
+    let sketch = b.doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = b
+        .doc
+        .add_rectangle(sketch, [30.0, 0.0], &num(30.0), &num(40.0))
+        .unwrap()
+        .region;
+    let step = b
+        .doc
+        .add_feature(&extrude(sketch, &[&region], 30.0, "join", &[b.body]), None)
+        .unwrap()
+        .uid;
+    assert_eq!(step, FeatureUid(4));
+    let lower = top(&b);
+    (b, lower, format!("{step}:end({region})"))
+}
+
+fn to_object(object: Value) -> Value {
+    json!({"type": "to_object", "object": object})
+}
+
+/// The case of the ticket: the lower step's top extruded up to the higher
+/// step's top (To Selected Face: its surface continued) joins into the
+/// block, one level body; with an offset it goes past it; the stored
+/// feature recomputes after an upstream change and after a save.
+#[test]
+fn a_stepped_blocks_lower_top_joins_up_to_the_higher_top() {
+    let (mut b, lower, higher) = stepped();
+    let face = json!({"type": "face", "body": b.body, "face": higher});
+    let uid = add(
+        &mut b.doc,
+        face_extrusion(b.body, &lower, to_object(face.clone()), "join"),
+    );
+    assert_eq!(uid, FeatureUid(5));
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!(
+            "extrude_face F5 {lower} key {lower} from 0: to face {higher} extend true offset 0"
+        )
+    );
+    // One body: the stepped block with the face's prism joined into it.
+    assert_eq!(b.doc.bodies().len(), 1);
+    let joined = history(&b.doc, b.body);
+    assert!(
+        joined.starts_with("join(") && joined.ends_with(&format!(",face_prism(F5:{lower}:0..10))")),
+        "{joined}"
+    );
+    // The caps keyed by the face, as by a distance.
+    let names = faces(&b.doc, b.body);
+    assert!(names.contains(&format!("F5:end({lower})")), "{names:?}");
+
+    // With an offset (positive goes past the face).
+    let mut past = to_object(face.clone());
+    past["offset"] = json!(2);
+    b.doc
+        .edit_feature(uid, &def(face_extrusion(b.body, &lower, past, "join")))
+        .unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!(
+            "extrude_face F5 {lower} key {lower} from 0: to face {higher} extend true offset 2"
+        )
+    );
+
+    // The block made deeper upstream: the face and its object are found
+    // again.
+    b.doc.set_parameter("d3", 25.0).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    let recomputed = history(&b.doc, b.body);
+    assert!(recomputed.contains("prism(F2:0..25)"), "{recomputed}");
+
+    // Saved and opened again: the same feature and result.
+    let saved = b.doc.to_json();
+    assert!(saved.contains("\"to_object\""), "{saved}");
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    loaded.recompute();
+    assert_eq!(status(&loaded, uid), FeatureStatus::Ok);
+    assert_eq!(history(&loaded, b.body), history(&b.doc, b.body));
+}
+
+/// Up to a plane and up to a body; To Adjacent Faces; with a taper; and on
+/// two sides, a side up to an object beside a distance (signed, ending on
+/// the object's side too).
+#[test]
+fn a_face_extrudes_up_to_planes_bodies_and_on_two_sides() {
+    let (mut b, lower, higher) = stepped();
+    // The stepped block as the extrusion finds it.
+    let before = history(&b.doc, b.body);
+    let plane = json!({"type": "plane", "plane": {"origin": [0, 0, 30], "normal": [0, 0, 1]}});
+    let uid = add(
+        &mut b.doc,
+        face_extrusion(b.body, &lower, to_object(plane.clone()), "join"),
+    );
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!(
+            "extrude_face F5 {lower} key {lower} from 0: to plane [0.0, 0.0, 30.0] [0.0, 0.0, 1.0] \
+             offset 0"
+        )
+    );
+    let cases = [
+        (
+            to_object(json!({"type": "face", "body": b.body, "face": higher, "chained": true})),
+            format!("to face {higher} extend false offset 0"),
+        ),
+        (
+            to_object(json!({"type": "body", "body": b.body, "through": true})),
+            format!("to body {before} through true offset 0"),
+        ),
+        (
+            json!({"type": "to_object", "object": plane, "taper": 0.1}),
+            "to plane [0.0, 0.0, 30.0] [0.0, 0.0, 1.0] offset 0 taper 0.1 0".to_owned(),
+        ),
+        (
+            json!({"type": "two_sides", "side1": to_object(plane.clone()),
+                   "side2": {"type": "distance", "distance": 5}}),
+            "to plane [0.0, 0.0, 30.0] [0.0, 0.0, 1.0] offset 0; 5".to_owned(),
+        ),
+        (
+            json!({"type": "two_sides", "signed": true, "side1": to_object(plane.clone()),
+                   "side2": {"type": "distance", "distance": -3}}),
+            "to plane [0.0, 0.0, 30.0] [0.0, 0.0, 1.0] offset 0; -3".to_owned(),
+        ),
+    ];
+    for (extent, spec) in cases {
+        b.doc
+            .edit_feature(uid, &def(face_extrusion(b.body, &lower, extent, "join")))
+            .unwrap();
+        assert_eq!(status(&b.doc, uid), FeatureStatus::Ok, "{spec}");
+        assert_eq!(
+            last_spec(&b.doc),
+            format!("extrude_face F5 {lower} key {lower} from 0: {spec}")
+        );
+    }
+}
+
+/// Through all: a cut of the block's top into it reaches past the block's
+/// far side (its depth 20, by a quarter and 1 mm more), both ways alike;
+/// a curved face along a direction from every point it may start at.
+#[test]
+fn a_face_cuts_through_all() {
+    let mut b = block();
+    let top = top(&b);
+    let mut into = face_extrusion(b.body, &top, json!({"type": "through_all"}), "cut");
+    into["flip"] = json!(true);
+    let uid = add(&mut b.doc, into);
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!("extrude_face F3 {top} key {top} reversed from 0: 26")
+    );
+    assert_eq!(
+        history(&b.doc, b.body),
+        format!("cut(prism(F2:0..20),face_prism(F3:{top}:-0..26))")
+    );
+    // Both ways.
+    b.doc
+        .edit_feature(
+            uid,
+            &def(face_extrusion(
+                b.body,
+                &top,
+                json!({"type": "through_all", "both_sides": true}),
+                "cut",
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        last_spec(&b.doc),
+        format!("extrude_face F3 {top} key {top} from 0: 26; 26")
+    );
+    // Out of the block nothing lies in the way.
+    b.doc
+        .edit_feature(
+            uid,
+            &def(face_extrusion(
+                b.body,
+                &top,
+                json!({"type": "through_all"}),
+                "cut",
+            )),
+        )
+        .unwrap();
+    let why = error(&b.doc, uid);
+    assert!(why.contains("no bodies in the extrude direction"), "{why}");
+
+    // A curved side face along -y: from the corners of its body's box, 40
+    // across.
+    let side = "F2:side(c1[c4,c2])";
+    b.doc.kernel().surfaces.borrow_mut().insert(
+        side.to_owned(),
+        SurfaceGeometry::Cylinder {
+            origin: [0.0, 0.0, 0.0],
+            axis: [0.0, 0.0, 1.0],
+            radius: 5.0,
+        },
+    );
+    let mut along = face_extrusion(b.body, side, json!({"type": "through_all"}), "new_body");
+    along["direction"] = json!([0.0, -1.0, 0.0]);
+    b.doc.edit_feature(uid, &def(along)).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!("extrude_face F3 {side} key {side} from 0: 51 along [0, -1, 0]")
+    );
+}
+
+/// Up to a face of another body, as a new body and joined into both.
+#[test]
+fn a_face_extrudes_up_to_a_face_of_another_body() {
+    let mut b = block();
+    let top = top(&b);
+    // A plate apart from the block: 40 to 45 above the sketch plane.
+    let sketch = b.doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = b
+        .doc
+        .add_rectangle(sketch, [0.0, 0.0], &num(60.0), &num(40.0))
+        .unwrap()
+        .region;
+    let plate = add(
+        &mut b.doc,
+        json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+               "start": {"type": "offset", "offset": 40},
+               "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}),
+    );
+    let plate_body = BodyUid::new(plate, 0);
+    let underside = format!("{plate}:start({region})");
+    let object = to_object(json!({"type": "face", "body": plate_body, "face": underside}));
+    let uid = add(
+        &mut b.doc,
+        face_extrusion(b.body, &top, object.clone(), "new_body"),
+    );
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!(
+            "extrude_face {uid} {top} key {top} from 0: to face {underside} extend true offset 0"
+        )
+    );
+    assert_eq!(b.doc.bodies().len(), 3);
+    assert_eq!(
+        history(&b.doc, BodyUid::new(uid, 0)),
+        format!("face_prism({uid}:{top}:0..10)")
+    );
+    // Joined into the block and the plate: one body.
+    let mut join = face_extrusion(b.body, &top, object, "join");
+    join["participants"] = json!([b.body, plate_body]);
+    b.doc.edit_feature(uid, &def(join)).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(b.doc.bodies().len(), 1);
+}
+
+/// A pattern's Adjust builds each copy of a face's extrusion up to an
+/// object again, up to the same plane, as for a sketch profile's; Identical
+/// moves the finished tool.
+#[test]
+fn adjust_rebuilds_a_face_extrusion_up_to_an_object_at_each_copy() {
+    let mut b = block();
+    let top = top(&b);
+    let plane = json!({"type": "plane", "plane": {"origin": [0, 0, 30], "normal": [0, 0, 1]}});
+    let uid = add(
+        &mut b.doc,
+        face_extrusion(b.body, &top, to_object(plane), "new_body"),
+    );
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    let specs = |doc: &Document<MockKernel>| -> Vec<String> {
+        doc.kernel()
+            .specs
+            .borrow()
+            .iter()
+            .filter(|s| s.starts_with(&format!("extrude_face {uid} ")))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(specs(&b.doc).len(), 1);
+    let pattern = |compute: &str| {
+        json!({"type": "rectangular_pattern",
+               "objects": {"type": "features", "features": [uid]},
+               "direction1": {"axis": {"type": "origin", "axis": "x"}, "quantity": 3,
+                              "distance": 80},
+               "distance_type": "spacing", "compute": compute})
+    };
+    let adjust = add(&mut b.doc, pattern("adjust"));
+    assert_eq!(status(&b.doc, adjust), FeatureStatus::Ok);
+    let built = specs(&b.doc);
+    assert_eq!(built.len(), 3, "{built:?}");
+    assert!(
+        built[1..]
+            .iter()
+            .all(|s| s.contains("to plane [0.0, 0.0, 30.0] [0.0, 0.0, 1.0]")),
+        "{built:?}"
+    );
+    b.doc
+        .edit_feature(adjust, &def(pattern("identical")))
+        .unwrap();
+    assert_eq!(specs(&b.doc).len(), 3);
 }

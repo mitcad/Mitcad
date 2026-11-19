@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/commands geometry/analysis
+# check-all sources: app/commands geometry/analysis app/browser/BrowserController.cpp
 # The INSPECT group (U4) through the real UI, on two 20 mm cubes that
 # overlap by 5 mm (Body1 at x = 0, Body2 at x = 15) and, apart from them,
 # a rod of radius 5 (Body3, from a circle in Sketch1 about (-40, 10)) and a
@@ -18,7 +18,9 @@
 #   - The analysis kept in the document (mitcad#41): the browser's Analysis
 #     folder lists it; Remove Section Analysis hides it, its light bulb
 #     shows and hides it; double-click edits it; saved with the file and
-#     cut again when it opens; deleted from the context menu, and undone.
+#     cut again when it opens; flipped from its context menu (mitcad#1975:
+#     no longer in the Inspect menu); deleted from the context menu, and
+#     undone.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-inspect-test.sh [screenshot.png]
@@ -196,7 +198,12 @@ ui_expect_log 'Section analysis at {"plane":{"normal":[1,0,0],"origin":[18,0,0]}
 ui_expect_log "Browser Root/Analysis/Section1 at" "listed again"
 ui_mark
 ui_step "right-click Section1"             ui_click_logged "Browser Root/Analysis/Section1" 3
-ui_expect_new "Context menu: Edit Section Analysis | Hide | Rename | Delete" "its menu"
+ui_expect_new "Context menu: Edit Section Analysis | Flip Section Analysis | Hide | Rename | Delete" "its menu"
+ui_step "choose Flip Section Analysis"     ui_menu_choose "Flip Section Analysis"
+ui_expect_new 'Section analysis at {"plane":{"normal":[-1,0,0],"origin":[18,0,0]}}' "cut on its other side"
+ui_mark
+ui_step "right-click Section1"             ui_click_logged "Browser Root/Analysis/Section1" 3
+ui_expect_new "Context menu: Edit Section Analysis | Flip Section Analysis | Hide | Rename | Delete" "its menu again"
 ui_step "choose Delete"                    ui_menu_choose "Delete"
 ui_expect_new "Deleted analysis Section1" "deleted"
 ui_expect_new "Section analysis off" "whole again"

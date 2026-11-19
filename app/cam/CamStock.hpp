@@ -72,6 +72,13 @@ struct StockMesh {
 StockMesh stockMesh(const StockGrid& grid, const std::vector<float>& heights, const WorkFrame& frame,
                     const std::vector<float>* part = nullptr, double tolerance = 0.01, double thickest = 0.0);
 
+// A lathe setup's turned stock (mitcad#1869): the `stock` of its
+// `cam_simulate` (`{z, inner, outer}`: per node along the work Z the ring
+// between two radii) revolved about the work Z in `segments` steps: the
+// outside and the bore as bands between the nodes where a radius changes,
+// and the ends of each stretch of material as rings. Plain shades.
+StockMesh turnedStockMesh(const QJsonObject& stock, const WorkFrame& frame, int segments = 48);
+
 // The snapshots' places along a playback of `points` places: at most
 // `count`, evenly apart, the last place always one; ascending, each once.
 std::vector<int> framePlaces(int points, int count);

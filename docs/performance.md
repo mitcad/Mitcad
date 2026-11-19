@@ -450,7 +450,10 @@ finds the new view in the cache.
   compounds of visible, outline, smooth and hidden lines
   (`HLRBRep_HLRToShape`); `convert` turns their edges into drawn curves.
   The polygonal algorithm's phases are `mesh` (copies of the parts
-  triangulated), `update`, `extract` and `convert`. An exact projection
+  triangulated), `update` (`HLRBRep_PolyAlgo::Update`: the triangles
+  stored and boxed), `hide` (`HLRBRep_PolyHLRToShape::Update`: the hiding
+  pass, on the kernel's threads since port patch 1810, mitcad#2021),
+  `extract` and `convert`. An exact projection
   that failed adds `failed=… exact-failed` before the polygonal phases.
 - `project 27 bodies exact: place=… kernel=… total=… ms; bodies 0 Body1, …`:
   one per projection, from the model: the bodies placed where their

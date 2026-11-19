@@ -33,7 +33,8 @@ pub struct ReorientReport {
     pub moves: Vec<String>,
     /// The occurrences whose placements changed, by name.
     pub occurrences: Vec<String>,
-    /// Named views, section analyses and lights that turned.
+    /// Named views and the Render workspace's shots, section analyses
+    /// and lights that turned.
     pub views: usize,
     pub analyses: usize,
     pub lights: usize,
@@ -913,6 +914,8 @@ fn turn_state(
         }
     }
     report.lights += crate::reorient::turn_lights(&mut state.render, turn);
+    // The Render workspace's shots turn with the design, as named views do.
+    report.views += crate::reorient::turn_shots(&mut state.render, turn);
     // Image references' planes and comments' points and places
     // (mitcad#1315).
     for image in &mut state.image_references {

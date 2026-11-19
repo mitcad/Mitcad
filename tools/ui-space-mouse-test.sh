@@ -5,6 +5,7 @@
 # check-all sources: app/platform/unix/SpaceMouseSpnav.cpp app/framework/TestDriver.cpp tools/ui-scripts/space-mouse.mitcad-ui
 # check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
 # check-all sources: app/view/ViewController.cpp app/framework/TestDriverNavigation.cpp
+# check-all sources: app/platform/unix/SpaceMouseMagellan.cpp app/platform/unix/SpaceMouseMagellan.hpp app/platform/SpaceMouseDriverReports.hpp
 # A 3D mouse (mitcad#951) on a private Xvfb display, through the test
 # driver's input (tools/ui-scripts/space-mouse.mitcad-ui): no device logs
 # "3D mouse: none", a spin turns the view, a push pans it, a pull zooms in

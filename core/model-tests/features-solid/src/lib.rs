@@ -37,3 +37,5 @@ mod fill_cavity_tests;
 mod press_pull_tests;
 // A Flex item let hang, pinned, dragged and locked (mitcad#1713).
 mod flex_hang_tests;
+// Panelize: a body's faces split off as panels, step by step (mitcad#2005).
+mod panelize_tests;

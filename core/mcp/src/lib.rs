@@ -12,7 +12,7 @@ mod framing;
 // Compact command results, command arrays (mitcad#689).
 mod changes;
 pub use changes::{
-    SNAPSHOT_QUERIES, TimelineMode, command_document, entry_failed, evaluated_features, recomputed,
+    TimelineMode, command_document, entry_failed, evaluated_features, recomputed, snapshot_queries,
 };
 mod hints;
 pub use hints::{command_hint_query, command_hints, command_hints_enabled};

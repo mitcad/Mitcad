@@ -6,7 +6,17 @@
 # The hidden menu bar (mitcad#1620) through the real UI, in the Floating and
 # the Docked layout, with the quick-access group hidden too (so that the
 # menus are reachable only by the bar, the ☰ button and the keys), on a
-# saved plate that mitcad-cli makes:
+# saved plate that mitcad-cli makes.
+# Floating (mitcad#1990): the menu bar never shows, whatever the setting
+# (Preferences does not offer it); the ☰ is the title row's part
+# titleMenu from the start, before Undo and Redo, the view at the window's
+# top:
+#   F1. The ☰ button opens the menus: File, Edit, View, Tools, …, Help.
+#   F2. Alt alone opens the ☰ menu; Esc closes it. Alt+F (File's
+#       mnemonic) opens File from the title row's File; Alt+E (Edit's)
+#       Edit beside the ☰ menu; the bar never shows ("Menu bar shown" not
+#       logged, the view's top stays).
+# Docked:
 #   1. Preferences › Display › Show the menu bar (Alt+E) cleared, OK: saved
 #      (view/menuBar=false), the menu bar hidden at once: the 3D view moves
 #      up by the bar's height; the ☰ button shows (Floating: the title
@@ -112,6 +122,63 @@ title_menu() {
   fi
 }
 
+# floating_steps: the Floating steps above.
+floating_steps() {
+  local top entries
+  echo "=== floating"
+  mkdir -p "$(dirname "$CONF")"
+  printf '[quickAccess]\nvisible=false\n' > "$CONF"
+  cp "$WORK/plate.mitcad" "$WORK/floating.mitcad"
+  ui_start_app --chrome=floating --open "$WORK/floating.mitcad"
+  ui_expect_log "Opened $WORK/floating.mitcad" "floating: opened"
+  ui_expect_log "Quick access toolbar hidden" "floating: the quick-access group hidden"
+  ui_expect_log "Menu bar hidden: Floating" "floating: the window's menu bar hidden"
+  ui_sync
+  top=$(view_top)
+  [ "$top" = 0 ] || ui_fail "floating: the view's top is $top, not the window's top (a menu bar row above it?)"
+  echo "ok   floating: no menu bar, the view at the window's top"
+  ui_expect_log "Menu bar button at" "floating: the ☰ button shows"
+  title_menu with
+
+  echo "--- F1. The ☰ button opens the menus"
+  ui_mark
+  ui_step "the ☰ button"                   ui_click_logged "Menu bar button"
+  ui_expect_new "Context menu: File | Edit | View | Tools" "floating: the ☰ button's menu opened"
+  entries=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^Context menu: " | tail -1)
+  [[ $entries == *" | Help" ]] || ui_fail "floating: the ☰ menu does not end with Help: $entries"
+  echo "ok   floating: ${entries#Context menu: }"
+  ui_step "File"                           ui_menu_choose "File"
+  ui_expect_new "Context menu File: New Design" "floating: the ☰ button's File opened the File menu"
+  ui_step "close the menus (Esc Esc)"      ui_key Escape Escape
+  ui_sync
+
+  echo "--- F2. The menus' keys"
+  ui_mark
+  ui_step "Alt alone"                      ui_key alt
+  ui_expect_new "Menus by the keys (Alt): ☰" "floating: Alt opens the ☰ menu"
+  ui_expect_new "Context menu: File | Edit | View | Tools" "floating: the ☰ menu open"
+  ui_step "Esc"                            ui_key Escape
+  ui_sync
+  ui_mark
+  ui_step "Alt+F (File's mnemonic)"        ui_key alt+f
+  ui_expect_new "Menus by the keys (Alt+F): File" "floating: Alt+F opens File from the title row"
+  ui_expect_new "File menu: " "floating: the File menu open"
+  ui_step "Esc"                            ui_key Escape
+  ui_sync
+  ui_mark
+  ui_step "Alt+E (Edit's mnemonic)"        ui_key alt+e
+  ui_expect_new "Menus by the keys (Alt+E): Edit" "floating: Alt+E opens Edit beside the ☰ menu"
+  ui_expect_new "Context menu Edit: " "floating: the Edit menu open"
+  ui_step "close the menus (Esc Esc)"      ui_key Escape Escape
+  ui_sync
+  if grep -q "^Menu bar shown" "$UI_LOG"; then
+    ui_fail "floating: the menu bar was shown"
+  fi
+  [ "$(view_top)" = 0 ] || ui_fail "floating: the view's top moved to $(view_top)"
+  echo "ok   floating: the menu bar never showed"
+  ui_stop_app
+}
+
 # menu_bar_steps layout: the four steps above.
 menu_bar_steps() {
   local layout=$1 shown hidden entries
@@ -171,6 +238,6 @@ menu_bar_steps() {
 }
 
 ui_start_display
-menu_bar_steps floating
+floating_steps
 menu_bar_steps docked
 ui_finish "the hidden menu bar"

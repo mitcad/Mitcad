@@ -66,8 +66,6 @@ CommandDef MainWindow::paperPrintCommand() {
   def.shortcut = QKeySequence(QKeySequence::Print);
   def.kind = CommandDef::Kind::Action;
   def.mode = CommandDef::Mode::Any;
-  def.tab.clear(); // the File menu
-  def.group = QStringLiteral("INSERT");
   def.keywords = {QStringLiteral("printer"), QStringLiteral("paper"), QStringLiteral("page"),
                   QStringLiteral("tile"),    QStringLiteral("template"), QStringLiteral("1:1"),
                   QStringLiteral("drawing"), QStringLiteral("sketch"), QStringLiteral("cut list"),

@@ -225,3 +225,42 @@ fn its_edit_changes_the_offsets_and_the_lie_in_one_undo_step() {
         t.translation
     );
 }
+
+#[test]
+fn an_edge_offset_change_renames_the_member_to_its_new_length() {
+    // Its automatic name follows its designation (mitcad#2030).
+    let mut doc = design();
+    let plate = plate(&mut doc);
+    let (edge, face) = long_edge(&plate);
+    let member = place(
+        &mut doc,
+        json!({"part": part("deck120"), "along": {"edge": edge, "face": face}}),
+    );
+    all_ok(&doc);
+    let name = |doc: &Document<MockKernel>| doc.assembly().name(component(&member));
+    let placed_name = name(&doc);
+    assert!(placed_name.starts_with("Planed 28x120 L="), "{placed_name}");
+    let depth = doc.undo_depth();
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": member["component"],
+               "along": {"start": 50, "end": 20}}),
+    )
+    .unwrap();
+    all_ok(&doc);
+    assert!((length_of(&doc, &member) - 1730.0).abs() < 1e-6);
+    assert_eq!(name(&doc), "Planed 28x120 L=1730");
+    assert_eq!(doc.undo_depth(), depth + 1);
+    // The plate shorter: the member follows, renamed in that edit.
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "plate_length", "value": 1500}),
+    )
+    .unwrap();
+    all_ok(&doc);
+    assert_eq!(name(&doc), "Planed 28x120 L=1430");
+    command(&mut doc, json!({"cmd": "undo"})).unwrap();
+    command(&mut doc, json!({"cmd": "undo"})).unwrap();
+    all_ok(&doc);
+    assert_eq!(name(&doc), placed_name);
+}

@@ -520,6 +520,7 @@ päätä", never "napsauta keskipiste".
 | recover | palauttaa | autosave: automaattinen tallennus; discard: hylätä |
 | library | kirjasto | library component: kirjastokomponentti; supplier: toimittaja |
 | Start, Solid, Build, Make | Aloitus, Solidi, Rakenna, Valmistus | the tabs |
+| 3D Print, Laser, CNC | 3D-tulostus, Laser, CNC | the Make workspace's tabs; its groups Slice: Viipalointi, Printers: Tulostimet, Prepare: Valmistele, Setup: Kiinnitys, 2D Milling: 2D-jyrsintä, 3D Milling: 3D-jyrsintä, Turning: Sorvaus, Toolpath: Työstörata |
 | Create, Modify, Inspect, Insert, Select | Luo, Muokkaa, Tarkastele, Lisää, Valitse | the groups |
 | Auto | Auto | an input's automatic value: Auto (%1) |
 | Cancel | Peruuta | every Cancel button, Qt's own dialogs too (Qt's catalogue says Peru) |
@@ -578,4 +579,15 @@ päätä", never "napsauta keskipiste".
 | toolbar labels | työkalurivin tekstit | Icons only: Vain kuvakkeet; Labels under icons: Tekstit kuvakkeiden alla; the buttons' short labels (the context `RibbonLabel`): Sketch: Luonnos; Section: Leikkaus |
 | Fill Hole, Bridge (Form) | Täytä aukko, Silta | an opening of the cage: aukko; quads: nelikulmiot; segments: segmentit; whole openings: kokonaiset aukot (mitcad#1941) |
 | shared miter | yhteinen jiiri | Miter Shared (the choice): jiirin valinta Jaettu; the component an end meets: kohdattava komponentti; Meets end %1 of %2: Kohtaa kohteen %2 pään %1; Leans: Kallistus (mitcad#1940) |
+| rip (sheet metal) | repäisy (repäistä) | Rip Edges: Repäisysärmät; Bend Edges: Taivutussärmät; corner gap: nurkan rako; Convert to Sheet Metal: Muunna ohutlevyksi (mitcad#1949) |
+| layout (toolbars and menus) | asettelu | default layout: oletusasettelu; Restore Default Layout: Palauta oletusasettelu; Move to Group: Siirrä ryhmään; Also Show in Group: Näytä myös ryhmässä (mitcad#1951) |
+| along sketch lines (Build) | luonnoksen viivoja pitkin | Chain: Ketju; Place along sketch lines: Sijoita luonnoksen viivoja pitkin; edge frame: särmäkehys; left square: jätetään suoriksi (mitcad#1965) |
 | second direction (sketch pattern) | toinen suunta | Direction 2: Suunta 2; At Right Angles: Kohtisuoraan; As Stored: Tallennettu (mitcad#1969) |
+| Manage (the tab), other new tabs and groups | Hallinta | Parameters: Parametrit; Configurations: Konfiguraatiot; Rules: Säännöt; Design: Malli; Curves: Käyrät; Joinery: Puuliitokset; Project / Include: Projisoi / sisällytä; Customize Toolbar…: Mukauta työkaluriviä…; Reset Toolbar: Palauta työkalurivi; Recompute All: Laske kaikki uudelleen (mitcad#1975) |
+| sheet process | levyprosessi | Metal: Metalli; Board: Kartonki (cardboard, corrugated board, fluted plastic sheet: kartonki, aaltopahvi, kennomuovilevy; folding carton: taivekartonki; corrugated polypropylene: PP-kennolevy); Laser Sheet: Laserlevy; plate (laser-cut): levy |
+| bend allowance, bend deduction | taivutuslisä, taivutusvähennys | Allowance (how the flat length is worked out): Levityslaskenta; per 90°: 90°:lle |
+| crease (board) | nuutti | to crease: nuutata; creasing, crease line: nuuttaus, nuuttausviiva; Crease Table: Nuuttaustaulukko; Crease Deduction: Nuutin vähennys; flute (corrugated board): aalto, aaltotyyppi; along/across the flutes: aaltojen suuntaisesti/poikki; blank: aihio |
+| kerf (laser) | leikkausrako | kerf bend (living hinge): viiltotaivutus (elävä sarana); slit: viilto; Slit Lattice: Viiltokuvio; Row Pitch: Rivijako |
+| finger joint | sormiliitos | finger: sormi; End Margin: Päätyvara; T-nut slot: T-mutteriura; Mating Plate: Vastinlevy; Flat Pack: Tasopakkaus |
+| glue flap | liimaläppä | Taper: Kavennus; End Inset: Päädyn sisennys; Standard Box: Vakiolaatikko |
+| die line | stanssikuva | Export Die Line…: Vie stanssikuva…; cut and crease lines: leikkaus- ja nuuttausviivat; engrave: kaiverrus; score: urotus; nest (parts on a sheet): sijoitella |

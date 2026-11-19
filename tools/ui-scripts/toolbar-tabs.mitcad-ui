@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: MIT
+# The tabs' menu, Customize Toolbar… and Reset Toolbar (mitcad#1975, P7)
+# through the real UI, run in the layout the wrapper starts (Floating and
+# Docked):
+#   1. a right-click on the SOLID tab: the model tabs with ticks (no Start),
+#      then Customize Toolbar… and Reset Toolbar; Surface unticked hides
+#      its tab, kept in the user's layout layer;
+#   2. the + after the last tab: the same menu; Surface ticked shows its
+#      tab again in its place;
+#   3. Customize Toolbar… of SOLID: Sweep's check box ticked gives it a
+#      button in Create;
+#   4. Reset Toolbar from Loft's row menu in Create: Sweep's button goes.
+expect-ever 'View area' 30
+wait-idle
+expect-ever '^Ribbon tab SURFACE at ' 30
+expect-ever '^Ribbon tabs button at ' 30
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+wait-idle
+
+# 1. Surface hidden from the SOLID tab's right-click menu.
+mark
+context-menu-logged '^Ribbon tab SOLID at ' Surface
+wait-log '^Ribbon tabs menu SOLID: Solid \| Surface \| Sheet Metal \| Build \| 3D Print \| Laser \| CNC \| Manage \| - \| Customize Toolbar'
+wait-log '^Ribbon tab SURFACE hidden$'
+wait-log '^Ribbon tabs: START, SOLID, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE [(]shown SOLID[)]$'
+wait-idle
+expect-ribbon-labels Start Solid 'Sheet Metal' Build '3D Print' Laser CNC Manage
+
+# 2. Surface shown again from the + after the last tab.
+sleep 300
+mark
+click-logged '^Ribbon tabs button at '
+wait-log '^Ribbon tabs menu shown: SOLID, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE$'
+popup Surface
+wait-log '^Ribbon tab SURFACE shown$'
+wait-log '^Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE [(]shown SOLID[)]$'
+wait-idle
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+
+# 3. Customize Toolbar…: Sweep gets a button in Create.
+sleep 300
+mark
+click-logged '^Ribbon tabs button at '
+wait-log '^Ribbon tabs menu SOLID: '
+popup 'Customize Toolbar'
+focus-dialog '^Customize Toolbar$'
+wait-log '^Customize Toolbar dialog SOLID: '
+focus-widget customize_solid.sweep
+key space
+key Return
+focus-main
+wait-log '^Customize Toolbar SOLID: solid.sweep on$'
+wait-log '^Ribbon group SOLID/CREATE buttons: sketch.create, solid.extrude, solid.revolve, solid.sweep, solid.hole$'
+wait-log '^Ribbon groups made again from the layout$'
+wait-idle
+
+# 4. Reset Toolbar from a command row's menu: Create as the default has it.
+sleep 300
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: '
+row-menu solid.loft
+wait-log '^Toolbar menu SOLID/CREATE solid.loft: .*Customize Toolbar.* [|] Reset Toolbar'
+popup 'Reset Toolbar'
+focus-main
+wait-log '^Toolbar reset: SOLID$'
+wait-log '^Ribbon group SOLID/CREATE buttons: sketch.create, solid.extrude, solid.revolve, solid.hole$'
+wait-log '^Ribbon groups made again from the layout$'
+wait-idle

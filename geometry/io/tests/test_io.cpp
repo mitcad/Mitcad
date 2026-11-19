@@ -962,6 +962,117 @@ TopoDS_Shape perforated_plate() {
   return BRepAlgoAPI_Cut(BRepPrimAPI_MakeBox(60.0, 40.0, 5.0).Shape(), holes).Shape();
 }
 
+// A progress that watches a read's transfer (mitcad#2032): it has advanced
+// once its position is above zero, which only the transfer moves (the
+// parsing before it takes no range); with `stop` its user break says yes
+// from then on, as a memory guard or a user's cancel that comes during the
+// transfer. It counts the user breaks asked from then on.
+class TransferWatch : public Message_ProgressIndicator {
+public:
+  explicit TransferWatch(bool stop) : m_stop(stop) {}
+
+  bool UserBreak() override {
+    if (!m_advanced.load()) {
+      return false;
+    }
+    m_asked_after.fetch_add(1);
+    return m_stop;
+  }
+  void Show(const Message_ProgressScope&, const bool) override {
+    if (GetPosition() > 0.0) {
+      m_advanced.store(true);
+    }
+  }
+
+  bool advanced() const { return m_advanced.load(); }
+  int asked_after() const { return m_asked_after.load(); }
+
+private:
+  const bool m_stop;
+  std::atomic<bool> m_advanced{false};
+  std::atomic<int> m_asked_after{0};
+};
+
+// Whether `read` throws mitcad::io::Cancelled (any other exception fails
+// the check and is not one).
+template <class Read>
+bool read_cancelled(Read&& read) {
+  try {
+    read();
+  } catch (const mitcad::io::Cancelled&) {
+    return true;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "test_io.cpp: a stopped read failed otherwise: %s\n", error.what());
+  }
+  return false;
+}
+
+// STEP and IGES reads stopped by their progress range (mitcad#2032, the
+// command's memory guard and the user's cancel): the file is parsed, which
+// nothing stops, and its transfer runs within the range. A range that
+// breaks during the transfer, or from the start (before the transfer), makes
+// the read fail as cancelled, giving no bodies and no document; a range
+// that does not break moves with the transfer and the read is whole.
+void test_reads_stopped_in_transfer(const std::string& dir) {
+  const std::vector<Body> bodies = sample_bodies();
+  const std::string step = dir + "/stopped-transfer.step";
+  const std::string iges = dir + "/stopped-transfer.igs";
+  mitcad::io::write_step(step, bodies);
+  mitcad::io::write_iges(iges, bodies);
+
+  // Not stopped: the transfer moves the range on, and the read is whole.
+  {
+    const occ::handle<TransferWatch> watch = new TransferWatch(false);
+    const std::vector<Body> read = mitcad::io::read_step(step, watch->Start());
+    CHECK(read.size() == 2);
+    CHECK(watch->advanced());
+  }
+  {
+    const occ::handle<TransferWatch> watch = new TransferWatch(false);
+    const std::vector<Body> read = mitcad::io::read_iges(iges, watch->Start());
+    CHECK(read.size() == 2);
+    CHECK(watch->advanced());
+  }
+
+  // Stopped during the transfer: once it has moved on, the break says yes.
+  {
+    const occ::handle<TransferWatch> watch = new TransferWatch(true);
+    CHECK(read_cancelled([&] { mitcad::io::read_step(step, watch->Start()); }));
+    CHECK(watch->advanced());
+    CHECK(watch->asked_after() >= 1);
+  }
+  {
+    const occ::handle<TransferWatch> watch = new TransferWatch(true);
+    CHECK(read_cancelled([&] { mitcad::io::read_step_structured(step, true, watch->Start()); }));
+    CHECK(watch->advanced());
+  }
+  {
+    const occ::handle<TransferWatch> watch = new TransferWatch(true);
+    CHECK(read_cancelled([&] { mitcad::io::read_iges(iges, watch->Start()); }));
+    CHECK(watch->advanced());
+  }
+  // Through read_file, as the bridge reads a STEP or IGES file.
+  {
+    const occ::handle<TransferWatch> watch = new TransferWatch(true);
+    CHECK(read_cancelled([&] { mitcad::io::read_file(step, watch->Start()); }));
+  }
+
+  // Stopped from the start: the read ends after the parsing, before the
+  // transfer moves at all.
+  {
+    const occ::handle<Message_ProgressIndicator> stop = new StopAtOnce;
+    CHECK(read_cancelled([&] { mitcad::io::read_step(step, stop->Start()); }));
+  }
+  {
+    const occ::handle<Message_ProgressIndicator> stop = new StopAtOnce;
+    CHECK(read_cancelled([&] { mitcad::io::read_iges(iges, stop->Start()); }));
+  }
+
+  // A read after a stopped one is whole (nothing of the stopped one stays
+  // in the readers' shared settings).
+  CHECK(mitcad::io::read_step(step).size() == 2);
+}
+
 // What a meshing reports (mitcad#635): every face meshed the first time,
 // kept the second; planes through Delabella (MeshOptions::fast_planes)
 // have the same nodes and as many triangles as by default, faces and
@@ -3031,6 +3142,7 @@ int main(int argc, char** argv) {
     test_triangulate_keeps_original();
     test_building_scale_sphere(dir);
     test_mesh_all_in_place();
+    test_reads_stopped_in_transfer(dir);
     test_mesh_report_and_fast_planes();
     test_reuse_triangulations();
     test_reuse_moved_face();

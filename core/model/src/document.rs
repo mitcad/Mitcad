@@ -1191,6 +1191,8 @@ impl DocState {
             .map_err(ModelError::Invalid)?;
         self.check_values(&entry.def)?;
         self.insert_resolved(entry)?;
+        // A Panelize's panels: materials, components (mitcad#2005).
+        self.sync_panels(uid)?;
         Ok(Added {
             uid,
             name,
@@ -1348,6 +1350,8 @@ impl DocState {
                 .map_err(|e| invalid(format!("{} would no longer work: {e}", entry.name)))?;
         }
         self.sync_made_component(uid)?;
+        // A Panelize's panels: materials, components (mitcad#2005).
+        self.sync_panels(uid)?;
         self.release_params(uid);
         Ok((created, kept))
     }
@@ -2013,6 +2017,33 @@ impl<K: Kernel> Document<K> {
         self.state.take_flex_places(&result);
         self.set_result(result);
         Ok(self.stats())
+    }
+
+    /// Evaluates every feature again from the start, with none of the
+    /// cached or stored results (Recompute All, mitcad#1982). The results
+    /// of this run become the cache; a cancel leaves the document and its
+    /// cache as they were. What the run measured anew (driven dimensions, a
+    /// Flex item's nodes) is one undo step, `Recompute All`, when it differs
+    /// from the state; otherwise there is no step. Returns the stats and
+    /// whether there was a step.
+    pub fn try_recompute_all(&mut self) -> Result<(RecomputeStats, bool), ModelError> {
+        let mut fresh = self.cache.emptied();
+        // A feed of final bodies goes with the run through the timeline.
+        fresh.final_bodies = self.cache.final_bodies.take();
+        let monitor = self.monitor.as_ref();
+        let result = recompute(&self.kernel, &self.state, &mut fresh, monitor)?;
+        fresh.store = self.cache.store.take();
+        self.cache = fresh;
+        let mut next = self.state.clone();
+        next.take_measured(&result.measured);
+        next.take_flex_places(&result);
+        let changed = next != self.state;
+        if changed {
+            self.commit("Recompute All".to_owned(), next);
+        }
+        self.set_result(result);
+        self.name_new_bodies();
+        Ok((self.stats(), changed))
     }
 
     /// Evaluates a definition state with the document's cache, reporting
@@ -2930,6 +2961,10 @@ impl<K: Kernel> Document<K> {
             next.take_measured(&result.measured);
             // Where the attached nodes of Flex items are now (mitcad#1713).
             next.take_flex_places(result);
+            // A BUILD part's automatic name follows its designation, in
+            // this undo step (mitcad#2030): after the measured values, so
+            // that a bound length's new value counts.
+            next.follow_build_designations(&self.state);
         }
         // An edited definition that builds clears its import note
         // (mitcad#170).
@@ -2982,6 +3017,8 @@ impl<K: Kernel> Document<K> {
         if !unnamed {
             return;
         }
+        // Panels by their faces' normals (mitcad#2005).
+        self.name_panels();
         for (uid, name) in display_names(&self.state, &self.result) {
             self.state.body_names.entry(uid).or_insert(name);
         }
@@ -3136,8 +3173,12 @@ impl<K: Kernel> Document<K> {
     ///
     /// A joint that goes as a dependent (one on a face, an edge or a frame
     /// of what goes) leaves what it placed where it is (mitcad#1820), as
-    /// `build_remove` and `delete_occurrence` do (mitcad#1811); a joint
-    /// deleted itself lets its parts go back where they were placed.
+    /// `build_remove` and `delete_occurrence` do (mitcad#1811); a free part
+    /// of a flexible occurrence it placed stays as that occurrence's own
+    /// placement of it (mitcad#2017, [`Document::held_free_parts`]). A
+    /// joint deleted itself lets its parts go back where they were placed
+    /// (a free part where a drag left it, else where its component places
+    /// it).
     pub fn delete_feature(
         &mut self,
         uid: FeatureUid,
@@ -3159,6 +3200,19 @@ impl<K: Kernel> Document<K> {
             BTreeMap::new()
         };
         let held = self.held_placements(sides.values().flatten().copied());
+        // And the free parts of flexible occurrences they placed
+        // (mitcad#2017).
+        let held_free: BTreeMap<FeatureUid, Vec<HeldFreePart>> = if with_dependents {
+            self.state
+                .features
+                .iter()
+                .filter(|f| f.uid != uid)
+                .map(|f| (f.uid, self.held_free_parts(components::joint_paths(&f.def))))
+                .filter(|(_, h)| !h.is_empty())
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
         self.apply(|state| {
             let position = state.require(uid)?;
             let name = state.features[position].name.clone();
@@ -3175,6 +3229,11 @@ impl<K: Kernel> Document<K> {
             // (mitcad#1820).
             let freed = order.iter().filter_map(|f| sides.get(f)).flatten().copied();
             state.hold_placements(freed, &held);
+            for f in &order {
+                if let Some(free) = held_free.get(f) {
+                    state.hold_free_parts(free);
+                }
+            }
             // What the deleted features made is no longer left alone
             // (mitcad#1236).
             state.drop_gone_exclusions();
@@ -5351,6 +5410,7 @@ mod kept_cages;
 // Flexible subassemblies: an occurrence whose component's joints move in
 // its parent's solve (mitcad#1793).
 mod flexible;
+pub use flexible::HeldFreePart;
 // The design and the files it refers to packed into a zip for a report
 // (mitcad#1795).
 mod design_package;
@@ -5377,6 +5437,11 @@ pub use bom_structure::{BomStructure, BomView, BomViewList, BomViewRow};
 // Hidden parents of new content: the occurrences that keep a component out
 // of sight, shown again by the commands that add to it (mitcad#1995).
 mod hidden_parents;
+// Panelize's panels: their materials, components and names (mitcad#2005).
+mod panelize;
+// Sections of a mesh body into sketches, one or a series (mitcad#1871).
+mod mesh_sections;
+pub use mesh_sections::{MAX_SECTIONS, MeshSectionRequest, MeshSections, SectionTarget};
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

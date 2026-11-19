@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
+#include <utility>
 #include <vector>
 
 #include <QString>
 #include <QStringList>
+
+namespace mitcad {
+class CommandLayout;
+}
 
 namespace mitcad::search {
 
@@ -71,5 +77,31 @@ void rememberRecentCommand(const QString& id);
 // The recent list with `id` first (moved there when it was in it), at most
 // `limit` long; an empty id changes nothing.
 QStringList withRecentCommand(const QStringList& recent, const QString& id, int limit = kRecentCommands);
+
+// The other names of commands (mitcad#1983): MitCad keeps its own command
+// names, and the names users know the same function by from other programs
+// are keywords of the command ("change parameters" finds Edit Parameters…,
+// "canvas" Image Reference). Plain function names only. The registry adds
+// them to each command's `keywords` (CommandRegistry::add);
+// app.layout_coverage fails for an id here that is no command.
+const std::vector<std::pair<QString, QStringList>>& otherNames();
+// `keywords` with the command's other names after them, each word once.
+QStringList withOtherNames(const QString& id, const QStringList& keywords);
+
+// The command search's place line (mitcad#1983): where a command sits, read
+// from the layout held in memory (the default with the user's layer,
+// CommandLayoutStore), so it follows a command the user moved. Its home
+// place first (CommandLayout::home), then its other toolbar groups, then the
+// menu bar's menus: "Solid › Create, Surface › Create, Menu bar › Tools";
+// `captions.nowhere` for a command in none. A toolbar submenu counts as its
+// group.
+struct PlaceCaptions {
+  std::function<QString(const QString& key)> ribbon; // a tab's or group's key: "Solid", "Create"
+  std::function<QString(const QString& key)> menu;   // a menu's key: "Tools"
+  QString menuBar;                                   // "Menu bar"
+  QString nowhere;                                   // "No toolbar place"
+};
+QStringList placeTexts(const CommandLayout& layout, const QString& id, const PlaceCaptions& captions);
+QString placeLine(const CommandLayout& layout, const QString& id, const PlaceCaptions& captions);
 
 } // namespace mitcad::search

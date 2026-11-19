@@ -533,18 +533,23 @@ fn through_length<K: Kernel>(
 
 /// The end face in the tenon's axes: x along the width, y along the
 /// thickness (z × x), and the face's extent along them from `origin`.
-struct EndFace {
-    origin: [f64; 3],
-    x: [f64; 3],
-    y: [f64; 3],
-    min: [f64; 2],
-    max: [f64; 2],
+pub(super) struct EndFace {
+    pub(super) origin: [f64; 3],
+    pub(super) x: [f64; 3],
+    pub(super) y: [f64; 3],
+    pub(super) min: [f64; 2],
+    pub(super) max: [f64; 2],
     /// x runs across the longest edge, -y along it.
     turned: bool,
 }
 
 impl EndFace {
-    fn new(origin: [f64; 3], z: [f64; 3], curves: &[Curve3], turned: bool) -> Result<Self, String> {
+    pub(super) fn new(
+        origin: [f64; 3],
+        z: [f64; 3],
+        curves: &[Curve3],
+        turned: bool,
+    ) -> Result<Self, String> {
         let points = outline_points(curves);
         if points.is_empty() {
             return Err("the tenon's end face has no edges".to_owned());

@@ -31,6 +31,7 @@
 #include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/ModelShapes.hpp"
+#include "../framework/ViewGhosts.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 
@@ -275,27 +276,42 @@ SelectionItem occurrenceItem(const SelectionItem& item) {
 
 bool isPlaced(const SelectionItem& item) { return !item.occurrence.isEmpty(); }
 
-// The occurrence that moves with an item: the one placed directly in the
-// joint's component that the item lies in, as a path from the root; none
-// for the component's own geometry or an item outside it.
-QStringList movingOccurrence(const SelectionItem& item, const CommandState& state, const CommandContext& context) {
-  const auto path = pathFrom(item, placingPaths(jointComponent(state, context), context));
-  if (!path || path->isEmpty()) {
-    return {};
+// Whether an occurrence (a path from the root) holds occurrences of its own.
+bool placesOccurrences(const QString& path, const CommandContext& context) {
+  if (path.isEmpty()) {
+    return false;
   }
-  // The item's path from the root ends with its path from the component.
-  const QString top = path->section(QLatin1Char('/'), 0, 0);
-  return {item.occurrence.left(item.occurrence.size() - path->size()) + top};
+  const QString inside = path + QLatin1Char('/');
+  bool found = false;
+  eachOccurrence(context, [&inside, &found](const QJsonObject&, const QString& at) {
+    found = found || at.startsWith(inside);
+  });
+  return found;
 }
 
-// The ghost of side A (mitcad#147): while `other` waits for its pick, A's
-// occurrence is see-through and not pickable, so that geometry behind it
-// can be picked. Once both are picked the preview shows A where the joint
-// puts it, normally.
+// The ghost of side A (mitcad#147): while `other` waits for its pick, A is
+// see-through and not pickable, so that geometry behind it can be picked.
+// With a component chosen (a holder, an edit) that is the occurrence placed
+// directly in it that A lies in; before a holder is known, a pick deeper
+// than that, or on a sub-assembly's own bodies, ghosts only its own
+// occurrence's bodies, so that B can lie in the same sub-assembly and the
+// holder question then come (mitcad#2027, jointSideGhost). Once both are
+// picked the preview shows A where the joint puts it, normally.
 std::function<QStringList(const SelectionItem&, const CommandState&, const CommandContext&)>
 ghostUntilPicked(const QString& other) {
   return [other](const SelectionItem& item, const CommandState& state, const CommandContext& context) {
-    return state.items(other).isEmpty() ? movingOccurrence(item, state, context) : QStringList();
+    if (!state.items(other).isEmpty()) {
+      return QStringList();
+    }
+    // A constraint row's state: the holder and an edit's component are the
+    // command's.
+    const CommandState whole = state.whole();
+    const auto path = pathFrom(item, placingPaths(jointComponent(whole, context), context));
+    const bool chosen =
+        !whole.text(QStringLiteral("component")).isEmpty() || !chosenHolder(whole, context).isEmpty();
+    const bool holds = !chosen && path && !path->isEmpty() && placesOccurrences(item.occurrence, context);
+    const QString ghost = jointSideGhost(item.occurrence, path, chosen, holds);
+    return ghost.isEmpty() ? QStringList() : QStringList{ghost};
   };
 }
 
@@ -1044,8 +1060,6 @@ CommandDef jointCommand(const CommandContext& context) {
   def.icon = QStringLiteral("joint");
   def.tooltip = QObject::tr("Joins two components at origins on their geometry, and says how they may move");
   def.shortcut = QKeySequence(Qt::Key_J);
-  def.group = QStringLiteral("ASSEMBLE");
-  def.pinned = true;
   def.keywords = {QStringLiteral("assembly"), QStringLiteral("hinge"), QStringLiteral("pivot"),
                   QStringLiteral("connect"), QStringLiteral("revolute"), QStringLiteral("slider")};
   def.featureType = QStringLiteral("joint");
@@ -1149,7 +1163,6 @@ CommandDef asBuiltJointCommand(const CommandContext& context) {
   def.name = QObject::tr("As-Built Joint");
   def.icon = QStringLiteral("as-built-joint");
   def.tooltip = QObject::tr("Joins two components where they are now, and says how they may move");
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("assembly"), QStringLiteral("in place"), QStringLiteral("connect")};
   def.featureType = QStringLiteral("as_built_joint");
   const auto componentInput = [](const QString& id, const QString& label, const QString& tip) {
@@ -1368,7 +1381,6 @@ CommandDef jointOriginCommand(const CommandContext& context) {
   def.name = QObject::tr("Joint Origin");
   def.icon = QStringLiteral("joint-origin");
   def.tooltip = QObject::tr("A frame on geometry of the active component for joints to use");
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("frame"), QStringLiteral("assembly")};
   def.featureType = QStringLiteral("joint_origin");
   def.inputs = {
@@ -1553,7 +1565,6 @@ CommandDef rigidGroupCommand(const CommandContext& context) {
   def.name = QObject::tr("Rigid Group");
   def.icon = QStringLiteral("rigid-group");
   def.tooltip = QObject::tr("Components that move as one");
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("assembly"), QStringLiteral("lock"), QStringLiteral("fix together")};
   def.featureType = QStringLiteral("rigid_group");
   def.inputs = {
@@ -1712,7 +1723,6 @@ CommandDef driveJointCommand(const CommandContext& context) {
   def.name = QObject::tr("Drive Joint");
   def.icon = QStringLiteral("drive-joint");
   def.tooltip = QObject::tr("Moves a joint's free motion to a value: the components follow");
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("motion"), QStringLiteral("animate"), QStringLiteral("position"),
                   QStringLiteral("turn joint")};
   def.sketchCommand = true;
@@ -2026,8 +2036,6 @@ CommandDef constraintCommand(const CommandContext& context) {
   def.shortLabel = QCoreApplication::translate("RibbonLabel", "Constraint"); // under its button (mitcad#1936)
   def.icon = QStringLiteral("constraint");
   def.tooltip = QObject::tr("Holds components against each other: align, angle, center, tangent, insert");
-  def.group = QStringLiteral("ASSEMBLE");
-  def.pinned = true;
   def.keywords = {QStringLiteral("assembly"), QStringLiteral("mate"),    QStringLiteral("align"),
                   QStringLiteral("insert"),   QStringLiteral("tangent"), QStringLiteral("concentric"),
                   QStringLiteral("flush"),    QStringLiteral("angle")};
@@ -2268,7 +2276,6 @@ CommandDef contactSetCommand(const CommandContext& context) {
   def.name = QObject::tr("Contact Set");
   def.icon = QStringLiteral("contact-set");
   def.tooltip = QObject::tr("Components that stop each other where they touch while joints move");
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("contact"), QStringLiteral("collision"), QStringLiteral("stop"),
                   QStringLiteral("interference")};
   def.modelCommand = true;
@@ -2466,7 +2473,6 @@ CommandDef motionLinkCommand(const CommandContext& context) {
   def.name = QObject::tr("Motion Link");
   def.icon = QStringLiteral("motion-link");
   def.tooltip = QObject::tr("Makes one joint's motion follow another's: gears, rack and pinion, screw, cam");
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("gear"),  QStringLiteral("rack"),     QStringLiteral("pinion"),
                   QStringLiteral("screw"), QStringLiteral("cam"),      QStringLiteral("coupling"),
                   QStringLiteral("ratio"), QStringLiteral("follower"), QStringLiteral("motion")};
@@ -2706,20 +2712,16 @@ CommandDef motionLinkCommand(const CommandContext& context) {
 // Motion Study at the end of "motion", then its "insert" section.
 void registerAssembleCommands(CommandRegistry& registry, const CommandContext& context) {
   using namespace cmd;
-  const auto add = [&registry](CommandDef def, const char* section) {
-    def.section = QString::fromLatin1(section);
-    registry.add(def);
-  };
   // What holds the components together.
-  add(jointCommand(context), "joints");
-  add(asBuiltJointCommand(context), "joints");
-  add(jointOriginCommand(context), "joints");
-  add(rigidGroupCommand(context), "joints");
-  add(constraintCommand(context), "joints"); // assembly constraints (mitcad#148)
+  registry.add(jointCommand(context));
+  registry.add(asBuiltJointCommand(context));
+  registry.add(jointOriginCommand(context));
+  registry.add(rigidGroupCommand(context));
+  registry.add(constraintCommand(context)); // assembly constraints (mitcad#148)
   // How they move.
-  add(driveJointCommand(context), "motion");
-  add(motionLinkCommand(context), "motion"); // mitcad#466
-  add(contactSetCommand(context), "motion"); // mitcad#454
+  registry.add(driveJointCommand(context));
+  registry.add(motionLinkCommand(context)); // mitcad#466
+  registry.add(contactSetCommand(context)); // mitcad#454
 }
 
 } // namespace mitcad

@@ -486,6 +486,36 @@ bool has_arc_near(const DrawnView& drawn, double cx, double cy, double radius) {
   return false;
 }
 
+// A closed outline has no preferred first chord. Its rounded corners must
+// stay whole even when their chords turn more than their tangent joins do.
+void test_fit_a_closed_rounded_outline() {
+  std::vector<Point2> points;
+  const Point2 centers[] = {{4.0, 4.0}, {1996.0, 4.0}, {1996.0, 56.0}, {4.0, 56.0}};
+  for (int k = 0; k < 4; ++k) {
+    const double start = test::kPi + k * test::kPi / 2.0;
+    const auto arc = on_circle(centers[k][0], centers[k][1], 4.0, start, start + test::kPi / 2.0, 3, false);
+    points.insert(points.end(), arc.begin(), arc.end());
+  }
+  for (const bool reverse : {false, true}) {
+    if (reverse) {
+      std::reverse(points.begin(), points.end());
+    }
+    for (std::size_t first = 0; first < points.size(); ++first) {
+      std::vector<Point2> rotated(points.begin() + static_cast<std::ptrdiff_t>(first), points.end());
+      rotated.insert(rotated.end(), points.begin(), points.begin() + static_cast<std::ptrdiff_t>(first));
+      Segments chords;
+      add_chords(chords, rotated, true);
+      DrawnView drawn;
+      drawn.curves = fit_segments(chords, 0.4);
+      CHECK(count_of(drawn.curves, DrawnCurve::Type::Line) == 4);
+      CHECK(count_of(drawn.curves, DrawnCurve::Type::Arc) == 4);
+      for (const Point2& center : centers) {
+        CHECK(has_arc_near(drawn, center[0], center[1], 4.0));
+      }
+    }
+  }
+}
+
 // The quick path: the same shapes with their faces as B-splines (free-form)
 // projected from a triangulation, its lines fitted, match the exact view of
 // the shapes within the drawing's tolerance; their circles are arcs.
@@ -1333,6 +1363,7 @@ int main(int argc, char* argv[]) {
   test::guarded("round holes", test_round_holes);
   test::guarded("lines and arcs from segments", test_fit_segments);
   test::guarded("a line into an arc", test_fit_a_line_into_an_arc);
+  test::guarded("a closed rounded outline", test_fit_a_closed_rounded_outline);
   test::guarded("the quick path", test_quick_path);
   test::guarded("the quick path for curved edges", test_quick_path_for_curved_edges);
   test::guarded("the quick path at the view's scale", test_quick_path_at_the_view_scale);

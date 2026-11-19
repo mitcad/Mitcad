@@ -283,8 +283,9 @@
 //! `"origin": true` (the Origin folder shown), `isolated` (`body` and
 //! `occurrence`, or an `occurrence` path), `hidden` (View › Show,
 //! mitcad#1287) and `folders` (the components' folders hidden by their
-//! eyes, mitcad#1771: `{"C0": {"sketches": true}}`; a design without it
-//! has every folder shown); a favourite parameter has
+//! eyes, mitcad#1771: `{"C0": {"sketches": true}}`, the root's
+//! Annotations folder as `"annotations": true`, mitcad#2041; a design
+//! without it has every folder shown); a favourite parameter has
 //! `"favorite": true`; timeline groups are `groups` (`name`, `features`).
 //!
 //! A modelled thread stores how its ends are cut (`ends`: `run_out` or

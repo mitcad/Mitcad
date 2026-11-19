@@ -522,7 +522,7 @@ Ui-StartApp 'build-new'
 Write-Host '--- 1. The BUILD tab'
 Ui-ExpectLog 'Ribbon tab BUILD at' 'the BUILD tab beside SOLID'
 Ui-Mark
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-ExpectNew 'Ribbon BUILD/PROFILE at' 'its PROFILE group'
 
 Write-Host '--- 2. The first profiles of a new design, Component1 active'
@@ -652,7 +652,7 @@ Ui-ExpectNew 'Construction geometry shown again' 'the planes shown again when th
 Start-Shots
 Ui-StartApp 'build' @('--open', $start)
 Remove-Item Env:MITCAD_TEST_INPUT -ErrorAction SilentlyContinue
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 
 Write-Host '--- 3. Profile: a frame of four'
 Ui-Mark
@@ -995,7 +995,7 @@ Run-Cli 'library fetch of v1.1.0' @('library', 'fetch', $library)
 
 Ui-StartApp 'build-picker' @('--open', $file)
 Ui-ExpectLog "Opened $fileLogged" 'reopened'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
 Ui-ExpectNew 'BUILD parts profile: 2 (1 in the design)' "the 30 profile listed beside the design's"
@@ -1159,7 +1159,7 @@ $p30Names = @{ 'p30-test' = 'Profile 30 test'; 'p30h-test' = 'Profile 30 heavy t
 
 # A new design (no file); the stars of 8 are kept in the test's settings.
 Ui-StartApp 'build-favourites'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
 Ui-ExpectNew 'BUILD parts profile: 3 (0 in the design)' 'the three profiles of the library'
@@ -1258,7 +1258,7 @@ function No-Placement([string]$Description) {
   Write-Host "ok   $Description"
 }
 Ui-StartApp 'build-shift-click'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
 Ui-ExpectNew 'Command Profile started' 'Profile started'
@@ -1319,7 +1319,7 @@ Set-Content -Encoding ascii $planeJson ('[{"cmd": "add_feature", "def": {"type":
 $plane = Join-Path $work 'plane.mitcad'
 Run-Cli 'the design with a block' @('run', $planeJson, '--save', $plane)
 Ui-StartApp 'build-plane' @('--open', $plane)
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 # The origin shown first, so that the fit takes in it and the block.
 Ui-ShowOrigin
 Ui-Step 'fit the view (F6)'              { Ui-Key 'F6' }
@@ -1419,7 +1419,7 @@ Write-Host 'ok   no move refused a body of another component'
 # (Enter, at its origin) is grounded; Move moves it 100 mm, and it stays
 # grounded there (the panel says so instead of refusing).
 Ui-StartApp 'build-grounded-move'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
 Ui-ExpectNew 'BUILD profile adds to Component1 (a ground placement)' 'a new design: adds to Component1'

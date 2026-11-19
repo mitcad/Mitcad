@@ -15,14 +15,17 @@
 #   - Project of another sketch's curve (mitcad#904): in a second design,
 #     Sketch1 (a line and a circle on XY) and Sketch2 on XY after it;
 #     Sketch2 edited, Project's selection filter has the row for other
-#     sketches' curves and points, a click takes Sketch1's line, and OK
-#     logs it by name.
+#     sketches' curves and points, a click takes Sketch1's line; Sketch1
+#     is still drawn after that pick (projecting does not use it,
+#     mitcad#2045), so a click takes its circle round (0, -10) in the same
+#     Project, and OK logs both by name.
 #   - Intersect of another sketch's curve (mitcad#1031): in the same design,
 #     Sketch1 also has a circle round (30, 0) of radius 5 and Sketch3 lies
 #     on XZ. Sketch3 edited; Intersect's selection filter has the row for
-#     other sketches' curves and points, Sketch1 picked in the browser goes
-#     in whole (in the view the circle is seen edge on, and Sketch1 is
-#     hidden once Sketch2 projects it), and OK gives two fixed points where
+#     other sketches' curves and points, Sketch1 is drawn (Sketch2's
+#     projection does not hide it, mitcad#2045), Sketch1 picked in the
+#     browser goes in whole (in the view the circle is seen edge on), and
+#     OK gives two fixed points where
 #     its circle crosses XZ, at x = 25 and 35 (its line and other circle
 #     do not cross it). The saved design has them as one linked section of
 #     the circle.
@@ -51,6 +54,15 @@ cat > "$WORK/model.json" << 'EOF'
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+
+# sketch1_drawn "description": the view's last "Sketches shown" line has
+# Sketch1 (F1) among the sketches it draws.
+sketch1_drawn() {
+  local line
+  line=$(grep "Sketches shown: " "$UI_LOG" | tail -1)
+  [[ ", ${line#*Sketches shown: }, " == *", F1, "* ]] || ui_fail "$1: ${line:-no Sketches shown line}"
+  echo "ok   $1"
+}
 
 # no_new "text" description: no log line with the text since the mark.
 no_new() {
@@ -164,10 +176,21 @@ ui_step "pick Sketch1's line"            ui_click_logged "Sketch entity F1/c3"
 ui_expect_new "Project Geometry: 1 sketch curve [sketch curve c3 of F1]" "the line went to Project"
 ui_expect_new "Preview Project: ok" "the projection previewed"
 ui_wait_idle
+ui_sync
+sketch1_drawn "Sketch1 still drawn after its line went to Project (mitcad#2045)"
+ui_mark
+ui_step "pick Sketch1's circle"          ui_click_logged "Sketch entity F1/c5"
+ui_expect_new "Project Geometry: 2 sketch curves" "the circle went to the same Project"
+ui_expect_new "Preview Project: ok" "both previewed"
+ui_wait_idle
+ui_sync
+sketch1_drawn "Sketch1 still drawn after its circle went to Project"
 ui_focus_main
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
-ui_expect_new "Projected 1 item(s): sketch curve c3 of F1" "the log names the projected curve"
+ui_expect_new "Projected 2 item(s): " "both projected"
+ui_expect_new "sketch curve c3 of F1" "the log names the line"
+ui_expect_new "sketch curve c5 of F1" "the log names the circle"
 ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "Sketch2 finished"
@@ -185,6 +208,8 @@ ui_mark
 ui_step "intersect (search)"             ui_command "Intersect"
 ui_expect_new "Command search chose sketch.intersect" "Intersect started"
 ui_expect_new "other-sketch-geometry=cross" "Intersect's filter has the row for other sketches' geometry"
+ui_sync
+sketch1_drawn "Sketch1 drawn before it is picked (Sketch2's projection does not hide it)"
 ui_expect_log "Browser Root/Sketches/Sketch1 at" "Sketch1 in the browser"
 ui_step "pick Sketch1 in the browser"    ui_click_logged "Browser Root/Sketches/Sketch1"
 ui_expect_new "Intersect Geometry: 1 sketch" "Sketch1 went to Intersect"

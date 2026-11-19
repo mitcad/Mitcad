@@ -297,9 +297,6 @@ CommandDef pulleyCommand(const CommandContext& context) {
   def.name = QObject::tr("Pulley");
   def.icon = QStringLiteral("pulley");
   def.tooltip = QObject::tr("A timing belt pulley (GT2, HTD, T5, XL), a smooth idler or a toothed idler");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("machine");
-  def.subgroup = QStringLiteral("Machine Elements");
   def.keywords = {QStringLiteral("timing belt"), QStringLiteral("belt"), QStringLiteral("idler"),
                   QStringLiteral("GT2"),         QStringLiteral("HTD"),  QStringLiteral("T5"),
                   QStringLiteral("XL"),          QStringLiteral("sheave")};

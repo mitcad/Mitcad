@@ -408,3 +408,163 @@ fn the_timeline_lists_the_sketches_each_feature_uses() {
     assert_eq!(sketches(&doc)[1].1, json!(["F1"]));
     assert_eq!(sketches(&doc)[5].1, json!(["F1", "F5"]));
 }
+
+/// The id of the curve a sketch command made (its `entities`).
+fn made_curve(result: &Value) -> String {
+    result["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|e| e.starts_with('c'))
+        .unwrap_or_else(|| panic!("no curve in {result}"))
+        .to_owned()
+}
+
+/// Sketch1 (F1) on XY: a 60 by 40 rectangle round the origin (its region
+/// returned) and two lines across the YZ plane, from (-10, 60) to (10, 60)
+/// and from (-10, 80) to (10, 80) (their curves returned).
+fn source_sketch() -> (Document<MockKernel>, Value, [String; 2]) {
+    let mut doc = Document::new(MockKernel::default());
+    command(&mut doc, json!({"cmd": "sketch.create"}));
+    let rectangle = command(
+        &mut doc,
+        json!({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-30, -20],
+               "width": 60, "height": 40}),
+    );
+    let lines = [60, 80].map(|y| {
+        made_curve(&command(
+            &mut doc,
+            json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [-10, y],
+                   "end": [10, y]}),
+        ))
+    });
+    assert_eq!(light_bulb(&doc, "F1"), SHOWN);
+    (doc, rectangle["region"].clone(), lines)
+}
+
+/// What the `timeline` query lists as the sketches `uid` uses.
+fn sketches_of(doc: &Document<MockKernel>, uid: &str) -> Value {
+    query(doc, json!({"query": "timeline"}))["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["uid"] == uid)
+        .and_then(|f| f.get("sketches").cloned())
+        .unwrap_or(Value::Null)
+}
+
+/// mitcad#2045: `make` creates a sketch or a 3D sketch and returns its
+/// uid; `pick` projects or intersects one of Sketch1's curves into it.
+/// Sketch1 stays shown through both picks (the second curve is picked as
+/// the user picks it in the same Project), and an extrusion of its profile
+/// afterwards still hides it, deleting the extrusion shows it again. A
+/// light bulb set off by hand stays off through the picks. With `linked`
+/// the timeline still lists Sketch1 under the sketch that projects it.
+fn the_source_sketch_stays_as_it_is(
+    linked: bool,
+    make: impl Fn(&mut Document<MockKernel>) -> String,
+    pick: impl Fn(&mut Document<MockKernel>, &str, &str),
+) {
+    let (mut doc, region, lines) = source_sketch();
+    let target = make(&mut doc);
+    for line in &lines {
+        pick(&mut doc, target.as_str(), line.as_str());
+        assert_eq!(light_bulb(&doc, "F1"), SHOWN, "after {line}");
+    }
+    if linked {
+        assert_eq!(sketches_of(&doc, &target), json!(["F1"]));
+    }
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(light_bulb(&doc, "F1"), SHOWN);
+    command(&mut doc, json!({"cmd": "redo"}));
+    assert_eq!(light_bulb(&doc, "F1"), SHOWN);
+
+    // A consumer of its profile hides it as before.
+    let extrusion = extrude(&mut doc, "F1", &region);
+    assert_eq!(light_bulb(&doc, "F1"), HIDDEN);
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": extrusion}));
+    assert_eq!(light_bulb(&doc, "F1"), SHOWN);
+
+    // Hidden by hand before the picks: it stays hidden.
+    let (mut doc, region, lines) = source_sketch();
+    set_visible(&mut doc, "F1", false);
+    assert_eq!(light_bulb(&doc, "F1"), HIDDEN_BY_HAND);
+    let target = make(&mut doc);
+    for line in &lines {
+        pick(&mut doc, target.as_str(), line.as_str());
+        assert_eq!(light_bulb(&doc, "F1"), HIDDEN_BY_HAND, "after {line}");
+    }
+    // The extrusion is its first consumer: the default hides it, and
+    // deleting the extrusion shows it.
+    let extrusion = extrude(&mut doc, "F1", &region);
+    assert_eq!(light_bulb(&doc, "F1"), HIDDEN);
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": extrusion}));
+    assert_eq!(light_bulb(&doc, "F1"), SHOWN);
+}
+
+fn new_sketch(doc: &mut Document<MockKernel>, plane: &str) -> String {
+    command(doc, json!({"cmd": "sketch.create", "plane": plane}))["uid"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// mitcad#2045: projecting another sketch's curves, linked or not, does
+/// not use that sketch.
+#[test]
+fn projecting_a_sketchs_curves_leaves_it_shown() {
+    for linked in [true, false] {
+        the_source_sketch_stays_as_it_is(
+            linked,
+            |doc| new_sketch(doc, "xy"),
+            |doc, target, curve| {
+                command(
+                    doc,
+                    json!({"cmd": "sketch.project", "sketch": target,
+                           "source": {"sketch": "F1", "curve": curve}, "linked": linked}),
+                );
+            },
+        );
+    }
+}
+
+/// mitcad#2045: Intersect with another sketch's curves (a section) does
+/// not use that sketch.
+#[test]
+fn intersecting_a_sketchs_curves_leaves_it_shown() {
+    the_source_sketch_stays_as_it_is(
+        true,
+        |doc| new_sketch(doc, "yz"),
+        |doc, target, curve| {
+            command(
+                doc,
+                json!({"cmd": "sketch.project", "sketch": target,
+                       "source": {"sketch": "F1", "curve": curve}, "linked": true,
+                       "section": true}),
+            );
+        },
+    );
+}
+
+/// mitcad#2045: a 3D sketch's linked projection of another sketch's curve
+/// does not use that sketch.
+#[test]
+fn a_3d_sketchs_projection_of_a_sketchs_curves_leaves_it_shown() {
+    the_source_sketch_stays_as_it_is(
+        true,
+        |doc| {
+            command(doc, json!({"cmd": "sketch3d.create"}))["uid"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        },
+        |doc, target, curve| {
+            command(
+                doc,
+                json!({"cmd": "sketch3d.include", "sketch": target,
+                       "source": {"sketch": "F1", "curve": curve}, "projected": true}),
+            );
+        },
+    );
+}

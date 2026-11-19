@@ -263,12 +263,15 @@ pub(super) fn library_json<K: Kernel>(doc: &Document<K>, query: &LibraryQuery) -
 }
 
 /// The `cam_dialects` query: the dialects MitCad writes, `{id, label,
-/// extension}`.
+/// extension}`, the lathe dialects with `lathe: true` (mitcad#1869).
 pub(super) fn dialects() -> Value {
-    let dialects: Vec<Value> = engine::dialects()
+    let mut dialects: Vec<Value> = engine::dialects()
         .iter()
         .map(|d| json!({"id": d.id(), "label": d.label(), "extension": d.extension()}))
         .collect();
+    dialects.extend(engine::turning::turning_dialects().iter().map(
+        |d| json!({"id": d.id(), "label": d.label(), "extension": d.extension(), "lathe": true}),
+    ));
     json!({"dialects": dialects})
 }
 

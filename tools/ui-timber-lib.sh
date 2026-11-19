@@ -303,7 +303,7 @@ click_place() {
 # last: its picker's member and the wood screw for its junctions.
 start_wall() {
   ui_mark
-  ui_step "the BUILD tab"                  ui_click_logged "Ribbon tab BUILD"
+  ui_step "the BUILD tab"                  ui_click_tab "BUILD"
   ui_expect_new "Ribbon BUILD/TIMBER at" "its TIMBER group (mitcad#520)"
   ui_mark
   ui_step "Wall (command search)"          ui_command "Wall"

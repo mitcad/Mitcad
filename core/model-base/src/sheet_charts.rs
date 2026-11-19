@@ -386,6 +386,80 @@ pub struct BendDomain {
     pub axial_interval: ParamSpan,
     pub rules: FeatureUid,
     pub rules_version: String,
+    /// A kerf bend's slit lattice (mitcad#1939, a living hinge): the Flat
+    /// Pattern cuts these slits across the bend's developed strip instead
+    /// of giving it reliefs. None for every other bend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lattice: Option<SlitLattice>,
+}
+
+/// The slit lattice of a kerf bend (mitcad#1939): rows of slits along the
+/// bend's axis, `pitch` apart across its developed width, each row slits
+/// `slit_length` long with `gap` of material between them, every other
+/// row shifted by half a period; `slit_width` is the cut's width (the
+/// laser's kerf), which closes as the strip bends. mm.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SlitLattice {
+    pub slit_length: f64,
+    pub gap: f64,
+    pub pitch: f64,
+    pub slit_width: f64,
+}
+
+impl SlitLattice {
+    /// The smallest inside radius the lattice bends to, mm: a row's slit
+    /// closes at most by its width, so the inside surface (half the
+    /// thickness from the neutral surface in the middle) may shorten by
+    /// at most `slit_width / pitch`: `(t / 2) / (r + t / 2) <= w / p`, so
+    /// `r >= t p / (2 w) - t / 2` (never below zero).
+    pub fn min_radius(&self, thickness: f64) -> f64 {
+        (thickness * self.pitch / (2.0 * self.slit_width) - thickness / 2.0).max(0.0)
+    }
+
+    /// The slits of one row at `u` across a developed strip whose material
+    /// along the axis is `intervals` (each `[from, to]`): row `row` (from
+    /// 0) starts `gap` in from each interval's start, every other row half
+    /// a period later; a slit is clipped to `gap` inside the interval's
+    /// ends and left out when shorter than the gap.
+    pub fn row(&self, row: usize, intervals: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        let period = self.slit_length + self.gap;
+        let mut out = Vec::new();
+        if period.is_nan() || period <= 0.0 {
+            return out;
+        }
+        for &[from, to] in intervals {
+            let (lo, hi) = (from.min(to) + self.gap, from.max(to) - self.gap);
+            if hi - lo < self.gap {
+                continue;
+            }
+            let mut start = if row.is_multiple_of(2) {
+                lo
+            } else {
+                lo + period / 2.0 - period
+            };
+            while start < hi {
+                let a = start.max(lo);
+                let b = (start + self.slit_length).min(hi);
+                if b - a >= self.gap.min(self.slit_length) - 1e-9 && b > a {
+                    out.push([a, b]);
+                }
+                start += period;
+            }
+        }
+        out
+    }
+
+    /// Where the rows of a strip `allowance` wide lie across it: as many
+    /// rows `pitch` apart as fit, centred.
+    pub fn rows(&self, allowance: f64) -> Vec<f64> {
+        if self.pitch.is_nan() || self.pitch <= 0.0 || allowance.is_nan() || allowance <= 0.0 {
+            return Vec::new();
+        }
+        let n = (allowance / self.pitch).floor() as usize;
+        let n = n.max(1);
+        let first = (allowance - (n as f64 - 1.0) * self.pitch) / 2.0;
+        (0..n).map(|i| first + i as f64 * self.pitch).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

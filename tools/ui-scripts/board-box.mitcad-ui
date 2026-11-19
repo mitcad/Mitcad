@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: MIT
+# Board (mitcad#1939; app/COMMANDS.md "Sheet process profiles"), on an
+# empty design (board-box.json):
+#   1. Standard Box: FEFCO 0201 of C flute board, 300 x 200 x 150 inside,
+#      folded: one board sheet, its twelve folds built (the glue flap
+#      touching the first panel inside, as cli.sheet_board_box checks).
+#   2. The board's profile: Finger Joint dimmed, Glue Flap offered.
+#   1b. Its rules edited from the timeline open in Standard Box: 200 mm
+#      high, the box's blank and creases made again, its folds following.
+#   3. Undo takes the edit and the whole box back, one step each.
+# Run by tools/ui-board-box-test.sh (Linux),
+# tools/ui-windows-board-box-test.ps1 (Windows) and
+# tools/ui-macos-board-box-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+
+# 1. A slotted box of corrugated board.
+capture-undo-depth start
+mark
+command sheet.standard_box
+wait-log '^Command Standard Box started' 30
+wait-idle
+expect-choice-text style '^FEFCO 0201'
+expect-choice-text board '^Corrugated C flute 4 mm$'
+mark
+button '^OK$'
+wait-log '^Standard box fefco_0201, ' 120
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-ever '^Timeline SheetFold12 at '
+expect-undo-depth ${start} 1
+
+# 1b. A library part with options: its rules open in Standard Box, 200 high.
+mark
+dblclick-logged '^Timeline SheetRules1 at '
+wait-log '^Editing F1 with Standard Box$' 30
+wait-idle
+expect-choice-text board '^Corrugated C flute 4 mm$'
+type-in '^Panel Standard Box input height at ' '200'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited standard box fefco_0201, ' 120
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-undo-depth ${start} 2
+
+# 2. Finger Joint is laser sheet's: dimmed for board.
+command tools.search
+focus-widget commandSearchInput
+type 'Finger Joint'
+expect-command-search 'Finger Joint' - disabled
+key Escape
+focus-main
+wait-idle
+
+# 3. One undo step each.
+mark
+command edit.undo
+wait-idle
+command edit.undo
+wait-idle
+expect-undo-depth ${start} 0

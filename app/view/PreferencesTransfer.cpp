@@ -47,6 +47,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/MenuBarReveal.hpp"
 #include "../framework/NoticeLevel.hpp"
+#include "../framework/BoostButton.hpp"
 #include "../framework/QuickAccess.hpp"
 #include "../framework/RibbonLabels.hpp"
 #include "../framework/SettingsTransfer.hpp"
@@ -384,6 +385,9 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
                   [](const bool& shown) { MenuBarSettings::saveShown(shown); });
     through<bool>(before, {QuickAccessSettings::visibleKey()}, [] { return QuickAccessSettings::loadVisible(); },
                   [](const bool& visible) { QuickAccessSettings::saveVisible(visible); });
+    // The Boost development button (mitcad#1990).
+    through<bool>(before, {BoostSettings::visibleKey()}, [] { return BoostSettings::loadVisible(); },
+                  [](const bool& visible) { BoostSettings::saveVisible(visible); });
     through<BrowserBackground>(before, {QStringLiteral("appearance/browserBackground")},
                                [] { return savedBrowserBackground(); },
                                [](const BrowserBackground& background) { saveBrowserBackground(background); });

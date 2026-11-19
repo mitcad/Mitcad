@@ -78,10 +78,10 @@ protected:
     painter.setPen(Qt::NoPen);
     if (isDown()) {
       painter.setBrush(tint(pal, 36));
-      painter.drawRoundedRect(box, 6, 6);
+      painter.drawRoundedRect(box, kControlRadius, kControlRadius);
     } else if (underMouse()) {
       painter.setBrush(tint(pal, 20));
-      painter.drawRoundedRect(box, 6, 6);
+      painter.drawRoundedRect(box, kControlRadius, kControlRadius);
     }
     painter.setBrush(tint(pal, 200));
     const QPointF center = box.center();
@@ -139,33 +139,62 @@ QuickAccessGroup::QuickAccessGroup(CommandRegistry& registry, Hooks hooks, QWidg
   // Preferences or the group's menu (mitcad#1189): at once, in either layout.
   connect(&QuickAccessNotifier::instance(), &QuickAccessNotifier::visibilityChanged, this,
           [this](bool) { applyVisible(); });
+  // A command added or removed (its Add to Quick Access, the group's menu,
+  // another window's group): after the menu's own handling of the click.
+  connect(&QuickAccessNotifier::instance(), &QuickAccessNotifier::commandsChanged, this, &QuickAccessGroup::rebuild,
+          Qt::QueuedConnection);
   rebuild();
 }
 
+void QuickAccessGroup::setHiddenWhileEmpty(bool hidden) {
+  if (hidden == m_hiddenWhileEmpty) {
+    return;
+  }
+  m_hiddenWhileEmpty = hidden;
+  if (m_visibleApplied) {
+    applyVisible();
+  }
+}
+
+bool QuickAccessGroup::isEmptyHidden() const { return m_hiddenWhileEmpty && m_buttons.isEmpty(); }
+
 void QuickAccessGroup::applyVisible() {
   const bool wanted = QuickAccessSettings::loadVisible();
-  if (m_visibleApplied && wanted == m_wanted && isHidden() != wanted) {
+  const bool empty = isEmptyHidden();
+  const bool show = wanted && !empty;
+  if (m_visibleApplied && wanted == m_wanted && isHidden() != show) {
     return;
   }
   const bool first = !m_visibleApplied;
   m_visibleApplied = true;
   const bool changed = wanted != m_wanted;
   m_wanted = wanted;
-  setVisible(wanted);
+  setVisible(show);
+  // The preference's lines: whether the user wants the group.
   if (first || changed) {
     qDebug().noquote() << (wanted ? QStringLiteral("Quick access toolbar shown")
                                   : QStringLiteral("Quick access toolbar hidden"));
   }
-  if (!wanted) {
+  // The Floating top bar's group without buttons of its own (mitcad#1990):
+  // hidden, its ⋮ too, until a command is added.
+  if (m_hiddenWhileEmpty && (first || empty != m_loggedEmpty)) {
+    m_loggedEmpty = empty;
+    qDebug().noquote() << (empty ? QStringLiteral("Quick access group hidden: no commands")
+                                 : QStringLiteral("Quick access group shown: it has commands"));
+  }
+  if (!show) {
     // Its places are logged again once it shows.
     m_lastPlaces.clear();
-    updateGeometry();
-    emit contentsChanged();
+  }
+  if (changed && wanted) {
+    // Wanted again: the same commands from the settings, made and logged
+    // anew (rebuild applies the emptiness again).
+    rebuild();
     return;
   }
-  if (changed) {
-    // Shown again: the same commands from the settings, made and logged anew.
-    rebuild();
+  if (!show) {
+    updateGeometry();
+    emit contentsChanged();
     return;
   }
   updateGeometry();
@@ -174,7 +203,15 @@ void QuickAccessGroup::applyVisible() {
 }
 
 QStringList QuickAccessGroup::availableIds() const {
-  return availableIds(m_registry, m_hooks.menus ? m_hooks.menus() : QList<QMenu*>());
+  QStringList ids = availableIds(m_registry, m_hooks.menus ? m_hooks.menus() : QList<QMenu*>());
+  // The commands added from elsewhere (a toolbar button's or a search
+  // row's Add to Quick Access), in the order they were added.
+  for (const QString& id : m_settings.chosen) {
+    if (!ids.contains(id) && m_registry.find(id) != nullptr && m_registry.action(id) != nullptr) {
+      ids.append(id);
+    }
+  }
+  return ids;
 }
 
 QStringList QuickAccessGroup::availableIds(const CommandRegistry& registry, const QList<QMenu*>& menus) {
@@ -219,11 +256,15 @@ void QuickAccessGroup::rebuild() {
     }
   }
   m_buttons.clear();
+  for (const QMetaObject::Connection& connection : std::as_const(m_rowStates)) {
+    disconnect(connection);
+  }
+  m_rowStates.clear();
   int index = 0;
   for (const QString& id : std::as_const(m_shown)) {
     QAction* action = m_registry.action(id);
-    if (action == nullptr) {
-      continue;
+    if (action == nullptr || m_rowCommands.contains(id)) {
+      continue; // the row's own buttons are followed below
     }
     auto* button = new QuickButton(action, m_iconSize, [this, id] { return tooltipOf(id); });
     button->setObjectName(QStringLiteral("quickAccess_") + id);
@@ -245,13 +286,32 @@ void QuickAccessGroup::rebuild() {
     line += QStringLiteral(" (not in this build: %1)").arg(missing.join(QStringLiteral(", ")));
   }
   qDebug().noquote() << line;
+  // The commands whose states are logged: the shown ones, and the row's own
+  // buttons (setRowCommands) whether chosen or not, as the top bar always
+  // has them (Save's state is the UI tests' sign of unsaved changes).
+  QStringList logged = m_shown;
+  QStringList rowIds = m_rowCommands.keys();
+  rowIds.sort();
+  for (const QString& id : std::as_const(rowIds)) {
+    if (!logged.contains(id)) {
+      logged.append(id);
+    }
+    if (QAction* action = m_registry.action(id)) {
+      m_rowStates.append(connect(action, &QAction::changed, this, [this, id] { logState(id, false); }));
+    }
+  }
   m_loggedEnabled.clear();
-  for (const QString& id : std::as_const(m_shown)) {
+  for (const QString& id : std::as_const(logged)) {
     logState(id, true);
   }
   updateGeometry();
   emit contentsChanged();
   schedulePlaces();
+  // Hidden or shown again as it became empty or got commands (the Floating
+  // top bar's group, setHiddenWhileEmpty).
+  if (m_visibleApplied && m_hiddenWhileEmpty) {
+    applyVisible();
+  }
 }
 
 void QuickAccessGroup::setFolded(bool folded) {
@@ -269,6 +329,19 @@ void QuickAccessGroup::setFolded(bool folded) {
   updateGeometry();
   emit contentsChanged();
   schedulePlaces();
+}
+
+void QuickAccessGroup::setRowCommands(const QHash<QString, QWidget*>& commands) {
+  QHash<QString, QPointer<QWidget>> row;
+  for (auto it = commands.cbegin(); it != commands.cend(); ++it) {
+    row.insert(it.key(), QPointer<QWidget>(it.value()));
+  }
+  if (row.keys() == m_rowCommands.keys()) {
+    m_rowCommands = row;
+    return;
+  }
+  m_rowCommands = row;
+  rebuild();
 }
 
 void QuickAccessGroup::setCompact(int height) {
@@ -369,6 +442,7 @@ bool QuickAccessGroup::mirrorMenu(QMenu* mirror, const QMenu* source, const QStr
     check->setChecked(m_settings.chosen.contains(id));
     connect(check, &QAction::toggled, this, [this, id](bool on) { choose(id, on); });
     entries.append(label);
+    m_menuIds.insert(id);
   }
   if (entries.isEmpty()) {
     return false;
@@ -387,6 +461,9 @@ void QuickAccessGroup::openMenu(const QPoint& global) {
   // Folded: the commands themselves first.
   if (m_folded && !m_shown.isEmpty()) {
     for (const QString& id : std::as_const(m_shown)) {
+      if (m_rowCommands.contains(id)) {
+        continue; // the row's own button is in sight
+      }
       if (QAction* action = m_registry.action(id)) {
         menu.addAction(action);
         top.append(quickAccessLabel(action->text()));
@@ -394,6 +471,7 @@ void QuickAccessGroup::openMenu(const QPoint& global) {
     }
     menu.addSeparator();
   }
+  m_menuIds.clear();
   if (m_hooks.menus) {
     for (const QMenu* source : m_hooks.menus()) {
       if (source == nullptr) {
@@ -409,12 +487,31 @@ void QuickAccessGroup::openMenu(const QPoint& global) {
       }
     }
   }
+  // The commands added from elsewhere (a toolbar button's or a search row's
+  // Add to Quick Access), which no menu above has: checked, to remove them.
+  for (const QString& id : std::as_const(m_shown)) {
+    if (m_menuIds.contains(id)) {
+      continue;
+    }
+    const QAction* action = m_registry.action(id);
+    const CommandDef* def = m_registry.find(id);
+    if (action == nullptr || def == nullptr) {
+      continue;
+    }
+    const QString label = quickAccessLabel(action->text().isEmpty() ? def->name : action->text());
+    QAction* check = menu.addAction(label);
+    check->setCheckable(true);
+    check->setChecked(true);
+    connect(check, &QAction::toggled, this, [this, id](bool on) { choose(id, on); });
+    top.append(label);
+  }
   menu.addSeparator();
   QAction* reset = menu.addAction(tr("Reset to Default"));
-  connect(reset, &QAction::triggered, this, [this] {
+  connect(reset, &QAction::triggered, this, [] {
     QuickAccessSettings::reset();
     qDebug().noquote() << QStringLiteral("Quick access reset to the default");
-    QMetaObject::invokeMethod(this, &QuickAccessGroup::rebuild, Qt::QueuedConnection);
+    // Every window's group made again, after the menu's own handling.
+    emit QuickAccessNotifier::instance().commandsChanged();
   });
   top.append(quickAccessLabel(reset->text()));
   // The group hidden (mitcad#1189); Preferences › Display › Show
@@ -435,14 +532,9 @@ void QuickAccessGroup::openMenu(const QPoint& global) {
 }
 
 void QuickAccessGroup::choose(const QString& id, bool on) {
-  if (!m_settings.setChosen(id, on)) {
-    return;
-  }
-  m_settings.save();
-  qDebug().noquote()
-      << QStringLiteral("Quick access %1 %2").arg(on ? QStringLiteral("added") : QStringLiteral("removed"), id);
-  // After the menu's own handling of the click.
-  QMetaObject::invokeMethod(this, &QuickAccessGroup::rebuild, Qt::QueuedConnection);
+  // Saved and logged; every window's group made again (commandsChanged,
+  // queued: after the menu's own handling of the click).
+  QuickAccessSettings::choose(id, on);
 }
 
 void QuickAccessGroup::contextMenuEvent(QContextMenuEvent* event) {
@@ -474,11 +566,23 @@ void QuickAccessGroup::logPlaces() {
   // The places in the window, as the ribbon logs its own (ui_click_logged).
   QStringList lines;
   const QWidget* top = window();
+  // The commands in order: the group's buttons, and the row's own for the
+  // commands it shows itself (setRowCommands).
+  QList<QPair<QString, QPointer<QWidget>>> places;
   for (const QPointer<QToolButton>& button : std::as_const(m_buttons)) {
+    if (button != nullptr) {
+      places.append({button->objectName().mid(12), QPointer<QWidget>(button.data())}); // after "quickAccess_"
+    }
+  }
+  for (const QString& id : std::as_const(m_shown)) {
+    if (m_rowCommands.contains(id)) {
+      places.append({id, m_rowCommands.value(id)});
+    }
+  }
+  for (const auto& [id, button] : std::as_const(places)) {
     if (button == nullptr) {
       continue;
     }
-    const QString id = button->objectName().mid(12); // after "quickAccess_"
     if (button->isVisible()) {
       const QPoint at = button->mapTo(top, button->rect().center());
       lines.append(QStringLiteral("Quick access %1 at %2,%3").arg(id).arg(at.x()).arg(at.y()));

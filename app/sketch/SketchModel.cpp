@@ -338,6 +338,8 @@ bool SketchModel::load(const QJsonObject& sketch) {
     text.fit = flag(path, "fit");
     text.flipX = flag(t, "flip_x");
     text.flipY = flag(t, "flip_y");
+    text.wrap = flag(t, "wrap");
+    text.lines = t.value(QStringLiteral("lines")).toInt();
     text.outlined = !t.value(QStringLiteral("outline")).toArray().isEmpty();
     // The contours' curves carry no type: their fields tell it.
     for (const QJsonValue& contour : t.value(QStringLiteral("outline")).toArray()) {
@@ -367,11 +369,16 @@ bool SketchModel::load(const QJsonObject& sketch) {
   }
   // The regions a text's contours bound, letters and counters (mitcad#1369).
   regionTexts.clear();
+  convertibleRegions.clear();
   for (const QJsonValue& value : sketch.value(QStringLiteral("regions")).toArray()) {
     const QJsonObject r = value.toObject();
     const QString text = r.value(QStringLiteral("text")).toString();
     if (!text.isEmpty()) {
       regionTexts.insert(r.value(QStringLiteral("key")).toString(), text);
+    }
+    // Convert to Sketch Geometry takes it (mitcad#2051).
+    if (r.value(QStringLiteral("projected")).toBool() || r.value(QStringLiteral("face_bounded")).toBool()) {
+      convertibleRegions << r.value(QStringLiteral("key")).toString();
     }
   }
 

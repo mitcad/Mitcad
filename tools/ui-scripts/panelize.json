@@ -1,0 +1,6 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design of tools/ui-scripts/panelize.mitcad-ui (mitcad#2005): a box 600 x 400 x 300 from the origin (Box1, F1, Body1), its faces bottom (-Z), top (+Z), side0 (-Y), side1 (+X), side2 (+Y) and side3 (-X): 72000000 mm3."},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[0,0],"length":600,"width":400,"height":300,"operation":"new_body"}},
+  {"expect":{"body":"F1.b0","volume":72000000,"tolerance":1e-9}}
+]

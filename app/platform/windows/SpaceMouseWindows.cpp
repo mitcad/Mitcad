@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// 3D mice on Windows (mitcad#951): the device's HID reports through Raw
-// Input, no vendor SDK. A message-only window of its own registers for the
+// 3D mice on Windows (mitcad#951): Raw Input reads HID reports when
+// 3DxWare is unavailable. A message-only window of its own registers for the
 // multi-axis controllers (HID usage page 1, usage 8) with RIDEV_INPUTSINK,
 // so that it gets them whichever of Mitcad's windows has the focus, and
 // RIDEV_DEVNOTIFY for the devices that come and go; its window procedure
@@ -16,6 +16,7 @@
 // reports, at most ten lines a second (SpaceMouseRawLog).
 
 #include "../SpaceMouseDevice.hpp"
+#include "SpaceMouse3DxWare.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,7 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QStringList>
+#include <QTimer>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -349,10 +351,85 @@ private:
   QElapsedTimer m_clock; // the raw reports' log interval
 };
 
+// Start one route at a time. Keep Raw Input usable when the system DLL or
+// a driver device is unavailable, and check again as the driver comes up.
+class WindowsBackend final : public SpaceMouseBackend {
+public:
+  WindowsBackend() {
+    m_retry.setInterval(5000);
+    QObject::connect(&m_retry, &QTimer::timeout, &m_retry, [this] {
+      QString device;
+      if ((!acceptsInput || acceptsInput()) && startDriver(device) && connection) {
+        connection(true, device);
+      }
+    });
+  }
+
+  QString name() const override {
+    return m_backend ? m_backend->name() : QStringLiteral("Raw Input");
+  }
+
+  bool start(QString& device) override {
+    if (startDriver(device)) {
+      return true;
+    }
+    return startRaw(device);
+  }
+
+private:
+  void wire(SpaceMouseBackend& backend) {
+    backend.acceptsInput = acceptsInput;
+    backend.nativeWindow = nativeWindow;
+    backend.motion = motion;
+    backend.button = button;
+  }
+
+  bool startDriver(QString& device) {
+    auto driver = createWindows3DxWareBackend();
+    wire(*driver);
+    if (!driver->start(device)) {
+      return false;
+    }
+    driver->connection = [this](bool present, const QString& deviceName) {
+      if (present) {
+        return;
+      }
+      // Closing the driver can destroy the native filter that called us.
+      QTimer::singleShot(0, &m_retry, [this, deviceName] {
+        if (connection) {
+          connection(false, deviceName);
+        }
+        QString rawDevice;
+        if (startRaw(rawDevice) && connection) {
+          connection(true, rawDevice);
+        }
+      });
+    };
+    if (motion) {
+      motion({});
+    }
+    m_backend = std::move(driver);
+    m_retry.stop();
+    return true;
+  }
+
+  bool startRaw(QString& device) {
+    auto raw = std::make_unique<RawInputBackend>();
+    wire(*raw);
+    raw->connection = connection;
+    m_backend = std::move(raw);
+    m_retry.start();
+    return m_backend->start(device);
+  }
+
+  QTimer m_retry;
+  std::unique_ptr<SpaceMouseBackend> m_backend;
+};
+
 } // namespace
 
 std::unique_ptr<SpaceMouseBackend> createSpaceMouseBackend() {
-  return std::make_unique<RawInputBackend>();
+  return std::make_unique<WindowsBackend>();
 }
 
 } // namespace mitcad

@@ -39,7 +39,7 @@ click-pick 'face F1[.]b0/F1:bottom'
 wait-log '^BUILD face picked: Direction Face normal, at the face.s center along its longest edge$' 30
 wait-log '^Inspect Profile: place geometry, length 300[.]00 mm .*; along normal; runs 0[.]000, 0[.]000, -1[.]000; x 0[.]000, -?1[.]000, 0[.]000; end A at 120[.]0, 230[.]0, 0[.]0;' 30
 wait-log '^Panel Profile input axis=normal at ' 20
-wait-log '^Panel Profile input rotate at [0-9]+,[0-9]+$' 20
+wait-log '^Panel Profile input ground_rotate at [0-9]+,[0-9]+$' 20
 wait-idle
 mark
 key Return

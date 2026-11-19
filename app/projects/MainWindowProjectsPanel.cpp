@@ -82,7 +82,6 @@ void MainWindow::registerProjectsPanelCommands() {
   panel.tooltip = tr("Shows or hides the Projects panel: your projects, their folders and designs");
   panel.kind = CommandDef::Kind::Action;
   panel.mode = CommandDef::Mode::Any;
-  panel.tab.clear(); // the View menu
   panel.duringCommands = true;
   panel.keywords = {QStringLiteral("projects"), QStringLiteral("panel"), QStringLiteral("designs"),
                     QStringLiteral("folders"), QStringLiteral("files")};
@@ -95,7 +94,6 @@ void MainWindow::registerProjectsPanelCommands() {
   design.tooltip = tr("A new design in the current project's selected folder, or an untitled one");
   design.kind = CommandDef::Kind::Action;
   design.mode = CommandDef::Mode::Any;
-  design.tab.clear(); // the File menu
   // New and New Design are one command (mitcad#175).
   design.shortcut = QKeySequence(QKeySequence::New);
   design.keywords = {QStringLiteral("design"), QStringLiteral("part"),     QStringLiteral("project"),
@@ -178,9 +176,7 @@ void MainWindow::createProjectsPanel() {
   connect(m_remote, &RemoteController::versionsSent, this, [this] { refreshProjectsPanel(); });
   if (QAction* action = m_registry->action(QStringLiteral("view.projects"))) {
     action->setCheckable(true);
-    if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
-      view->addAction(action);
-    }
+    addPanelEntry(action, 0); // View › Panels › Projects (mitcad#1975)
   }
 }
 
@@ -291,6 +287,17 @@ void MainWindow::addProjectsCard() {
 
 bool MainWindow::projectsPanelShownAtStart() const {
   const ProjectsSettings settings = ProjectsSettings::load();
+  if (m_titleRow != nullptr) {
+    // The Floating top bar of Windows and Linux (mitcad#1990): hidden until
+    // it is shown in this layout.
+    if (settings.panelShownTopBar.has_value()) {
+      qInfo().noquote() << QStringLiteral("Projects panel at the start: %1 (as chosen)")
+                               .arg(*settings.panelShownTopBar ? QStringLiteral("shown") : QStringLiteral("hidden"));
+      return *settings.panelShownTopBar;
+    }
+    qInfo().noquote() << QStringLiteral("Projects panel at the start: hidden (no choice yet in this layout)");
+    return false;
+  }
   if (settings.panelShown.has_value()) {
     qInfo().noquote() << QStringLiteral("Projects panel at the start: %1 (as chosen)")
                              .arg(*settings.panelShown ? QStringLiteral("shown") : QStringLiteral("hidden"));
@@ -324,8 +331,10 @@ void MainWindow::setProjectsPanelShown(bool shown, bool remember) {
   }
   if (remember) {
     ProjectsSettings settings = ProjectsSettings::load();
-    if (!settings.panelShown.has_value() || *settings.panelShown != shown) {
-      settings.panelShown = shown;
+    // The top bar's layout keeps a choice of its own (mitcad#1990).
+    std::optional<bool>& chosen = m_titleRow != nullptr ? settings.panelShownTopBar : settings.panelShown;
+    if (!chosen.has_value() || *chosen != shown) {
+      chosen = shown;
       settings.save();
       qInfo().noquote() << QStringLiteral("Projects panel: %1 at the next start")
                                .arg(shown ? QStringLiteral("shown") : QStringLiteral("hidden"));

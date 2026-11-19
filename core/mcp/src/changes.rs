@@ -8,7 +8,7 @@
 //! removed, beside the document's `state`. `"full"` gives the whole
 //! `timeline` and `bodies` as before; `"none"` the `state` alone. The
 //! backend reads the document before the command (only for `changed`) and
-//! after it with [`SNAPSHOT_QUERIES`], and lists the features the command
+//! after it with [`snapshot_queries`], and lists the features the command
 //! evaluated (the `recompute_times` query after each command that
 //! recomputed).
 
@@ -59,16 +59,37 @@ impl TimelineMode {
 
 /// The queries of a snapshot, by the key its value goes under: the
 /// document's state, the timeline, and the bodies with their shape
-/// versions (which tell a changed body) and boxes (where each is,
-/// mitcad#714).
-pub const SNAPSHOT_QUERIES: [(&str, &str); 3] = [
-    ("state", r#"{"query":"document"}"#),
-    ("timeline", r#"{"query":"timeline"}"#),
-    (
-        "bodies",
-        r#"{"query":"bodies","versions":true,"bbox":true}"#,
-    ),
-];
+/// versions (which tell a changed body). A snapshot `after` a command also
+/// has the boxes of the bodies (where each is, mitcad#714) that the
+/// snapshot `before` it does not have at the same version: those whose
+/// shape the command changed and those it added, every body's without a
+/// `before` with bodies (mitcad#2021: the boxes of every body of a design
+/// of 815, read before its first command after opening, took 7 s).
+pub fn snapshot_queries(after: bool, before: Option<&Value>) -> [(&'static str, String); 3] {
+    let mut bodies = json!({"query": "bodies", "versions": true});
+    if after {
+        let known: Map<String, Value> = before
+            .and_then(|b| b["bodies"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|body| {
+                Some((
+                    body["uid"].as_str()?.to_owned(),
+                    Value::String(body["version"].as_str()?.to_owned()),
+                ))
+            })
+            .collect();
+        bodies["bbox"] = json!(true);
+        if !known.is_empty() {
+            bodies["bbox_known"] = Value::Object(known);
+        }
+    }
+    [
+        ("state", json!({"query": "document"}).to_string()),
+        ("timeline", json!({"query": "timeline"}).to_string()),
+        ("bodies", bodies.to_string()),
+    ]
+}
 
 /// The features a command's results say it evaluated: `recompute_times`
 /// answers, one per command that recomputed, merged in order.
@@ -104,7 +125,7 @@ pub fn entry_failed(result: &Value) -> bool {
 /// The document's part of a `model_command` result: `state`, and by
 /// `mode` the `changes` against `before`, the whole `timeline` and
 /// `bodies`, or nothing more. `before` and `after` are snapshots
-/// ([`SNAPSHOT_QUERIES`]); `evaluated` the features the command evaluated.
+/// ([`snapshot_queries`]); `evaluated` the features the command evaluated.
 pub fn command_document(
     mode: TimelineMode,
     before: Option<&Value>,

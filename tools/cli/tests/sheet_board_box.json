@@ -1,0 +1,30 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Board (mitcad#1939): a FEFCO 0201 slotted box of C flute corrugated board (4 mm, crease deduction 4, crease radius 0.5: each crease develops 2 (0.5 + 4) - 4 = 5), inside 300 x 200 x 150. The blank (sketch F2), its creases (sketch F3), the Face F4 and twelve Folds F5 to F16: the eight flaps first, the glue flap (F13), then the three walls from the far end. The glue flap folds under the first panel's free edge and touches it inside: touching flaps of a folded carton build. Its blank: panels' creases at x = 206, 510, 714 and the glue crease at 1013.6 (the last panel short by the seam gap of 0.4 that keeps the glue flap off the first panel), the glue flap to 1046.1; the band 150 - 1 + 5 = 154 high, the long panels' flap creases a thickness and the seam gap further out, flaps 96 deep: from y = -100.4 to 254.4."},
+  {"cmd": "add_standard_box", "style": "fefco_0201", "length": 300, "width": 200, "height": 150, "board": "c_flute", "radius": 0.5},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"feature": "F5", "status": "ok"}},
+  {"expect": {"feature": "F13", "status": "ok"}},
+  {"expect": {"feature": "F16", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "sheet_process"}, "result": {"process": "board", "source": "rules"}}},
+  {"comment": "It unfolds to its blank with the crease allowances."},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
+    "result": {"status": "valid", "bounds": {"min": [0, -100.4], "max": [1046.1, 254.4]}}}},
+  {"comment": "Its die line: cut and crease layers for a cutting table, and as PDF."},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_box.dxf"},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_box.pdf"},
+  {"cmd": "export_flat_pattern_dxf", "body": "F4.b0", "path": "sheet_board_box_flat.dxf"},
+
+  {"comment": "A library part with options: the box edited to 200 high (edit_standard_box of its rules F1) makes its rules, blank and creases again, and its Face and Folds follow: the band 200 - 1 + 5 = 204 high, the blank to y = 304.4."},
+  {"cmd": "edit_standard_box", "rules": "F1", "height": 200},
+  {"expect": {"feature": "F16", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
+    "result": {"status": "valid", "bounds": {"min": [0, -100.4], "max": [1046.1, 304.4]}}}},
+
+  {"comment": "Engraved and scored marks on the die line: a sketch on the blank's plane (F17), a line engraved."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [50, 50]},
+    {"id": "p2", "type": "point", "at": [150, 50]},
+    {"id": "c3", "type": "line", "start": "p1", "end": "p2"}]}},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_box_marked.dxf",
+    "marks": [{"sketch": "F17", "kind": "engrave"}]}
+]

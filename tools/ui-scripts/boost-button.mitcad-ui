@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MIT
+# The Boost development button (mitcad#1990) through the real UI, in the
+# layout the wrapper starts (the Floating top bar of Windows and Linux,
+# left of the indicators; the Docked toolbar's tabs' row at its right
+# end), in a 1024 x 768 window, with a fresh profile:
+#   1. The button shows ("Boost button shown", its places logged); a
+#      picture of it (boost-button.png in MITCAD_TEST_WORK).
+#   2. A click on it opens the project's Ko-fi page: "Boost link opened:
+#      https://ko-fi.com/mitcad", and the UI tests' URL log instead of the
+#      browser (MITCAD_TEST_LOG_URLS: "Open URL (test, not opened): ...").
+#   3. Its × hides it: "Boost button hidden", saved
+#      (appearance/boostButton false), no link opened.
+#   4. Preferences › Display › Show the Boost development button checked:
+#      saved, the button back with its places.
+# Preferences is a dialog on Windows and Linux (applied on OK) and the
+# Settings window on macOS (at once). Run by tools/ui-boost-button-test.sh
+# (Linux), tools/ui-windows-boost-button-test.ps1 (Windows) and
+# tools/ui-macos-boost-button-test.sh (macOS, Docked).
+expect-ever 'View area' 30
+window-resize 1024 768
+wait-idle
+expect-ever '^Boost button shown$' 30
+expect-ever '^Boost button at ' 30
+expect-ever '^Boost button close at ' 30
+expect-never '^Boost button hidden$'
+wait-idle
+sleep 300
+screenshot '${MITCAD_TEST_WORK}/boost-button.png'
+
+# 2. The click: the link logged, not opened.
+mark
+click-logged '^Boost button at '
+wait-log '^Boost link opened: https://ko-fi[.]com/mitcad$'
+wait-log '^Open URL [(]test, not opened[)]: https://ko-fi[.]com/mitcad$'
+wait-idle
+
+# 3. The ×: hidden and saved.
+mark
+click-logged '^Boost button close at '
+wait-log '^Boost button hidden$'
+wait-idle
+expect-setting appearance/boostButton false
+expect-no-log '^Boost link opened'
+
+# 4. Preferences › Display: shown again.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property boostVisible checked false
+focus-widget boostVisible
+key space
+expect-widget-property boostVisible checked true
+key Return
+focus-main
+wait-log '^Preferences: Boost development button shown$'
+wait-log '^Boost button shown$'
+expect-setting appearance/boostButton true
+wait-log '^Boost button at ' 30
+wait-log '^Boost button close at ' 30
+wait-idle
+expect-never 'TestDriver: FAIL'

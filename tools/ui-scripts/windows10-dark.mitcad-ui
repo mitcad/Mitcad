@@ -33,9 +33,11 @@ sleep 500
 expect-widget-theme startPage dark
 
 # 4. The Browser.
-expect-ever '^Ribbon tab SOLID at ' 10
+# Off the Start page: the design's tab in the Floating title row (the
+# toolbar panel is hidden over the page, mitcad#1990), the Solid tab
+# in the Docked layout.
 mark
-click-logged '^Ribbon tab SOLID at '
+leave-start-page
 expect-log '^Start page hidden$'
 wait-idle
 sleep 500

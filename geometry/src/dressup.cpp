@@ -92,7 +92,9 @@
 #include "mitcad/geometry/user_error.hpp"
 #include "mitred_dressup.hpp"
 #include "node_dressup.hpp"
+#include "remnant_patch.hpp"
 #include "ring_dressup.hpp"
+#include "runout_dressup.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -4554,11 +4556,17 @@ std::string input_face_of(const std::string& name, const std::set<std::string>& 
 // geometry kernel's defeaturing, the faces round them extended to meet (the
 // bevels' faces closing between them), where those faces are planes,
 // cylinders, cones, spheres or tori and that gives one valid solid of
-// nearly the same volume; else the result keeps them with a warning that
-// says so, the pieces as its places. The result itself where there is no
-// such piece.
+// nearly the same volume. Elsewhere (beside a blend's faces, which meet the
+// faces they round and each other tangentially, so that extending them to
+// meet ran for minutes and failed, mitcad#1858), or where the defeaturing
+// fails, each place is closed by a patch tangent to the dressup's faces
+// round it, those cut back a setback from it (patch_remnants,
+// remnant_patch.hpp). Where neither gives one valid solid the result keeps
+// the pieces with a warning that says so, the pieces as its places. The
+// result itself where there is no such piece.
 ShapePtr without_remnants(const ShapePtr& result, const Shape& input, std::vector<int> chain,
-                          const std::vector<char>& follows, double contact, const char* role) {
+                          const std::vector<char>& follows, double contact, const std::string& feature,
+                          const char* role) {
   if (!result || !(contact > 0.0)) {
     return result;
   }
@@ -4677,11 +4685,10 @@ ShapePtr without_remnants(const ShapePtr& result, const Shape& input, std::vecto
     // The defeaturing extends the faces round the pieces to meet: tried only
     // where they are all planes, cylinders, cones, spheres or tori (a
     // chamfer's bevels and the faces it cuts, mitcad#1821's case). Beside a
-    // blend's B-spline faces it ran for minutes and failed (the owner's nut
+    // blend's B-spline faces it ran for minutes and failed (a reported nut
     // design: two roundings of 5 with 3 and 6 pieces, 155.6 s and 84.0 s,
-    // both left with their pieces, mitcad#1819): the pieces then stay, with
-    // the warning below. This removes none of those pieces: removing pieces
-    // between blend faces is still open.
+    // both left with their pieces, mitcad#1819): those places are closed by
+    // patches instead (below, mitcad#1858).
     bool analytic = true;
     for (const int f : remnants) {
       for (TopExp_Explorer ex(result->face(f), TopAbs_EDGE); ex.More() && analytic; ex.Next()) {
@@ -4737,6 +4744,12 @@ ShapePtr without_remnants(const ShapePtr& result, const Shape& input, std::vecto
         out->copy_notes(*result);
         return out;
       }
+    }
+    // A patch at each place, tangent to the dressup's faces round it (cut
+    // back a setback from it) and, for a fillet, to the faces it rounds:
+    // the rounding closed where the kernel left the old face (mitcad#1858).
+    if (ShapePtr patched = detail::patch_remnants(*result, input, remnants, made, feature, role, contact)) {
+      return patched;
     }
     // (Kept, with a warning: never silently, mitcad#1821.)
     std::vector<Shape::NotePlace> places;
@@ -5092,6 +5105,131 @@ std::string with_cause(const std::string& error, const std::string& cause) {
   return error.substr(0, p + 2) + cause + " (" + rest + ")";
 }
 
+// Sets without a tangent chain whose geometry kernel chain runs on past
+// their selected edges into edges no set selects (mitcad#2037): OCCT
+// cannot end the dressup at such a vertex, so it is built over the whole
+// chain (`full`, the sets with their tangent chain) and kept over the
+// selected edges only, running out over the next edge, else ending flat
+// there (runout_dressup.hpp). `size_of` gives a chain its set's size and
+// throws for sizes that cannot run out. Null when no set has such a chain;
+// throws the refusal, said in words, when neither way builds.
+template <class Set, class Full, class SizeOf>
+ShapePtr over_partial_chains(const std::string& feature, const char* what, const Shape& body,
+                             const std::vector<Set>& sets, bool is_chamfer, Full&& full, SizeOf&& size_of) {
+  std::vector<char> off;
+  bool any = false;
+  for (const Set& set : sets) {
+    off.push_back(set.tangent_chain ? 0 : 1);
+    any = any || !set.tangent_chain;
+  }
+  if (!any) {
+    return nullptr;
+  }
+  const std::vector<int> owner = select_edges(body, sets);
+  std::vector<detail::PartialChain> chains;
+  try {
+    OCC_CATCH_SIGNALS
+    chains = detail::partial_chains(body, owner, off, is_chamfer);
+  } catch (const Standard_Failure&) {
+    return nullptr; // (the dressup's own path says what is wrong)
+  }
+  if (chains.empty()) {
+    return nullptr;
+  }
+  // The first selected edge that continues into an unselected one, for
+  // the places of the refusal.
+  int seed = -1;
+  int unselected = -1;
+  for (const detail::PartialChain& chain : chains) {
+    const std::size_t n = chain.edges.size();
+    for (std::size_t i = 0; i < n && seed < 0; ++i) {
+      const std::size_t j = (i + 1) % n;
+      if ((j == 0 && !chain.closed) || chain.selected[i] == chain.selected[j]) {
+        continue;
+      }
+      seed = chain.edges[chain.selected[i] != 0 ? i : j];
+      unselected = chain.edges[chain.selected[i] != 0 ? j : i];
+    }
+  }
+  if (seed < 0) {
+    return nullptr; // (a chain of one edge: nothing runs on)
+  }
+  std::vector<Set> whole = sets;
+  for (detail::PartialChain& chain : chains) {
+    chain.size = size_of(chain, seed, unselected);
+    whole[static_cast<std::size_t>(chain.set)].tangent_chain = true;
+  }
+  const ShapePtr built = full(whole);
+  if (built) {
+    for (const bool run_out : {true, false}) {
+      try {
+        OCC_CATCH_SIGNALS
+        ShapePtr result = detail::over_selected_edges(feature, body, *built, chains, run_out);
+        int solids = 0;
+        for (TopExp_Explorer it(result ? result->occt() : TopoDS_Shape(), TopAbs_SOLID); it.More(); it.Next()) {
+          ++solids;
+        }
+        if (result && solids == 1 && closed_solids(result->occt())) {
+          return result;
+        }
+      } catch (const Cancelled&) {
+        throw;
+      } catch (const Standard_Failure&) {
+      } catch (const std::exception&) {
+      }
+    }
+  }
+  const std::string said = std::string("unsupported: a selected edge continues smoothly into an edge not selected, "
+                                       "and the ") +
+                           what + " could neither run out over that edge nor end flat at it";
+  throw std::invalid_argument(edges_error(body, {seed, unselected}, said,
+                                          "unsupported: " + describe_edge(body, seed) + " continues smoothly into " +
+                                              describe_edge(body, unselected) + ", and the " + what +
+                                              " could neither run out over it nor end flat at it"));
+}
+
+// The size of a fillet set's chain for its run-out; variable, asymmetric,
+// spline and curvature continuous sizes cannot run out.
+detail::RunOutSize fillet_run_out_size(const Shape& body, const FilletSet& set, int seed, int unselected) {
+  if ((set.size != FilletSize::Constant && set.size != FilletSize::ChordLength) || set.curvature) {
+    const std::string said = "unsupported: variable, asymmetric, spline and curvature continuous fillets need "
+                             "Tangent Chain on where a selected edge continues smoothly into an edge not selected";
+    throw std::invalid_argument(edges_error(body, {seed, unselected}, said,
+                                            said + " (" + describe_edge(body, seed) + " into " +
+                                                describe_edge(body, unselected) + ")"));
+  }
+  detail::RunOutSize size;
+  size.fillet = true;
+  if (set.size == FilletSize::Constant) {
+    size.radius = set.radius;
+  } else {
+    size.chord = set.chord;
+  }
+  return size;
+}
+
+// The size of a chamfer set's chain for its run-out, measured on the face
+// of its first selected edge the set measures on.
+detail::RunOutSize chamfer_run_out_size(const Shape& body, const ChamferSet& set, const detail::PartialChain& chain) {
+  detail::RunOutSize size;
+  size.distance = set.spec.distance;
+  if (set.spec.type == ChamferType::EqualDistance) {
+    return size;
+  }
+  if (set.spec.type == ChamferType::TwoDistances) {
+    size.distance2 = set.spec.distance2;
+  } else {
+    size.angle = set.spec.angle;
+  }
+  for (std::size_t i = 0; i < chain.edges.size(); ++i) {
+    if (chain.selected[i] != 0) {
+      size.measured = measured_face(body, chain.edges[i], set.spec.reference_face, set.spec.flip);
+      break;
+    }
+  }
+  return size;
+}
+
 } // namespace
 
 ShapePtr fillet(const std::string& feature, const Shape& given, const std::vector<FilletSet>& sets,
@@ -5100,6 +5238,16 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
     check_fillet_set(set);
   }
   detail::require_surfaces(given.occt(), "fillet");
+  // (Tangent Chain off on a chain that runs on: the rounding runs out over
+  // the next edge, mitcad#2037.)
+  if (ShapePtr partial = over_partial_chains(
+          feature, "fillet", given, sets, false,
+          [&](const std::vector<FilletSet>& whole) { return fillet(feature, given, whole, rolling_ball_corners); },
+          [&](const detail::PartialChain& chain, int seed, int unselected) {
+            return fillet_run_out_size(given, sets[static_cast<std::size_t>(chain.set)], seed, unselected);
+          })) {
+    return partial;
+  }
   // (A thread's faces, a turn each, joined where the edges run along them.)
   std::vector<int> pieces;
   const ShapePtr joined = surface_pieces_joined(given, select_edges(given, sets), pieces);
@@ -5198,7 +5346,7 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
     // (Faces of one surface joined, mitcad#1261; pieces of a face it takes
     // away removed, mitcad#1821.)
     const ShapePtr built = without_remnants(detail::join_same_surfaces(rounded), input, owner, chain_follows(sets),
-                                            largest_contact(input, sets, owner), "fillet");
+                                            largest_contact(input, sets, owner), feature, "fillet");
     if (built) {
       if (const auto side = detail::dressup_side(input, owner)) {
         detail::DressupFinding warning =
@@ -5363,12 +5511,23 @@ std::string chamfer_context(const Shape& body, const std::vector<ChamferSet>& se
 // the .f3d import tells a failure of the kernel (kernel_failure).
 ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
                  ChamferCorner corner) {
+  // (Tangent Chain off on a chain that runs on: the bevel runs out over the
+  // next edge, mitcad#2037.)
+  if (ShapePtr partial = over_partial_chains(
+          feature, "chamfer", input, sets, true,
+          [&](const std::vector<ChamferSet>& whole) { return chamfer(feature, input, whole, corner); },
+          [&](const detail::PartialChain& chain, int, int) {
+            return chamfer_run_out_size(input, sets[static_cast<std::size_t>(chain.set)], chain);
+          })) {
+    return partial;
+  }
   try {
     // (Faces of one surface joined, mitcad#1261.)
     // (Pieces of a face it takes away removed, mitcad#1821.)
     const ShapePtr result =
         without_remnants(detail::join_same_surfaces(detail::chamfer_unexplained(feature, input, sets, corner)),
-                         input, select_edges(input, sets), chain_follows(sets), largest_size(sets), "chamfer");
+                         input, select_edges(input, sets), chain_follows(sets), largest_size(sets), feature,
+                         "chamfer");
     // A result whose made faces reach to the wrong side of the body gets a
     // warning, never a refusal (mitcad#1253).
     if (const auto side = detail::dressup_side(input, select_edges(input, sets))) {

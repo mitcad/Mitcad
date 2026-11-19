@@ -84,6 +84,10 @@ impl<K: Kernel> Document<K> {
         options: &SimulateOptions,
     ) -> Result<Value, ModelError> {
         let index = self.cam_setup_index(setup)?;
+        // A lathe setup's stock is its turned section (mitcad#1869).
+        if self.cam_on_lathe(&self.state.cam.setups[index]) {
+            return self.turning_simulate_json(index, options.resolution, options.tolerance);
+        }
         let setup = &self.state.cam.setups[index];
         let run = self.compute_cam_setup(index, None);
         let program = Self::cam_program(setup, &run).map_err(invalid)?;

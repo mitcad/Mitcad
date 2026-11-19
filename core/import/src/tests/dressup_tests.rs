@@ -398,6 +398,97 @@ fn a_distance_and_angle_chamfers_face_comes_from_the_history() {
     assert_eq!(def["flip"], true, "{def}");
 }
 
+/// A chamfer set without its tangent chain (mitcad#2037) comes in with
+/// `tangent_chain` false: parametric where the file's body is the one the
+/// chamfer builds, the file's body where it is not (the history check).
+#[test]
+fn a_chamfer_without_its_tangent_chain_comes_in_or_falls_back() {
+    let block_items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut block = Document::new(TestKernel::default());
+    import_design(
+        &mut block,
+        &timeline_dump(block_items.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let (a, b) = shapes(&block)[0].edges[0].clone();
+    let p = edge_point(&a, &b);
+    let edge = json!({"kind": "edge", "mid_point": [p[0] / 10.0, p[1] / 10.0, p[2] / 10.0],
+                      "length": 0.1});
+    let chamfer = |distance: Value| {
+        json!({"index": 2, "name": "Chamfer1", "objectType": "ChamferFeature",
+               "detail": {"chamferType": "EqualDistanceChamferType",
+                          "cornerType": "ChamferCornerType",
+                          "edgeSets": [{"edges": [edge.clone()], "isTangentChain": false,
+                                        "distance": distance}]}})
+    };
+    let dump = |distance: Value| {
+        let mut items = block_items.clone();
+        items.push(chamfer(distance));
+        timeline_dump(items)
+    };
+    let two = dump(param("d5", "2 mm", 0.2, "mm"));
+    let import = |full: &Dump, geometry: &mut dyn StoredGeometry<MockShape>| {
+        let mut doc = Document::new(TestKernel {
+            edge_points: true,
+            ..TestKernel::default()
+        });
+        let report = import_design(&mut doc, full, geometry, &Options::default());
+        (doc, report)
+    };
+    // Without the history: MitCad's own chamfer, without the chain.
+    let (reference, report) = import(&two, &mut NoGeometry);
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let uid = report.items[2].features[0].clone();
+    let def: Value = serde_json::from_str::<Value>(
+        &reference
+            .query(&format!(r#"{{"query": "feature", "uid": "{uid}"}}"#))
+            .unwrap(),
+    )
+    .unwrap()["def"]
+        .clone();
+    assert_eq!(def["sets"][0]["tangent_chain"], false, "{def}");
+    // The file's body is the one the chamfer builds: parametric, verified.
+    let mut geometry = TestGeometry {
+        states: vec![Vec::new(), shapes(&block), shapes(&reference)],
+        items: HashMap::from([(1, 1), (2, 2)]),
+        ..TestGeometry::default()
+    };
+    let (_, report) = import(&two, &mut geometry);
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    assert_eq!(report.items[2].verified, Some(true), "{}", report.text());
+    // The file's body is another (a bevel of 3 mm): the file's bodies. Its
+    // own parameter: d5 is 2 mm in the dump's model table, which the import
+    // reads a named parameter from.
+    let (wider, _) = import(&dump(param("d6", "3 mm", 0.3, "mm")), &mut NoGeometry);
+    assert_ne!(shapes(&wider), shapes(&reference));
+    let mut geometry = TestGeometry {
+        states: vec![Vec::new(), shapes(&block), shapes(&wider)],
+        items: HashMap::from([(1, 1), (2, 2)]),
+        ..TestGeometry::default()
+    };
+    let (_, report) = import(&two, &mut geometry);
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Fallback,
+        "{}",
+        report.text()
+    );
+}
+
 /// A replace face of the block's top onto the XY plane, as external dumps give
 /// it (no source faces), and the history with the file's result.
 fn replace_face_history() -> (Vec<Value>, TestGeometry, String) {

@@ -3708,6 +3708,84 @@ fn face_profiles_extrude_the_face_and_ignored_sketch_edges_take_the_sketch() {
 }
 
 #[test]
+fn a_face_profile_pads_up_to_a_face() {
+    // (mitcad#2033) Pad2 pads the top of Pad (its Face2: the mock's end
+    // cap) up to that face moved 5 by its Offset (UpToFace, Type 3): a face
+    // extrusion up to an object, as a sketch's, not refused.
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Block",
+            format!(
+                "{}{}{}",
+                shape("Block.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad", "Pad2"]),
+                link("Tip", "Pad2")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad2",
+            format!(
+                "{}{}{}{}{}{}",
+                link_sub("Profile", "Pad", &["Face2"]),
+                link("BaseFeature", "Pad"),
+                enumeration("Type", 3),
+                link_sub("UpToFace", "Pad", &["Face2"]),
+                float("Offset", 5.0),
+                shape("Pad2.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Block.brp", b"10 block"),
+            ("Pad.brp", b"6 pad"),
+            ("Pad2.brp", b"10 pad2"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let f = feature(&report, "Pad2");
+    assert_eq!(f.outcome, ObjectOutcome::Parametric, "{f:?}");
+    assert_eq!(f.mitcad, "extrude", "{f:?}");
+    assert!(!report.text().contains("by distances"), "{}", report.text());
+    let pad2 = def_of(&doc, &feature(&report, "Pad2").features[0]);
+    assert!(
+        pad2["profile_face"]["face"]
+            .as_str()
+            .unwrap()
+            .contains(":end("),
+        "{pad2}"
+    );
+    assert_eq!(pad2["extent"]["type"], "to_object", "{pad2}");
+    let object = &pad2["extent"]["object"];
+    assert!(
+        matches!(object["type"].as_str(), Some("face" | "plane")),
+        "{pad2}"
+    );
+    let offset = &pad2["extent"]["offset"];
+    let offset = offset.as_f64().or_else(|| value_of(&doc, offset));
+    assert_eq!(offset.map(f64::abs), Some(5.0), "{pad2}");
+}
+
+#[test]
 fn profiles_of_a_whole_sketch_with_an_empty_sub_element_replay() {
     // (mitcad#708) FreeCAD 1.x links a feature to its whole sketch by one
     // empty sub-element (`count="1"`, `<Sub value=""/>`), with

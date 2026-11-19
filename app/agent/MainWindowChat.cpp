@@ -125,7 +125,6 @@ void MainWindow::registerChatCommands() {
   chat.icon = QStringLiteral("assistant-chat");
   chat.kind = CommandDef::Kind::Action;
   chat.mode = CommandDef::Mode::Any;
-  chat.tab.clear(); // the View menu and its button
   chat.tooltip = tr("Asks an AI agent to change the open design");
   chat.keywords = {QStringLiteral("ai"),     QStringLiteral("chat"),   QStringLiteral("claude"),
                    QStringLiteral("agent"),  QStringLiteral("prompt"), QStringLiteral("assistant"),
@@ -304,17 +303,18 @@ void MainWindow::createChat() {
   }
   // The AppKit frontend's View menu and toolbar button come with its window
   // (createNativeChat).
-  if (QMenu* view = m_nativeUi ? nullptr : findChild<QMenu*>(QStringLiteral("viewMenu"))) {
-    view->addAction(action);
+  if (!m_nativeUi) {
+    addPanelEntry(action, 4); // View › Panels › Chat (mitcad#1975)
   }
   if (auto* titleBar = m_nativeUi ? nullptr : findChild<TitleBar*>()) {
     // Beside the agent indicator in the title bar row.
-    auto* button = new CapsuleFrame(-1);
+    auto* button = new CapsuleFrame(kCardRadius); // a top bar pill (mitcad#1990)
     button->setObjectName(QStringLiteral("titleChat"));
     auto* row = new QHBoxLayout(button);
     row->setContentsMargins(4, 2, 4, 3);
     row->addWidget(new RibbonButton(action, uiIconSize(18)));
-    button->setCardMaterial(titleBar->isFloatingRow());
+    // Flat in the Floating row, as the bar's other icon buttons (mitcad#1990).
+    button->setFlat(titleBar->isFloatingRow());
     titleBar->setChatButton(button);
   }
   // Looked for again when MitCad comes to the front: an agent installed or

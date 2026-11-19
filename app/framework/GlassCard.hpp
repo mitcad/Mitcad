@@ -9,6 +9,8 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include "UiSizes.hpp"
+
 class QGraphicsOpacityEffect;
 class QHBoxLayout;
 class QLabel;
@@ -51,8 +53,8 @@ private:
 // The header exists when the card has a title or is collapsible; the
 // chevron collapses the card to its header (SF Symbol chevron.down /
 // chevron.right on macOS, a drawn one elsewhere). Trailing header widgets
-// (a badge button) are added with addHeaderWidget. A capsule card (the
-// timeline, the status pill) has the corner radius of half its height.
+// (a badge button) are added with addHeaderWidget. Every card and bar has
+// the corner radius kRadius (kCardRadius), at most half its height.
 //
 // The card is exactly its rounded rectangle: it takes mouse events there
 // and nowhere else, so the 3D view under the shadow stays clickable. The
@@ -71,14 +73,14 @@ public:
   // behind the card provides the material; the card draws none of it.
   enum class Backdrop { Painted, External };
 
-  static constexpr int kRadius = 14;
+  static constexpr int kRadius = kCardRadius; // every card and bar (UiSizes.hpp)
   // The shadow's extent around the card (it is painted outside the card's
   // rectangle, on the companion widget).
   static constexpr int kShadowBlur = 16;
   static constexpr int kShadowOffset = 4;
   // The corner radius of the small boxes of a bare card (setBare): its
   // header's and the Browser's rows'.
-  static constexpr int kBoxRadius = 8;
+  static constexpr int kBoxRadius = kControlRadius;
 
   explicit GlassCard(QWidget* parent = nullptr);
   ~GlassCard() override;
@@ -92,12 +94,19 @@ public:
   // A widget at the right end of the header (the card owns it).
   void addHeaderWidget(QWidget* widget);
   // The widget below the header (the card owns it); `margins` is the room
-  // around it.
-  void setContent(QWidget* content, const QMargins& margins = QMargins(8, 2, 8, 8));
+  // around it. Its scroll areas paint no page of their own: the card's
+  // material shows through them (a page set into one later must be made
+  // see-through by its owner, after QScrollArea::setWidget).
+  void setContent(QWidget* content, const QMargins& margins = QMargins(8, 4, 8, 8));
   QWidget* content() const { return m_content; }
 
-  // A capsule: the corner radius is half the card's height.
+  // A capsule (the timeline, the status pill): a one-row bar. Its corners
+  // are every card's (kRadius, at most half its height, mitcad#1990: one
+  // radius for the cards and the bars).
   void setCapsule(bool capsule);
+  // The room around a bottom bar's one row (the timeline, the Render
+  // workspace's Shots bar; mitcad#1990: one bottom bar in every workspace).
+  static QMargins barMargins() { return QMargins(16, 4, 16, 4); }
   qreal cornerRadius() const;
 
   void setBackdrop(Backdrop backdrop);
@@ -246,7 +255,7 @@ private:
   QWidget* m_holder = nullptr;
   QVBoxLayout* m_holderLayout = nullptr;
   QWidget* m_content = nullptr;
-  QMargins m_contentMargins = QMargins(8, 2, 8, 8);
+  QMargins m_contentMargins = QMargins(8, 4, 8, 8);
   bool m_hasHeaderWidgets = false;
   bool m_bare = false;
   QRegion m_contentRegion;     // setContentRegion

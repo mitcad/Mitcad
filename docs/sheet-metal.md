@@ -702,12 +702,13 @@ Decisions made while implementing the production Cut and the reliefs:
 
 Decisions made while implementing the command UI and the DXF export:
 
-- **Commands on the model API.** The Sheet Metal group of the Solid tab
+- **Commands on the model API.** The Sheet Metal tab (a group of the Solid tab
+  until mitcad#1975)
   (`app/commands/SheetCommands.cpp`, [app/COMMANDS.md](../app/COMMANDS.md#sheet-metal))
   has Sheet Rules, Edit Sheet Rules, Face, Flange, Bend, Fold, Corner Relief,
   Corner Round, Corner Chamfer, Sheet Cut, Unfold, Refold, Flat Pattern and
   Show Flat Pattern, in that order and in sections (mitcad#1778); Export Flat
-  Pattern is on the Make tab. It keeps no sheet model: picks
+  Pattern is on the Laser tab. It keeps no sheet model: picks
   are faces and edges named by their domains, which the `sheet_reference`
   query turns into panels, bends, boundaries and corners (`at` chooses among
   pieces of one curve, and between panels whose coplanar caps the kernel
@@ -1141,15 +1142,35 @@ sheets unfold, refold and have a Flat Pattern:
   it and must lie in that plane, its edge along the bend running the whole
   bend. The rules' thickness always governs: MitCad's sheet state has one
   thickness, its rules'; an import makes rules of the thickness its file
-  measured. Not supported, each refused with the edge or face: faces that
-  meet at an edge that is no bend (corners that would have to be cut open
-  with a gap), loops of bends, curved faces, chamfers or rolled bends
-  picked as bends, faces ending at an angle to their bend. CLI
-  `sheet_convert`: a 40 x 20 x 2 plate (1600, a 3 thick one refused), an
-  L of 2 thick walls bent at its outer edge (`6000 + 200 pi`, radius 1:
-  `6400 + 100 pi`), a solid block becoming a U channel (`3600 + 240 pi`,
-  flat `30 (60 + 3.6 pi)`), the corner and the unconnected bend refused,
-  reopened.
+  measured. Every other edge between two panels is a rip (mitcad#1949):
+  the panels are cut apart there with the corners of a flange on several
+  edges (mitcad#1872): the bisecting plane of the two faces with half the
+  corner gap (default the thickness) each way, or one face running on to
+  the other's far surface (earlier or later in the order the faces are
+  reached), cut normal to the sheet where the plane meets the surface that
+  reaches further. The bends at a rip's ends end square where all their
+  material clears that plane; the panel before such a bend is cut back to
+  its tangent line beside it (a corner relief). A bend runs only as far
+  as both faces reach its tangent lines, so a wall whose ends are not
+  square to its bend (a vertical side wall on an inclined base) converts,
+  running past the bend at one end and short of the edge's end at the
+  other. All panels are placed first, from the faces as the body has
+  them; then cut at the rips, then back to their bends' tangent lines;
+  the bends are made last, between the cut panels. Not supported, each
+  refused with the edge or face: loops of bends (leave an edge out of the
+  bends to rip it open), curved faces, chamfers or rolled bends picked as
+  bends, a rip that cuts a face away whole. CLI `sheet_convert`: a 40 x
+  20 x 2 plate (1600, a 3 thick one refused), an L of 2 thick walls bent
+  at its outer edge (`6000 + 200 pi`, radius 1: `6400 + 100 pi`), a solid
+  block becoming a U channel (`3600 + 240 pi`, flat `30 (60 + 3.6 pi)`),
+  then an L with a rip, the unconnected bend refused, reopened. CLI
+  `sheet_convert_tray`: a level tray from a 60 x 40 x 20 box (walls `2 +
+  sqrt 2` and bends `5 + sqrt 2` short of each corner, flat `4260 - 120
+  sqrt 2 + 1.8 pi (160 - 8 sqrt 2)`), picked rips, the rip refusals, and
+  an inclined tray (the base rising 6 over 60, vertical walls, a level
+  rim) with its flat pattern. The panel is Convert to Sheet Metal in the
+  SHEET METAL group (`app/COMMANDS.md`); UI test
+  `tools/ui-sheet-convert-test.sh`.
 - **Perforate** (`sheet/folded/perforate.rs`). The holes are real: cut
   through the material as a developed cut with every bend open, so the
   body, the Flat Pattern, the DXF (`CUT_INNER` circles) and every measure

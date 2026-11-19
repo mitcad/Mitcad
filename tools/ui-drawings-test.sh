@@ -702,7 +702,7 @@ ui_step "end the tool (Esc)"               ui_key Escape
 ui_expect_new "Drawing tool: selection" "back to the selection"
 no_refusal
 ui_mark
-ui_step "Hole Table"                       ui_click_logged "Drawing tool Hole Table"
+ui_step "Hole Table"                       ui_drawing_tool "Hole Table" DRAWING/TABLES
 ui_expect_new "Drawing tool: Hole Table" "the hole table tool is on"
 ui_expect_new "Drawing hint: Click the view whose holes the table lists" "its hint"
 ui_step "the top view"                     ui_click_logged "Drawing view 5"
@@ -809,7 +809,7 @@ ui_mark
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
 # Solid and Build back, Solid shown, as before the drawing (mitcad#1008).
-ui_expect_new "Ribbon tabs: START, SOLID, BUILD, MAKE (shown SOLID)" "the model's tabs back, the one it was opened from shown"
+ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)" "the model's tabs back, the one it was opened from shown"
 ui_mark
 ui_step "edit Extrude1 (double-click)"     ui_double_click_logged "Timeline Extrude1"
 ui_expect_new " with Extrude" "editing Extrude1"
@@ -843,7 +843,7 @@ ui_step "choose Suppress Features"         ui_menu_choose "Suppress Features"
 ui_expect_new "Suppressed Extrude2" "the hole suppressed"
 # Opened from the Build tab, the drawing closes back to it (mitcad#1008).
 ui_mark
-ui_step "the Build tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the Build tab"                    ui_click_tab "BUILD"
 ui_expect_new "Ribbon BUILD/PROFILE at" "the Build tab shown"
 ui_mark
 ui_step "open Drawing1 (double-click)"     ui_double_click_logged "Browser Root/Drawings/Drawing1"
@@ -861,7 +861,7 @@ echo "--- Saved and opened again"
 ui_mark
 ui_step "back to the model (Close Drawing)" ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "closed"
-ui_expect_new "Ribbon tabs: START, SOLID, BUILD, MAKE (shown BUILD)" "back on the Build tab it was opened from"
+ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)" "back on the Build tab it was opened from"
 ui_focus_main
 ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_log "Saved $FILE" "saved"
@@ -980,7 +980,12 @@ EOF
   { cat "$WORK/cli.log"; ui_fail "mitcad-cli (the assembly)"; }
 ui_stop_app
 # The assembly's part runs in the Floating layout (mitcad#725): the
-# drawing shows the same inside the cards over the 3D view.
+# drawing shows the same inside the cards over the 3D view. Without labels
+# under the toolbar's icons, which the Floating toolbar panel shows by
+# default (mitcad#1990). Even so the DRAWING tab's groups at the right of
+# its Sheet group (mitcad#1990), the tables' tools among them, fold at
+# 1280 px: ui_drawing_tool takes a tool from its group's menu then.
+ui_icons_only
 ui_start_app --open "$ASSEMBLY" --no-native-dialogs --chrome=floating
 ui_expect_log "assembly.mitcad" "the assembly opened"
 ui_expect_log "Browser Root/Component1:2 at" "the browser lists Component1's second placement"
@@ -991,14 +996,16 @@ ui_focus_dialog '^Create Drawing$'
 ui_step "OK"                               ui_key Return
 ui_focus_main
 ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "its sheet over the view"
-ui_expect_new "Drawing tool Bill of Materials at" "the tables' tools on the ribbon"
+ui_expect_new "Ribbon DRAWING/TABLES at" "the tables' group on the ribbon"
 ui_expect_new "Drawing tool: Base View" "Base View on for the new drawing"
 # In the Floating layout too (mitcad#1008): the DRAWING tab's group cards,
-# the sheet over the whole view, of the cards only the browser's.
+# the sheet over the whole view, of the cards only the Drawings card
+# (mitcad#1990: the design's drawings in place of the model's Browser).
 ui_expect_new "Ribbon tabs: DRAWING (shown DRAWING)" "the DRAWING tab alone"
 area_is_view
 floating_cards without timelineDock
-floating_cards with browserDock
+floating_cards with drawingsDock
+floating_cards without browserDock
 floating_cards with ribbonGroup_DRAWING/CLOSE_DRAWING
 ui_mark
 ui_step "click the sheet at 120, 120"      sheet_click 120 120
@@ -1008,8 +1015,8 @@ ui_step "end the tool (Esc)"               ui_key Escape
 ui_expect_new "Drawing tool: selection" "back to the selection"
 # A parts list places its balloons, on by default (mitcad#725).
 ui_mark
-settled "Drawing tool Bill of Materials"
-ui_step "Bill of Materials"                       ui_click_logged "Drawing tool Bill of Materials"
+settled "Ribbon DRAWING/TABLES"
+ui_step "Bill of Materials"                       ui_drawing_tool "Bill of Materials" DRAWING/TABLES
 ui_expect_new "Drawing tool: Bill of Materials" "the parts list tool is on"
 ui_expect_new "Drawing panel drawingOption_balloons at" "its Balloons option"
 ui_step "the front view"                   ui_click_logged "Drawing view 1"
@@ -1025,8 +1032,8 @@ ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
 ui_expect_new "Drawing annotations drawn: none" "the list and its balloons gone in one step"
 # Without them, the balloon placed by hand.
 ui_mark
-settled "Drawing tool Bill of Materials"
-ui_step "Bill of Materials again"                 ui_click_logged "Drawing tool Bill of Materials"
+settled "Ribbon DRAWING/TABLES"
+ui_step "Bill of Materials again"                 ui_drawing_tool "Bill of Materials" DRAWING/TABLES
 ui_expect_new "Drawing tool: Bill of Materials" "the parts list tool is on"
 settled "Drawing panel drawingOption_balloons"
 ui_step "Balloons off"                     ui_click_logged "Drawing panel drawingOption_balloons"
@@ -1039,8 +1046,8 @@ ui_expect_new "1 = 1 Component1 x2; 2 Component2 x1" "sorted, numbered and count
 grep -q '"balloons":true' <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "balloons asked for with the option off"
 no_refusal
 ui_mark
-settled "Drawing tool Balloon"
-ui_step "Balloon"                          ui_click_logged "Drawing tool Balloon"
+settled "Ribbon DRAWING/TABLES"
+ui_step "Balloon"                          ui_drawing_tool "Balloon" DRAWING/TABLES
 ui_expect_new "Drawing tool: Balloon" "the balloon tool is on"
 ui_step "Component1:2's right side"        sheet_click 154.8 117.5
 ui_expect_new "Drawing picked line (1)" "its edge picked"
@@ -1119,9 +1126,12 @@ ui_mark
 settled "Drawing Close Drawing"
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
-# The model's tabs and the cards back (mitcad#1008).
-ui_expect_new "Ribbon tabs: START, SOLID, BUILD, MAKE (shown SOLID)" "Solid and Build back"
+# The model's tabs and the cards back (mitcad#1008), the Browser's in place
+# of the Drawings card (mitcad#1990).
+ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)" "Solid and Build back"
 floating_cards with timelineDock
+floating_cards with browserDock
+floating_cards without drawingsDock
 ui_focus_main
 ui_mark
 ui_step "Export Drawing (search)"          ui_command "Export Drawing"
@@ -1143,8 +1153,8 @@ ui_mark
 ui_step "open Drawing2 (double-click)"     ui_double_click_logged "Browser Root/Drawings/Drawing2"
 ui_expect_new "Drawing opened: D2 Drawing2" "the drawing the export made"
 ui_mark
-settled "Drawing tool Text"
-ui_step "Text"                             ui_click_logged "Drawing tool Text"
+settled "Ribbon DRAWING/TEXT"
+ui_step "Text"                             ui_drawing_tool "Text" DRAWING/TEXT
 ui_expect_new "Drawing tool: Text" "the text tool is on"
 settled "Drawing panel drawingOption_text"
 ui_step "its text"                         ui_click_logged "Drawing panel drawingOption_text"

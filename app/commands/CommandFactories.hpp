@@ -169,4 +169,16 @@ CommandDef fillCavityCommand(const CommandContext& context);
 // FlexCommands.cpp (mitcad#1713): a flexible item laid through the model.
 CommandDef flexCommand(const CommandContext& context, DocumentHost& host);
 
+// PanelizeCommands.cpp (mitcad#2005): a body's planar faces split off as
+// panels of one thickness, step by step.
+CommandDef panelizeCommand(const CommandContext& context);
+// MeshToolsCommands.cpp (mitcad#1871): mesh tools for reverse engineering,
+// the sections of a mesh body into sketches and the mesh edits.
+CommandDef meshSectionCommand(const CommandContext& context);
+CommandDef meshRepairCommand(const CommandContext& context);
+CommandDef meshDecimateCommand(const CommandContext& context);
+CommandDef meshRemoveCommand(const CommandContext& context);
+CommandDef meshSegmentCommand(const CommandContext& context);
+CommandDef meshFitSurfaceCommand(const CommandContext& context);
+
 } // namespace mitcad::cmd

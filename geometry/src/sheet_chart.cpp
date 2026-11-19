@@ -155,8 +155,11 @@ Embedding make_embedding(const SheetPatch& patch, double thickness) {
     detail::require_positive("sheet neutral radius", c.neutral_radius);
     detail::require_positive("sheet bend angle", c.angle_extent);
     // A flange's bend may turn past 180 degrees, short of a full turn (a hem, mitcad#1378).
-    if (c.neutral_radius < c.inside_radius || c.neutral_radius > c.inside_radius + thickness ||
-        c.angle_extent >= 2 * kPi - kAngularTolerance || std::abs(c.axis.Dot(c.radial_start)) > kAngularTolerance ||
+    // The neutral radius only scales the chart's u to the angle (u / neutral radius): a
+    // measured allowance or deduction of a fold (mitcad#1939: a nearly sharp crease in board)
+    // may put it outside the material, beyond K = 1 or below K = 0, so any positive radius is
+    // taken.
+    if (c.angle_extent >= 2 * kPi - kAngularTolerance || std::abs(c.axis.Dot(c.radial_start)) > kAngularTolerance ||
         std::abs(c.axis.Dot(c.angular_direction)) > kAngularTolerance ||
         std::abs(c.radial_start.Dot(c.angular_direction)) > kAngularTolerance) {
       throw std::invalid_argument("invalid sheet cylinder radius, angle or orthogonal basis");

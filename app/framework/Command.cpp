@@ -329,13 +329,13 @@ int CommandDef::inputIndex(const QString& inputId) const {
 
 const InputDef* CommandDef::primarySelection() const {
   for (const InputDef& input : inputs) {
-    if (input.type == InputDef::Type::Selection) {
+    if (input.type == InputDef::Type::Selection && !input.notPrimary) {
       return &input;
     }
     if (input.type == InputDef::Type::List) {
       // The first row's (a fillet's first set of edges).
       for (const InputDef& child : input.children) {
-        if (child.type == InputDef::Type::Selection) {
+        if (child.type == InputDef::Type::Selection && !child.notPrimary) {
           return &child;
         }
       }
@@ -387,7 +387,7 @@ CommandState CommandDef::initialState() const {
   return state;
 }
 
-bool CommandDef::completedBy(const Selection& selection) const {
+bool CommandDef::completedBy(const Selection& selection, bool creation) const {
   const InputDef* first = primarySelection();
   const int count = static_cast<int>(selection.size());
   if (first == nullptr || count == 0 || count < first->min || (first->max > 0 && count > first->max) ||
@@ -426,7 +426,7 @@ bool CommandDef::completedBy(const Selection& selection) const {
   const bool places = first->places || std::any_of(selection.begin(), selection.end(), [](const SelectionItem& item) {
     return item.kind == SelectKind::Face || item.kind == SelectKind::Plane;
   });
-  return !(group == QStringLiteral("CREATE") && places);
+  return !(creation && places);
 }
 
 } // namespace mitcad

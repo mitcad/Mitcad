@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MIT
+# The Manage tab's Recompute All, Units… and Plastic Rules (mitcad#1982),
+# each run from its group's menu on the MANAGE tab, on
+# tools/ui-scripts/manage-commands.json (two boxes):
+#   1. Manage › Design › Recompute All: both features computed again, no
+#      undo step (nothing measured changed).
+#   2. Manage › Design › Units…: the design's units offered, millimeters
+#      first, as the browser's Change Active Units offers them; Esc keeps
+#      them.
+#   3. Manage › Rules › Plastic Rules: Plastic Feature opens on its Plastic
+#      Rule type; OK adds the rule, one undo step, which Undo takes back.
+# Run by tools/ui-manage-commands-test.sh (Linux),
+# tools/ui-windows-manage-commands-test.ps1 (Windows) and
+# tools/ui-macos-manage-commands-test.sh (macOS).
+wait-idle
+focus-main
+capture-undo-depth baseline
+# MANAGE is the Design workspace's (nothing to choose where every tab is
+# in sight).
+workspace DESIGN
+wait-idle
+expect-ever '^Ribbon tab MANAGE at ' 30
+
+mark
+click-logged '^Ribbon tab MANAGE at '
+wait-log '^Ribbon tab shown: MANAGE$'
+wait-log '^Ribbon MANAGE/DESIGN at '
+wait-idle
+
+# 1. Recompute All.
+mark
+click-logged '^Ribbon MANAGE/DESIGN at '
+wait-log '^Ribbon menu MANAGE/DESIGN: Recompute All \| Units'
+popup 'Recompute All'
+wait-log '^Recompute All: 2 features, no undo step$'
+wait-log '^Recomputed 2 feature'
+expect-no-log '^Recompute failed'
+expect-undo-depth ${baseline} 0
+wait-idle
+
+# 2. Units…: the units dialog, kept as it was.
+mark
+click-logged '^Ribbon MANAGE/DESIGN at '
+wait-log '^Ribbon menu MANAGE/DESIGN: '
+popup 'Units*'
+wait-log '^Units dialog opened: mm \(mm \| cm \| m \| in \| ft\)$'
+focus-dialog '^Units$'
+key Escape
+focus-main
+expect-no-log '^Units: '
+expect-undo-depth ${baseline} 0
+wait-idle
+
+# 3. Plastic Rules: Plastic Feature on its Plastic Rule type.
+mark
+click-logged '^Ribbon MANAGE/RULES at '
+wait-log '^Ribbon menu MANAGE/RULES: .*\bPlastic Rules$'
+popup 'Plastic Rules'
+wait-log '^Command Plastic Feature started'
+wait-log '^Plastic Rules: Plastic Feature on its Plastic Rule type$'
+expect-choice-text type '^Plastic Rule$'
+wait-idle
+key Return
+wait-log '^Added plastic feature \(Plastic Rule\)$'
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-undo-depth ${baseline} 0
+wait-idle

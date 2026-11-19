@@ -56,6 +56,8 @@ const QVector<ActivatingCommand>& activatingCommands() {
       {QStringLiteral("solid.torus"), {QStringLiteral("at")}},
       // Fill Cavity (mitcad#1818): the body it fills and its seed face.
       {QStringLiteral("solid.fill_cavity"), {QStringLiteral("body"), QStringLiteral("seed")}},
+      // Panelize (mitcad#2005): the faces it splits off.
+      {QStringLiteral("solid.panelize"), {QStringLiteral("faces")}},
   };
   return table;
 }

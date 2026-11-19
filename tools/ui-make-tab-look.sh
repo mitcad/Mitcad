@@ -69,8 +69,8 @@ picture() {
   ui_expect_log "make-$layout-$theme.mitcad" "$layout, $theme: the design opened"
   ui_step "fit (F6)"                       ui_key F6
   ui_mark
-  ui_step "the Make tab"                   ui_click_logged "Ribbon tab MAKE"
-  ui_expect_new "Ribbon MAKE/LASER at" "$layout, $theme: the Make tab's groups"
+  ui_step "the 3D Print tab"               ui_click_tab "MAKE_PRINT"
+  ui_expect_new "Ribbon MAKE_PRINT/PRINTERS at" "$layout, $theme: the 3D Print tab's groups"
   ui_expect_new "Browser Make markers: Root/Bodies/Body2: Own print settings: " "Body2 marked"
   ui_mark
   ui_step "select Body2"                   ui_click_logged "Browser Root/Bodies/Body2"
@@ -78,8 +78,8 @@ picture() {
   ui_expect_new "Make card value perimeters at" "its fields placed"
   shot "$name"
   ui_mark
-  ui_step "the Annotate menu"              ui_click_logged "Ribbon MAKE/ANNOTATE"
-  ui_expect_new "Ribbon menu MAKE/ANNOTATE: " "the menu open"
+  ui_step "the Annotate menu"              ui_click_logged "Ribbon MAKE_PRINT/ANNOTATE"
+  ui_expect_new "Ribbon menu MAKE_PRINT/ANNOTATE: " "the menu open"
   ui_sync
   sleep 1
   ui_capture "$DIR/$name-menu.png"

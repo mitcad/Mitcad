@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/sketch app/OcctViewer.cpp app/OcctViewer.hpp app/view app/MainWindow.cpp tools/cli
-# check-all sources: app/framework/FloatingLayout.cpp
+# check-all sources: app/framework/FloatingLayout.cpp app/framework/TestDriver.cpp
+# check-all sources: tools/ui-scripts/sketch-halo-face.mitcad-ui tools/ui-scripts/sketch-halo-face.json
 # check-all sources: core/model-api/src/sketch.rs core/model/src/features/sketch.rs core/sketch/src/def.rs
 # How sketch mode shows its geometry, through the real UI:
 #   - A sketch on XY: its origin is the design's (mitcad#254).
@@ -23,8 +24,12 @@
 #     fully constrained circle and a centre line on the face, a circle
 #     beside the block. In the dark theme the lines on the face are light
 #     with dark pixels of their halo beside them, in the light theme dark
-#     with white ones; the circle over the empty background shows in both
-#     (pixels of a screen dump; mitcad#302). Every background change also
+#     with no light fringe over the default body (mitcad#2034); the circle
+#     over the empty background shows in both (pixels of a screen dump;
+#     mitcad#302). The same with the body black (the shared script
+#     sketch-halo-face.mitcad-ui): in the light theme the lines on the face
+#     are over white pixels of their halo, and the halos follow the body's
+#     and the face's appearances and their undo (mitcad#2034). Every background change also
 #     restyles the halos ("Sketch halos:"). A free line on the face with a
 #     driven length dimension: its dimension line on the face is a row in
 #     the line's own tone between rows of its halo, dark ones in the dark
@@ -95,10 +100,17 @@ expect_recoloured() {
   [ -n "$count" ] && [ "$count" -ge 4 ] ||
     ui_fail "$1 background: '$count' fully constrained entities recoloured, expected 4 or more"
   echo "ok   $count fully constrained entities recoloured for the $1 background"
-  # Their halos took the background's tone too (mitcad#302).
-  count=$(grep "Sketch halos: " "$UI_LOG" | tail -1 | sed -n "s/.*Sketch halos: \([0-9]*\) $1\$/\1/p")
-  [ -n "$count" ] && [ "$count" -ge 4 ] ||
-    ui_fail "$1 background: the last halos are '$(grep "Sketch halos: " "$UI_LOG" | tail -1)'"
+  # Their halos took the background's tone too (mitcad#302) on a dark
+  # background; on a light one a sketch on an origin plane has none
+  # (mitcad#2034: only over a dark face).
+  count=$(grep "^Sketch halos: " "$UI_LOG" | tail -1 | sed -n "s/.*Sketch halos: \([0-9]*\) $1\$/\1/p")
+  if [ "$1" = dark ]; then
+    [ -n "$count" ] && [ "$count" -ge 4 ] ||
+      ui_fail "$1 background: the last halos are '$(grep "^Sketch halos: " "$UI_LOG" | tail -1)'"
+  else
+    [ "$count" = 0 ] ||
+      ui_fail "$1 background: the last halos are '$(grep "^Sketch halos: " "$UI_LOG" | tail -1)', expected none"
+  fi
   echo "ok   $count halos for the $1 background"
 }
 
@@ -274,11 +286,11 @@ ui_sync
 # says so.
 expect_halos() {
   for _ in $(seq 1 30); do
-    [ "$(grep "Sketch halos: " "$UI_LOG" | tail -1 | sed 's/.*Sketch halos: //')" = "$1" ] &&
+    [ "$(grep "^Sketch halos: " "$UI_LOG" | tail -1 | sed 's/.*Sketch halos: //')" = "$1" ] &&
       { echo "ok   halos: $1"; return; }
     sleep 0.2
   done
-  ui_fail "halos: the last line is '$(grep "Sketch halos: " "$UI_LOG" | tail -1)', expected '$1'"
+  ui_fail "halos: the last line is '$(grep "^Sketch halos: " "$UI_LOG" | tail -1)', expected '$1'"
 }
 
 # expect_dimension_halos dark|light: within six seconds the last "Sketch
@@ -381,16 +393,19 @@ check dark "L >= 2" "the circle over the dark background is light"
 expect_dimension_halos dark
 line_in_halo dark -16 16 "$DIMENSION" "l >= 140" "l <= 70" "the dimension line on the face"
 
+# On a light background the dark lines over the default body have no halo
+# (mitcad#2034): no white fringe beside them, the face's own light grey
+# (about 223) up to the line.
 ui_step "light background (search)"      ui_command "Light Background"
-expect_halos "3 light"
+expect_halos "0 light"
 ui_sync
 sleep 1
 xwd -root -silent > "$WORK/light.xwd" || ui_fail "no screenshot"
 [ -z "$SHOT" ] || convert "$WORK/light.xwd" "${SHOT%.png}-face-light.png"
 region light 18 0 "$ACROSS" "light: the circle on the face"
-check light "MIN <= 110 && W >= 2" "the circle on the face is dark over a light halo"
+check light "MIN <= 110 && W == 0" "the circle on the face is dark, without a light fringe"
 region light -10 -12 "$ALONG" "light: the centre line on the face"
-check light "W >= 2 && MIN <= 160" "the centre line on the face is darker over a light halo"
+check light "W == 0 && MIN <= 160" "the centre line on the face is darker, without a light fringe"
 region light 58 0 "$ACROSS" "light: the circle beside the block"
 check light "MIN <= 110" "the circle over the light background is dark"
 # The driven dimension's line on the face (about 117, the driven grey
@@ -398,6 +413,40 @@ check light "MIN <= 110" "the circle over the light background is dark"
 # face's light grey (about 223).
 expect_dimension_halos light
 line_in_halo light -16 16 "$DIMENSION" "l <= 150" "l >= 240" "the dimension line on the face"
+
+echo "--- Over a dark body on a light background: the halo, as the appearances change (mitcad#2034)"
+# The shared driver script (tools/ui-scripts/sketch-halo-face.mitcad-ui, as
+# the Windows and macOS tests run it) on the same block and sketch: the
+# halos from the log as the body's and the face's appearances change; it
+# ends with the body black, the background light and the sketch edited,
+# where the pixels are read.
+ui_stop_app
+"$CLI" run "$(dirname "$0")/ui-scripts/sketch-halo-face.json" --save "$WORK/halo-face.mitcad" > "$WORK/cli.log" 2>&1 ||
+  { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
+{ cat "$(dirname "$0")/ui-scripts/sketch-halo-face.mitcad-ui"; echo stay; } > "$WORK/halo-face.mitcad-ui"
+MITCAD_TEST_INPUT=$WORK/halo-face.mitcad-ui ui_start_app --open "$WORK/halo-face.mitcad"
+UI_MARK=0
+for _ in $(seq 1 300); do
+  grep -q '^TestDriver: \(done\|FAIL\)' "$UI_LOG" && break
+  kill -0 "$UI_RUNNER" 2> /dev/null || break
+  sleep 0.2
+done
+grep -q '^TestDriver: done' "$UI_LOG" ||
+  ui_fail "the halo script failed: $(grep -m1 'TestDriver: FAIL' "$UI_LOG")"
+echo "ok   the halos follow the background and the face's and body's appearances"
+ui_wait_idle
+expect_halos "3 light"
+ui_sync
+sleep 1
+xwd -root -silent > "$WORK/dark-body.xwd" || ui_fail "no screenshot"
+[ -z "$SHOT" ] || convert "$WORK/dark-body.xwd" "${SHOT%.png}-face-dark-body.png"
+region dark-body 18 0 "$ACROSS" "dark body: the circle on the face"
+# The black face (about 40) and the dark line: light pixels come only from
+# the halo, a pixel and a half on each side of the line, which the multisampling
+# may spread over two.
+check dark-body "MIN <= 110 && L >= 2" "the circle on the black face is dark over a light halo"
+region dark-body -10 -12 "$ALONG" "dark body: the centre line on the face"
+check dark-body "L >= 2" "the centre line on the black face is over a light halo"
 
 echo "--- New sketches open with the design's Z up (mitcad#692)"
 # A 40 x 30 x 20 block behind the origin as the isometric view sees it

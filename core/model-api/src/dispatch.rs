@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 34];
+    fn command_families() -> [CommandFamily<K>; 35];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 34] {
+    fn command_families() -> [CommandFamily<K>; 35] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -407,6 +407,14 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                     doc.run_convert_command(parse(value, "command")?)
                 },
             },
+            // Mesh tools for reverse engineering (mitcad#1871, `mesh_tools.rs`).
+            CommandFamily {
+                names: super::mesh_tools::MeshCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    doc.run_mesh_command(parse(value, "command")?)
+                },
+            },
         ]
     }
 }
@@ -547,7 +555,7 @@ mod tests {
             ),
             "{error}"
         );
-        assert!(error.ends_with("`set_body_folder`"), "{error}");
+        assert!(error.ends_with("`add_glue_flap`"), "{error}");
         let error = doc
             .command(r#"{"cmd": "sketch.fly"}"#)
             .unwrap_err()

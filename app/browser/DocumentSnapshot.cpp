@@ -173,12 +173,13 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   snapshot.showOrigins = show.value(QStringLiteral("origins")).toBool(true);
   snapshot.showConstruction = show.value(QStringLiteral("construction")).toBool(true);
   snapshot.showSketches = show.value(QStringLiteral("sketches")).toBool(true);
-  // The folders the components' own eyes hide (mitcad#1771).
+  // The folders the components' own eyes hide (mitcad#1771); the root's
+  // Annotations folder among them (mitcad#2041).
   const QJsonObject folders = display.value(QStringLiteral("folders")).toObject();
   for (auto entry = folders.begin(); entry != folders.end(); ++entry) {
     const QJsonObject shown = entry.value().toObject();
     QVector<Folder> hidden;
-    for (const Folder folder : {Folder::Bodies, Folder::Sketches, Folder::Construction}) {
+    for (const Folder folder : {Folder::Bodies, Folder::Sketches, Folder::Construction, Folder::Annotations}) {
       if (!shown.value(folderKey(folder)).toBool(true)) {
         hidden.append(folder);
       }
@@ -420,6 +421,8 @@ QString DocumentSnapshot::folderKey(Folder folder) {
     return QStringLiteral("sketches");
   case Folder::Construction:
     return QStringLiteral("construction");
+  case Folder::Annotations:
+    return QStringLiteral("annotations");
   }
   return QString();
 }
@@ -770,6 +773,7 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("sheet_refold"), QStringLiteral("sheet-refold")},
       {QStringLiteral("sheet_cut"), QStringLiteral("sheet-cut")},
       {QStringLiteral("sheet_corner_relief"), QStringLiteral("sheet-corner-relief")},
+      {QStringLiteral("sheet_convert"), QStringLiteral("sheet-convert")},
       // Motion links (mitcad#466).
       {QStringLiteral("motion_link"), QStringLiteral("motion-link")},
       // Emboss (mitcad#458).
@@ -812,6 +816,8 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("fill_cavity"), QStringLiteral("fill-cavity")},
       // Flex (mitcad#1713): a wire, cable, hose or strip.
       {QStringLiteral("flex"), QStringLiteral("flex")},
+      // Panelize (mitcad#2005).
+      {QStringLiteral("panelize"), QStringLiteral("panelize")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

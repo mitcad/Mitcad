@@ -883,8 +883,6 @@ CommandDef flexCommand(const CommandContext& /*context*/, DocumentHost& host) {
   def.name = QObject::tr("Flex");
   def.icon = QStringLiteral("flex");
   def.tooltip = QObject::tr("Lays a wire, cable, hose or strip through the model by clicks");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("flex");
   def.keywords = {QStringLiteral("wire"),  QStringLiteral("cable"),   QStringLiteral("hose"),
                   QStringLiteral("tube"),  QStringLiteral("cord"),    QStringLiteral("harness"),
                   QStringLiteral("strip"), QStringLiteral("ribbon"),  QStringLiteral("belt")};

@@ -109,6 +109,7 @@ pub fn library_material(
         library.trim().to_owned()
     };
     Some(Material {
+        sheet_process: None,
         id: id_of(&name),
         name,
         density,

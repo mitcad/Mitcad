@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "RibbonFit.hpp"
 
+#include <algorithm>
 #include <cstddef>
 
 namespace mitcad {
@@ -20,7 +21,20 @@ RibbonFit fitRibbonGroups(const std::vector<RibbonFitGroup>& groups, int fixed, 
       total += widths[i];
     }
   }
-  for (std::size_t i = count; i-- > 0 && total > available;) {
+  // The groups in their turn to fold: the highest rank first, of equal
+  // ranks the rightmost.
+  std::vector<std::size_t> turns(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    turns[i] = i;
+  }
+  const auto rankOf = [&groups](std::size_t i) {
+    return groups[i].rank >= 0 ? groups[i].rank : static_cast<int>(i);
+  };
+  std::stable_sort(turns.begin(), turns.end(), [&rankOf](std::size_t a, std::size_t b) {
+    return rankOf(a) > rankOf(b) || (rankOf(a) == rankOf(b) && a > b);
+  });
+  for (std::size_t turn = 0; turn < count && total > available; ++turn) {
+    const std::size_t i = turns[turn];
     const RibbonFitGroup& group = groups[i];
     if (!group.collapsible || group.widths.empty()) {
       continue;

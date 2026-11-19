@@ -18,13 +18,32 @@
 #include <QRectF>
 #include <QSize>
 
+#include "../framework/UiSizes.hpp"
+
 class QPainter;
 
 namespace mitcad::start {
 
+// The backdrop is a card (docs/ui-conventions.md "Corners"): every card's
+// radius, on all four corners (mitcad#1990).
+inline constexpr int kBackdropRadius = kCardRadius;
+// The room the page's content keeps inside the backdrop. The content paints
+// no page of its own (the backdrop's surface shows through it), and its
+// rectangle stays within the backdrop's rounding (contentInsideRounding), so
+// that no square corner shows inside the rounded one (mitcad#1990).
+inline constexpr int kContentPadding = 8;
+
+// True when a rectangle `padding` inside a rounded rectangle of `radius`
+// keeps its square corners within the rounding.
+constexpr bool contentInsideRounding(int radius, int padding) {
+  return padding >= radius || 2 * (radius - padding) * (radius - padding) <= radius * radius;
+}
+static_assert(contentInsideRounding(kBackdropRadius, kContentPadding),
+              "the Start page's content would show square corners inside the backdrop's");
+
 // What the page paints.
 struct Backdrop {
-  QColor fill;        // the backdrop's surface (the palette's window colour)
+  QColor fill;        // the backdrop's surface: the cards' (the palette's Window), opaque
   QColor border;      // a hairline round it
   QColor viewTop;     // the view's background at its top
   QColor viewBottom;  // and at its bottom (the same for one colour)

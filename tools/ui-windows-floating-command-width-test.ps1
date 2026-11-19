@@ -24,7 +24,9 @@ $env:MITCAD_TEST_STEP_MS = '100'
 # The sizes alone: no scale factor of the environment's.
 Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
 Remove-Item Env:MITCAD_USER_QT_SCALE_FACTOR -ErrorAction SilentlyContinue
-Set-Content -Encoding ascii $ini @('[appearance]', 'textSize=200', 'iconSize=200')
+# Icons only: the toolbar panel without its labels (mitcad#1990), as the
+# script's steps were laid out.
+Set-Content -Encoding ascii $ini @('[appearance]', 'textSize=200', 'iconSize=200', 'ribbonLabels=icons')
 
 $name = 'Floating, text and icons 200%'
 $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/floating-command-width.mitcad-ui'

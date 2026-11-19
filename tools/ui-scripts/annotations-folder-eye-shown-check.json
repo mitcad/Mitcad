@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Saved by the UI after the Annotations folder's eye showed it again (mitcad#2041): every annotation's own light bulb as it was, Offset2 still hidden."},
+  {"expect": {"query": {"query": "annotations"},
+    "result": [{"name": "Offset1", "visible": true}, {"name": "Offset2", "visible": false},
+               {"name": "Offset3", "visible": true}]}}
+]

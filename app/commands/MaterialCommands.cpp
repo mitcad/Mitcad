@@ -991,7 +991,6 @@ CommandDef materialCommand(const CommandContext& context) {
   def.name = QObject::tr("Material");
   def.icon = QStringLiteral("material");
   def.tooltip = QObject::tr("Gives bodies, or a component's default, a material");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("material"), QStringLiteral("physical material"), QStringLiteral("density"),
                   QStringLiteral("mass"),     QStringLiteral("filament"),          QStringLiteral("assign")};
   def.modelCommand = true;
@@ -1256,7 +1255,6 @@ CommandDef appearanceCommand(const CommandContext& context) {
   def.name = QObject::tr("Appearance");
   def.icon = QStringLiteral("appearance");
   def.tooltip = QObject::tr("How bodies look");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = QStringList{QStringLiteral("colour"), QStringLiteral("color"), QStringLiteral("paint")};
   def.modelCommand = true;
   const auto cache = std::make_shared<MaterialCache>();

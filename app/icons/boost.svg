@@ -1,0 +1,11 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- MitCad icon: 24 x 24, a rocket climbing to the upper right (Boost development, mitcad#1990); outline only, so that it can be tinted to one colour. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M14.5 4.5 C17 3 19.5 2.8 21 3 C21.2 4.5 21 7 19.5 9.5 L12.5 16.5 L7.5 11.5 Z"/>
+  <circle cx="16.5" cy="7.5" r="1.6"/>
+  <path d="M9.5 9.5 L6 9.2 L3.5 11.8 L7.5 11.5"/>
+  <path d="M14.5 14.5 L14.8 18 L12.2 20.5 L12.5 16.5"/>
+  <path d="M8 16 L4.5 19.5"/>
+  <path d="M6.2 13.8 L3.8 16.2"/>
+  <path d="M10.2 17.8 L7.8 20.2"/>
+</svg>

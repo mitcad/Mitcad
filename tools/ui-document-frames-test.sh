@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/DocumentFrame.cpp app/DocumentFrame.hpp app/WindowManager.cpp app/WindowManager.hpp app/framework/TestDriverDocuments.cpp tools/cli
+# check-all sources: app/framework/TitleBar.cpp
 # check-all sources: tools/ui-scripts/multi-document-frames-script.py
 # Document tabs on Linux (mitcad#1172): the portable document frame's
 # scenario (tools/ui-scripts/multi-document-frames-script.py) in Floating
-# and Docked chrome, then Close All from a tab's context menu. With one
-# design the frame shows no tab bar and lays the window out as a single
+# and Docked chrome, then Close All from a tab's context menu. Docked, with
+# one design the frame shows no tab bar and lays the window out as a single
 # document window; a second design shows the tabs, and they go again when
-# one design is left.
+# one design is left. Floating, the tabs are in the shown design's title
+# row (mitcad#1990), one for each design, the first one too, and the window
+# is laid out as a single document window with any number of them.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-document-frames-test.sh

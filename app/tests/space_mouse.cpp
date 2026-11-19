@@ -35,6 +35,7 @@
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
+#include "platform/SpaceMouseDriverReports.hpp"
 #include "view/SpaceMouseCamera.hpp"
 #include "view/SpaceMouseController.hpp"
 #include "view/SpaceMouseNavigation.hpp"
@@ -1754,10 +1755,42 @@ void deviceButtonTests() {
   qInstallMessageHandler(previous);
 }
 
+void driverReportTests() {
+  using namespace mitcad;
+  using Kind = SiAppDeviceEvent::Kind;
+  std::array<std::int32_t, 11> packet{2, 0, 1, 0, 0, -350, 100, -250, 200, -50, 350};
+  const auto* bytes = reinterpret_cast<const std::byte*>(packet.data());
+  const auto read = [&] { return parseSiAppDeviceEvent(bytes, sizeof(packet)); };
+  CHECK(parseSiAppDeviceEvent(bytes, sizeof(packet) - 1).kind == Kind::Other);
+  const auto motion = read();
+  CHECK(motion.kind == Kind::Motion);
+  const std::array<int, 6> expected{-350, 100, -250, 200, -50, 350};
+  CHECK(motion.axes == expected);
+
+  packet[0] = 1;
+  CHECK(read().kind == Kind::Buttons && read().buttons == 1);
+  packet[0] = 4;
+  CHECK(read().kind == Kind::Rest);
+  packet[0] = 12;
+  packet[1] = 32;
+  CHECK(read().kind == Kind::ButtonDown && read().button == 31);
+  packet[0] = 13;
+  packet[1] = 1;
+  CHECK(read().kind == Kind::ButtonUp && read().button == 0);
+  packet[1] = 0;
+  CHECK(read().kind == Kind::Other);
+  packet[0] = 14;
+  CHECK(read().kind == Kind::DeviceChange);
+
+  const std::array<std::uint16_t, 10> message{9, 17, 65186, 100, 65286, 200, 65486, 350, 16, 0};
+  CHECK(magellanMotion(message) == expected);
+}
+
 } // namespace
 
 int spaceMouseTests() {
   reportTests();
+  driverReportTests();
   splitReportTests();
   rawLogTests();
   rotationMappingTests();

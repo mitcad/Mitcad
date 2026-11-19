@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <unordered_set>
 #include <utility>
@@ -46,6 +47,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -91,6 +93,7 @@
 #include "../sketch/SketchTool.hpp"
 #include "../browser/TimelineWidget.hpp"
 #include "GlassCard.hpp"
+#include "Ribbon.hpp"
 #include "TestSync.hpp"
 #include "HangWatchdog.hpp"
 #include "SessionLog.hpp"
@@ -170,6 +173,9 @@ const StepSpec kSpecs[] = {
     {"capture-model-number", 3, 3, kIdle},
     {"expect-document-cache-sharing", 1, 1, kIdle},
     {"system-window-menu", 1, 1, kInputOfMain},
+#ifdef Q_OS_MACOS
+    {"expect-system-menu-bar", 1, -1, kIdle},
+#endif
     {"expect-document-windows", 1, 1, kIdle},
     {"expect-document-window-gone", 1, 1, kIdle},
     {"expect-document-window-active", 1, 1, kIdle},
@@ -226,6 +232,8 @@ const StepSpec kSpecs[] = {
     {"expect-sketch-field-dimension", 3, 3, kIdle},
     {"expect-sketch-dimension-clear", 1, 1, kIdle},
     {"expect-sketch-dimensions-apart", 1, 1, kIdle},
+    {"expect-sketch-text", 2, 2, kIdle},
+    {"sketch-click-text", 1, 1, kInputOfMain},
     {"sketch-drag", 4, 4, kInputOfMain},
     {"sketch-pointer", 3, 4, kInputOfMain},
     {"expect-profiles", 1, 1, kIdle},
@@ -238,6 +246,11 @@ const StepSpec kSpecs[] = {
     {"menu", 1, 1, kInputOfMain},
     {"menu-now", 1, 1, kPlain},
     {"popup", 1, 1, kInputOfTarget},
+    // A command's row of the open menu made the active one and its row
+    // menu opened by the Menu key's Shift+F10 (the ribbon's group menus,
+    // mitcad#1001, mitcad#1951): `row-menu <command id>`, whichever row the
+    // pointer left over the menu had made active.
+    {"row-menu", 1, 1, kInputOfTarget},
     {"button", 1, 2, kInputOfTarget},
     {"native-click", 1, 1, kInputOfTarget},
     {"native-focus", 1, 1, kInputOfTarget},
@@ -370,6 +383,8 @@ const StepSpec kSpecs[] = {
     {"expect-projects-layout", 1, 1, kIdle},
     {"expect-sketch-finish-layout", 0, 0, kIdle},
     {"expect-ribbon-labels", 1, -1, kIdle},
+    {"workspace", 1, 1, kIdle},
+    {"leave-start-page", 0, 0, kInputOfMain},
     {"expect-tree-rename", 1, 1, kIdle},
     {"native-drag", 2, 2, kInputOfTarget},
     {"expect-native-focus", 1, 2, kIdle},
@@ -1111,6 +1126,17 @@ bool TestDriver::sketchPoint(double x, double y, QPoint& out) const {
 // x0,y0 x1,y1 x2,y2" (the sheet points (0, 0), (100, 0) and (0, 100);
 // mitcad#1841).
 bool TestDriver::drawingSheetPoint(double x, double y, QPoint& out) const {
+  // The unrounded origin and zoom, logged with the rounded points below: a
+  // sheet shown small (a narrow window beside a wide panel) is too few
+  // pixels per 100 mm for those to place a click within a pick's reach.
+  static const QRegularExpression exact(
+      QStringLiteral("^Drawing sheet origin ([-0-9.]+),([-0-9.]+) zoom ([-0-9.]+)"));
+  QRegularExpressionMatch found;
+  if (findLastLine(exact, 0, nullptr, &found) >= 0) {
+    const double zoom = found.captured(3).toDouble();
+    out = QPoint(qRound(found.captured(1).toDouble() + x * zoom), qRound(found.captured(2).toDouble() - y * zoom));
+    return true;
+  }
   static const QRegularExpression view(QStringLiteral(
       "^Drawing sheet view ([-0-9.]+),([-0-9.]+) ([-0-9.]+),([-0-9.]+) ([-0-9.]+),([-0-9.]+)"));
   QRegularExpressionMatch match;
@@ -2046,6 +2072,13 @@ void TestDriver::run(const Step& step) {
       }
       return sum <= total + 1 && (windows.size() > 1 || std::abs(sum - total) <= 1);
     }, 10, QStringLiteral("the actual document caches did not share the process budget"));
+#ifdef Q_OS_MACOS
+  } else if (name == QLatin1String("expect-system-menu-bar")) {
+    const QPointer<DocumentFrame> frame = DocumentFrame::containing(qobject_cast<MainWindow*>(mainWindow));
+    whenReady([this, frame, expected = a] {
+      return frame && mac::systemMenuBarMatches(*frame->menuBar(), expected, m_waitDetail);
+    }, 5, QStringLiteral("the native system menu bar or application roles did not match [%1]").arg(a.join(QStringLiteral(", "))));
+#endif
   } else if (name == QLatin1String("system-window-menu")) {
     const QPointer<QWidget> presenter = mainWindow;
     whenReady([this, presenter, entry = a.at(0)] {
@@ -2333,6 +2366,13 @@ void TestDriver::run(const Step& step) {
       if (mac::test::active()) { return mac::test::textMatches(id, re); }
       QWidget* window = m_main.data();
       const auto* input = window ? window->findChild<QLineEdit*>(id) : nullptr;
+      if (input == nullptr && window != nullptr) {
+        // A text box of several lines (mitcad#2029): its lines joined by \n.
+        if (const auto* lines = window->findChild<QPlainTextEdit*>(id)) {
+          m_waitDetail = QStringLiteral("shown '%1'").arg(lines->toPlainText());
+          return re.match(lines->toPlainText()).hasMatch();
+        }
+      }
       return input && re.match(input->text()).hasMatch();
     }, 6, QStringLiteral("input %1 did not match %2").arg(a.at(0), a.at(1)));
   } else if (name == QLatin1String("expect-choice-text")) {
@@ -5197,7 +5237,7 @@ void TestDriver::run(const Step& step) {
       return;
     }
     const auto at = std::make_shared<QPoint>();
-    const auto editor = std::make_shared<QPointer<QLineEdit>>();
+    const auto editor = std::make_shared<QPointer<QWidget>>();
     whenReady(
         [this, re, at, editor] {
           QString logged;
@@ -5205,7 +5245,11 @@ void TestDriver::run(const Step& step) {
           const auto match = QRegularExpression(QStringLiteral(" input (\\S+) at ")).match(logged);
           if (match.hasMatch() && m_main) {
             const QString name = QStringLiteral("input_") + match.captured(1);
-            auto* input = m_main->findChild<QLineEdit*>(name);
+            QWidget* input = m_main->findChild<QLineEdit*>(name);
+            if (input == nullptr) {
+              // A text box of several lines (mitcad#2029).
+              input = m_main->findChild<QPlainTextEdit*>(name);
+            }
             if (input == nullptr) {
               // A field with a slider before it: the name is the row's (the
               // slider and the field), the editor inside it.
@@ -5277,6 +5321,88 @@ void TestDriver::run(const Step& step) {
     }
     qInfo() << "Sketch dimension readability:" << matched << "matching labels clear of" << glyphs.size()
             << "constraint glyphs; ordinary pick targets retained";
+  } else if (name == QLatin1String("expect-sketch-text")) {
+    // expect-sketch-text <text regex> <lines> (mitcad#2029): the edited
+    // sketch's text whose text (its lines joined by \n) matches was laid
+    // out in that many lines (or fewest-most), and a text wrapped in a
+    // frame lies within the frame's width (its outlines along the frame's
+    // x side, 0.05 mm allowed for the letters' ink). Logged as
+    // "TestDriver: text t3: 2 lines, from 0.31 to 38.20 in a frame 40.00
+    // wide".
+    QRegularExpression re;
+    if (!regex(a.at(0), re)) return;
+    // The lines: a count, or a range "2-3" where a font's widths decide.
+    const QStringList range = a.at(1).split(QLatin1Char('-'));
+    bool counted = false;
+    bool high = true;
+    const int fewest = range.value(0).toInt(&counted);
+    const int most = range.size() == 2 ? range.at(1).toInt(&high) : fewest;
+    if (range.size() > 2 || !counted || !high || most < fewest) {
+      fail(line, QStringLiteral("expect-sketch-text <text regex> <lines, or fewest-most>"));
+      return;
+    }
+    whenReady([this, re, fewest, most] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      auto* controller = window->findChild<sketch::SketchController*>();
+      if (!controller || !controller->isActive()) return false;
+      const sketch::SketchModel& model = controller->model();
+      for (const sketch::TextData& text : model.texts) {
+        if (!re.match(text.text).hasMatch()) continue;
+        QString found = QStringLiteral("text %1: %2 lines").arg(text.id).arg(text.lines);
+        bool inside = true;
+        if (text.wrap && text.frame.size() >= 2) {
+          const sketch::PointData* o = model.point(text.frame.at(0));
+          const sketch::PointData* x = model.point(text.frame.at(1));
+          if (!o || !x) return false;
+          const double width = sketch::dist(o->at, x->at);
+          if (!(width > 0.0)) return false;
+          const sketch::V2 u{(x->at.x - o->at.x) / width, (x->at.y - o->at.y) / width};
+          double lo = std::numeric_limits<double>::infinity();
+          double hi = -std::numeric_limits<double>::infinity();
+          for (const sketch::Curve2& curve : text.outline) {
+            for (const sketch::V2& p : curve.sample(0.05)) {
+              const double along = (p.x - o->at.x) * u.x + (p.y - o->at.y) * u.y;
+              lo = std::min(lo, along);
+              hi = std::max(hi, along);
+            }
+          }
+          found += QStringLiteral(", from %1 to %2 in a frame %3 wide")
+                       .arg(lo, 0, 'f', 2).arg(hi, 0, 'f', 2).arg(width, 0, 'f', 2);
+          inside = lo <= hi && lo >= -0.05 && hi <= width + 0.05;
+        }
+        m_waitDetail = found;
+        if (text.lines < fewest || text.lines > most || !inside) return false;
+        qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(found);
+        return true;
+      }
+      m_waitDetail = QStringLiteral("no text of the sketch matches");
+      return false;
+    }, 6, QStringLiteral("no text matching %1 in %2 lines within its frame").arg(a.at(0), a.at(1)));
+  } else if (name == QLatin1String("sketch-click-text")) {
+    // sketch-click-text <text regex> (mitcad#2029): a click on the outline
+    // of the edited sketch's text whose text matches (the middle of its
+    // first letter's first piece), which picks the text wherever its
+    // lines were laid out.
+    QRegularExpression re;
+    if (!regex(a.at(0), re)) return;
+    const auto at = std::make_shared<QPoint>();
+    whenReady(
+        [this, re, at] {
+          auto* window = qobject_cast<MainWindow*>(m_main.data());
+          if (!window || window->modelBusy()) return false;
+          auto* controller = window->findChild<sketch::SketchController*>();
+          if (!controller || !controller->isActive()) return false;
+          for (const sketch::TextData& text : controller->model().texts) {
+            if (re.match(text.text).hasMatch() && !text.outline.empty()) {
+              const sketch::V2 p = text.outline.front().middle();
+              return sketchPoint(p.x, p.y, *at);
+            }
+          }
+          return false;
+        },
+        6, QStringLiteral("no outline of a text matching %1").arg(a.at(0)),
+        [this, at] { queueClick(*at, Qt::LeftButton, Qt::NoModifier, 1); }, mainWindow);
   } else if (name == QLatin1String("expect-sketch-dimensions-apart")) {
     // The values of the dimensions whose text matches, as drawn, overlap
     // none of the others (mitcad#1673).
@@ -5551,6 +5677,34 @@ void TestDriver::run(const Step& step) {
                 }
               },
               mainWindow);
+  } else if (name == QLatin1String("row-menu")) {
+    const QString id = a.at(0);
+    const auto found = std::make_shared<QPointer<QMenu>>();
+    whenReady(
+        [this, id, found] {
+          auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+          m_waitDetail = popupState();
+          if (menu == nullptr || !menu->isVisible()) {
+            return false;
+          }
+          for (QAction* action : menu->actions()) {
+            if (action->objectName() == QStringLiteral("command_") + id && action->isVisible()) {
+              *found = menu;
+              return true;
+            }
+          }
+          m_waitDetail = QStringLiteral("%1; no row of %2 in it").arg(m_waitDetail, id);
+          return false;
+        },
+        6, QStringLiteral("no row of %1 in an open menu").arg(id),
+        [this, id, found, line] {
+          auto* ribbon = m_main->findChild<Ribbon*>();
+          if (ribbon == nullptr || !ribbon->openRowMenu(found->data(), id)) {
+            fail(line, QStringLiteral("no row menu of %1: the open menu is no group menu with its row").arg(id));
+            return;
+          }
+          qDebug().noquote() << QStringLiteral("TestDriver: row menu of %1").arg(id);
+        });
   } else if (name == QLatin1String("popup")) {
     const QString entry = a.at(0);
     // "Sub/Item" opens the submenu Sub and chooses Item in it (Material ▸
@@ -6102,6 +6256,29 @@ void TestDriver::run(const Step& step) {
     testSketchFinishLayout();
   } else if (name == QLatin1String("expect-ribbon-labels")) {
     testRibbonLabels(a);
+  } else if (name == QLatin1String("workspace")) {
+    // workspace DESIGN|MAKE|RENDER|DRAWING: the toolbar panel's workspace chosen as
+    // its selector's list chooses it (mitcad#1990), so that a script's next
+    // step finds that workspace's tabs; nothing in a layout without the
+    // selector (Docked, macOS), where every tab is in sight. The list
+    // itself is clicked by the UI tests (tools/ui-workspaces-test.sh).
+    auto* ribbon = m_main ? m_main->findChild<Ribbon*>() : nullptr;
+    if (ribbon == nullptr || !ribbon->isPanel()) {
+      qDebug().noquote() << QStringLiteral("TestDriver: workspace %1: no selector in this layout").arg(a.at(0));
+    } else {
+      ribbon->setWorkspace(a.at(0).toUpper());
+    }
+  } else if (name == QLatin1String("leave-start-page")) {
+    // The Start page left as a user does (mitcad#1990): a click on the
+    // design's tab in the Floating title row, where the toolbar panel is
+    // hidden over the page; on the SOLID tab elsewhere. A click-logged step
+    // at that place.
+    auto* ribbon = m_main ? m_main->findChild<Ribbon*>() : nullptr;
+    Step click = step;
+    click.name = QStringLiteral("click-logged");
+    click.args = QStringList{ribbon != nullptr && ribbon->isPanel() ? QStringLiteral("^Document tab shown at ")
+                                                                    : QStringLiteral("^Ribbon tab SOLID at ")};
+    run(click);
   } else if (name == QLatin1String("expect-design-chrome")) {
     testDesignChrome();
   } else if (name == QLatin1String("expect-interface-size")) {
@@ -6200,10 +6377,10 @@ void TestDriver::run(const Step& step) {
       }
       (item->flags() & Qt::ItemIsEnabled) ? ++enabled : ++disabled;
       const auto* action = m_main->findChild<QAction*>(QStringLiteral("command_") + id);
-      if (!action || item->text(1) != action->shortcut().toString(QKeySequence::NativeText)) {
+      if (!action || item->text(2) != action->shortcut().toString(QKeySequence::NativeText)) {
         fail(line, QStringLiteral("search shortcut differs from the native shortcut for %1").arg(id)); return;
       }
-      if (item->text(1).contains(QChar(0x2318))) ++shortcuts;
+      if (item->text(2).contains(QChar(0x2318))) ++shortcuts;
     }
     const bool needDisabled = a.size() == 3 && a.at(2) == QStringLiteral("disabled");
     const bool needShortcuts = a.size() == 3 && a.at(2) == QStringLiteral("shortcuts");

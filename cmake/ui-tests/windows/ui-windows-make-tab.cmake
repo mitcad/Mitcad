@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-# The Make tab (mitcad#1049): its groups and menus, the moved commands
-# from it, the Annotate group's kinds, the body card and the Browser's
-# markers; Floating too.
+# The Make workspace's tabs (mitcad#1049; 3D Print, Laser and CNC): their
+# groups and menus, the moved commands from them, the Annotate group's
+# kinds, the body card and the Browser's markers; Floating too.
 add_test(NAME app.ui-windows-make-tab
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass
           -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-make-tab-test.ps1"

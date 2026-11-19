@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# The Browser's Annotations folder's eye (mitcad#2041), the design that
+# annotations-folder-eye.mitcad-ui saved with the folder hidden, opened
+# again: no annotation drawn and the folder's eye off; the eye shows the
+# same two as before (Offset2 hidden by its own light bulb), and the
+# design is saved with the folder shown.
+wait-idle
+command view.fit
+wait-idle
+expect-ever '^Annotations folder: hidden$'
+# Nothing drawn from the start: the view logs only a change of what it
+# draws, so no "Annotations drawn: none" line comes; none naming one.
+expect-never '^Annotations drawn: Offset'
+expect-ever '^Browser eye Root/Annotations at '
+expect-ever '^Browser row colours: [^,]+, (.*; )?hidden #[0-9a-f]{6}: [^;]*Root/Annotations'
+mark
+click-logged '^Browser eye Root/Annotations at '
+wait-log '^Visibility Root/Annotations: shown$'
+wait-log '^Annotations drawn: Offset1 = [^|]+ [|] Offset3 = '
+wait-log '^Annotations folder: shown$'
+expect-no-log '^Annotations drawn: .*Offset2'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

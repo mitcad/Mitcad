@@ -43,6 +43,9 @@ pub mod ffi {
         /// A Move's motion: a rigid one as a location on the same B-rep, its
         /// faces keeping their triangulations (mitcad#838).
         fn move_shape(shape: &Shape, map: &Affine, rename: &str) -> Result<SharedPtr<Shape>>;
+        /// `transform_shape` of each shape by its map, without renaming,
+        /// beside each other (mitcad#2021).
+        fn transform_shapes(shapes: &ShapeList, maps: &[Affine]) -> Result<UniquePtr<ShapeList>>;
         fn unite(shapes: &ShapeList) -> Result<SharedPtr<Shape>>;
         /// The union within a tolerance (mm, mitcad#397).
         fn unite_within(shapes: &ShapeList, within: f64) -> Result<SharedPtr<Shape>>;

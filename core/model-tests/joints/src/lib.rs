@@ -22,3 +22,5 @@ mod edit_preview_through_tests;
 
 // The component a joint's picks belong in (mitcad#1856).
 mod joint_holder_tests;
+// Flexible subassemblies without joints of their own (mitcad#2016).
+mod flexible_free_parts_tests;

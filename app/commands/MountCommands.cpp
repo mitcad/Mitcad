@@ -385,8 +385,6 @@ CommandDef mountPartCommand(const std::shared_ptr<MountPart>& part, DocumentHost
   def.name = QObject::tr("Place Component");
   def.icon = QStringLiteral("insert-library");
   def.tooltip = QObject::tr("Places a library component by its mount frame on a face, a hole or a grid");
-  def.tab.clear(); // Insert from Library starts it
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("mount"), QStringLiteral("snap"), QStringLiteral("library"), QStringLiteral("grid")};
   def.okLabel = QObject::tr("Place");
   def.repeats = true;

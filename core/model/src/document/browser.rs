@@ -5,7 +5,10 @@
 //! dialog), and whether a feature can move to a timeline index (dragging).
 //!
 //! A sketch is hidden while a feature uses it and shown while none does;
-//! construction geometry is shown. A light bulb set by hand wins until the
+//! construction geometry is shown. A sketch or a 3D sketch that projects
+//! or intersects another sketch's curves and points does not use that
+//! sketch (mitcad#2045): the source stays as its light bulb or the default
+//! says, so that more of its curves can be picked in the same Project. A light bulb set by hand wins until the
 //! sketch gets its first consumer or loses its last one: the command that
 //! does it forgets the setting, in the same undo step, so the sketch hides
 //! or shows again (mitcad#7).
@@ -45,6 +48,8 @@ impl DocState {
     /// The sketches some feature uses (a profile, curves or points).
     /// Suppressed features and those after the timeline marker count too,
     /// so suppressing or rolling back neither shows nor hides a sketch.
+    /// Sketches and 3D sketches do not count (mitcad#2045): projecting or
+    /// intersecting another sketch's curves and points does not use it.
     pub fn used_sketches(&self) -> BTreeSet<FeatureUid> {
         let sketches: BTreeSet<FeatureUid> = self
             .features
@@ -57,15 +62,22 @@ impl DocState {
             return used;
         }
         for entry in &self.features {
+            if matches!(
+                entry.def,
+                FeatureDef::Sketch(_) | FeatureDef::SpatialSketch(_)
+            ) {
+                continue;
+            }
             let references = entry.def.info().references().features;
             used.extend(references.intersection(&sketches).copied());
         }
         used
     }
 
-    /// The sketches each feature uses, planar ones as
-    /// [`DocState::used_sketches`] counts them and 3D sketches too (the
-    /// route of a Pipe or a Sweep, mitcad#1527), in timeline order;
+    /// The sketches each feature refers to, planar ones and 3D sketches
+    /// too (the route of a Pipe or a Sweep, mitcad#1527), in timeline
+    /// order; unlike [`DocState::used_sketches`], a sketch's projection
+    /// sources count here;
     /// features that use none are left out. The browser lists a feature
     /// under each of its sketches (mitcad#177), and editing the feature
     /// shows them for its time. A 3D sketch is not hidden when a feature

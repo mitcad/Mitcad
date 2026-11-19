@@ -5,7 +5,10 @@
 #include <QApplication>
 #include <QStyleFactory>
 #include <QCommandLineParser>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QIcon>
 #include <QImage>
 #include <QMessageBox>
@@ -28,6 +31,7 @@
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
 #include "DocumentFrame.hpp"
+#include "framework/CommandLayout.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "OcctViewer.hpp"
 #include "files/F3dImport.hpp"
@@ -38,6 +42,7 @@
 #include "framework/ChromeStyle.hpp"
 #include "framework/DebugLog.hpp"
 #include "framework/HangWatchdog.hpp"
+#include "framework/RibbonLabels.hpp"
 #include "framework/SessionLog.hpp"
 #include "framework/DesktopEntry.hpp"
 #include "framework/Diagnostics.hpp"
@@ -106,7 +111,11 @@ void useStoredSettings() {
   // the bundle identifier fi.nocodo.mitcad (MITCAD_BUNDLE_ID in
   // app/packaging/macos). Windows and Linux key their settings on the
   // organization name, so the domain stays unset there.
+#ifdef MITCAD_3DXWARE_PREVIEW
+  const QString kOrganizationDomain = QStringLiteral("3dxware-test.mitcad.org");
+#else
   const QString kOrganizationDomain = QStringLiteral("nocodo.fi");
+#endif
   QCoreApplication::setOrganizationDomain(kOrganizationDomain);
 #endif
   QCoreApplication::setApplicationName(mitcad::storedApplicationName());
@@ -124,6 +133,17 @@ void useStoredSettings() {
 // The application, or its import worker; main ends the process with what
 // this returns (framework/ProcessEnd.hpp).
 int runApplication(int argc, char* argv[]) {
+#ifdef MITCAD_3DXWARE_PREVIEW
+  const QDir previewData(QDir::home().filePath(QStringLiteral("Library/Application Support/") +
+                                             mitcad::storedApplicationName()));
+  if (!qEnvironmentVariableIsSet("MITCAD_LIBRARIES_DIR")) {
+    qputenv("MITCAD_LIBRARIES_DIR", QFile::encodeName(previewData.filePath(QStringLiteral("libraries"))));
+  }
+  if (!qEnvironmentVariableIsSet("MITCAD_PRINT_LIBRARY_DIR")) {
+    qputenv("MITCAD_PRINT_LIBRARY_DIR", QFile::encodeName(previewData.filePath(QStringLiteral("print-library"))));
+  }
+  qputenv("MITCAD_NO_UPDATE_CHECK", "1");
+#endif
   // Crash reports (mitcad#62), in the application and its import worker.
   const bool importWorker = mitcad::isImportWorker(argc, argv);
   mitcad::crash::install(importWorker ? "import-worker" : "app", MITCAD_VERSION);
@@ -156,7 +176,11 @@ int runApplication(int argc, char* argv[]) {
   // boolean of many large spheres took gigabytes) stops with an error that
   // says so, the document as it was, instead of the system ending the
   // application with the unsaved work: the user's commands and the live
-  // MCP server's (mitcad#1480). The imports keep their own guard.
+  // MCP server's (mitcad#1480). import_file (STEP, IGES, BRep, STL, OBJ)
+  // is a model command and runs under it too: a STEP or IGES transfer
+  // stops inside, with an error that says the file needs more memory than
+  // the system has left (mitcad#2032). The bridge's own imports (.f3d,
+  // .ipt, IFC, ...) keep their own guard.
   mitcad::guard_command_memory(0.0);
 
 #ifdef __linux__
@@ -411,6 +435,14 @@ int runApplication(int argc, char* argv[]) {
                      "Preferences > General > Language chooses it for every start."),
       QStringLiteral("code"));
   parser.addOption(languageOption);
+  // The layout this run's toolbar and menus are built from, written as JSON
+  // to <file> (mitcad#1951): the default with the user's layer, each command
+  // as this build has it; for developers comparing layouts.
+  QCommandLineOption writeLayoutOption(QStringLiteral("write-layout"),
+                                       QStringLiteral("Write the command layout in use to <file> and exit."),
+                                       QStringLiteral("file"));
+  writeLayoutOption.setFlags(QCommandLineOption::HiddenFromHelp);
+  parser.addOption(writeLayoutOption);
   parser.addPositionalArgument(
       QStringLiteral("file"),
       QStringLiteral("Open <file> at start-up, like --open (as a file association passes it)."),
@@ -496,6 +528,12 @@ int runApplication(int argc, char* argv[]) {
   }
   qInfo().noquote() << "Style:" << mitcad::applicationStyleKey() << "Chrome:"
                     << mitcad::chromeStyleName(mitcad::chromeStyle()) << QStringLiteral("(%1)").arg(chromeSource);
+  // The toolbar panel of the Floating layout on Windows and Linux shows the
+  // buttons' labels under their icons unless the user chose Icons only
+  // (mitcad#1990, the owner's choice for the panel layout).
+  if (!nativeUiRequested && mitcad::chromeStyle() == mitcad::ChromeStyle::Floating && mitcad::floatingTopCards()) {
+    mitcad::setDefaultRibbonLabels(mitcad::RibbonLabels::UnderIcons);
+  }
   // Windows 10's dark app mode (mitcad#1282): Qt's own style with a dark palette
   // while it is dark, before the first window; nothing elsewhere.
   mitcad::win::followAppColorScheme();
@@ -638,6 +676,31 @@ int runApplication(int argc, char* argv[]) {
     }
     if (!expectedKeys) return 1;
     qInfo() << "Registered default shortcuts have no conflicts";
+    return 0;
+  }
+  // The command layout (mitcad#1951): every registered command placed or
+  // listed as on no toolbar, every id of the default layout a command,
+  // every key a caption to translate (ctest app.layout_coverage).
+  if (qEnvironmentVariableIntValue("MITCAD_TEST_LAYOUT_COVERAGE") == 1) {
+    const auto* registry = window.findChild<mitcad::CommandRegistry*>();
+    if (registry == nullptr) return 1;
+    return mitcad::checkLayoutCoverage(*registry) ? 0 : 1;
+  }
+  if (parser.isSet(writeLayoutOption)) {
+    const auto* registry = window.findChild<mitcad::CommandRegistry*>();
+    if (registry == nullptr) return 1;
+    const mitcad::CommandLayout written =
+        mitcad::commandLayout().resolved([registry](const QString& id) {
+          const mitcad::CommandDef* def = registry->find(id);
+          return def != nullptr ? def->id : QString();
+        });
+    QFile file(parser.value(writeLayoutOption));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+        file.write(QJsonDocument(written.toJson()).toJson(QJsonDocument::Indented)) < 0) {
+      qCritical().noquote() << QStringLiteral("Could not write the layout to %1").arg(file.fileName());
+      return 2;
+    }
+    qInfo().noquote() << QStringLiteral("Layout written to %1").arg(file.fileName());
     return 0;
   }
   // The window's size and place are set as it was made: where it was when
@@ -793,7 +856,7 @@ int main(int argc, char* argv[]) {
   // reaches a pipe even if a later teardown would crash).
   for (int index = 1; index < argc; ++index) {
     if (std::strcmp(argv[index], "--version") == 0 || std::strcmp(argv[index], "-v") == 0) {
-      std::printf("MitCad %s\n", MITCAD_VERSION);
+      std::printf("%s %s\n", qPrintable(mitcad::programName()), MITCAD_VERSION);
       std::fflush(stdout);
       return 0;
     }

@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "commands/Commands.hpp"
+#include "commands/SheetProcess.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/CommandSession.hpp"
 #include "framework/Dialogs.hpp"
@@ -58,8 +59,6 @@ void MainWindow::registerSheetActions() {
     def.icon = QString::fromLatin1(icon);
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Model;
-    def.tab = QStringLiteral("SOLID");
-    def.group = QStringLiteral("SHEET METAL");
     def.run = std::move(run);
     def.enabled = [this] { return !sheetBody(false).isEmpty() || !sheetBody(true).isEmpty(); };
     return def;
@@ -106,13 +105,51 @@ void MainWindow::registerSheetActions() {
     exportFlatPattern(sheet.value(QStringLiteral("body")).toString());
   });
   // The Make tab's Laser group (mitcad#1049).
-  exporting.tab = QStringLiteral("MAKE");
-  exporting.group = QStringLiteral("LASER");
-  exporting.pinned = true;
   exporting.tooltip = tr("Writes the selected sheet's Flat Pattern to a DXF file");
   exporting.keywords = {QStringLiteral("sheet metal"), QStringLiteral("dxf"), QStringLiteral("laser"),
                         QStringLiteral("drawing")};
   m_registry->add(exporting);
+
+  // A board's die line (mitcad#1939): the Flat Pattern with its cut and
+  // crease layers as DXF for cutting tables, or as PDF.
+  CommandDef dieLine = action("sheet.export_die_line", tr("Export Die Line…"), "export-dxf", [this] {
+    QJsonObject sheet = sheetBody(true);
+    if (sheet.isEmpty()) {
+      showHint(tr("Export Die Line: select a board sheet with a Flat Pattern first."));
+      return;
+    }
+    const QString body = sheet.value(QStringLiteral("body")).toString();
+    const QString name = bodyName(body);
+    const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".dxf"));
+    const QString path = dialogSaveFileName(this, tr("Export Die Line"), suggested,
+                                            tr("Die line for cutting tables (*.dxf);;Die line as PDF (*.pdf)"));
+    if (path.isEmpty()) {
+      return;
+    }
+    rememberDialogFolder(DialogGroup::Export, path);
+    QJsonObject result;
+    if (!runCommand({{QStringLiteral("cmd"), QStringLiteral("export_die_line")},
+                     {QStringLiteral("body"), body},
+                     {QStringLiteral("path"), path}},
+                    &result)) {
+      sheetWarning(this, tr("Export Die Line"), tr("Could not export:\n%1").arg(m_lastError));
+      return;
+    }
+    qInfo().noquote() << QStringLiteral("Exported %1: %2 die line of %3")
+                             .arg(path, result.value(QStringLiteral("format")).toString(), name);
+    showHint(tr("Exported the die line of %1 to %2.").arg(name, QDir::toNativeSeparators(path)));
+  });
+  dieLine.tooltip = tr("Writes the selected board sheet's die line: cut and crease lines as DXF or PDF");
+  dieLine.keywords = {QStringLiteral("board"), QStringLiteral("carton"), QStringLiteral("crease"),
+                      QStringLiteral("cutting table"), QStringLiteral("pdf")};
+  const auto sheetEnabled = dieLine.enabled;
+  dieLine.enabled = [this, sheetEnabled] {
+    return sheetEnabled() && cmd::processAllows(*this, QStringLiteral("sheet.export_die_line"));
+  };
+  dieLine.disabledReason = [this] {
+    return cmd::processReason(*this, QStringLiteral("sheet.export_die_line"));
+  };
+  m_registry->add(dieLine);
 }
 
 void MainWindow::toggleFlatPattern(const QString& body) {

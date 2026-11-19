@@ -2,7 +2,7 @@
 //! Editable folded sheet operations; geometry is shared with material trimming.
 
 use super::mapping::map_params;
-use super::sheet::Relief;
+use super::sheet::{Allowance, Relief};
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput, References,
 };
@@ -213,6 +213,11 @@ pub struct SheetFlangeDef<P = ParamId> {
     /// Corners whose miter differs from `miter`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corner_miters: Vec<SheetMiterCorner>,
+    /// The fold's own allowance in place of the rules' (mitcad#1939, a
+    /// per-bend override): any allowance method; a crease table without
+    /// rows picks the rules' rows in its direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowance: Option<Allowance<P>>,
 }
 
 impl<P> SheetFlangeDef<P> {
@@ -244,6 +249,11 @@ pub struct SheetBendDef<P = ParamId> {
     /// `double`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed: Option<DoubleBendFixed>,
+    /// The fold's own allowance in place of the rules' (mitcad#1939, a
+    /// per-bend override): any allowance method; a crease table without
+    /// rows picks the rules' rows in its direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowance: Option<Allowance<P>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +285,11 @@ pub struct SheetFoldDef<P = ParamId> {
     pub radius: Option<P>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relief: Option<Relief<P>>,
+    /// The fold's own allowance in place of the rules' (mitcad#1939, a
+    /// per-bend override): any allowance method; a crease table without
+    /// rows picks the rules' rows in its direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowance: Option<Allowance<P>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +350,14 @@ fn map_relief<P, Q, E>(
             })
         })
         .transpose()
+}
+
+/// A fold's own allowance, its slots under `allowance` (mitcad#1939).
+fn map_allowance<P, Q, E>(
+    a: &Option<Allowance<P>>,
+    f: &mut dyn FnMut(&str, &P) -> Result<Q, E>,
+) -> Result<Option<Allowance<Q>>, E> {
+    a.as_ref().map(|a| a.map("allowance", f)).transpose()
 }
 
 impl<P> SheetFlangeDef<P> {
@@ -410,6 +433,7 @@ impl<P> SheetFlangeDef<P> {
                 .transpose()?,
             miter: self.miter,
             corner_miters: self.corner_miters.clone(),
+            allowance: map_allowance(&self.allowance, f)?,
         })
     }
 }
@@ -439,6 +463,7 @@ impl<P> SheetBendDef<P> {
             radius: self.radius.as_ref().map(|p| f("radius", p)).transpose()?,
             relief: map_relief(&self.relief, f)?,
             fixed: self.fixed,
+            allowance: map_allowance(&self.allowance, f)?,
         })
     }
 }
@@ -455,6 +480,7 @@ impl<P> SheetFoldDef<P> {
             position: copy,
             radius: option,
             relief: with(map_relief),
+            allowance: with(map_allowance),
         }
     }
 }

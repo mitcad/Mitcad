@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: MIT
+# The command layout's user layer (mitcad#1951, mitcad#1991, mitcad#1998) through the
+# real UI, run in the layout the wrapper starts (Floating and Docked):
+#   1. Sweep moved from the SOLID tab's Create group to Modify (its row's
+#      Move to Group…): in Modify's menu, no longer in Create's.
+#   2. Sweep also shown in Create (Also Show in Group… from Modify's row):
+#      one command in two groups.
+#   3. Revolve's button removed by its own right-click (Remove from
+#      Toolbar): gone from the toolbar, still in Create's menu.
+#   4. Inspect moved after Modify (its caption's right-click, Move Group
+#      Left twice: past Construct, then past Assemble).
+# The wrapper then starts the application again on the same settings with
+# command-layout-restart.mitcad-ui: the changes kept, Show on Toolbar and
+# Restore Default Layout.
+# The window as it starts (no resize: a size the desktop cannot hold moves
+# the window after the places were logged), the SOLID tab shown.
+expect-ever 'View area' 30
+wait-idle
+expect-ever '^Ribbon SOLID/CREATE at ' 30
+wait-idle
+
+# 1. Move to Group… Modify.
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: '
+# Sweep's row menu: its row made the active one and opened by Shift+F10
+# (the Menu key's), whichever row the pointer left over the menu hovers.
+row-menu solid.sweep
+wait-log '^Toolbar menu SOLID/CREATE solid.sweep: .*Move to Group'
+popup 'Move to Group'
+focus-dialog '^Move to Group$'
+qt-choice layoutGroupChoice 'Modify'
+key Return
+focus-main
+wait-log '^Layout: moved solid.sweep from SOLID/CREATE to SOLID/MODIFY$'
+wait-log '^Ribbon groups made again from the layout$'
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon SOLID/MODIFY at '
+wait-log '^Ribbon menu SOLID/MODIFY: .*\bSweep\b'
+key Escape
+wait-idle
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: '
+expect-no-log '^Ribbon menu SOLID/CREATE: .*\bSweep\b'
+key Escape
+wait-idle
+
+# 2. Also Show in Group… Create, from Modify's row: in both groups.
+mark
+click-logged '^Ribbon SOLID/MODIFY at '
+wait-log '^Ribbon menu SOLID/MODIFY: .* Sweep$'
+row-menu solid.sweep
+wait-log '^Toolbar menu SOLID/MODIFY solid.sweep: .*Also Show in Group'
+popup 'Also Show in Group'
+focus-dialog '^Also Show in Group$'
+qt-choice layoutGroupChoice 'Create'
+key Return
+focus-main
+wait-log '^Layout: added solid.sweep to SOLID/CREATE$'
+wait-log '^Ribbon groups made again from the layout$'
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: .*\bSweep\b'
+key Escape
+wait-idle
+mark
+click-logged '^Ribbon SOLID/MODIFY at '
+wait-log '^Ribbon menu SOLID/MODIFY: .*\bSweep\b'
+key Escape
+wait-idle
+
+# 3. Remove from Toolbar, from Revolve's row in the group's menu (in this
+# empty design Revolve is disabled, and a disabled button takes no
+# right-click): the group made again without its button, the command
+# still in the group's menu.
+expect-ever '^Ribbon button solid.revolve at ' 30
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: .*\bRevolve\b'
+row-menu solid.revolve
+wait-log '^Toolbar menu SOLID/CREATE solid.revolve: .*Remove from Toolbar'
+popup 'Remove from Toolbar'
+wait-log '^Layout: removed the button of solid.revolve from SOLID/CREATE$'
+wait-log '^Ribbon groups made again from the layout$'
+wait-log '^Ribbon group SOLID/CREATE buttons: '
+expect-no-log '^Ribbon group SOLID/CREATE buttons: .*solid\.revolve'
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: .*\bRevolve\b'
+key Escape
+wait-idle
+
+# 4. Move Group Left twice, from Inspect's caption: Inspect after Modify.
+mark
+context-menu-logged '^Ribbon SOLID/INSPECT at ' 'Move Group Left'
+wait-log '^Ribbon caption menu SOLID/INSPECT: Move Group Left [|] Move Group Right [|] - [|] Show on Toolbar'
+wait-log '^Layout: moved the group SOLID/INSPECT: CREATE, MODIFY, ASSEMBLE, INSPECT, CONSTRUCT, '
+wait-log '^Ribbon groups made again from the layout$'
+wait-log '^Ribbon groups of SOLID: CREATE, MODIFY, ASSEMBLE, INSPECT, CONSTRUCT, '
+wait-log '^Ribbon SOLID/INSPECT at '
+wait-idle
+sleep 300
+mark
+context-menu-logged '^Ribbon SOLID/INSPECT at ' 'Move Group Left'
+wait-log '^Layout: moved the group SOLID/INSPECT: CREATE, MODIFY, INSPECT, ASSEMBLE, CONSTRUCT, '
+wait-log '^Ribbon groups made again from the layout$'
+wait-log '^Ribbon groups of SOLID: CREATE, MODIFY, INSPECT, ASSEMBLE, CONSTRUCT, '
+wait-log '^Ribbon SOLID/INSPECT at '
+wait-idle
+sleep 300

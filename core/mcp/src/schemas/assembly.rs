@@ -36,6 +36,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "set_policy",
     "reorient_design",
     "convert_derived_part",
+    "mesh_section",
 ];
 
 /// The design policy's settings (`Setting::key`).
@@ -347,6 +348,20 @@ fn others(name: &str) -> Option<Value> {
             },
             "required": [],
             "examples": [{"cmd": "convert_derived_part", "feature": "F1"}, {"cmd": "convert_derived_part", "component": "C1", "check": true}]
+        }),
+        "mesh_section" => json!({
+            "description": "A mesh body's section by a sketch's plane as the sketch's lines, arcs and circles; with count, a series of parallel sections, a new sketch each (mitcad#1871). Result: sketches, names, curves, lines, arcs, circles, missed.",
+            "properties": {
+                "body": id("The mesh body (F2.b0)"),
+                "sketch": feature_uid("Into this sketch; or plane"),
+                "plane": {"description": "Instead of sketch: a new sketch on this plane: xy, xz, yz, a construction plane \"F4\" or a planar face {\"face\", \"body\"}", "type": ["string", "object"]},
+                "tolerance": number("How far a curve may lie from the section's points, mm (more than 0, at most 10; default 0.05)"),
+                "count": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Sections in all (default 1)"},
+                "spacing": number("mm between neighbouring sections along the first sketch's normal (not 0 with count above 1)")
+            },
+            "required": ["body"],
+            "examples": [{"cmd": "mesh_section", "body": "F2.b0", "plane": "F4", "count": 3, "spacing": 2}, {"cmd": "mesh_section", "body": "F2.b0", "sketch": "F5"}],
+            "restrictions": ["sketch or plane, one of the two."]
         }),
         _ => return None,
     };

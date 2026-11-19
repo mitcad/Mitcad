@@ -8,7 +8,7 @@ use mitcad_model::datum::{CurveGeometry, SurfaceGeometry};
 use mitcad_model::features::SketchPlane;
 use mitcad_model::ids::{BodyUid, FeatureUid};
 use mitcad_model::kernel::BoundingBox;
-use mitcad_model::test_support::{block, def, num};
+use mitcad_model::test_support::{block, corner, def, num, top_edge};
 use mitcad_model::testing::{MockKernel, MockShape};
 use mitcad_model::topo::{EdgeName, FaceName, RegionKey};
 use mitcad_model::{Document, FeatureStatus};
@@ -3365,4 +3365,45 @@ fn combine_with_an_empty_result_fails_and_keeps_its_bodies() {
         .unwrap();
     assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
     assert_eq!(uids(&b.doc), ["F2.b0"]);
+}
+
+/// Tangent Chain off on one edge of a chain that runs on (mitcad#2037): the
+/// block's top front edge runs smoothly into the rounded corners beside it;
+/// a chamfer of that edge alone evaluates, its set keeping `tangent_chain`
+/// false for the kernel.
+#[test]
+fn a_chamfer_of_one_edge_of_a_chain_without_its_tangent_chain_evaluates() {
+    let mut b = block();
+    let corners: Vec<EdgeName> = (0..4).map(|i| corner(b.extrude, 1, i)).collect();
+    let rounded = add(
+        &mut b.doc,
+        json!({"type": "fillet", "body": "F2.b0", "edges": corners, "radius": 5}),
+    );
+    assert_eq!(b.doc.status(rounded), Some(&FeatureStatus::Ok));
+    let edge = top_edge(b.extrude, 1, &b.region, 0);
+    let chamfer = add(
+        &mut b.doc,
+        json!({"type": "chamfer", "body": "F2.b0", "sets": [
+            {"edges": [edge], "size": {"type": "equal_distance", "distance": 1},
+             "tangent_chain": false}]}),
+    );
+    assert_eq!(b.doc.status(chamfer), Some(&FeatureStatus::Ok));
+    let feature: Value = serde_json::from_str(
+        &b.doc
+            .query(&json!({"query": "feature", "uid": chamfer}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        feature["def"]["sets"][0]["tangent_chain"], false,
+        "{feature}"
+    );
+    let shape = shape(&b.doc, "F2.b0");
+    assert!(
+        shape
+            .faces
+            .contains(&FaceName::chamfer(chamfer, edge.clone())),
+        "{:?}",
+        shape.faces
+    );
 }

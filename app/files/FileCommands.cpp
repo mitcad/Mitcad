@@ -26,7 +26,6 @@ std::vector<CommandDef> fileDocumentCommands(const FileCommandRuns& runs) {
     d.shortcut = shortcut;
     d.kind = CommandDef::Kind::Action;
     d.mode = CommandDef::Mode::Any;
-    d.tab.clear(); // the File menu
     // As the menu's actions were: also while a command's panel is open
     // (Save then saves the design as the panel left it, or says why not).
     d.duringCommands = true;

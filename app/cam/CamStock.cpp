@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <utility>
 
 #include <QJsonValue>
 
@@ -185,6 +186,101 @@ StockMesh stockMesh(const StockGrid& grid, const std::vector<float>& heights, co
   for (int j = 0; j + 1 < ny; ++j) {
     side(0, j + 1, 0, j, {-1.0, 0.0, 0.0});
     side(nx - 1, j, nx - 1, j + 1, {1.0, 0.0, 0.0});
+  }
+  return mesh;
+}
+
+StockMesh turnedStockMesh(const QJsonObject& stock, const WorkFrame& frame, int segments) {
+  StockMesh mesh;
+  const QJsonArray zs = stock.value(QStringLiteral("z")).toArray();
+  const QJsonArray inners = stock.value(QStringLiteral("inner")).toArray();
+  const QJsonArray outers = stock.value(QStringLiteral("outer")).toArray();
+  const qsizetype n = zs.size();
+  if (n < 2 || inners.size() != n || outers.size() != n || segments < 3) {
+    return mesh;
+  }
+  const auto z = [&zs](qsizetype i) { return zs.at(i).toDouble(); };
+  const auto in = [&inners](qsizetype i) { return std::max(0.0, inners.at(i).toDouble()); };
+  const auto out = [&outers](qsizetype i) { return outers.at(i).toDouble(); };
+  const auto solid = [&](qsizetype i) { return out(i) > in(i) + kEmpty; };
+  // The nodes where a radius changes (and the ends): the bands run
+  // between them.
+  std::vector<qsizetype> kept;
+  for (qsizetype i = 0; i < n; ++i) {
+    const bool same = i > 0 && i + 1 < n && solid(i - 1) == solid(i) && solid(i + 1) == solid(i) &&
+                      std::abs(out(i - 1) - out(i)) < 1e-6 && std::abs(out(i + 1) - out(i)) < 1e-6 &&
+                      std::abs(in(i - 1) - in(i)) < 1e-6 && std::abs(in(i + 1) - in(i)) < 1e-6;
+    if (!same) {
+      kept.push_back(i);
+    }
+  }
+  const Point3 axis = unitOr(frame.directionToModel({0.0, 0.0, 1.0}), {0.0, 0.0, 1.0});
+  const auto at = [&frame](double r, double angle, double h) {
+    return frame.toModel({r * std::cos(angle), r * std::sin(angle), h});
+  };
+  const double step = 2.0 * 3.14159265358979323846 / segments;
+  // A band of the surface of revolution from (ra, za) to (rb, zb), its
+  // normal out from the axis (`sign` +1) or towards it (-1).
+  const auto band = [&](double ra, double za, double rb, double zb, double sign) {
+    if (ra < kEmpty && rb < kEmpty) {
+      return;
+    }
+    const int first = mesh.vertices();
+    const double dz = zb - za;
+    const double dr = rb - ra;
+    for (int k = 0; k <= segments; ++k) {
+      const double angle = step * k;
+      const Point3 radial{std::cos(angle), std::sin(angle), 0.0};
+      // Perpendicular to the band in its plane through the axis.
+      const Point3 normal{sign * radial[0] * dz, sign * radial[1] * dz, -sign * dr};
+      for (const auto& [r, h] : {std::pair<double, double>{ra, za}, std::pair<double, double>{rb, zb}}) {
+        push3(mesh.points, at(r, angle, h));
+        push3(mesh.normals, unitOr(frame.directionToModel(normal), axis));
+        mesh.shades.push_back(0.0f);
+      }
+    }
+    for (int k = 0; k < segments; ++k) {
+      const int a = first + 2 * k;
+      mesh.triangles.insert(mesh.triangles.end(), {a, a + 2, a + 3, a, a + 3, a + 1});
+    }
+  };
+  // A flat ring at `h` from `r0` to `r1`, facing along the axis (`sign`).
+  const auto ring = [&](double h, double r0, double r1, double sign) {
+    if (r1 - r0 < kEmpty) {
+      return;
+    }
+    const int first = mesh.vertices();
+    const Point3 normal = unitOr(frame.directionToModel({0.0, 0.0, sign}), axis);
+    for (int k = 0; k <= segments; ++k) {
+      for (const double r : {r0, r1}) {
+        push3(mesh.points, at(r, step * k, h));
+        push3(mesh.normals, normal);
+        mesh.shades.push_back(0.0f);
+      }
+    }
+    for (int k = 0; k < segments; ++k) {
+      const int a = first + 2 * k;
+      mesh.triangles.insert(mesh.triangles.end(), {a, a + 1, a + 3, a, a + 3, a + 2});
+    }
+  };
+  for (std::size_t k = 0; k < kept.size(); ++k) {
+    const qsizetype i = kept[k];
+    if (!solid(i)) {
+      continue;
+    }
+    // Where material starts or ends along Z: a ring.
+    const bool startsHere = k == 0 || !solid(kept[k - 1]);
+    const bool endsHere = k + 1 == kept.size() || !solid(kept[k + 1]);
+    if (startsHere) {
+      ring(z(i), in(i), out(i), -1.0);
+    }
+    if (endsHere) {
+      ring(z(i), in(i), out(i), 1.0);
+      continue;
+    }
+    const qsizetype j = kept[k + 1];
+    band(out(i), z(i), out(j), z(j), 1.0);
+    band(in(i), z(i), in(j), z(j), -1.0);
   }
   return mesh;
 }

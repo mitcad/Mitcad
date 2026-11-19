@@ -150,6 +150,40 @@ pub enum ToolKind {
         #[serde(default)]
         tip_diameter: f64,
     },
+    // Lathe tools (mitcad#1869): the number is the turret station (1 to
+    // 99), the diameter the holder's size (a boring bar's diameter), the
+    // flute length the deepest cut and the length the overhang.
+    /// An outside turning tool with its insert's nose radius.
+    Turning {
+        #[serde(default)]
+        nose_radius: f64,
+    },
+    /// A boring bar with its insert's nose radius.
+    Boring {
+        #[serde(default)]
+        nose_radius: f64,
+    },
+    /// A grooving insert, outside or in a bore.
+    Grooving {
+        width: f64,
+        #[serde(default)]
+        nose_radius: f64,
+        #[serde(default)]
+        inside: bool,
+    },
+    /// A parting blade.
+    Parting { width: f64 },
+    /// A threading insert with its included angle, outside or in a bore.
+    Threading {
+        #[serde(default = "sixty")]
+        angle: f64,
+        #[serde(default)]
+        inside: bool,
+    },
+}
+
+fn sixty() -> f64 {
+    60.0
 }
 
 fn drill_point() -> f64 {
@@ -174,7 +208,24 @@ impl ToolKind {
             ToolKind::Drill { .. } => "drill",
             ToolKind::Chamfer { .. } => "chamfer mill",
             ToolKind::Engraver { .. } => "engraving cutter",
+            ToolKind::Turning { .. } => "turning tool",
+            ToolKind::Boring { .. } => "boring bar",
+            ToolKind::Grooving { .. } => "grooving tool",
+            ToolKind::Parting { .. } => "parting tool",
+            ToolKind::Threading { .. } => "threading tool",
         }
+    }
+
+    /// Whether it is a lathe tool.
+    pub fn is_turning(&self) -> bool {
+        matches!(
+            self,
+            ToolKind::Turning { .. }
+                | ToolKind::Boring { .. }
+                | ToolKind::Grooving { .. }
+                | ToolKind::Parting { .. }
+                | ToolKind::Threading { .. }
+        )
     }
 
     /// The shape as the engine's tools have it (`mitcad_cam::ToolShape`'s
@@ -195,6 +246,12 @@ impl ToolKind {
                 angle,
                 tip_diameter,
             } => json!({"kind": "v_bit", "angle": angle, "tip_diameter": tip_diameter}),
+            // Lathe tools are not milling tools ([`CamTool::engine`]).
+            ToolKind::Turning { .. }
+            | ToolKind::Boring { .. }
+            | ToolKind::Grooving { .. }
+            | ToolKind::Parting { .. }
+            | ToolKind::Threading { .. } => Value::Null,
         }
     }
 }
@@ -309,6 +366,41 @@ impl CamTool {
                 }
             }
             ToolKind::Flat | ToolKind::Ball => {}
+            ToolKind::Turning { nose_radius } | ToolKind::Boring { nose_radius } => {
+                if !(nose_radius.is_finite() && nose_radius >= 0.0) {
+                    return Err(format!("Tool {n}'s nose radius must be zero or more."));
+                }
+            }
+            ToolKind::Grooving {
+                width, nose_radius, ..
+            } => {
+                if !(positive(width)
+                    && nose_radius.is_finite()
+                    && nose_radius >= 0.0
+                    && 2.0 * nose_radius <= width)
+                {
+                    return Err(format!(
+                        "Tool {n}'s insert needs a width above zero and at least twice its corner radius."
+                    ));
+                }
+            }
+            ToolKind::Parting { width } => {
+                if !positive(width) {
+                    return Err(format!("Tool {n}'s blade needs a width above zero."));
+                }
+            }
+            ToolKind::Threading { angle, .. } => {
+                if !(angle > 0.0 && angle < 120.0) {
+                    return Err(format!(
+                        "Tool {n}'s thread angle must be between 0 and 120 degrees."
+                    ));
+                }
+            }
+        }
+        if self.shape.is_turning() && n > 99 {
+            return Err(format!(
+                "Tool {n} is a lathe tool: its number is its turret station, 1 to 99."
+            ));
         }
         if let Some(cutting) = &self.cutting {
             cutting.validate().map_err(|e| format!("Tool {n}: {e}"))?;
@@ -318,6 +410,12 @@ impl CamTool {
 
     /// The tool as the engine computes with it.
     pub fn engine(&self) -> Result<engine::Tool, String> {
+        if self.shape.is_turning() {
+            return Err(format!(
+                "Tool {} is a lathe tool, not a milling tool.",
+                self.number
+            ));
+        }
         let name = if self.name.trim().is_empty() {
             self.default_name()
         } else {
@@ -334,6 +432,49 @@ impl CamTool {
             "cutting": self.cutting,
         });
         serde_json::from_value(value).map_err(|_| format!("Tool {} cannot be used.", self.number))
+    }
+}
+
+impl CamTool {
+    /// A lathe tool as the engine's turning computes with it.
+    pub fn turning_engine(&self) -> Result<engine::TurningTool, String> {
+        use engine::turning::TurningToolKind as K;
+        let kind = match self.shape {
+            ToolKind::Turning { .. } => K::Turning,
+            ToolKind::Boring { .. } => K::Boring {
+                bar_diameter: self.diameter,
+            },
+            ToolKind::Grooving { width, inside, .. } => K::Grooving { width, inside },
+            ToolKind::Parting { width } => K::Parting { width },
+            ToolKind::Threading { angle, inside } => K::Threading { angle, inside },
+            _ => {
+                return Err(format!(
+                    "Tool {} is a milling tool, not a lathe tool.",
+                    self.number
+                ));
+            }
+        };
+        let nose_radius = match self.shape {
+            ToolKind::Turning { nose_radius }
+            | ToolKind::Boring { nose_radius }
+            | ToolKind::Grooving { nose_radius, .. } => nose_radius,
+            _ => 0.0,
+        };
+        let name = if self.name.trim().is_empty() {
+            self.default_name()
+        } else {
+            self.name.clone()
+        };
+        let tool = engine::TurningTool {
+            number: self.number,
+            offset: 0,
+            name,
+            kind,
+            nose_radius,
+            max_depth: self.flute_length,
+        };
+        tool.validate()?;
+        Ok(tool)
     }
 }
 
@@ -429,11 +570,33 @@ impl CamMachine {
         if m.name.trim().is_empty() || m.name.chars().count() > MAX_NAME {
             return Err("A machine needs a name of at most 120 characters.".to_owned());
         }
-        if engine::dialect(&m.controller).is_none() {
+        let lathe = m.lathe.is_some();
+        let known = if lathe {
+            engine::turning_dialect(&m.controller).is_some()
+        } else {
+            engine::dialect(&m.controller).is_some()
+        };
+        if !known {
             return Err(format!(
                 "The machine {} has a controller MitCad does not write for.",
                 m.name
             ));
+        }
+        if let Some(l) = &m.lathe {
+            l.validate()
+                .map_err(|e| format!("The machine {}: {e}", m.name))?;
+        }
+        if self
+            .tools
+            .tools
+            .iter()
+            .any(|t| t.shape.is_turning() != lathe)
+        {
+            return Err(if lathe {
+                format!("The lathe {} takes lathe tools only.", m.name)
+            } else {
+                format!("The machine {} takes milling tools only.", m.name)
+            });
         }
         if !(m.spindle.min_rpm >= 0.0 && m.spindle.max_rpm >= m.spindle.min_rpm) {
             return Err(format!(
@@ -699,6 +862,58 @@ pub struct CamSetup {
     pub visible: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub operations: Vec<CamOperation>,
+    /// What a setup on a lathe adds (mitcad#1869).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lathe: Option<LatheSetup>,
+}
+
+/// A lathe setup's own values (mitcad#1869, `docs/cam.md`, "Turning"):
+/// the stock's bore (a tube, a drilled hole), where the turret indexes,
+/// the program's number and where the chuck's jaws are.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LatheSetup {
+    /// The stock's bore diameter; a solid bar when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_bore: Option<CamValue>,
+    /// The tool change position: a diameter and a work Z; 50 mm clear of
+    /// the stock's diameter and its face when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_diameter: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_z: Option<CamValue>,
+    /// The program's number (`O1000`), 1 to 9999.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_number: Option<u32>,
+    /// How far the chuck's jaws are behind the stock's back (the end
+    /// towards the chuck), for the lathe check; unchecked when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chuck_gap: Option<CamValue>,
+}
+
+impl LatheSetup {
+    fn values(&self) -> Vec<&CamValue> {
+        [
+            &self.stock_bore,
+            &self.change_diameter,
+            &self.change_z,
+            &self.chuck_gap,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    fn values_mut(&mut self) -> Vec<&mut CamValue> {
+        [
+            &mut self.stock_bore,
+            &mut self.change_diameter,
+            &mut self.change_z,
+            &mut self.chuck_gap,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 }
 
 /// The depths an operation cuts between (work Z); each from the stock and
@@ -821,7 +1036,57 @@ pub enum OperationKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         slope: Option<CamValue>,
     },
+    // Turning on a lathe (mitcad#1869): from the profile of the setup's
+    // bodies about the spindle axis. Z values are work Z along the
+    // spindle (0 on the part's face, negative towards the chuck); a
+    // diameter is a diameter.
+    /// Facing the part's front from the stock's face.
+    TurnFace,
+    /// Roughing the outside or the bore in passes along Z.
+    TurnRough {
+        #[serde(default)]
+        side: TurnSide,
+    },
+    /// Finishing the outside or the bore along its contour.
+    TurnFinish {
+        #[serde(default)]
+        side: TurnSide,
+    },
+    /// A groove between two Z (from the groove's face input when left
+    /// out), down to the profile there.
+    TurnGroove {
+        #[serde(default)]
+        side: TurnSide,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        z_from: Option<CamValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        z_to: Option<CamValue>,
+    },
+    /// Parting the part off at its back (or at `z`).
+    TurnPartOff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        z: Option<CamValue>,
+    },
+    /// A thread of `pitch` from `z_start` to `z_end` on `diameter` (the
+    /// major diameter outside, the minor in a bore), `depth` deep
+    /// (radius); the diameter and the Z from the threaded face input, the
+    /// depth from the pitch, when left out.
+    TurnThread {
+        #[serde(default)]
+        side: TurnSide,
+        pitch: CamValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diameter: Option<CamValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        z_start: Option<CamValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        z_end: Option<CamValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth: Option<CamValue>,
+    },
 }
+
+pub use engine::turning::TurnSide;
 
 fn outside() -> Side {
     Side::Outside
@@ -844,7 +1109,26 @@ impl OperationKind {
             OperationKind::Roughing3d { .. } => "roughing_3d",
             OperationKind::RasterFinish { .. } => "raster_finish",
             OperationKind::WaterlineFinish { .. } => "waterline_finish",
+            OperationKind::TurnFace => "turn_face",
+            OperationKind::TurnRough { .. } => "turn_rough",
+            OperationKind::TurnFinish { .. } => "turn_finish",
+            OperationKind::TurnGroove { .. } => "turn_groove",
+            OperationKind::TurnPartOff { .. } => "turn_part_off",
+            OperationKind::TurnThread { .. } => "turn_thread",
         }
+    }
+
+    /// Whether it is a turning operation (a lathe's).
+    pub fn is_turning(&self) -> bool {
+        matches!(
+            self,
+            OperationKind::TurnFace
+                | OperationKind::TurnRough { .. }
+                | OperationKind::TurnFinish { .. }
+                | OperationKind::TurnGroove { .. }
+                | OperationKind::TurnPartOff { .. }
+                | OperationKind::TurnThread { .. }
+        )
     }
 
     /// Whether it machines the bodies' surfaces (3-axis), from their
@@ -870,6 +1154,12 @@ impl OperationKind {
             OperationKind::Roughing3d { .. } => "3D Roughing",
             OperationKind::RasterFinish { .. } => "Raster Finishing",
             OperationKind::WaterlineFinish { .. } => "Waterline Finishing",
+            OperationKind::TurnFace => "Turn Facing",
+            OperationKind::TurnRough { .. } => "Turn Roughing",
+            OperationKind::TurnFinish { .. } => "Turn Finishing",
+            OperationKind::TurnGroove { .. } => "Grooving",
+            OperationKind::TurnPartOff { .. } => "Parting Off",
+            OperationKind::TurnThread { .. } => "Threading",
         }
     }
 }
@@ -1000,6 +1290,34 @@ pub struct CamOperation {
     /// (32 hex digits); none before the first generate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated: Option<String>,
+    /// A turning operation's speeds, feeds and depths (mitcad#1869).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turning: Option<TurningInput>,
+}
+
+/// A turning operation's values (mitcad#1869), each the operation's
+/// default when left out: the spindle at a constant surface speed
+/// (m/min) under a limit (rpm), or at a constant speed (the cutting
+/// values' rpm) when `constant_rpm`, as threading always is; the feed per
+/// revolution; the depth of cut (radius) of roughing, the peck of grooving
+/// and parting; the stock to leave along Z (the operation's stock to leave,
+/// a radius, when left out).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TurningInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_speed: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rpm: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub constant_rpm: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed_per_rev: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_of_cut: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peck: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_to_leave_z: Option<CamValue>,
 }
 
 impl CamOperation {
@@ -1048,6 +1366,44 @@ impl CamOperation {
             OperationKind::WaterlineFinish { slope: Some(slope) } => out.push((slope, Angle)),
             _ => {}
         }
+        // Turning (mitcad#1869).
+        match &self.kind {
+            OperationKind::TurnGroove { z_from, z_to, .. } => {
+                out.extend([z_from, z_to].into_iter().flatten().map(|v| (v, Length)));
+            }
+            OperationKind::TurnPartOff { z: Some(z) } => out.push((z, Length)),
+            OperationKind::TurnThread {
+                pitch,
+                diameter,
+                z_start,
+                z_end,
+                depth,
+                ..
+            } => {
+                out.push((pitch, Length));
+                out.extend(
+                    [diameter, z_start, z_end, depth]
+                        .into_iter()
+                        .flatten()
+                        .map(|v| (v, Length)),
+                );
+            }
+            _ => {}
+        }
+        if let Some(t) = &self.turning {
+            for (value, kind) in [
+                (&t.surface_speed, Number),
+                (&t.max_rpm, Number),
+                (&t.feed_per_rev, Length),
+                (&t.depth_of_cut, Length),
+                (&t.peck, Length),
+                (&t.stock_to_leave_z, Length),
+            ] {
+                if let Some(value) = value {
+                    out.push((value, kind));
+                }
+            }
+        }
         out
     }
 
@@ -1095,7 +1451,42 @@ impl CamOperation {
                 out.extend([angle, slope].into_iter().flatten().map(|v| (v, Angle)));
             }
             OperationKind::WaterlineFinish { slope: Some(slope) } => out.push((slope, Angle)),
+            // Turning (mitcad#1869).
+            OperationKind::TurnGroove { z_from, z_to, .. } => {
+                out.extend([z_from, z_to].into_iter().flatten().map(|v| (v, Length)));
+            }
+            OperationKind::TurnPartOff { z: Some(z) } => out.push((z, Length)),
+            OperationKind::TurnThread {
+                pitch,
+                diameter,
+                z_start,
+                z_end,
+                depth,
+                ..
+            } => {
+                out.push((pitch, Length));
+                out.extend(
+                    [diameter, z_start, z_end, depth]
+                        .into_iter()
+                        .flatten()
+                        .map(|v| (v, Length)),
+                );
+            }
             _ => {}
+        }
+        if let Some(t) = &mut self.turning {
+            for (value, kind) in [
+                (&mut t.surface_speed, Number),
+                (&mut t.max_rpm, Number),
+                (&mut t.feed_per_rev, Length),
+                (&mut t.depth_of_cut, Length),
+                (&mut t.peck, Length),
+                (&mut t.stock_to_leave_z, Length),
+            ] {
+                if let Some(value) = value {
+                    out.push((value, kind));
+                }
+            }
         }
         out
     }
@@ -1135,6 +1526,9 @@ impl CamSetup {
                 (bottom, ValueKind::Length),
             ]);
         }
+        if let Some(lathe) = &self.lathe {
+            out.extend(lathe.values().into_iter().map(|v| (v, ValueKind::Length)));
+        }
         out
     }
 
@@ -1148,6 +1542,14 @@ impl CamSetup {
                 (top, ValueKind::Length),
                 (bottom, ValueKind::Length),
             ]);
+        }
+        if let Some(lathe) = &mut self.lathe {
+            out.extend(
+                lathe
+                    .values_mut()
+                    .into_iter()
+                    .map(|v| (v, ValueKind::Length)),
+            );
         }
         out
     }
@@ -1347,6 +1749,7 @@ pub fn check_setup(setup: &CamSetup) -> Result<(), String> {
     }
     if let Some(dialect) = &setup.dialect
         && engine::dialect(dialect).is_none()
+        && engine::turning_dialect(dialect).is_none()
     {
         return Err("MitCad does not write G-code for that controller.".to_owned());
     }
@@ -1362,6 +1765,11 @@ pub fn check_setup(setup: &CamSetup) -> Result<(), String> {
     if setup.operations.len() > MAX_OPERATIONS {
         return Err(format!("A setup has at most {MAX_OPERATIONS} operations."));
     }
+    if let Some(number) = setup.lathe.as_ref().and_then(|l| l.program_number)
+        && !(1..=9999).contains(&number)
+    {
+        return Err("The program number must be from 1 to 9999.".to_owned());
+    }
     Ok(())
 }
 
@@ -1375,6 +1783,25 @@ pub fn check_operation(op: &CamOperation) -> Result<(), String> {
         && !(1..=64).contains(&tabs.count)
     {
         return Err("An outline has 1 to 64 holding tabs.".to_owned());
+    }
+    // A turning operation reads the setup's bodies; grooving and
+    // threading may read the face they cut (mitcad#1869).
+    if op.kind.is_turning() {
+        let faces = matches!(
+            op.kind,
+            OperationKind::TurnGroove { .. } | OperationKind::TurnThread { .. }
+        );
+        if op
+            .inputs
+            .iter()
+            .any(|i| !(faces && matches!(i, CamInput::Face { .. })))
+        {
+            return Err(
+                "A turning operation turns the setup's bodies; grooving and threading also take the face they cut."
+                    .to_owned(),
+            );
+        }
+        return Ok(());
     }
     // The 3-axis operations read bodies and a boundary of faces or
     // profiles; only they read bodies.
@@ -1464,6 +1891,9 @@ pub struct CamSetupInput {
     /// Its toolpaths shown (the Browser's eye).
     #[serde(default)]
     pub visible: Option<bool>,
+    /// A lathe setup's values (mitcad#1869); null clears them.
+    #[serde(default, deserialize_with = "double")]
+    pub lathe: Option<Option<LatheSetup>>,
 }
 
 impl CamSetupInput {
@@ -1515,6 +1945,9 @@ impl CamSetupInput {
         if let Some(visible) = self.visible {
             setup.visible = visible;
         }
+        if let Some(lathe) = self.lathe {
+            setup.lathe = lathe;
+        }
     }
 }
 
@@ -1556,6 +1989,9 @@ pub struct CamOperationInput {
     pub lead: Option<Option<Lead>>,
     #[serde(default)]
     pub suppressed: Option<bool>,
+    /// A turning operation's values (mitcad#1869); null clears them.
+    #[serde(default, deserialize_with = "double")]
+    pub turning: Option<Option<TurningInput>>,
 }
 
 impl CamOperationInput {
@@ -1608,6 +2044,9 @@ impl CamOperationInput {
         }
         if let Some(suppressed) = self.suppressed {
             op.suppressed = suppressed;
+        }
+        if let Some(turning) = self.turning {
+            op.turning = turning;
         }
     }
 }
@@ -1663,6 +2102,31 @@ pub enum ToolShapeInput {
         #[serde(default)]
         tip_diameter: Option<CamValue>,
     },
+    // Lathe tools (mitcad#1869).
+    Turning {
+        #[serde(default)]
+        nose_radius: Option<CamValue>,
+    },
+    Boring {
+        #[serde(default)]
+        nose_radius: Option<CamValue>,
+    },
+    Grooving {
+        width: CamValue,
+        #[serde(default)]
+        nose_radius: Option<CamValue>,
+        #[serde(default)]
+        inside: bool,
+    },
+    Parting {
+        width: CamValue,
+    },
+    Threading {
+        #[serde(default)]
+        angle: Option<CamValue>,
+        #[serde(default)]
+        inside: bool,
+    },
 }
 
 /// A tool's default speeds and feeds as values (feeds a length per
@@ -1707,9 +2171,38 @@ impl CamToolInput {
                 angle: angle(a, thirty())?,
                 tip_diameter: opt_length(tip_diameter)?.unwrap_or(0.0),
             },
+            ToolShapeInput::Turning { nose_radius } => ToolKind::Turning {
+                nose_radius: opt_length(nose_radius)?.unwrap_or(0.0),
+            },
+            ToolShapeInput::Boring { nose_radius } => ToolKind::Boring {
+                nose_radius: opt_length(nose_radius)?.unwrap_or(0.0),
+            },
+            ToolShapeInput::Grooving {
+                width,
+                nose_radius,
+                inside,
+            } => ToolKind::Grooving {
+                width: length(width)?,
+                nose_radius: opt_length(nose_radius)?.unwrap_or(0.0),
+                inside: *inside,
+            },
+            ToolShapeInput::Parting { width } => ToolKind::Parting {
+                width: length(width)?,
+            },
+            ToolShapeInput::Threading { angle: a, inside } => ToolKind::Threading {
+                angle: angle(a, sixty())?,
+                inside: *inside,
+            },
         };
         let diameter = length(&self.diameter)?;
-        let flute_length = opt_length(&self.flute_length)?.unwrap_or(diameter * 3.0);
+        // A lathe tool's flute length is the deepest it cuts.
+        let flute_default = match shape {
+            ToolKind::Turning { .. } | ToolKind::Boring { .. } | ToolKind::Threading { .. } => 4.0,
+            ToolKind::Grooving { .. } => 5.0,
+            ToolKind::Parting { .. } => 25.0,
+            _ => diameter * 3.0,
+        };
+        let flute_length = opt_length(&self.flute_length)?.unwrap_or(flute_default);
         let tool_length = opt_length(&self.length)?.unwrap_or(flute_length + 5.0);
         let cutting = match &self.cutting {
             Some(c) => Some(Cutting {

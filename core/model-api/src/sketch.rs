@@ -59,6 +59,12 @@ named_enum! {
             /// Sketch in the application asks for it.
             #[serde(default)]
             upright: bool,
+            /// On a planar face of a body: the face's outline projected
+            /// into the sketch, linked, in the same undo step (mitcad#2051;
+            /// the application's Sketch preference). Other planes get
+            /// nothing.
+            #[serde(default)]
+            project_face: bool,
         },
         "sketch.add_rectangle" => AddRectangle {
             sketch: FeatureUid,
@@ -625,7 +631,13 @@ named_enum! {
         // Projected geometry into ordinary sketch geometry (mitcad#257).
         "sketch.convert_projected" => ConvertProjected {
             sketch: FeatureUid,
+            #[serde(default)]
             entities: Vec<Ref>,
+            /// Profiles of the sketch by their region keys (mitcad#2051):
+            /// the projected curves of their boundaries, and the supporting
+            /// face's edges that bound them, projected first.
+            #[serde(default)]
+            profiles: Vec<RegionKey>,
         },
         // An SVG drawing's geometry and texts into the sketch (mitcad#473).
         "sketch.import_svg" => ImportSvg {
@@ -712,6 +724,25 @@ named_enum! {
             /// A point id or `[x, y]`; the sketch origin when left out.
             #[serde(default)]
             center: Option<Value>,
+        },
+        // Auto Constrain (mitcad#2019, `sketch_auto_constrain.rs`): the
+        // relations the geometry has, then dimensions for what is left free.
+        "sketch.auto_constrain" => AutoConstrain {
+            sketch: FeatureUid,
+            /// The curves and points to constrain; the whole sketch when
+            /// left out.
+            #[serde(default)]
+            entities: Option<Vec<Ref>>,
+            #[serde(default = "yes")]
+            relations: bool,
+            #[serde(default = "yes")]
+            dimensions: bool,
+            /// mm.
+            #[serde(default)]
+            length_tolerance: Option<f64>,
+            /// Degrees.
+            #[serde(default)]
+            angle_tolerance: Option<f64>,
         },
     }
 }
@@ -1376,6 +1407,7 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                 occurrence,
                 context,
                 upright,
+                project_face,
             } => {
                 let plane_link = match &occurrence {
                     Some(path) => mitcad_model::internal::links::link_for(
@@ -1396,11 +1428,27 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                     ..SketchDef::new(plane)
                 };
                 let depth = self.undo_depth();
+                let face = match (&def.plane, project_face) {
+                    (SketchPlane::Face { face, body }, true) => Some((face.clone(), *body)),
+                    _ => None,
+                };
                 let added = self.add_feature(&FeatureDef::Sketch(def.clone()), name.as_deref())?;
                 if upright {
                     self.stand_upright(added.uid, def, &occurrence, &context, depth, &added.name)?;
                 }
-                json!({"uid": added.uid, "name": added.name})
+                let mut value = json!({"uid": added.uid, "name": added.name});
+                if let Some((face, body)) = face {
+                    self.project_plane_face(
+                        added.uid,
+                        &face,
+                        body,
+                        &occurrence,
+                        &context,
+                        &mut value,
+                    );
+                    self.merge_undo(depth, &format!("Add {}", added.name));
+                }
+                value
             }
             SketchCommand::AddRectangle {
                 sketch,
@@ -1534,8 +1582,16 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                 projection,
                 successor,
             } => self.project_again(sketch, projection.as_ref(), successor.as_deref())?,
-            SketchCommand::ConvertProjected { sketch, entities } => {
-                self.convert_projected(sketch, &entities)?
+            SketchCommand::ConvertProjected {
+                sketch,
+                entities,
+                profiles,
+            } => {
+                if profiles.is_empty() {
+                    self.convert_projected(sketch, &entities)?
+                } else {
+                    self.convert_profiles(sketch, &entities, &profiles)?
+                }
             }
             SketchCommand::ImportSvg {
                 sketch,
@@ -1553,6 +1609,24 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
             SketchCommand::RedefinePlane(command) => {
                 super::sketch_plane::SketchPlaneOps::redefine_plane_command(self, command)?
             }
+            SketchCommand::AutoConstrain {
+                sketch,
+                entities,
+                relations,
+                dimensions,
+                length_tolerance,
+                angle_tolerance,
+            } => super::sketch_auto_constrain::auto_constrain(
+                self,
+                sketch,
+                super::sketch_auto_constrain::options(
+                    entities,
+                    relations,
+                    dimensions,
+                    length_tolerance,
+                    angle_tolerance,
+                )?,
+            )?,
             command => self.edit_command(command)?,
         })
     }
@@ -1769,6 +1843,23 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                         if r.profile.face_bounded() {
                             value["face_bounded"] = json!(true);
                         }
+                        // Projected curves on its boundary, which Convert to
+                        // Sketch Geometry takes (mitcad#2051).
+                        if r.profile
+                            .loops
+                            .iter()
+                            .flat_map(|l| &l.segments)
+                            .filter_map(|s| s.key.curve.entity())
+                            .any(|id| {
+                                def.entity(id).is_some_and(|e| e.reference)
+                                    || def
+                                        .projections
+                                        .iter()
+                                        .any(|p| p.entities.iter().any(|e| e.uid() == id))
+                            })
+                        {
+                            value["projected"] = json!(true);
+                        }
                         // A region bounded by one glyph contour belongs to
                         // its text.
                         let outer: Vec<mitcad_model::topo::CurveId> =
@@ -1869,6 +1960,11 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                 if let Some(o) = output.and_then(|o| o.texts.iter().find(|o| o.id == t.id)) {
                     value["family"] = json!(o.family);
                     value["fallback"] = json!(o.fallback);
+                    // The lines it was laid out in, wrapped in its frame
+                    // (mitcad#2029).
+                    if o.lines > 0 {
+                        value["lines"] = json!(o.lines);
+                    }
                     if o.stored {
                         value["stored_outlines"] = json!(true);
                     }
@@ -2541,6 +2637,39 @@ trait SketchLocal<K: Kernel> {
         depth: usize,
         name: &str,
     ) -> Result<(), ApiError>;
+
+    // The face's outline in a sketch on a face (mitcad#2051).
+
+    /// `sketch.create` with `project_face`: the outline of the planar face
+    /// the sketch `uid` was just added on (`face` of `body`, picked where
+    /// `occurrence` and `context` say) projected into it, linked, as
+    /// `sketch.project` with the face as its source does; its entities go
+    /// into `value` as `projected`. A projection that fails leaves the
+    /// sketch as it is, the reason in `value`'s `warnings`.
+    fn project_plane_face(
+        &mut self,
+        uid: FeatureUid,
+        face: &mitcad_model::topo::FaceName,
+        body: Option<BodyUid>,
+        occurrence: &Option<OccurrencePath>,
+        context: &Option<OccurrencePath>,
+        value: &mut Value,
+    );
+
+    /// `sketch.convert_projected` with `profiles`: the projected curves on
+    /// the boundaries (outer and inner loops) of the profiles named by
+    /// these region keys, with `entities`, converted as
+    /// [`SketchLocal::convert_projected`] converts them; the supporting
+    /// face's edges that bound a profile are projected first (linked, as
+    /// Project does), and converted too. One undo step. Refused for a
+    /// profile that is not found and for one bounded only by ordinary
+    /// sketch geometry.
+    fn convert_profiles(
+        &mut self,
+        sketch: FeatureUid,
+        entities: &[Ref],
+        profiles: &[RegionKey],
+    ) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> SketchLocal<K> for Document<K> {
@@ -2664,6 +2793,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             | C::ImportSvg { .. }
             | C::Axis { .. }
             | C::Paste { .. }
+            | C::AutoConstrain { .. }
             | C::RedefinePlane(_) => {
                 unreachable!("handled above")
             }
@@ -3725,6 +3855,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 | C::ImportSvg { .. }
                 | C::Axis { .. }
                 | C::Paste { .. }
+                | C::AutoConstrain { .. }
                 | C::RedefinePlane(_) => {
                     unreachable!("handled above")
                 }
@@ -4249,6 +4380,131 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         self.edit_feature(uid, &FeatureDef::Sketch(def))?;
         self.merge_undo(depth, &format!("Add {name}"));
         Ok(())
+    }
+
+    fn project_plane_face(
+        &mut self,
+        uid: FeatureUid,
+        face: &mitcad_model::topo::FaceName,
+        body: Option<BodyUid>,
+        occurrence: &Option<OccurrencePath>,
+        context: &Option<OccurrencePath>,
+        value: &mut Value,
+    ) {
+        let source = TopoName::Face(face.clone());
+        let occurrence = occurrence.as_ref().map(|o| &o.0[..]);
+        let context = context.as_ref().map(|c| &c.0[..]);
+        match self.project_from(uid, &source, body, true, occurrence, context) {
+            Ok(report) => value["projected"] = names(&report.entities),
+            Err(error) => {
+                value["warnings"] =
+                    json!([format!("the face's outline was not projected: {error}")]);
+            }
+        }
+    }
+
+    fn convert_profiles(
+        &mut self,
+        sketch: FeatureUid,
+        entities: &[Ref],
+        profiles: &[RegionKey],
+    ) -> Result<Value, ApiError> {
+        use mitcad_model::topo::{CurveId, FaceBoundaryRef};
+        let entry = self
+            .feature(sketch)
+            .ok_or_else(|| ApiError(format!("feature {sketch} does not exist")))?;
+        let name = entry.name.clone();
+        let FeatureDef::Sketch(def) = &entry.def else {
+            return Err(ApiError(format!("{name} ({sketch}) is not a sketch")));
+        };
+        let output = self
+            .sketch_output(sketch)
+            .ok_or_else(|| ApiError(format!("{name} does not evaluate, so it has no profiles")))?;
+        let projected = |id: EntityUid| {
+            def.entity(id).is_some_and(|e| e.reference)
+                || def
+                    .projections
+                    .iter()
+                    .any(|p| p.entities.iter().any(|r| r.uid() == id))
+        };
+        let mut refs: Vec<Ref> = entities.to_vec();
+        // The face's edges to project first, in the order the profiles
+        // name them; the whole face for an edge known only by the profile
+        // that made it.
+        let mut sources: Vec<TopoName> = Vec::new();
+        for key in profiles {
+            let region = output
+                .resolved(key)
+                .ok_or_else(|| ApiError(format!("a selected profile is no longer in {name}")))?;
+            let mut any = false;
+            for segment in region.loops.iter().flat_map(|l| &l.segments) {
+                let source = match &segment.key.curve {
+                    CurveId::Curve(uid) if projected(*uid) => {
+                        let curve = Ref::Curve(*uid);
+                        if !refs.contains(&curve) {
+                            refs.push(curve);
+                        }
+                        any = true;
+                        continue;
+                    }
+                    CurveId::FaceEdge(edge) => match (edge.as_ref(), &def.plane) {
+                        (FaceBoundaryRef::Named(edge), _) => TopoName::Edge(edge.clone()),
+                        (FaceBoundaryRef::Profile { .. }, SketchPlane::Face { face, .. }) => {
+                            TopoName::Face((**face).clone())
+                        }
+                        (FaceBoundaryRef::Profile { .. }, _) => continue,
+                    },
+                    _ => continue,
+                };
+                any = true;
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
+            if !any {
+                return Err(ApiError(
+                    "nothing to convert: a selected profile has neither projected curves nor \
+                     edges of the sketch's face on its boundary"
+                        .to_owned(),
+                ));
+            }
+        }
+        // As the sketch's plane was picked: its face's body, through the
+        // link of another component's face.
+        let body = match &def.plane {
+            SketchPlane::Face { body, .. } => *body,
+            _ => None,
+        };
+        let link = def.plane_link.clone();
+        let occurrence = link.as_ref().map(|l| &l.source.0[..]);
+        let context = link.as_ref().map(|l| &l.target.0[..]);
+        let depth = self.undo_depth();
+        let mut result = Ok(());
+        for source in &sources {
+            match self.project_from(sketch, source, body, true, occurrence, context) {
+                Ok(report) => {
+                    for r in report.entities {
+                        if !refs.contains(&r) {
+                            refs.push(r);
+                        }
+                    }
+                }
+                Err(error) => {
+                    result = Err(ApiError::from(error));
+                    break;
+                }
+            }
+        }
+        let label = format!("Convert to Sketch Geometry in {name}");
+        let converted = result.and_then(|()| self.convert_projected(sketch, &refs));
+        if converted.is_err() && self.undo_depth() > depth {
+            // The projections made for it go again.
+            self.merge_undo(depth, &label);
+            self.undo();
+        } else {
+            self.merge_undo(depth, &label);
+        }
+        converted
     }
 }
 

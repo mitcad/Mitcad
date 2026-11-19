@@ -171,11 +171,24 @@ void RenderMode::setEnabled(bool enabled) {
   }
 }
 
+int RenderMode::liveSamples() { return renderSamples(); }
+
+void RenderMode::setPaused(bool paused) {
+  if (paused == m_paused) {
+    return;
+  }
+  m_paused = paused;
+  qInfo().noquote() << (paused ? QStringLiteral("Rendered view paused") : QStringLiteral("Rendered view resumed"));
+  if (m_enabled && m_ready && m_documentVisible) {
+    m_client->send({{QStringLiteral("cmd"), QStringLiteral("pause")}, {QStringLiteral("paused"), paused}});
+  }
+}
+
 void RenderMode::setDocumentVisible(bool visible) {
   if (visible == m_documentVisible) return;
   m_documentVisible = visible;
   if (!m_enabled || !m_ready) return;
-  m_client->send({{QStringLiteral("cmd"), QStringLiteral("pause")}, {QStringLiteral("paused"), !visible}});
+  m_client->send({{QStringLiteral("cmd"), QStringLiteral("pause")}, {QStringLiteral("paused"), !visible || m_paused}});
   if (visible) {
     sendEnvironment();
     scheduleScene();
@@ -211,7 +224,8 @@ void RenderMode::workerReady(const QString& renderer) {
   }
   qInfo().noquote() << QStringLiteral("Render worker ready: %1").arg(renderer);
   m_ready = true;
-  m_client->send({{QStringLiteral("cmd"), QStringLiteral("pause")}, {QStringLiteral("paused"), !m_documentVisible}});
+  m_client->send(
+      {{QStringLiteral("cmd"), QStringLiteral("pause")}, {QStringLiteral("paused"), !m_documentVisible || m_paused}});
   m_workerMeshes.clear();
   // Full-resolution previews (docs/rendering.md, "Previews"): none unless
   // asked for, as each costs a denoise of the whole view.
@@ -635,6 +649,7 @@ void RenderMode::showFrame() {
   if (!displayFrame()) {
     return; // the camera has moved on: not shown
   }
+  emit frameShown(width, height, static_cast<int>(m_frame.info.samples), renderSamples());
   // What the frame covers, in the view's logical pixels (UI tests compare
   // it with the shaded view).
   ScopedTiming diagnostics("render diagnostics");

@@ -51,6 +51,7 @@ fn query(doc: &Document<MockKernel>, query: Value) -> Value {
 fn petg(version: u32) -> ItemData {
     ItemData::Material {
         material: Material {
+            sheet_process: None,
             id: "acme/petg".to_owned(),
             name: "Acme PETG".to_owned(),
             density: 1.27,

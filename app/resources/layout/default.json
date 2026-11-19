@@ -1,0 +1,1138 @@
+{
+  "comment": "The toolbar's tabs and groups and the menu bar's menus (mitcad#1951, app/COMMANDS.md \"The layout file\"). Keys only: captions are translated in code. \"-\" is a separator; a text is a command without a button; {\"command\", \"button\": true} one with a button of its own; {\"submenu\"} a submenu (on the toolbar its first command with a button is a split button); {\"extra\"} entries the code provides. \"unplaced\": commands on no toolbar or menu here; \"optional\": commands a build or run may lack.",
+  "version": 1,
+  "tabs": [
+    {"tab": "START", "groups": []},
+    {
+      "tab": "SOLID",
+      "groups": [
+        {
+          "group": "CREATE",
+          "entries": [
+            {"command": "solid.new_component", "repeat": true},
+            {"command": "sketch.create", "button": true},
+            "-",
+            {"command": "solid.extrude", "button": true},
+            {"command": "solid.revolve", "button": true},
+            "solid.sweep",
+            "solid.loft",
+            "solid.rib",
+            "solid.web",
+            "solid.emboss",
+            "-",
+            {"command": "solid.hole", "button": true},
+            "solid.thread",
+            "-",
+            "solid.box",
+            "solid.cylinder",
+            "solid.sphere",
+            "solid.torus",
+            "solid.coil",
+            "solid.pipe",
+            "-",
+            {
+              "submenu": "Pattern",
+              "entries": ["solid.rectangular_pattern", "solid.circular_pattern", "solid.path_pattern", "solid.pattern_at_points"]
+            },
+            "solid.mirror",
+            {"command": "surface.thicken", "repeat": true},
+            "-",
+            {
+              "submenu": "Curves",
+              "entries": ["solid.helix", "solid.intersection_curve", "solid.helix_curve"]
+            },
+            "-",
+            "solid.plastic",
+            "solid.envelope",
+            "solid.form",
+            "solid.flex",
+            "-",
+            {
+              "submenu": "Machine Elements",
+              "entries": ["solid.gear", "solid.gear_pair", "solid.pulley", "solid.belt_drive", "solid.bearing"]
+            }
+          ]
+        },
+        {
+          "group": "MODIFY",
+          "entries": [
+            {"command": "solid.press_pull", "button": true},
+            {"command": "solid.fillet", "button": true},
+            {"command": "solid.chamfer", "button": true},
+            {"command": "solid.shell", "button": true},
+            "solid.draft",
+            "-",
+            "solid.offset_face",
+            "solid.move_face",
+            "solid.replace_face",
+            "solid.fill_cavity",
+            "solid.split_face",
+            "solid.delete_face",
+            "-",
+            "solid.combine",
+            "solid.split_body",
+            "solid.panelize",
+            "solid.scale",
+            "solid.convert_mesh",
+            {
+              "submenu": "Mesh",
+              "entries": ["solid.mesh_section", "solid.mesh_repair", "solid.mesh_decimate", "solid.mesh_remove", "solid.mesh_segment", "solid.mesh_fit_surface"]
+            },
+            "-",
+            "solid.move",
+            "solid.align",
+            "-",
+            {
+              "submenu": "Joinery",
+              "entries": ["solid.dogbone", "solid.mortise_tenon"]
+            },
+            "-",
+            "solid.material",
+            "solid.appearance"
+          ]
+        },
+        {
+          "group": "ASSEMBLE",
+          "entries": [
+            {"command": "solid.new_component", "button": true},
+            "-",
+            {"command": "assemble.joint", "button": true},
+            "assemble.as_built_joint",
+            "assemble.joint_origin",
+            "assemble.rigid_group",
+            {"command": "assemble.constraint", "button": true},
+            "-",
+            "assemble.drive_joint",
+            "assemble.motion_link",
+            "assemble.contact_set",
+            "-",
+            "assemble.flex_hang",
+            "-",
+            "assemble.animate_joint",
+            "assemble.motion_study"
+          ]
+        },
+        {
+          "group": "CONSTRUCT",
+          "entries": [
+            {"command": "construct.offset_plane", "button": true},
+            {"command": "construct.plane_angle", "button": true},
+            "construct.tangent_plane",
+            {"command": "construct.midplane", "button": true},
+            "construct.plane_two_edges",
+            "construct.plane_three_points",
+            "construct.plane_tangent_point",
+            "construct.plane_along_path",
+            "construct.plane_edge_point",
+            "construct.plane_normal_point",
+            "construct.plane_offset_point",
+            "-",
+            "construct.axis_cylinder",
+            "construct.axis_perpendicular",
+            "construct.axis_two_planes",
+            "construct.axis_two_points",
+            "construct.axis_edge",
+            "construct.axis_normal_face",
+            "-",
+            "construct.point_vertex",
+            "construct.point_two_edges",
+            "construct.point_three_planes",
+            "construct.point_center",
+            "construct.point_edge_plane",
+            "construct.point_along_path",
+            "-",
+            "construct.coordinate_system"
+          ]
+        },
+        {
+          "group": "INSPECT",
+          "entries": [
+            {"command": "inspect.measure", "button": true},
+            "inspect.interference",
+            {"command": "inspect.section", "button": true},
+            {"command": "inspect.print_analysis", "repeat": true},
+            "inspect.properties",
+            "inspect.center_of_mass",
+            "comment.add"
+          ]
+        },
+        {
+          "group": "INSERT",
+          "entries": [
+            {"command": "insert.component", "button": true},
+            "insert.library_component",
+            "-",
+            {"command": "insert.mesh", "button": true},
+            {"command": "insert.dxf", "button": true},
+            "insert.svg",
+            "insert.open_design",
+            "insert.component_web",
+            "file.import",
+            "insert.image_reference"
+          ]
+        },
+        {
+          "group": "SELECT",
+          "entries": [
+            {"extra": "solid.selection"}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "SURFACE",
+      "groups": [
+        {
+          "group": "CREATE",
+          "entries": [
+            {"command": "sketch.create", "button": true, "repeat": true},
+            "-",
+            {"command": "surface.extrude", "button": true},
+            "surface.revolve",
+            "surface.sweep",
+            "surface.loft",
+            "surface.helix",
+            "-",
+            {"command": "surface.patch", "button": true},
+            "surface.ruled",
+            "surface.boundary",
+            "surface.blend",
+            "-",
+            "surface.offset"
+          ]
+        },
+        {
+          "group": "MODIFY",
+          "entries": [
+            {"command": "surface.trim", "button": true},
+            "surface.untrim",
+            "surface.extend",
+            "-",
+            "surface.stitch",
+            "surface.unstitch",
+            "surface.reverse_normal",
+            "-",
+            "surface.match",
+            "surface.fair",
+            "-",
+            {"command": "surface.thicken", "button": true}
+          ]
+        },
+        {
+          "group": "CONSTRUCT",
+          "entries": [
+            {"command": "construct.offset_plane", "button": true},
+            {"command": "construct.plane_angle", "button": true},
+            "construct.tangent_plane",
+            {"command": "construct.midplane", "button": true},
+            "construct.plane_two_edges",
+            "construct.plane_three_points",
+            "construct.plane_tangent_point",
+            "construct.plane_along_path",
+            "construct.plane_edge_point",
+            "construct.plane_normal_point",
+            "construct.plane_offset_point",
+            "-",
+            "construct.axis_cylinder",
+            "construct.axis_perpendicular",
+            "construct.axis_two_planes",
+            "construct.axis_two_points",
+            "construct.axis_edge",
+            "construct.axis_normal_face",
+            "-",
+            "construct.point_vertex",
+            "construct.point_two_edges",
+            "construct.point_three_planes",
+            "construct.point_center",
+            "construct.point_edge_plane",
+            "construct.point_along_path",
+            "-",
+            "construct.coordinate_system"
+          ]
+        },
+        {
+          "group": "SELECT",
+          "entries": [
+            {"extra": "solid.selection"}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "SHEET METAL",
+      "groups": [
+        {
+          "group": "CREATE",
+          "entries": [
+            {"command": "sketch.create", "button": true, "repeat": true},
+            "-",
+            {"command": "sheet.face", "button": true},
+            {"command": "sheet.flange", "button": true},
+            "sheet.convert",
+            "-",
+            {"command": "sheet.bend", "button": true},
+            "sheet.fold",
+            "-",
+            "sheet.cut"
+          ]
+        },
+        {
+          "group": "MODIFY",
+          "entries": [
+            "sheet.corner_relief",
+            "sheet.corner_round",
+            "sheet.corner_chamfer",
+            "-",
+            {"command": "sheet.unfold", "button": true},
+            "sheet.refold",
+            {"command": "sheet.flat_pattern", "button": true},
+            "sheet.show_flat",
+            "-",
+            {"command": "sheet.export_dxf", "repeat": true}
+          ]
+        },
+        {
+          "group": "RULES",
+          "entries": [
+            {"command": "sheet.rules", "button": true, "repeat": true},
+            {"command": "sheet.edit_rules", "repeat": true}
+          ]
+        },
+        {
+          "group": "PROCESS",
+          "entries": [
+            {"command": "sheet.finger_joint", "button": true},
+            "sheet.t_nut_slot",
+            "sheet.kerf_bend",
+            "sheet.flat_pack",
+            "-",
+            "sheet.glue_flap",
+            "sheet.standard_box",
+            "sheet.export_die_line"
+          ]
+        },
+        {
+          "group": "CONSTRUCT",
+          "entries": [
+            {"command": "construct.offset_plane", "button": true},
+            {"command": "construct.plane_angle", "button": true},
+            "construct.tangent_plane",
+            {"command": "construct.midplane", "button": true},
+            "construct.plane_two_edges",
+            "construct.plane_three_points",
+            "construct.plane_tangent_point",
+            "construct.plane_along_path",
+            "construct.plane_edge_point",
+            "construct.plane_normal_point",
+            "construct.plane_offset_point",
+            "-",
+            "construct.axis_cylinder",
+            "construct.axis_perpendicular",
+            "construct.axis_two_planes",
+            "construct.axis_two_points",
+            "construct.axis_edge",
+            "construct.axis_normal_face",
+            "-",
+            "construct.point_vertex",
+            "construct.point_two_edges",
+            "construct.point_three_planes",
+            "construct.point_center",
+            "construct.point_edge_plane",
+            "construct.point_along_path",
+            "-",
+            "construct.coordinate_system"
+          ]
+        },
+        {
+          "group": "SELECT",
+          "entries": [
+            {"extra": "solid.selection"}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "BUILD",
+      "groups": [
+        {
+          "group": "PROFILE",
+          "entries": [
+            {"command": "build.profile", "button": true},
+            {"command": "build.panel", "button": true},
+            {"command": "build.linear", "button": true}
+          ]
+        },
+        {
+          "group": "TIMBER",
+          "entries": [
+            {"command": "build.timber", "button": true},
+            {"command": "build.wall", "button": true},
+            {"command": "build.floor_roof", "button": true}
+          ]
+        },
+        {
+          "group": "CONNECT",
+          "entries": [
+            {"command": "build.connector", "button": true},
+            {"command": "build.fasteners", "button": true},
+            "build.swap_fastener"
+          ]
+        },
+        {
+          "group": "MODIFY",
+          "entries": [
+            {"command": "build.length", "button": true},
+            {"command": "build.ends", "button": true},
+            {"command": "build.flip", "button": true},
+            {"command": "build.rotate", "button": true},
+            {"command": "build.spacing", "button": true},
+            {"command": "build.frame", "button": true},
+            "build.placement"
+          ]
+        },
+        {
+          "group": "OUTPUT",
+          "entries": [
+            {"command": "build.cut_list", "button": true},
+            {"command": "build.parts_list", "button": true}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "MAKE_PRINT",
+      "groups": [
+        {
+          "group": "SLICE",
+          "entries": [
+            {"command": "make.print3d", "button": true}
+          ]
+        },
+        {
+          "group": "PRINTERS",
+          "entries": [
+            {"command": "make.printers", "button": true},
+            {"command": "make.processes", "button": true},
+            {"command": "make.plates", "button": true}
+          ]
+        },
+        {
+          "group": "PREPARE",
+          "entries": [
+            {"command": "inspect.print_analysis", "button": true}
+          ]
+        },
+        {
+          "group": "MATERIALS",
+          "entries": [
+            {"command": "solid.material", "button": true, "repeat": true}
+          ]
+        },
+        {
+          "group": "ANNOTATE",
+          "entries": [
+            {"command": "make.dimension", "button": true},
+            {"command": "make.note", "button": true},
+            "make.datum_label",
+            "make.frame",
+            "make.hole_callout",
+            "make.material_note",
+            "make.process_note",
+            "-",
+            {"command": "view.annotations", "button": true}
+          ]
+        },
+        {
+          "group": "INSPECT",
+          "entries": [
+            {"command": "inspect.measure", "button": true},
+            "inspect.interference",
+            {"command": "inspect.section", "button": true},
+            "inspect.properties",
+            "inspect.center_of_mass",
+            "comment.add"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "MAKE_LASER",
+      "groups": [
+        {
+          "group": "EXPORT",
+          "entries": [
+            {"command": "sheet.export_dxf", "button": true},
+            {"command": "make.export_face_dxf", "button": true}
+          ]
+        },
+        {
+          "group": "MATERIALS",
+          "entries": [
+            {"command": "solid.material", "button": true, "repeat": true}
+          ]
+        },
+        {
+          "group": "ANNOTATE",
+          "entries": [
+            {"command": "make.dimension", "button": true, "repeat": true},
+            {"command": "make.note", "button": true, "repeat": true},
+            {"command": "make.datum_label", "repeat": true},
+            {"command": "make.frame", "repeat": true},
+            {"command": "make.hole_callout", "repeat": true},
+            {"command": "make.material_note", "repeat": true},
+            {"command": "make.process_note", "repeat": true},
+            "-",
+            {"command": "view.annotations", "button": true, "repeat": true}
+          ]
+        },
+        {
+          "group": "INSPECT",
+          "entries": [
+            {"command": "inspect.measure", "button": true, "repeat": true},
+            {"command": "inspect.interference", "repeat": true},
+            {"command": "inspect.section", "button": true, "repeat": true},
+            {"command": "inspect.properties", "repeat": true},
+            {"command": "inspect.center_of_mass", "repeat": true},
+            {"command": "comment.add", "repeat": true}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "MAKE_CNC",
+      "groups": [
+        {
+          "group": "SETUP",
+          "entries": [
+            {"command": "make.cam_setup", "button": true},
+            "make.cam_machines"
+          ]
+        },
+        {
+          "group": "2D MILLING",
+          "entries": [
+            "make.cam_facing",
+            {"command": "make.cam_contour", "button": true},
+            "make.cam_pocket",
+            "make.cam_adaptive",
+            "make.cam_rest",
+            "make.cam_drill"
+          ]
+        },
+        {
+          "group": "3D MILLING",
+          "entries": [
+            {"command": "make.cam_roughing_3d", "button": true},
+            "make.cam_raster_finish",
+            "make.cam_waterline_finish"
+          ]
+        },
+        {
+          "group": "TURNING",
+          "entries": [
+            "make.cam_turn_face",
+            {"command": "make.cam_turn_rough", "button": true},
+            "make.cam_turn_finish",
+            "make.cam_turn_groove",
+            "make.cam_turn_part_off",
+            "make.cam_turn_thread"
+          ]
+        },
+        {
+          "group": "TOOLPATH",
+          "entries": [
+            {"command": "make.cam_generate", "button": true},
+            {"command": "make.cam_simulate", "button": true},
+            "make.cam_post"
+          ]
+        },
+        {
+          "group": "MATERIALS",
+          "entries": [
+            {"command": "solid.material", "button": true, "repeat": true}
+          ]
+        },
+        {
+          "group": "ANNOTATE",
+          "entries": [
+            {"command": "make.dimension", "button": true, "repeat": true},
+            {"command": "make.note", "repeat": true},
+            {"command": "make.datum_label", "repeat": true},
+            {"command": "make.frame", "repeat": true},
+            {"command": "make.hole_callout", "repeat": true},
+            {"command": "make.material_note", "repeat": true},
+            {"command": "make.process_note", "repeat": true},
+            "-",
+            {"command": "view.annotations", "repeat": true}
+          ]
+        },
+        {
+          "group": "INSPECT",
+          "entries": [
+            {"command": "inspect.measure", "button": true, "repeat": true},
+            {"command": "inspect.interference", "repeat": true},
+            {"command": "inspect.section", "repeat": true},
+            {"command": "inspect.properties", "repeat": true},
+            {"command": "inspect.center_of_mass", "repeat": true},
+            {"command": "comment.add", "repeat": true}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "MANAGE",
+      "groups": [
+        {
+          "group": "PARAMETERS",
+          "entries": [
+            {"command": "solid.parameters", "button": true}
+          ]
+        },
+        {
+          "group": "CONFIGURATIONS",
+          "entries": [
+            {"command": "solid.configurations", "button": true}
+          ]
+        },
+        {
+          "group": "MATERIALS",
+          "entries": [
+            {"command": "solid.materials", "button": true},
+            {"command": "solid.appearances", "button": true}
+          ]
+        },
+        {
+          "group": "RULES",
+          "entries": [
+            {"command": "sheet.rules", "button": true},
+            "sheet.edit_rules",
+            "-",
+            {"command": "manage.plastic_rules", "button": true}
+          ]
+        },
+        {
+          "group": "DESIGN",
+          "entries": [
+            {"command": "manage.recompute_all", "button": true},
+            {"command": "manage.units", "button": true},
+            "-",
+            {"command": "file.design_properties", "button": true}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "SKETCH",
+      "groups": [
+        {
+          "group": "CREATE",
+          "entries": [
+            {
+              "submenu": "Lines",
+              "entries": [
+                {"command": "sketch.line", "button": true},
+                "sketch.line_midpoint"
+              ]
+            },
+            {"command": "sketch.point", "button": true},
+            {
+              "submenu": "Rectangles",
+              "entries": [
+                {"command": "sketch.rectangle", "button": true},
+                "sketch.rectangle_3pt",
+                "sketch.rectangle_center",
+                "sketch.rectangle_rounded",
+                "sketch.rectangle_rounded_center"
+              ]
+            },
+            {
+              "submenu": "Circles",
+              "entries": [
+                {"command": "sketch.circle", "button": true},
+                "sketch.circle_2pt",
+                "sketch.circle_3pt",
+                "sketch.circle_2tangent",
+                "sketch.circle_3tangent"
+              ]
+            },
+            {
+              "submenu": "Arcs",
+              "entries": [
+                {"command": "sketch.arc", "button": true},
+                "sketch.arc_center",
+                "sketch.arc_tangent"
+              ]
+            },
+            {
+              "submenu": "Other Geometry",
+              "entries": [
+                "sketch.ellipse",
+                "sketch.polygon",
+                "sketch.polygon_inscribed",
+                "sketch.polygon_edge",
+                "sketch.slot",
+                "sketch.slot_overall",
+                "sketch.slot_center",
+                "sketch.slot_arc",
+                "sketch.slot_arc_center",
+                "sketch.spline",
+                "sketch.spline_control"
+              ]
+            },
+            {"submenu": "Text", "entries": ["sketch.text", "sketch.add_code"]},
+            {
+              "submenu": "Patterns",
+              "entries": ["sketch.rectangular_pattern", "sketch.circular_pattern", "sketch.mirror"]
+            },
+            {
+              "submenu": "References",
+              "entries": [
+                "sketch.project",
+                "sketch.intersect",
+                "sketch.clean_up_projections",
+                "sketch.clean_up_stale_projections",
+                "sketch.project_again"
+              ]
+            },
+            {"command": "sketch.dimension", "button": true}
+          ]
+        },
+        {
+          "group": "MODIFY",
+          "entries": [
+            {"command": "sketch.fillet", "button": true},
+            "sketch.chamfer",
+            {"command": "sketch.trim", "button": true},
+            "sketch.extend",
+            {"command": "sketch.offset", "button": true},
+            "sketch.move",
+            "sketch.construction",
+            "sketch.centerline",
+            "sketch.convert_projected",
+            "sketch.parameters"
+          ]
+        },
+        {
+          "group": "CONSTRAINTS",
+          "entries": [
+            {"command": "sketch.constraint.horizontal_vertical", "button": true},
+            {"command": "sketch.constraint.coincident", "button": true},
+            {"command": "sketch.constraint.tangent", "button": true},
+            {"command": "sketch.constraint.equal", "button": true},
+            {"command": "sketch.constraint.parallel", "button": true},
+            {"command": "sketch.constraint.perpendicular", "button": true},
+            {"command": "sketch.constraint.fix", "button": true},
+            "sketch.constraint.midpoint",
+            "sketch.constraint.concentric",
+            "sketch.constraint.collinear",
+            "sketch.constraint.symmetric",
+            "sketch.constraint.smooth",
+            "sketch.equal_spacing",
+            {"command": "sketch.auto_constrain", "button": true}
+          ]
+        },
+        {
+          "group": "INSPECT",
+          "entries": [
+            {"command": "inspect.measure", "button": true, "repeat": true}
+          ]
+        },
+        {
+          "group": "INSERT",
+          "entries": [
+            {"command": "sketch.insert_dxf", "button": true},
+            "sketch.insert_svg"
+          ]
+        },
+        {
+          "group": "SELECT",
+          "entries": [
+            {"extra": "sketch.selection"}
+          ]
+        },
+        {
+          "group": "FINISH SKETCH",
+          "entries": [
+            {"command": "sketch.finish", "button": true}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "DRAWING",
+      "groups": [
+        {
+          "group": "CLOSE DRAWING",
+          "entries": [
+            {"command": "drawing.close", "button": true}
+          ]
+        },
+        {
+          "group": "SHEET",
+          "entries": [
+            {"command": "drawing.edit_sheet", "button": true},
+            {"command": "drawing.add_revision", "button": true}
+          ]
+        },
+        {
+          "group": "CREATE",
+          "entries": [
+            {"command": "drawing.base_view", "button": true},
+            {"command": "drawing.projected_view", "button": true},
+            {"command": "drawing.section_view", "button": true},
+            {"command": "drawing.detail_view", "button": true},
+            {"command": "drawing.break", "button": true}
+          ]
+        },
+        {
+          "group": "GEOMETRY",
+          "entries": [
+            {"command": "drawing.center_mark", "button": true},
+            {"command": "drawing.centerline", "button": true},
+            {"command": "drawing.line", "button": true},
+            {"command": "drawing.arc", "button": true},
+            {"command": "drawing.center_pattern", "button": true},
+            {"command": "drawing.edge_extension", "button": true}
+          ]
+        },
+        {
+          "group": "DIMENSIONS",
+          "entries": [
+            {"command": "drawing.dimension", "button": true},
+            {"command": "drawing.ordinate", "button": true},
+            {"command": "drawing.baseline", "button": true},
+            {"command": "drawing.model_items", "button": true}
+          ]
+        },
+        {
+          "group": "TEXT",
+          "entries": [
+            {"command": "drawing.text", "button": true},
+            {"command": "drawing.note", "button": true}
+          ]
+        },
+        {
+          "group": "SYMBOLS",
+          "entries": [
+            {"command": "drawing.datum", "button": true},
+            {"command": "drawing.frame", "button": true},
+            {"command": "drawing.finish", "button": true}
+          ]
+        },
+        {
+          "group": "TABLES",
+          "entries": [
+            {"command": "drawing.hole_table", "button": true},
+            {"command": "drawing.parts_list", "button": true},
+            {"command": "drawing.balloon", "button": true}
+          ]
+        },
+        {
+          "group": "EXPORT",
+          "entries": [
+            "drawing.export_pdf",
+            "drawing.export_svg",
+            "drawing.export_dxf",
+            "drawing.export_dwg",
+            "-",
+            {"command": "file.print", "button": true}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "CUT SHEET",
+      "groups": [
+        {
+          "group": "CLOSE DRAWING",
+          "entries": [
+            {"extra": "cut_sheet.close"}
+          ]
+        },
+        {
+          "group": "PARTS",
+          "entries": [
+            {"command": "drawing.add_parts", "button": true}
+          ]
+        },
+        {
+          "group": "EXPORT",
+          "entries": [
+            {"extra": "cut_sheet.export"}
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "RENDER",
+      "groups": [
+        {
+          "group": "LOOK",
+          "entries": [
+            {"command": "solid.appearance", "button": true, "repeat": true},
+            {"command": "solid.appearances", "button": true, "repeat": true}
+          ]
+        },
+        {
+          "group": "ENVIRONMENT",
+          "entries": [
+            {"command": "view.render_environment", "button": true}
+          ]
+        },
+        {
+          "group": "VIEW",
+          "entries": [
+            {"command": "view.rendered", "button": true}
+          ]
+        },
+        {
+          "group": "OUTPUT",
+          "entries": [
+            {"command": "file.render_image", "button": true}
+          ]
+        }
+      ]
+    }
+  ],
+  "menus": [
+    {
+      "menu": "FILE",
+      "entries": [
+        "file.new_design",
+        "file.open",
+        "file.open_from_project",
+        {"extra": "recent"},
+        "file.open_read_only",
+        "file.close",
+        "-",
+        "file.save",
+        "file.save_as",
+        "file.save_to_project",
+        "file.save_version",
+        "file.version_history",
+        "file.design_properties",
+        "-",
+        {
+          "submenu": "PROJECT",
+          "entries": [
+            "file.new_project",
+            "file.open_project",
+            "file.open_remote",
+            "-",
+            "file.sync",
+            "file.check_remote",
+            "file.remote_browser",
+            "-",
+            "file.project_settings",
+            "-",
+            "file.web_viewer",
+            "file.update_web_viewer"
+          ]
+        },
+        "-",
+        "file.import",
+        "file.export",
+        "view.export_snapshot",
+        "file.create_drawing",
+        "file.export_drawing",
+        "-",
+        "file.print",
+        "-",
+        "file.recover",
+        "-",
+        "file.exit"
+      ]
+    },
+    {
+      "menu": "EDIT",
+      "entries": [
+        "edit.undo",
+        "edit.redo",
+        "-",
+        "sketch.cut",
+        "sketch.copy",
+        "sketch.paste",
+        "sketch.delete",
+        "-",
+        "solid.parameters",
+        "solid.configurations",
+        "view.search_timeline",
+        "view.find_in_design"
+      ]
+    },
+    {
+      "menu": "VIEW",
+      "entries": [
+        "view.fit",
+        {
+          "submenu": "STANDARD VIEWS",
+          "icon": "orientation-cube",
+          "entries": ["view.home", "view.front", "view.back", "view.left", "view.right", "view.top", "view.bottom", "view.iso"]
+        },
+        "view.look_at",
+        {"submenu": "CAMERA", "icon": "perspective", "entries": ["view.orthographic", "view.perspective"]},
+        "view.anaglyph",
+        {
+          "submenu": "VISUAL STYLE",
+          "icon": "visual-style",
+          "entries": [
+            "view.style.shaded",
+            "view.style.visible_edges",
+            "view.style.hidden_edges",
+            "view.style.wireframe",
+            "view.style.wireframe_hidden",
+            "-",
+            "view.rendered",
+            "view.render_environment",
+            "file.render_image"
+          ]
+        },
+        {
+          "submenu": "ENVIRONMENT",
+          "icon": "environment",
+          "entries": [
+            "view.environment.gradient",
+            "view.environment.light",
+            "view.environment.white",
+            "view.environment.dark",
+            "view.environment.custom",
+            "view.environment.automatic"
+          ]
+        },
+        {
+          "submenu": "SHOW",
+          "icon": "eye",
+          "entries": ["view.show_origins", "view.show_construction", "view.show_sketches"]
+        },
+        "view.sketches_through",
+        "view.selection_through",
+        "view.component_colors",
+        "view.build_volume",
+        {
+          "submenu": "GRID AND SNAPS",
+          "icon": "grid",
+          "entries": ["view.grid", "view.snap_grid", "view.grid_settings"]
+        },
+        {
+          "submenu": "NAMED VIEWS",
+          "icon": "named-view",
+          "entries": ["view.named_view", "view.set_home", "view.reset_home"]
+        },
+        "view.annotations",
+        "view.comment_pins",
+        "-",
+        {
+          "submenu": "PANELS",
+          "entries": [{"extra": "panels"}, "-", "view.comments"]
+        }
+      ]
+    },
+    {
+      "menu": "TOOLS",
+      "entries": [
+        "tools.search",
+        "tools.shortcuts",
+        {
+          "submenu": "LIBRARIES",
+          "entries": [
+            "tools.browse_components",
+            "-",
+            "tools.library_parts",
+            "tools.publish_library",
+            "-",
+            "tools.material_library",
+            "tools.printer_library",
+            "tools.process_library",
+            "-",
+            "tools.libraries"
+          ]
+        },
+        "-",
+        "tools.preferences"
+      ]
+    },
+    {
+      "menu": "WINDOW",
+      "entries": [
+        {"extra": "window"}
+      ]
+    },
+    {
+      "menu": "HELP",
+      "entries": [
+        "help.user_guide",
+        "help.shortcuts",
+        "help.connect_assistant",
+        "help.diagnostics",
+        "help.open_log_folder",
+        "help.check_updates",
+        "help.send_feedback",
+        "-",
+        {"extra": "about"},
+        {"extra": "about_qt"}
+      ]
+    }
+  ],
+  "unplaced": [
+    "sketch.create_3d",
+    "sketch.next_plane",
+    "sketch.previous_plane",
+    "sketch.placement_normal",
+    "sketch.redefine_plane",
+    "solid.form_edit",
+    "solid.form_fill_hole",
+    "solid.form_bridge",
+    "assemble.derived_component",
+    "insert.mount_part",
+    "insert.calibrate_image_reference",
+    "inspect.remove_section",
+    "inspect.flip_section",
+    "sketch.edit_pattern",
+    "sketch.edit_offset",
+    "sketch.edit_text",
+    "sketch.edit_code",
+    "sketch.equal_spacing_dimension",
+    "sketch.edit_equal_spacing",
+    "comment.retarget",
+    "view.turn_left",
+    "view.turn_right",
+    "view.turn_up",
+    "view.turn_down",
+    "view.space_mouse_lock_rotation",
+    "view.show_all_sketches",
+    "view.hide_all_sketches",
+    "view.property_sets",
+    "view.projects",
+    "view.chat",
+    "window.new",
+    "tools.community_library",
+    "assembly.policy",
+    "assembly.reorient_design",
+    "tools.preferences.general",
+    "tools.preferences.navigation",
+    "tools.preferences.display",
+    "tools.preferences.cache",
+    "tools.preferences.cloud",
+    "tools.preferences.updates",
+    "tools.preferences.print",
+    "tools.preferences.diagnostics",
+    "tools.preferences.textures",
+    "tools.preferences.agents",
+    "tools.preferences.fonts",
+    "tools.preferences.sketch",
+    "tools.preferences.suppliers",
+    "tools.preferences.assembly",
+    "test.component_web_file",
+    "test.leave_wait_cursor",
+    "test.nested_wait",
+    "edit.repeat"
+  ],
+  "optional": [
+    "file.render_image",
+    "view.rendered",
+    "view.render_environment",
+    "test.component_web_file",
+    "test.leave_wait_cursor",
+    "test.nested_wait"
+  ]
+}

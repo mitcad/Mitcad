@@ -31,7 +31,10 @@ struct WriteOptions {
 };
 
 // Reads a file by its extension. Mesh files take millimetres as their unit.
-std::vector<Body> read_file(const std::string& path);
+// A STEP or IGES file's transfer stops within `range` (read_step,
+// read_iges; mitcad#2032); the other formats' reads take no range.
+std::vector<Body> read_file(const std::string& path,
+                            const Message_ProgressRange& range = Message_ProgressRange());
 
 // Writes the bodies to a file by its extension, each where its placements
 // say (see Body).

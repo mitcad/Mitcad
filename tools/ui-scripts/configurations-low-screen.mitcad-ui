@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Configurations on a screen 720 logical px high (mitcad#2036), on
+# configurations.json: the window, its tab's buttons and Close within the
+# screen on the Options and the Rules tab; it can be made shorter than the
+# Rules palette's full height, and the palette then scrolls to its last
+# entry. Run by ui-configurations-low-screen-test.sh.
+expect-ever 'View area'
+wait-idle
+mark
+command solid.configurations
+focus-dialog '^Configurations$'
+expect-log 'Configurations window opened'
+wait-log '^Configurations window minimum size '
+expect-ever 'Configurations tab Rules at'
+
+# The Options tab, the first one.
+expect-dialog-fits
+
+# The Rules tab.
+mark
+dialog-click-logged '^Configurations tab Rules at '
+wait-log '^Configurations page Rules'
+expect-dialog-fits
+
+# Shorter than the palette's full height (about 26 rows, some 570 px for
+# the palette alone): it scrolls. (The window's minimum, about 440 px,
+# comes from the other tabs' contents.)
+dialog-resize 900 480
+expect-dialog-fits 900 480
+mark
+focus-widget rulePalette
+key End
+wait-log '^Rule palette in_table at '
+
+button '^Close$'
+expect-dialog-gone '^Configurations$'
+focus-main

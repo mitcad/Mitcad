@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+# The Sketch Palette's Construction (X) box follows X (mitcad#2040): with
+# sketch curves selected it converts them, one undo step, and shows their
+# state (partly checked when mixed); with nothing selected it is the mode
+# for new geometry. Fixture: Sketch1 (F1) with the lines c1 at y = 20 and
+# c4 at y = -20 (x -40..40) and two points that widen the fitted view.
+# The wrapper replaces ENTER_SKETCH with the frontend's timeline
+# activation. Clicks stay off the axes (a click there selects them) and
+# within x -45..47 mm, the free part of the view in session 0's window on
+# Windows too.
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-log '^Sketch Palette construction: new geometry off'
+capture-undo-depth baseline
+
+# A normal line selected: the box unchecked; a click makes it construction
+# as X does, the box checked, the mode for new geometry still off.
+mark
+sketch-click 15 20
+wait-log '^Selected: 1 sketch curve'
+wait-log '^Sketch Palette construction: selection off'
+mark
+click-logged '^Palette paletteConstruction at '
+wait-log '^Construction on: \["c1"\]'
+wait-log '^Sketch Palette construction: selection on'
+expect-undo-depth ${baseline} 1
+expect-never '^Construction mode on'
+
+# Only construction curves selected: one click makes them normal again;
+# one undo step takes it back and the box follows. (An undo back to the
+# depth the sketch was opened at would leave the sketch, so the first
+# conversion stays.)
+mark
+click-logged '^Palette paletteConstruction at '
+wait-log '^Construction off: \["c1"\]'
+wait-log '^Sketch Palette construction: selection off'
+expect-undo-depth ${baseline} 2
+mark
+command edit.undo
+wait-log '^Sketch Palette construction: selection on'
+expect-undo-depth ${baseline} 1
+
+# A normal and a construction curve selected: partly checked; one click
+# makes both construction, one undo step back to mixed.
+mark
+sketch-click 15 -20 ctrl
+wait-log '^Selected: 2 sketch curves'
+wait-log '^Sketch Palette construction: selection mixed'
+mark
+click-logged '^Palette paletteConstruction at '
+wait-log '^Construction on: \[.*"c4"'
+wait-log '^Sketch Palette construction: selection on'
+expect-undo-depth ${baseline} 2
+mark
+command edit.undo
+wait-log '^Sketch Palette construction: selection mixed'
+expect-undo-depth ${baseline} 1
+expect-never '^Construction mode on'
+
+# Nothing selected: the box sets the mode for new geometry, as before.
+mark
+sketch-click 15 -35
+wait-log '^Selected: nothing'
+wait-log '^Sketch Palette construction: new geometry off'
+mark
+click-logged '^Palette paletteConstruction at '
+wait-log '^Construction mode on'
+wait-log '^Sketch Palette construction: new geometry on'
+expect-undo-depth ${baseline} 1
+mark
+click-logged '^Palette paletteConstruction at '
+wait-log '^Construction mode off'
+wait-log '^Sketch Palette construction: new geometry off'

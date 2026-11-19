@@ -30,6 +30,7 @@
 #include "../framework/UserText.hpp"
 #include "CamSimulateDialog.hpp"
 #include "CamStock.hpp"
+#include "CamToolpaths.hpp"
 
 namespace mitcad {
 namespace {
@@ -73,6 +74,36 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
                  .toObject();
   } catch (const std::exception& e) {
     qWarning().noquote() << QStringLiteral("CAM stock of %1 not read: %2").arg(name, QString::fromUtf8(e.what()));
+    return;
+  }
+  // A lathe setup's stock is its turned section (mitcad#1869): drawn as the
+  // section revolved about the spindle axis at the program's end, with its
+  // summary in words.
+  if (answer.value(QStringLiteral("turning")).toBool()) {
+    const cam::StockMesh turned = cam::turnedStockMesh(answer.value(QStringLiteral("stock")).toObject(), frame);
+    qInfo().noquote() << QStringLiteral("CAM turned stock overlay: %1 vertices, %2 triangles")
+                             .arg(turned.vertices())
+                             .arg(turned.triangleCount());
+    if (!turned.empty()) {
+      m_camTurnedStock = true;
+      m_viewer->setCamStock(turned);
+    }
+    const double left = answer.value(QStringLiteral("left")).toDouble();
+    const int gouges = static_cast<int>(answer.value(QStringLiteral("gouges")).toArray().size());
+    const QJsonArray cuts = answer.value(QStringLiteral("rapid_cuts")).toArray();
+    qInfo().noquote() << QStringLiteral("CAM turned stock: %1: left %2, %3 gouge(s), %4 rapid cut(s)")
+                             .arg(name, cam::shortNumber(left))
+                             .arg(gouges)
+                             .arg(cuts.size());
+    if (m_camSimulate != nullptr) {
+      const QString cut = gouges > 0 ? tr("The tools cut into the part.") : tr("No tool cuts into the part.");
+      m_camSimulate->setRemaining(
+          tr("The turned part: at most %1 mm of material left over it. %2").arg(cam::shortNumber(left), cut), {});
+    }
+    if (!cuts.isEmpty()) {
+      showWarning(tr("The simulation found a problem. %1")
+                      .arg(modelMessage(userText(str(cuts.first().toObject(), "message")))));
+    }
     return;
   }
   CamStockPlayback stock;
@@ -157,8 +188,9 @@ void MainWindow::showCamStock(int index) {
 }
 
 void MainWindow::clearCamStock() {
-  const bool shown = m_camStock.has_value();
+  const bool shown = m_camStock.has_value() || m_camTurnedStock;
   m_camStock.reset();
+  m_camTurnedStock = false;
   if (m_camSimulate != nullptr) {
     m_camSimulate->setRemaining(QString(), {});
   }

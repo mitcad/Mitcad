@@ -22,7 +22,6 @@ CommandDef mortiseTenonCommand(const CommandContext& context) {
   def.name = QObject::tr("Mortise and Tenon");
   def.icon = QStringLiteral("mortise-tenon");
   def.tooltip = QObject::tr("A tenon on a body's end face and its mortise in another body");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("joint"), QStringLiteral("joinery"), QStringLiteral("tenon"),
                   QStringLiteral("mortise"), QStringLiteral("woodworking")};
   def.featureType = QStringLiteral("mortise_tenon");

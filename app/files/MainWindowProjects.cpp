@@ -76,7 +76,6 @@ void MainWindow::registerProjectCommands() {
     d.tooltip = tooltip;
     d.kind = CommandDef::Kind::Action;
     d.mode = CommandDef::Mode::Any;
-    d.tab.clear(); // the File menu
     d.run = std::move(run);
     return d;
   };

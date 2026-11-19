@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/framework/Ribbon.cpp app/framework/RibbonLabels.cpp app/view/ViewController.cpp app/MainWindow.cpp app/framework/TestDriver.cpp tools/ui-scripts/ribbon-labels.mitcad-ui
+# check-all sources: app/framework/Ribbon.cpp app/framework/RibbonLabels.cpp app/view/ViewController.cpp app/MainWindow.cpp app/framework/TestDriver.cpp tools/ui-scripts/ribbon-labels.mitcad-ui app/main.cpp
 # Preferences > Display > Toolbar labels (mitcad#1936, GitHub
 # mitcad/Mitcad#356) in the build VM, as tools/ui-ribbon-labels-test.sh on
 # Linux: the shared steps tools/ui-scripts/ribbon-labels.mitcad-ui in the
-# Floating and the Docked layout. Icons only by default; Labels under
+# Floating and the Docked layout. Labels under icons by default in Floating
+# (its toolbar panel, mitcad#1990), Icons only in Docked; Labels under
 # icons makes the rows higher and puts Sketch, Extrude, Revolve and Hole
 # under the SOLID tab's Create buttons, Create and Modify stay whole in a
 # wide window and the groups fold from the right in a narrow one; Icons
@@ -21,6 +22,8 @@ $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/ribbon-labels.mitca
 
 # The shared script in one layout.
 function Run-Layout([string]$Layout) {
+  # The option's index without a choice: Labels under icons in Floating.
+  $env:MITCAD_TEST_LABELS_DEFAULT = if ($Layout -eq 'floating') { '1' } else { '0' }
   Ui-StartApp "ribbon-labels-$Layout" @('--ui=qt', '--no-mcp', "--chrome=$Layout")
   $null = $script:UiProcess.Handle
   if (-not $script:UiProcess.WaitForExit(150000)) { Ui-Fail "ribbon labels driver timed out ($Layout)" }

@@ -15,6 +15,7 @@ use std::f64::consts::TAU;
 use mitcad_vec3::vec2::distance as dist;
 
 use super::flat::FlatBend;
+use super::process::{OutputPreset, SheetProcess};
 use super::{BoundedCurve2Ext, MaterialRegion};
 use crate::expr::LengthUnit;
 use crate::profile::SegmentGeometry;
@@ -38,6 +39,9 @@ pub struct FlatDxfOptions {
     pub unit: LengthUnit,
     /// Also the tangent lines of the bends.
     pub tangents: bool,
+    /// The sheet's process profile, whose output preset names the layers
+    /// (mitcad#1939): metal's as they always were.
+    pub process: SheetProcess,
 }
 
 impl Default for FlatDxfOptions {
@@ -45,6 +49,7 @@ impl Default for FlatDxfOptions {
         Self {
             unit: LengthUnit::Millimetre,
             tangents: false,
+            process: SheetProcess::Metal,
         }
     }
 }
@@ -161,7 +166,8 @@ pub fn drawing(
 ) -> Result<mitcad_dxf::Drawing, String> {
     use mitcad_dxf::Layer;
 
-    let mut curves: Vec<(&'static str, String, SegmentGeometry)> = Vec::new();
+    let preset = OutputPreset::of(options.process);
+    let mut curves: Vec<(String, String, SegmentGeometry)> = Vec::new();
     for (r, region) in regions.iter().enumerate() {
         for (l, contour) in region.loops.iter().enumerate() {
             let pieces = contour
@@ -170,28 +176,42 @@ pub fn drawing(
                 .map(|e| e.curve.geometry_piece())
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("contour {l} of region {r}: {e}"))?;
-            let layer = if l == 0 { CUT_OUTER } else { CUT_INNER };
+            let layer = if l == 0 {
+                &preset.cut_outer
+            } else {
+                &preset.cut_inner
+            };
             for (i, piece) in joined(pieces).into_iter().enumerate() {
-                curves.push((layer, format!("contour {l} piece {i}"), piece));
+                curves.push((layer.clone(), format!("contour {l} piece {i}"), piece));
             }
         }
     }
     for bend in bends {
         let layer = if bend.direction == "up" {
-            BEND_UP
+            &preset.bend_up
         } else {
-            BEND_DOWN
+            &preset.bend_down
         };
         let name = format!("bend {} slot {}", bend.bend.feature, bend.bend.slot);
-        let lines = bend.centerlines.iter().map(|line| (layer, line));
+        // A kerf bend (mitcad#1939) has no centre line to mark: its slits
+        // are cut, on the inner cut layer.
+        let lines = bend
+            .centerlines
+            .iter()
+            .filter(|_| bend.slits.is_empty())
+            .map(|line| (layer.as_str(), line));
         let tangents = bend
             .tangents
             .iter()
             .filter(|_| options.tangents)
             .map(|line| (BEND_TANGENT, line));
-        for (layer, line) in lines.chain(tangents) {
+        let slits = bend
+            .slits
+            .iter()
+            .map(|line| (preset.cut_inner.as_str(), line));
+        for (layer, line) in lines.chain(tangents).chain(slits) {
             curves.push((
-                layer,
+                layer.to_owned(),
                 name.clone(),
                 SegmentGeometry::Line {
                     start: line.start,
@@ -203,16 +223,26 @@ pub fn drawing(
     let mut drawing = crate::exchange::sketch_drawing(
         curves
             .iter()
-            .map(|(layer, name, geometry)| (*layer, name.as_str(), geometry)),
+            .map(|(layer, name, geometry)| (layer.as_str(), name.as_str(), geometry)),
     )?;
-    let mut layers = vec![(CUT_OUTER, 7), (CUT_INNER, 6), (BEND_UP, 3), (BEND_DOWN, 1)];
-    if options.tangents {
-        layers.push((BEND_TANGENT, 8));
+    let mut names: Vec<&str> = Vec::new();
+    for name in [
+        preset.cut_outer.as_str(),
+        preset.cut_inner.as_str(),
+        preset.bend_up.as_str(),
+        preset.bend_down.as_str(),
+    ] {
+        if !names.contains(&name) {
+            names.push(name);
+        }
     }
-    drawing.layers = layers
+    if options.tangents {
+        names.push(BEND_TANGENT);
+    }
+    drawing.layers = names
         .into_iter()
-        .map(|(name, color)| Layer {
-            color,
+        .map(|name| Layer {
+            color: preset.colour(name),
             ..Layer::new(name)
         })
         .collect();

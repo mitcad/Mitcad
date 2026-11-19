@@ -16,6 +16,11 @@
 //! The measurement is the caller's (`mitcad-ffi` measures the process
 //! against its limits as the imports' memory guard does, mitcad#80), so
 //! that the guard is tested here with readings of its own.
+//!
+//! The error says what the command was ([`GuardedWork`], mitcad#2032): a
+//! modelling command is told to do the work in smaller steps, a file's
+//! import (`import_file`) that the file needs more memory than the system
+//! has left, as there is nothing of it to do in steps.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -35,6 +40,18 @@ pub struct MemoryReading {
     /// How many allocations inside the geometry kernel have failed in the
     /// process so far (also those it caught inside, mitcad#132).
     pub failed_allocations: u64,
+}
+
+/// What a guarded command does, for the words of its error (mitcad#2032).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GuardedWork {
+    /// A modelling command: its error advises doing the work in smaller
+    /// steps.
+    #[default]
+    Command,
+    /// A file's import (`import_file`: STEP, IGES, ...): its error says the
+    /// file needs more memory than the system has left.
+    Import,
 }
 
 /// The share of the tightest limit at which a command is stopped: as the
@@ -70,6 +87,17 @@ pub fn refusal(reading: &MemoryReading, failed_before: u64) -> Option<String> {
 /// second, from the last measurement): also when it would reach
 /// [`MEMORY_LOW`] within [`MEMORY_AHEAD`] at that rate.
 pub fn refusal_ahead(reading: &MemoryReading, failed_before: u64, growth: f64) -> Option<String> {
+    refusal_for(GuardedWork::Command, reading, failed_before, growth)
+}
+
+/// [`refusal_ahead`] in the words for `work`: a modelling command's, or a
+/// file's import's (mitcad#2032).
+pub fn refusal_for(
+    work: GuardedWork,
+    reading: &MemoryReading,
+    failed_before: u64,
+    growth: f64,
+) -> Option<String> {
     let cause = if reading.failed_allocations > failed_before {
         " (an allocation in the geometry kernel failed)"
     } else if reading.share >= MEMORY_LOW {
@@ -79,12 +107,20 @@ pub fn refusal_ahead(reading: &MemoryReading, failed_before: u64, growth: f64) -
     } else {
         return None;
     };
-    Some(format!(
-        "the operation ran out of memory{cause} at {} and was stopped before the system would \
-         end the process; the document is as it was before the command. Do the work in smaller \
-         steps, for example join the bodies in smaller groups",
-        reading.text
-    ))
+    Some(match work {
+        GuardedWork::Command => format!(
+            "the operation ran out of memory{cause} at {} and was stopped before the system would \
+             end the process; the document is as it was before the command. Do the work in \
+             smaller steps, for example join the bodies in smaller groups",
+            reading.text
+        ),
+        GuardedWork::Import => format!(
+            "the file could not be imported because it needs more memory than the system has \
+             left{cause}: the import was stopped at {} before the system would end the process, \
+             and the design is as it was before the import",
+            reading.text
+        ),
+    })
 }
 
 /// Whether memory at `share` of the tightest limit, growing by `growth`
@@ -124,12 +160,23 @@ impl MemoryGrowth {
 /// `f` returns or the monitor is cancelled otherwise (by the user).
 pub fn guarded<T>(
     monitor: &Arc<RecomputeMonitor>,
+    measure: impl FnMut() -> MemoryReading + Send + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    guarded_for(monitor, GuardedWork::Command, measure, f)
+}
+
+/// [`guarded`] for `work`, whose words the reason takes ([`refusal_for`],
+/// mitcad#2032: a file's import is not told to join bodies).
+pub fn guarded_for<T>(
+    monitor: &Arc<RecomputeMonitor>,
+    work: GuardedWork,
     mut measure: impl FnMut() -> MemoryReading + Send + 'static,
     f: impl FnOnce() -> T,
 ) -> T {
     let first = measure();
     let failed_before = first.failed_allocations;
-    if monitor.is_cancelled() || refuse(monitor, &first, failed_before, 0.0) {
+    if monitor.is_cancelled() || refuse(monitor, work, &first, failed_before, 0.0) {
         // (Fails at its first check.)
         return f();
     }
@@ -150,7 +197,7 @@ pub fn guarded<T>(
                 }
                 let reading = measure();
                 let rate = growth.measured(Instant::now(), reading.share);
-                if refuse(&watched, &reading, failed_before, rate) {
+                if refuse(&watched, work, &reading, failed_before, rate) {
                     break;
                 }
             }
@@ -177,15 +224,16 @@ fn growth(before: (Instant, f64), after: (Instant, f64)) -> f64 {
     (after.1 - before.1).max(0.0) / seconds
 }
 
-/// Cancels `monitor` with the reason when `reading`, growing at `rate`,
-/// refuses the command; whether it did.
+/// Cancels `monitor` with the reason for `work` when `reading`, growing at
+/// `rate`, refuses the command; whether it did.
 fn refuse(
     monitor: &RecomputeMonitor,
+    work: GuardedWork,
     reading: &MemoryReading,
     failed_before: u64,
     rate: f64,
 ) -> bool {
-    match refusal_ahead(reading, failed_before, rate) {
+    match refusal_for(work, reading, failed_before, rate) {
         Some(reason) => {
             monitor.cancel_because(&reason);
             true
@@ -286,6 +334,68 @@ mod tests {
             low.starts_with("the operation ran out of memory at 0.9"),
             "{low}"
         );
+    }
+
+    /// An import stopped for memory (mitcad#2032) says the file needs more
+    /// memory than the system has left, without the modelling commands'
+    /// advice; the commands' words stay as they were.
+    #[test]
+    fn an_imports_refusal_in_its_own_words() {
+        assert_eq!(
+            refusal_for(GuardedWork::Import, &reading(0.5, 0), 0, 0.0),
+            None
+        );
+        let low = refusal_for(GuardedWork::Import, &reading(0.9, 0), 0, 0.0).expect("low");
+        assert!(
+            low.starts_with(
+                "the file could not be imported because it needs more memory than the system \
+                 has left: the import was stopped at 0.9 GiB of 1.0 GiB (the command memory limit)"
+            ),
+            "{low}"
+        );
+        assert!(low.contains("as it was before the import"), "{low}");
+        assert!(!low.contains("join the bodies"), "{low}");
+        assert!(!low.contains("smaller steps"), "{low}");
+        let fast = refusal_for(GuardedWork::Import, &reading(0.5, 0), 0, 4.0).expect("fast");
+        assert!(
+            fast.contains("has left (growing too fast to go on): the import was stopped at 0.5"),
+            "{fast}"
+        );
+        let failed = refusal_for(GuardedWork::Import, &reading(0.2, 4), 3, 0.0).expect("failed");
+        assert!(
+            failed.contains("(an allocation in the geometry kernel failed): the import"),
+            "{failed}"
+        );
+        assert_eq!(
+            refusal_for(GuardedWork::Command, &reading(0.9, 0), 0, 0.0),
+            refusal(&reading(0.9, 0), 0)
+        );
+    }
+
+    /// The guard of an import cancels its monitor with the import's words.
+    #[test]
+    fn an_import_refused_while_it_runs() {
+        let monitor = Arc::new(RecomputeMonitor::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let measure = move || {
+            let n = counted.fetch_add(1, Ordering::SeqCst);
+            reading(if n >= 1 { 0.9 } else { 0.3 }, 0)
+        };
+        let stopped = guarded_for(&monitor, GuardedWork::Import, measure, || {
+            let start = Instant::now();
+            while !monitor.is_cancelled() && start.elapsed() < Duration::from_secs(30) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            monitor.is_cancelled()
+        });
+        assert!(stopped, "the guard did not stop the import");
+        let reason = monitor.cancel_reason().expect("a reason");
+        assert!(
+            reason.starts_with("the file could not be imported"),
+            "{reason}"
+        );
+        assert!(!reason.contains("join the bodies"), "{reason}");
     }
 
     #[test]

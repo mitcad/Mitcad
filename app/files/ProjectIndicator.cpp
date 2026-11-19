@@ -15,7 +15,9 @@
 
 #include "../framework/TestSync.hpp"
 #include "../framework/ChromeStyle.hpp"
+#include "../framework/Icons.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UiSizes.hpp"
 #include "SyncState.hpp"
 
 namespace mitcad {
@@ -34,14 +36,64 @@ ProjectIndicator::ProjectIndicator(std::function<void(const QString& id)> trigge
   refresh();
 }
 
+namespace {
+
+// The compact button's parts (setCompact): the icon's room, as wide as the
+// top bar's other icon buttons, and the caret's after it.
+int compactIconRoom() { return uiIconSize(18) + 10; }
+constexpr int kCompactCaret = 12;
+
+} // namespace
+
 QSize ProjectIndicator::sizeHint() const {
+  if (m_compact) {
+    return QSize(compactIconRoom() + kCompactCaret, std::max(minimumHeight(), compactIconRoom()));
+  }
   if (chromeStyle() != ChromeStyle::Floating) {
     return QToolButton::sizeHint();
   }
   return QSize(std::min(280, fontMetrics().horizontalAdvance(text()) + 42), 30);
 }
 
+void ProjectIndicator::setCompact(bool compact) {
+  if (compact == m_compact) {
+    return;
+  }
+  m_compact = compact;
+  refresh();
+  updateGeometry();
+}
+
 void ProjectIndicator::paintEvent(QPaintEvent* event) {
+  if (m_compact) {
+    // Flat: a rounded highlight only under the mouse or pressed.
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QPalette pal = palette();
+    if (isDown() || underMouse()) {
+      QColor fill = pal.color(QPalette::WindowText);
+      fill.setAlpha(isDown() ? 36 : 20);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(fill);
+      painter.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 8, 8);
+    }
+    const int side = uiIconSize(18);
+    const QPixmap pixmap = themeIcon(m_iconName).pixmap(QSize(side, side), devicePixelRatioF(),
+                                                        isEnabled() ? QIcon::Normal : QIcon::Disabled);
+    const QSizeF size = pixmap.deviceIndependentSize();
+    painter.drawPixmap(QPointF((compactIconRoom() - size.width()) / 2, (height() - size.height()) / 2), pixmap);
+    QColor ink = pal.color(QPalette::WindowText);
+    ink.setAlpha(190);
+    painter.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    const QPointF center(compactIconRoom() + kCompactCaret / 2.0 - 2, height() / 2.0);
+    QPainterPath caret;
+    caret.moveTo(center + QPointF(-3, -1.5));
+    caret.lineTo(center + QPointF(0, 1.5));
+    caret.lineTo(center + QPointF(3, -1.5));
+    painter.drawPath(caret);
+    return;
+  }
   if (chromeStyle() != ChromeStyle::Floating) {
     QToolButton::paintEvent(event);
     return;
@@ -258,7 +310,23 @@ void ProjectIndicator::refresh() {
   }
   tip << tr("Click for the project's menu");
   setText(shown.join(dot));
+  // The compact button's icon: the kind and the remote's state.
+  m_iconName = QStringLiteral("project");
+  if (m_project.kind == ProjectState::Kind::Cloud) {
+    const QString& cls = m_remote.problem;
+    const bool synced = m_remote.busy.isEmpty() && !m_remote.conflict && cls.isEmpty() && m_remote.ahead == 0 &&
+                        m_remote.behind == 0;
+    m_iconName = cls == QLatin1String("network") || cls == QLatin1String("timed_out") ? QStringLiteral("cloud-offline")
+                 : synced                                                             ? QStringLiteral("cloud-synced")
+                                                                                      : QStringLiteral("cloud");
+  }
+  // Compact, the text the button no longer shows leads its tooltip.
+  if (m_compact) {
+    tip.prepend(text());
+  }
   setToolTip(tip.join(QLatin1Char('\n')));
+  setAccessibleName(tr("Project: %1").arg(text()));
+  update();
   const QString line = logged.join(QStringLiteral(", "));
   if (line != m_logged) {
     m_logged = line;
@@ -300,6 +368,15 @@ void ProjectIndicator::logPlace() {
 
 void ProjectIndicator::fillMenu() {
   m_menu->clear();
+  if (m_compact) {
+    // The text the compact button does not show, at the menu's top; not
+    // one of its entries (not logged).
+    QAction* header = m_menu->addAction(text());
+    header->setEnabled(false);
+    header->setProperty("indicatorText", true);
+    header->setMenuRole(QAction::NoRole);
+    m_menu->addSeparator();
+  }
   const auto add = [this](const QString& text, const char* id) {
     QAction* action = m_menu->addAction(text);
     const QString command = QString::fromLatin1(id);
@@ -352,7 +429,7 @@ void ProjectIndicator::fillMenu() {
   }
   QStringList entries;
   for (QAction* action : m_menu->actions()) {
-    if (!action->isSeparator()) {
+    if (!action->isSeparator() && !action->property("indicatorText").toBool()) {
       entries << action->text().remove(QLatin1Char('&'));
     }
   }

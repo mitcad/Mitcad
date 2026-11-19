@@ -69,6 +69,7 @@ mod chat;
 use chat::{ChatStream, agent_chat, new_chat_stream};
 
 use cxx::SharedPtr;
+use mitcad_model::monitor::memory_guard::GuardedWork;
 use mitcad_model::{BodyUid, FeatureUid, RegionKey};
 use mitcad_model_api::ApiError;
 use mitcad_model_api::{AnalysisApi, DocumentApi, ReportApi, ScriptApi};
@@ -187,7 +188,7 @@ mod ffi {
         fn mcp_diagnose_dressups(self: &mut Document, result: &str) -> Result<String>;
         fn validate_mcp_query(request: &str) -> Result<()>;
         /// Live MCP's command results, arrays and export (mitcad#689).
-        fn mcp_snapshot_queries() -> String;
+        fn mcp_snapshot_queries(after: bool, before: &str) -> String;
         fn mcp_command_document(
             mode: &str,
             before: &str,
@@ -1091,6 +1092,16 @@ impl Document {
             .and_then(|v| v.get("cmd"))
             .and_then(|c| c.as_str())
             .is_some_and(|c| matches!(c, "undo" | "redo"));
+        // A file's import says so when the memory guard stops it
+        // (mitcad#2032).
+        let work = match value
+            .as_ref()
+            .and_then(|v| v.get("cmd"))
+            .and_then(|c| c.as_str())
+        {
+            Some("import_file") => GuardedWork::Import,
+            _ => GuardedWork::Command,
+        };
         match value {
             Some(v) if is_import(&v) => {
                 let mut result = self.import_command(v)?;
@@ -1121,7 +1132,7 @@ impl Document {
             _ if step => self.0.command(json),
             // Under the memory guard where the process turned it on
             // (mitcad#1480).
-            _ => self.guarded_command(json),
+            _ => self.guarded_command(json, work),
         }
     }
 

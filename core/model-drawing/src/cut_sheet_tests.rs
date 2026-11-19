@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::{ViewEdge, ViewEdgeKind};
+use mitcad_model::sheet::process::SheetProcess;
 
 const EPS: f64 = 1e-6;
 
@@ -231,12 +232,16 @@ fn parts() -> Vec<PlacedPart> {
     let outline = plate();
     vec![
         PlacedPart {
+            marks: Vec::new(),
+            process: SheetProcess::Metal,
             id: 1,
             name: "Rib 3".to_owned(),
             loops: placed(&outline, [60.0, 40.0], 0.0),
             bends: Vec::new(),
         },
         PlacedPart {
+            marks: Vec::new(),
+            process: SheetProcess::Metal,
             id: 2,
             name: "Rib 3".to_owned(),
             loops: placed(&outline, [180.0, 40.0], 0.0),
@@ -289,6 +294,8 @@ fn the_dxf_file_reads_back_with_its_layers_and_sizes() {
 #[test]
 fn a_polyline_is_a_spline_of_degree_one_and_a_path() {
     let part = PlacedPart {
+        marks: Vec::new(),
+        process: SheetProcess::Metal,
         id: 1,
         name: "Curve".to_owned(),
         loops: vec![OutlineLoop {
@@ -512,6 +519,8 @@ fn a_spline_edge_is_written_as_a_dxf_spline_and_an_svg_path() {
     let (lo, hi) = outline.bounds().unwrap();
     let mid = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let part = PlacedPart {
+        marks: Vec::new(),
+        process: SheetProcess::Metal,
         id: 1,
         name: "Curved".to_owned(),
         loops: placed(&outline, mid, 0.0),

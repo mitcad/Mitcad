@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# Extrude of a body face up to another face of the same body (mitcad#2033)
+# on extrude-face-to-object.json (a 60 x 40 x 20 block, F2.b0, with a step
+# on its right half 30 high: the lower top F2:end(r{...}) at z = 20, the
+# higher top F4:end(r{...}) at z = 30; 60000 mm3):
+#   1. Extrude with its profile cleared takes the lower top, picked in the
+#      view; the Start offers Profile Plane and Offset, not Object.
+#   2. Extent To Object takes the higher top, picked in the view; Extend is
+#      To Selected Face (its surface continued). The automatic Join builds,
+#      the panel shows no error.
+#   3. OK adds the Join: one level body, 60 x 40 x 30 = 72000 mm3.
+# Run by tools/ui-extrude-face-to-object-test.sh (Linux),
+# tools/ui-windows-extrude-face-to-object-test.ps1 (Windows) and
+# tools/ui-macos-extrude-face-to-object-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The lower top as the profile.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+# Extrude may preselect a profile: cleared, so that the click takes the face.
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick face F2[.]b0/F2:end[(]' 20
+click-pick 'face F2[.]b0/F2:end[(]'
+wait-log '^Extrude Profiles: 1 face [[]face F2:end[(]r[{]c1[[]c4,c2[]]'
+wait-idle
+expect-choice-text start '^Profile Plane$'
+
+# 2. To Object: the higher top of the same body.
+mark
+qt-choice input_extent 'To Object'
+wait-log '^Extrude: Extent = To Object'
+wait-log '^Pick face F2[.]b0/F4:end[(]' 20
+click-pick 'face F2[.]b0/F4:end[(]'
+wait-log '^Extrude Object: 1 face [[]face F4:end[(]r[{]c1[[]c4,c2[]]'
+expect-choice-text object_extend '^To Selected Face$'
+wait-log '^Preview Extrude: ok' 30
+wait-idle
+expect-ever '^Extrude: automatic Operation = Join' 30
+expect-never 'Panel Extrude error|Preview Extrude: failed'
+screenshot '${MITCAD_TEST_WORK}/extrude-face-to-object.png'
+
+# 3. OK: one level body.
+mark
+button '^OK$'
+wait-log '^Added extrude \(Join\), distance to object, of a face' 30
+wait-idle
+expect-model-bodies 1 72000
+expect-never 'Preview Extrude: failed|Recompute failed|TestDriver: FAIL'

@@ -35,6 +35,10 @@ namespace mitcad {
 
 class ProjectIndicator : public QToolButton {
   Q_OBJECT
+  // The Floating layout's top bar (TitleBar::setFloatingRow, mitcad#1990):
+  // a flat icon button with a caret, the project's icon for its kind and
+  // state; its text leads its tooltip and its menu.
+  Q_PROPERTY(bool compact READ isCompact WRITE setCompact)
 
 public:
   // What the indicator knows of a Cloud project's remote
@@ -76,6 +80,8 @@ public:
   QString shownText() const { return text(); }
   const QString& loggedText() const { return m_logged; }
   QSize sizeHint() const override;
+  bool isCompact() const { return m_compact; }
+  void setCompact(bool compact);
 
 signals:
   // Native chrome observes the same project, live and lock status.
@@ -105,6 +111,8 @@ private:
   QString m_logged;
   QString m_loggedPlace;
   bool m_placePending = false;
+  bool m_compact = false;
+  QString m_iconName; // the compact button's icon (app/icons)
 };
 
 } // namespace mitcad

@@ -192,6 +192,11 @@ struct SketchEntityDisplay {
   // A 3D sketch's (mitcad#1524): its points keep their markers with the
   // Sketch Palette's Show points off (setSketchPointsHidden).
   bool spatial = false;
+  // The shaded colour (sRGB) of the face the sketch lies on, when its plane
+  // is a face of a body: the face's own appearance, else its body's, else
+  // the default look (mitcad#2034). Invalid on a construction or an origin
+  // plane. On a light background only a dark one gets the curves' halos.
+  QColor faceColor = QColor();
   // What the shape is made from (the entity's solved geometry, the sketch
   // frame, the style and the placement): an entity shown with the same
   // signature keeps its display (setSketchEntities). Empty: always new.
@@ -639,9 +644,12 @@ public:
   // the bodies of the occurrences inside them, are drawn as ghosts
   // (BodyDisplay::Style::Ghost) instead of normally, now and by later
   // setBodies() calls, until the list changes (mitcad#147: a command picks
-  // through them). Highlights of items in them are not pickable either, so
-  // a click goes to what lies behind. Logs "View ghosts: ..." when the
-  // list changes.
+  // through them). An entry made by ownBodiesGhost() (framework/
+  // ViewGhosts.hpp, mitcad#2027) covers only the bodies its occurrence
+  // places directly, not those of the occurrences inside it. Highlights of
+  // items in them are not pickable either, so a click goes to what lies
+  // behind. Logs "View ghosts: ..." when the list changes (`only O1/O4`
+  // for an entry of own bodies).
   void setGhosts(const QStringList& occurrences);
   // What the view draws normally while a component other than the root is
   // active (mitcad#420): the bodies, sketches, profiles and construction
@@ -1123,6 +1131,18 @@ public:
   // x0,y0 to x1,y1, the area at x0,y0 to x1,y1 (inside|outside)", in
   // window coordinates.
   bool showInFreeArea(const Bnd_Box& box, const QString& what);
+  // Moves the view sideways, as little as it takes and never zoomed, so
+  // that a box (model coordinates: the origin planes Create Sketch offers,
+  // mitcad#1990) that a card over the view or the view cube covers part of
+  // lies in the free area below the cube, where a click on what it holds
+  // reaches the view: in the Floating layout the view is framed beside the
+  // Browser's card, and Create Sketch's command card then came over the
+  // XY plane's square. Left as it is, false, when it is there already,
+  // when no part of it is in the view (the user looks elsewhere) or when it
+  // is larger than that area. Logged "View for <what>: moved dx,dy px; the
+  // box at x0,y0 to x1,y1, the area at x0,y0 to x1,y1" in window
+  // coordinates, the box where the move puts it.
+  bool panClearOfCards(const Bnd_Box& box, const QString& what);
   // The box of the bodies shown as placed (not previews, ghosts, datums,
   // sketches or the grid); void when none is shown.
   Bnd_Box bodiesBox() const;
@@ -1433,7 +1453,7 @@ private:
   // drawn from what they have (no presentation computed again).
   void placeBody(BodyEntry& entry, const TopLoc_Location& placement);
   void removeBody(BodyEntry& entry);
-  // Whether setGhosts() names an occurrence or one it lies in.
+  // Whether setGhosts() covers an occurrence's own bodies (ghostCovers).
   bool isGhosted(const QString& occurrence) const;
   // Inactive ghosts (setActiveScope, mitcad#420): whether what an occurrence
   // places lies outside the active component, and whether an item (a
@@ -1515,6 +1535,10 @@ private:
   // Where a box (model coordinates) is on the view: its corners' bounds.
   QRectF screenBox(const Bnd_Box& box) const;
   QRectF cubeArea() const;
+  // A copy of the camera moved so that what the view shows moves `shift`
+  // pixels on the screen (its direction and zoom kept); null without
+  // screen axes to move along (mitcad#773).
+  occ::handle<Graphic3d_Camera> pannedCamera(const QPointF& shift) const;
   void placeHomeButton();
   // The buttons over the view take dark or light icons by the background.
   void updateOverlayIcons();
@@ -1530,6 +1554,7 @@ private:
     bool temporary = false; // shown only for a command (mitcad#546)
     bool hidden = false;    // a point without its marker (Show points off, mitcad#1705)
     bool spatial = false;   // a 3D sketch's, whose points keep their markers (mitcad#1764)
+    bool darkFace = false;  // its sketch lies on a dark face (mitcad#2034)
   };
   void styleSketchEntity(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const;
   // A shown curve's colour: its kind's, pale outside the active component,
@@ -1540,10 +1565,16 @@ private:
   QImage sketchPointMarker(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look, QString& key) const;
   // Whether the entity is drawn over a halo (mitcad#302): fully constrained
   // curves and centre lines, whose colour follows the background and would
-  // otherwise vanish over a body's face of the same tone.
-  static bool hasSketchHalo(const SketchEntityLook& look);
+  // otherwise vanish over a body's face of the same tone. On a dark
+  // background always (a light line over the light default body); on a
+  // light one only over a dark face (mitcad#2034: over the default body
+  // the dark line has contrast enough, and the halo only made a fringe).
+  bool hasSketchHalo(const SketchEntityLook& look) const;
   // The halo: a wider line in the background's tone under the entity's.
   void styleSketchHalo(const occ::handle<AIS_Shape>& halo, const SketchEntityLook& look) const;
+  // Gives the shown entity its halo, restyles it or takes it away, as
+  // hasSketchHalo says now (the background or the face changed).
+  void updateSketchHalo(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look);
   // The line type of a sketch curve's selection highlight: the curve's own
   // (mitcad#1619), dashed for construction geometry, dash-dot for a centre
   // line, else (and for a curve not shown) solid.

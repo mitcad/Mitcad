@@ -109,7 +109,9 @@ fn sheet_invalid_rule_values_fail_at_recompute_and_are_unit_checked() {
     let FeatureDef::SheetRules(rule_def) = &doc.feature(rule).unwrap().def else {
         panic!("rules")
     };
-    let mitcad_model::features::sheet::Allowance::KFactor { k } = rule_def.allowance;
+    let mitcad_model::features::sheet::Allowance::KFactor { k } = rule_def.allowance else {
+        panic!("a K-factor")
+    };
     let name = doc.parameters().name(k);
     assert!(doc.parameters().get(k).unwrap().unit().is_unitless());
     doc.set_parameter(&name, 1.2).unwrap();

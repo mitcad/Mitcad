@@ -265,7 +265,7 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
   const QScopedValueRollback<bool> active(m_mcpRequestActive, true);
   // What the result compares (mitcad#689): the document before, when only
   // the changes are answered.
-  const QByteArray before = mode == QStringLiteral("changed") ? compactJson(mcpSnapshot())
+  const QByteArray before = mode == QStringLiteral("changed") ? compactJson(mcpSnapshot(false, {}))
       : hints ? compactJson(QJsonObject{{QStringLiteral("timeline"), query({{QStringLiteral("query"), QStringLiteral("timeline")}})}})
               : QByteArray();
   const bool inSketch = m_mode == Mode::Sketch;
@@ -330,7 +330,7 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
     mcpLabelAgentChange(depth);
   }
   const QByteArray timesText = QJsonDocument(times).toJson(QJsonDocument::Compact);
-  const QByteArray after = compactJson(mcpSnapshot());
+  const QByteArray after = compactJson(mcpSnapshot(true, before));
   QJsonObject result = parseObject(mcp_command_document(rustStr(mode.toUtf8()), rustStr(before),
                                                         rustStr(after), rustStr(timesText)));
   result.insert(QStringLiteral("document"), m_mcpDocumentId);
@@ -476,10 +476,12 @@ int MainWindow::mcpUndoTo(int depth) {
   return undone;
 }
 
-QJsonObject MainWindow::mcpSnapshot() const {
-  // The queries a command's result compares (mitcad#689, mcp_snapshot_queries).
+QJsonObject MainWindow::mcpSnapshot(bool after, const QByteArray& before) const {
+  // The queries a command's result compares (mitcad#689, mcp_snapshot_queries);
+  // after the command only the boxes of the bodies it changed or added
+  // (mitcad#2021).
   QJsonObject snapshot;
-  const QJsonObject queries = parseObject(mcp_snapshot_queries());
+  const QJsonObject queries = parseObject(mcp_snapshot_queries(after, rustStr(before)));
   for (auto it = queries.constBegin(); it != queries.constEnd(); ++it) {
     snapshot.insert(it.key(), query(it.value().toObject()));
   }

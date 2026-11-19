@@ -35,3 +35,6 @@ mod sketch_dxf_points_1963_tests;
 // The reporter's arc whose Symmetry partly repeats the others: information,
 // not a redundancy warning (mitcad#1992).
 mod sketch_partly_redundant_reported_1992_tests;
+// import_file stopped inside its read by the memory guard or the user's
+// cancel, in the import's own words, the design unchanged (mitcad#2032).
+mod import_stopped_2032_tests;

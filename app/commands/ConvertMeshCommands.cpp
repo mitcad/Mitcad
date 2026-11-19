@@ -36,7 +36,6 @@ CommandDef convertMeshCommand(const CommandContext& context) {
   def.name = QObject::tr("Convert Mesh");
   def.icon = QStringLiteral("convert-mesh");
   def.tooltip = QObject::tr("Makes a mesh body from an STL or OBJ file a solid that features can change");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("stl"), QStringLiteral("obj"), QStringLiteral("mesh"),
                   QStringLiteral("solid"), QStringLiteral("remix"), QStringLiteral("facets")};
   def.featureType = QStringLiteral("mesh_convert");

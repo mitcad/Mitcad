@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -153,22 +154,7 @@ ShapePtr parallel_side(const std::string& feature, const detail::SweepFace& face
   if (!side.target) {
     return detail::distance_side(face, side.distance, side.taper, along, near, far);
   }
-  const gp_Pln neutral = BRepAdaptor_Surface(face.face).Plane();
-  // A taper along a direction off the sketch normal (mitcad#539).
-  if (side.taper != 0.0 && std::abs(std::abs(neutral.Axis().Direction().Dot(along)) - 1.0) > 1.0e-12) {
-    throw std::invalid_argument("unsupported: a taper up to an object along a direction off the sketch normal");
-  }
-  // Past the target, then back to where it is reached.
-  const std::string unreached = face_name(feature, "unreached", face.regions.front());
-  const double length = detail::reach(*side.target, along, detail::bounds_of(face.face));
-  ShapePtr solid = detail::named_prism(face, gp_Vec(along) * length, near, {unreached});
-  if (side.taper != 0.0) {
-    NameList caps = near;
-    caps.push_back(unreached);
-    solid = detail::tapered(*solid, neutral, along, side.taper, caps);
-  }
-  const TopoDS_Shape tool = detail::target_tool(*side.target, along, detail::bounds_of(solid->occt()));
-  return detail::trimmed(*solid, *side.target, tool, along, near.front(), far, unreached, true);
+  return detail::target_side(feature, face, *side.target, side.taper, along, near, far);
 }
 
 // One side swept from a start plane that is not parallel to the sketch: the
@@ -272,6 +258,31 @@ ShapePtr distance_side(const SweepFace& face, double distance, double taper, con
   NameList caps = near;
   caps.insert(caps.end(), far.begin(), far.end());
   return tapered(*solid, neutral, along, taper, caps);
+}
+
+ShapePtr target_side(const std::string& feature, const SweepFace& face, const Target& target, double taper,
+                     const gp_Dir& along, const NameList& near, const NameList& far) {
+  // Only a tapered side needs the face's plane: an untapered face may be
+  // curved (a body face along a direction, mitcad#2033).
+  std::optional<gp_Pln> neutral;
+  if (taper != 0.0) {
+    neutral = BRepAdaptor_Surface(face.face).Plane();
+    // A taper along a direction off the sketch normal (mitcad#539).
+    if (std::abs(std::abs(neutral->Axis().Direction().Dot(along)) - 1.0) > 1.0e-12) {
+      throw std::invalid_argument("unsupported: a taper up to an object along a direction off the sketch normal");
+    }
+  }
+  // Past the target, then back to where it is reached.
+  const std::string unreached = face_name(feature, "unreached", face.regions.front());
+  const double length = reach(target, along, bounds_of(face.face));
+  ShapePtr solid = named_prism(face, gp_Vec(along) * length, near, {unreached});
+  if (neutral) {
+    NameList caps = near;
+    caps.push_back(unreached);
+    solid = tapered(*solid, *neutral, along, taper, caps);
+  }
+  const TopoDS_Shape tool = target_tool(target, along, bounds_of(solid->occt()));
+  return trimmed(*solid, target, tool, along, near.front(), far, unreached, true);
 }
 
 ShapePtr past_other_end(const Shape& solid, const gp_Pln& start, const gp_Dir& along, double distance,

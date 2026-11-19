@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: MIT
+# Convert to Sheet Metal (mitcad#1949, GitHub mitcad/Mitcad#377;
+# app/COMMANDS.md "Convert to Sheet Metal"), on sheet-convert.json (rules
+# F1, the solid box F2.b0, 60 x 40 x 20):
+#   1. Convert to Sheet Metal: the rules are the design's; the box seen
+#      from below, its four bottom edges picked into Bend Edges, then its
+#      bottom face into Face: the preview is ok (the four corners ripped).
+#   2. OK adds the conversion F3; the tray is one body of the volume
+#      cli.sheet_convert_tray gives (10049.035789306856 mm3).
+#   3. The conversion edited from the timeline loads its face and its four
+#      bend edges (its preview ok, which a plate of the box is not); Esc
+#      cancels.
+# Run by tools/ui-sheet-convert-test.sh (Linux),
+# tools/ui-windows-sheet-convert-test.ps1 (Windows) and
+# tools/ui-macos-sheet-convert-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+
+# 1. The base and its four edges.
+mark
+command sheet.convert
+wait-log '^Pick places:' 30
+wait-idle
+expect-choice-text rules '^SheetRules1'
+mark
+command view.bottom
+wait-idle
+command view.fit
+wait-idle
+wait-log '^Pick places:' 30
+# The four edges first, into Bend Edges, while no preview can replace
+# the box (it needs the Face); each pick where the places logged after the
+# last say. Then the face.
+mark
+click-logged '^Panel Convert to Sheet Metal input bends at '
+wait-log '^Pick places:' 30
+wait-idle
+mark
+click-pick 'edge F2[.]b0/E[{]F2:bottom[|]F2:side0[}] at'
+wait-idle
+mark
+click-pick 'edge F2[.]b0/E[{]F2:bottom[|]F2:side1[}] at'
+wait-idle
+mark
+click-pick 'edge F2[.]b0/E[{]F2:bottom[|]F2:side2[}] at'
+wait-idle
+mark
+click-pick 'edge F2[.]b0/E[{]F2:bottom[|]F2:side3[}] at'
+wait-idle
+mark
+click-logged '^Panel Convert to Sheet Metal input face at '
+wait-log '^Pick places:' 30
+wait-idle
+mark
+click-pick 'face F2[.]b0/F2:bottom at'
+wait-log '^Preview Convert to Sheet Metal: ok' 60
+wait-idle
+expect-never 'Convert to Sheet Metal Bend Edges: .* not taken'
+
+# 2. OK: one sheet, its corners ripped.
+mark
+button '^OK$'
+wait-log '^Converted to sheet metal: 4 bend edge[(]s[)], 0 rip edge[(]s[)] picked$' 60
+wait-log '^Added Convert to Sheet Metal as F3$' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 10049.035789306856
+
+# 3. The conversion edited: its face and its four bend edges loaded.
+mark
+dblclick-logged '^Timeline SheetConvert1 at '
+wait-log '^Editing F3 with Convert to Sheet Metal$' 30
+wait-log '^Preview Convert to Sheet Metal: ok' 60
+wait-idle
+mark
+key Escape
+wait-log '^Command Convert to Sheet Metal cancelled$' 30
+wait-idle
+expect-model-bodies 1 10049.035789306856

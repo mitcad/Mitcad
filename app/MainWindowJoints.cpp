@@ -73,6 +73,45 @@ bool isBodyItem(const SelectionItem& item) {
          item.kind == SelectKind::Body;
 }
 
+// The unit the last occurrence of `path` (uids from the root) moves with
+// in the parent of the outermost flexible occurrence before it, as the
+// `joints` query's degrees of freedom give it (`under` and `within`, the
+// chain of flexible occurrences it is in, mitcad#1793, mitcad#1805,
+// mitcad#2016); empty when none of the occurrences before it is flexible
+// up to it, or that parent has no such unit. The outermost chain first, as
+// the model's drag takes it.
+QJsonObject flexibleUnit(const DocumentSnapshot& snapshot, const QStringList& path,
+                         const QHash<QString, const DocumentSnapshot::Occurrence*>& occurrences) {
+  const int last = static_cast<int>(path.size()) - 1;
+  for (int first = 0; first < last; ++first) {
+    bool flexible = true;
+    for (int k = first; k < last && flexible; ++k) {
+      const DocumentSnapshot::Occurrence* occurrence = occurrences.value(path.at(k));
+      flexible = occurrence != nullptr && occurrence->flexible;
+    }
+    if (!flexible) {
+      continue;
+    }
+    const DocumentSnapshot::Occurrence* holder = first == 0 ? nullptr : occurrences.value(path.at(first - 1));
+    const QString parent = first == 0 ? QStringLiteral("C0") : holder != nullptr ? holder->component : QString();
+    const QStringList chain = path.mid(first, last - first);
+    for (const QJsonValue& value : snapshot.jointDof(parent).value(QStringLiteral("units")).toArray()) {
+      const QJsonObject unit = value.toObject();
+      QStringList within;
+      for (const QJsonValue& o : unit.value(QStringLiteral("within")).toArray()) {
+        within << o.toString();
+      }
+      if (within.isEmpty() && unit.contains(QStringLiteral("under"))) {
+        within << unit.value(QStringLiteral("under")).toString();
+      }
+      if (within == chain && unit.value(QStringLiteral("occurrences")).toArray().contains(path.at(last))) {
+        return unit;
+      }
+    }
+  }
+  return QJsonObject();
+}
+
 } // namespace
 
 void MainWindow::setUpOccurrenceDrag() {
@@ -129,6 +168,7 @@ MainWindow::DragAnswer MainWindow::dragAnswer(const SelectionItem& item) const {
   // joints and whose unit can move drags; else the innermost reason.
   QString refusal;
   bool unjoined = false; // the innermost reason: no joints of its own
+  QString freeIn;        // the flexible occurrence the innermost one is free in
   DragAnswer answer;
   for (int depth = static_cast<int>(uids.size()); depth >= 1 && answer.path.isEmpty(); --depth) {
     const QString uid = uids.at(depth - 1);
@@ -141,12 +181,27 @@ MainWindow::DragAnswer MainWindow::dragAnswer(const SelectionItem& item) const {
         unit = value.toObject();
       }
     }
+    // A free part of flexible occurrences (mitcad#2016): without joints of
+    // its own parent component, it drags by the joints of the outermost
+    // flexible one's parent, as the model drags it (its unit there,
+    // `under` the chain of flexible occurrences it is in).
+    const QJsonObject inFlexible =
+        depth >= 2 ? flexibleUnit(m_snapshot, uids.mid(0, depth), occurrences) : QJsonObject();
+    bool viaFlexible = false;
+    if (!inFlexible.isEmpty() && unit.value(QStringLiteral("joints")).toArray().isEmpty()) {
+      if (!inFlexible.value(QStringLiteral("joints")).toArray().isEmpty()) {
+        unit = inFlexible;
+        viaFlexible = true;
+      } else if (depth == static_cast<int>(uids.size())) {
+        freeIn = nameOf(uids.at(depth - 2));
+      }
+    }
     const QString name = nameOf(uid);
     const QJsonArray joints = unit.value(QStringLiteral("joints")).toArray();
     const DocumentSnapshot::Occurrence* self = occurrences.value(uid);
     const bool selfGrounded = self != nullptr && self->grounded;
     const bool grounded = selfGrounded || unit.value(QStringLiteral("grounded")).toBool();
-    if (!grounded && (dof.isEmpty() || (!unit.isEmpty() && joints.isEmpty()))) {
+    if (!grounded && ((dof.isEmpty() && !viaFlexible) || (!unit.isEmpty() && joints.isEmpty()))) {
       // No joints of its own in the parent component: components do not
       // drag freely (mitcad#150); an occurrence above it may drag.
       unjoined = unjoined || refusal.isEmpty();
@@ -235,6 +290,13 @@ MainWindow::DragAnswer MainWindow::dragAnswer(const SelectionItem& item) const {
   }
   if (!unjoined && !refusal.isEmpty()) {
     return {OccurrenceDragStart::Refuse, QString(), refusal};
+  }
+  // A free part of a flexible occurrence that no joint of the parent is on
+  // (mitcad#2016): it moves only by joints.
+  if (!freeIn.isEmpty()) {
+    return {OccurrenceDragStart::Refuse, QString(),
+            tr("%1 has no joints: it is free in %2, which is flexible, and moves only by joints")
+                .arg(nameOf(uids.last()), freeIn)};
   }
   // The innermost occurrence has no joints in its parent component.
   const DocumentSnapshot::Occurrence* innermost = occurrences.value(uids.last());

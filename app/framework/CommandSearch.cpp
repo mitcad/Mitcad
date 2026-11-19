@@ -9,15 +9,19 @@
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPalette>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include "CommandLayout.hpp"
 #include "CommandRegistry.hpp"
 #include "CommandSearchRank.hpp"
 #include "Language.hpp"
 #include "PanelTree.hpp"
+#include "QuickAccess.hpp"
+#include "Ribbon.hpp"
 #include "../platform/MacCommandSearch.hpp"
 
 namespace mitcad {
@@ -39,20 +43,42 @@ CommandSearch::CommandSearch(CommandRegistry& registry, QWidget* parent)
   panel::setCompactIndentation(m_list, panel::Indent::Flat);
   m_list->setObjectName(QStringLiteral("commandSearchResults"));
   m_list->setAccessibleName(tr("Commands"));
-  m_list->setColumnCount(2);
+  // The command, its place (mitcad#1983) and its shortcut.
+  m_list->setColumnCount(3);
   m_list->setHeaderHidden(true);
   m_list->setRootIsDecorated(false);
   m_list->setFocusPolicy(Qt::NoFocus);
   m_list->header()->setStretchLastSection(false);
   m_list->header()->setSectionResizeMode(0, QHeaderView::Stretch);
   m_list->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  m_list->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
   layout->addWidget(m_edit);
   layout->addWidget(m_list);
-  resize(360, 300);
+  resize(520, 300);
   mac::styleCommandSearch(this, m_edit, m_list, layout);
   connect(m_edit, &QLineEdit::textChanged, this, &CommandSearch::fill);
   connect(m_list, &QTreeWidget::itemActivated, this, &CommandSearch::choose);
   connect(m_list, &QTreeWidget::itemClicked, this, &CommandSearch::choose);
+  m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(m_list, &QWidget::customContextMenuRequested, this, &CommandSearch::openRowMenu);
+}
+
+void CommandSearch::openRowMenu(const QPoint& at) {
+  const QTreeWidgetItem* item = m_list->itemAt(at);
+  const QString id = item != nullptr ? item->data(0, Qt::UserRole).toString() : QString();
+  if (!m_quickAccessEntries || id.isEmpty()) {
+    return; // the mode hint's row has no command
+  }
+  // A command that cannot run now can still be added: the group shows it
+  // disabled, with the reason in its tooltip.
+  const bool chosen = QuickAccessSettings::isChosen(id);
+  QMenu menu(this);
+  menu.setObjectName(QStringLiteral("commandSearchRowMenu"));
+  QAction* quick = menu.addAction(chosen ? tr("Remove from Quick Access") : tr("Add to Quick Access"));
+  qDebug().noquote() << QStringLiteral("Command search menu %1: %2").arg(id, quick->text());
+  if (menu.exec(m_list->viewport()->mapToGlobal(at)) == quick) {
+    QuickAccessSettings::choose(id, !chosen);
+  }
 }
 
 void CommandSearch::popup(const QPoint& globalCenter) {
@@ -120,7 +146,7 @@ void CommandSearch::fill(const QString& rawText) {
   if (!listing.hint.isEmpty()) {
     // A row of its own above the commands that wait for the mode
     // (mitcad#1681): nothing to run, so Enter starts no weaker match; no id.
-    auto* hint = new QTreeWidgetItem(m_list, {listing.hint, QString()});
+    auto* hint = new QTreeWidgetItem(m_list, {listing.hint, QString(), QString()});
     hint->setFlags(Qt::NoItemFlags);
     hint->setToolTip(0, listing.hint);
     QFont font = m_list->font();
@@ -131,14 +157,29 @@ void CommandSearch::fill(const QString& rawText) {
     hint->setFirstColumnSpanned(true);
     qDebug().noquote() << QStringLiteral("Command search hint: %1").arg(listing.hint);
   }
+  // Where each command sits (mitcad#1983): from the layout held in memory
+  // (the default with the user's layer), never read from its file here.
+  search::PlaceCaptions captions;
+  captions.ribbon = [](const QString& key) { return displayName(key); };
+  captions.menu = [this](const QString& key) {
+    const QString title = m_menuCaption ? m_menuCaption(key) : QString();
+    return title.isEmpty() ? displayName(key) : title;
+  };
+  captions.menuBar = tr("Menu bar");
+  captions.nowhere = tr("No toolbar place");
+  const CommandLayout& layout = commandLayout();
   for (const int index : listing.rows) {
     const CommandDef* def = defs[static_cast<size_t>(index)];
     QAction* action = m_registry.action(def->id);
+    const QString place = search::placeLine(layout, def->id, captions);
     auto* item = new QTreeWidgetItem(
-        m_list, {def->name, action->shortcut().toString(QKeySequence::NativeText)});
+        m_list, {def->name, place, action->shortcut().toString(QKeySequence::NativeText)});
     item->setIcon(0, action->icon());
     item->setData(0, Qt::UserRole, def->id);
     item->setToolTip(0, action->toolTip());
+    item->setToolTip(1, place);
+    // Quieter than the command's name, as the shortcut is on macOS.
+    item->setForeground(1, m_list->palette().brush(QPalette::Active, QPalette::PlaceholderText));
     if (!action->isEnabled()) {
       item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
     }

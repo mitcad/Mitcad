@@ -1,0 +1,7 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Convert to Sheet Metal (mitcad#1949; tools/ui-sheet-convert-test.sh and its Windows and macOS twins): sheet rules F1 (t = 2, r = 3, K = 0.3) and a solid box F2 (F2.b0), 60 x 40 x 20, the tray to convert from its bottom face and its four bottom edges (cli.sheet_convert_tray: 10049.035789306856 mm3 converted)."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.3},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":60,"width":40,"height":20,"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok","body":"F2.b0","volume":48000}}
+]

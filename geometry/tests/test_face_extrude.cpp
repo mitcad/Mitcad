@@ -2,9 +2,11 @@
 // A planar face of a body extruded as a profile (face_extrude.hpp,
 // mitcad#535): a block's top out of it, into it, to two sides and from an
 // offset; an annular face with its hole; an oblique face along its own
-// normal; faces that are not planar or not there refused.
+// normal; faces that are not planar or not there refused; sides up to a
+// target (mitcad#2033).
 
 #include <cmath>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -19,6 +21,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "mitcad/geometry/boolean.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/face_extrude.hpp"
 #include "mitcad/geometry/naming.hpp"
@@ -371,6 +374,191 @@ void test_curved_face_along_a_direction() {
   CHECK(throws_with([&] { extrude_face(*body, tapered); }, "is not planar"));
 }
 
+// mitcad#2033: sides up to a target.
+
+// A 60 x 40 x 20 block with a step x = 30..60 up to z = 30, joined. Its
+// lower top (x = 0..30 at z = 20) is `end_cap("F2", 1)`, the step's top
+// `end_cap("F4", 5)`.
+ShapePtr stepped_block() {
+  const ShapePtr block = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, 20);
+  const ShapePtr step = extrude("F4", {rectangle(5, 30, 0, 30, 40)}, 20, 30);
+  return boolean(BooleanOp::Join, {block.get()}, *step).pieces.at(0).shape;
+}
+
+// The stepped block's lower top extruded up to the step's top, its
+// surface continued (To Selected Face): a 30 x 40 x 10 prism whose far cap
+// is the target's, and joined into the block one level body 60 x 40 x 30;
+// the block stays as it was. With an offset of 2 it goes past the face, 3
+// short of it with -3; up to a plane.
+void test_lower_step_up_to_the_higher_top() {
+  const ShapePtr body = stepped_block();
+  const std::string lower = end_cap("F2", 1);
+  const std::string higher = end_cap("F4", 5);
+  CHECK(faces_named(*body, lower) == 1);
+  CHECK(faces_named(*body, higher) == 1);
+  const std::string start = face_name("F3", "start", lower);
+  const std::string end = face_name("F3", "end", lower);
+  double x0, y0, z0, x1, y1, z1;
+
+  Target top;
+  top.kind = Target::Kind::Face;
+  top.body = body;
+  top.face = higher;
+  FaceExtrudeSpec up = spec_of(lower, 0.0);
+  up.target1 = top;
+  const ShapePtr prism = extrude_face(*body, up);
+  CHECK(BRepCheck_Analyzer(prism->occt()).IsValid());
+  CHECK_NEAR(volume_of(*prism), 30.0 * 40.0 * 10.0);
+  bounds(prism->occt(), x0, y0, z0, x1, y1, z1);
+  CHECK_NEAR_TOL(x0, 0.0, 1e-7);
+  CHECK_NEAR_TOL(x1, 30.0, 1e-7);
+  CHECK_NEAR_TOL(z0, 20.0, 1e-7);
+  CHECK_NEAR_TOL(z1, 30.0, 1e-7);
+  CHECK(faces_named(*prism, start) == 1);
+  CHECK(faces_named(*prism, end) == 1);
+  CHECK_NEAR_TOL(face_middle(*prism, start).Z(), 20.0, 1e-7);
+  CHECK_NEAR_TOL(face_middle(*prism, end).Z(), 30.0, 1e-7);
+  CHECK(faces_named(*prism, face_name("F3", "side", edge(lower, side("F2", 1, 3)))) == 1);
+
+  // Joined: one level body.
+  const BooleanResult joined = boolean(BooleanOp::Join, {body.get()}, *prism);
+  CHECK(joined.pieces.size() == 1);
+  const ShapePtr level = joined.pieces.at(0).shape;
+  CHECK(BRepCheck_Analyzer(level->occt()).IsValid());
+  CHECK_NEAR(volume_of(*level), 60.0 * 40.0 * 30.0);
+  bounds(level->occt(), x0, y0, z0, x1, y1, z1);
+  CHECK_NEAR_TOL(z0, 0.0, 1e-7);
+  CHECK_NEAR_TOL(z1, 30.0, 1e-7);
+  CHECK_NEAR(volume_of(*body), 60.0 * 40.0 * 20.0 + 30.0 * 40.0 * 10.0);
+
+  // Past the face by 2, short of it by 3.
+  for (const double offset : {2.0, -3.0}) {
+    FaceExtrudeSpec moved = up;
+    moved.target1->offset = offset;
+    const ShapePtr longer = extrude_face(*body, moved);
+    CHECK(BRepCheck_Analyzer(longer->occt()).IsValid());
+    CHECK_NEAR(volume_of(*longer), 30.0 * 40.0 * (10.0 + offset));
+    CHECK_NEAR_TOL(face_middle(*longer, end).Z(), 30.0 + offset, 1e-7);
+  }
+
+  // Up to a plane at z = 25.
+  Target plane;
+  plane.kind = Target::Kind::Plane;
+  plane.plane = gp_Pln(gp_Pnt(0.0, 0.0, 25.0), gp_Dir(0.0, 0.0, 1.0));
+  FaceExtrudeSpec to_plane = spec_of(lower, 0.0);
+  to_plane.target1 = plane;
+  const ShapePtr slab = extrude_face(*body, to_plane);
+  CHECK_NEAR(volume_of(*slab), 30.0 * 40.0 * 5.0);
+  CHECK_NEAR_TOL(face_middle(*slab, end).Z(), 25.0, 1e-7);
+
+  // A target behind the face is refused.
+  Target below = plane;
+  below.plane = gp_Pln(gp_Pnt(0.0, 0.0, 10.0), gp_Dir(0.0, 0.0, 1.0));
+  FaceExtrudeSpec behind = spec_of(lower, 0.0);
+  behind.target1 = below;
+  CHECK(throws_with([&] { extrude_face(*body, behind); }, "behind"));
+}
+
+// Two sides with one up to the step's top: the other a distance of 5 down
+// into the block (side one's far cap the start, side two's the end, the
+// face between them gone), or -4, ending on the target's side 4 above the
+// face; tapered by 5 degrees up to a plane.
+void test_two_sides_and_a_taper_up_to_a_target() {
+  const ShapePtr body = stepped_block();
+  const std::string lower = end_cap("F2", 1);
+  const std::string start = face_name("F3", "start", lower);
+  const std::string end = face_name("F3", "end", lower);
+  Target top;
+  top.kind = Target::Kind::Face;
+  top.body = body;
+  top.face = end_cap("F4", 5);
+  double x0, y0, z0, x1, y1, z1;
+
+  FaceExtrudeSpec two = spec_of(lower, 0.0);
+  two.target1 = top;
+  two.distance2 = 5.0;
+  const ShapePtr both = extrude_face(*body, two);
+  CHECK(BRepCheck_Analyzer(both->occt()).IsValid());
+  CHECK_NEAR(volume_of(*both), 30.0 * 40.0 * 15.0);
+  bounds(both->occt(), x0, y0, z0, x1, y1, z1);
+  CHECK_NEAR_TOL(z0, 15.0, 1e-7);
+  CHECK_NEAR_TOL(z1, 30.0, 1e-7);
+  CHECK_NEAR_TOL(face_middle(*both, start).Z(), 30.0, 1e-7);
+  CHECK_NEAR_TOL(face_middle(*both, end).Z(), 15.0, 1e-7);
+  CHECK(faces_named(*both, face_name("F3", "mid", lower)) == 0);
+
+  FaceExtrudeSpec past = two;
+  past.distance2 = -4.0;
+  const ShapePtr above = extrude_face(*body, past);
+  CHECK(BRepCheck_Analyzer(above->occt()).IsValid());
+  CHECK_NEAR(volume_of(*above), 30.0 * 40.0 * 6.0);
+  CHECK_NEAR_TOL(face_middle(*above, start).Z(), 30.0, 1e-7);
+  CHECK_NEAR_TOL(face_middle(*above, end).Z(), 24.0, 1e-7);
+
+  // Tapered by 5 degrees up to the plane z = 30: the 30 x 40 face grows by
+  // h tan(taper) on each side at height h.
+  const double t = std::tan(5.0 * kPi / 180.0);
+  Target plane;
+  plane.kind = Target::Kind::Plane;
+  plane.plane = gp_Pln(gp_Pnt(0.0, 0.0, 30.0), gp_Dir(0.0, 0.0, 1.0));
+  FaceExtrudeSpec tapered = spec_of(lower, 0.0);
+  tapered.target1 = plane;
+  tapered.taper1 = 5.0 * kPi / 180.0;
+  const ShapePtr grown = extrude_face(*body, tapered);
+  CHECK(BRepCheck_Analyzer(grown->occt()).IsValid());
+  const double h = 10.0;
+  CHECK_NEAR_TOL(volume_of(*grown), 1200.0 * h + 70.0 * t * h * h + 4.0 / 3.0 * t * t * h * h * h, 1e-6);
+  CHECK_NEAR_TOL(face_middle(*grown, end).Z(), 30.0, 1e-7);
+}
+
+// A curved face along a direction up to a plane: a quarter cylinder's arc
+// side along +x to the plane x = 10, each line from the arc to the plane;
+// a side that ends on the other side's side is refused for it.
+void test_curved_face_up_to_a_plane() {
+  Region quarter;
+  quarter.name = "r{c1,c2,c3}";
+  Loop loop;
+  Segment a;
+  a.name = "c1";
+  a.kind = SegmentKind::Line;
+  a.start = gp_Pnt2d(0.0, 0.0);
+  a.end = gp_Pnt2d(5.0, 0.0);
+  Segment arc;
+  arc.name = "c2";
+  arc.kind = SegmentKind::Arc;
+  arc.start = gp_Pnt2d(5.0, 0.0);
+  arc.end = gp_Pnt2d(0.0, 5.0);
+  arc.center = gp_Pnt2d(0.0, 0.0);
+  arc.radius = 5.0;
+  arc.start_angle = 0.0;
+  arc.end_angle = kPi / 2.0;
+  Segment b;
+  b.name = "c3";
+  b.kind = SegmentKind::Line;
+  b.start = gp_Pnt2d(0.0, 5.0);
+  b.end = gp_Pnt2d(0.0, 0.0);
+  loop.segments = {a, arc, b};
+  quarter.loops = {loop};
+  const ShapePtr body = extrude("F2", {quarter}, 0, 10);
+  const std::string curved = face_name("F2", "side", "c2");
+
+  Target plane;
+  plane.kind = Target::Kind::Plane;
+  plane.plane = gp_Pln(gp_Pnt(10.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0));
+  FaceExtrudeSpec along = spec_of(curved, 0.0);
+  along.direction = gp_Dir(1.0, 0.0, 0.0);
+  along.target1 = plane;
+  const ShapePtr out = extrude_face(*body, along);
+  CHECK(BRepCheck_Analyzer(out->occt()).IsValid());
+  // 10 high, over y = 0..5 from x = sqrt(25 - y^2) to 10.
+  CHECK_NEAR_TOL(volume_of(*out), 10.0 * (50.0 - 25.0 * kPi / 4.0), 1e-6);
+  CHECK(faces_named(*out, face_name("F3", "end", curved)) == 1);
+
+  FaceExtrudeSpec short_side = along;
+  short_side.distance2 = -2.0;
+  CHECK(throws_with([&] { extrude_face(*body, short_side); }, "ends on the other side"));
+}
+
 } // namespace
 
 void face_extrude_tests() {
@@ -381,6 +569,9 @@ void face_extrude_tests() {
   guarded("test_tapered_face", test_tapered_face);
   guarded("test_face_along_a_direction", test_face_along_a_direction);
   guarded("test_curved_face_along_a_direction", test_curved_face_along_a_direction);
+  guarded("test_lower_step_up_to_the_higher_top", test_lower_step_up_to_the_higher_top);
+  guarded("test_two_sides_and_a_taper_up_to_a_target", test_two_sides_and_a_taper_up_to_a_target);
+  guarded("test_curved_face_up_to_a_plane", test_curved_face_up_to_a_plane);
 }
 
 } // namespace test

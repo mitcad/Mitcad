@@ -630,7 +630,7 @@ function Wall-From([string]$Name, [int[]]$At, [string]$Length, [string]$Text, [i
 # panel), Wall 1 placed from the origin along +X; its bodies in $Wall1.
 function First-Wall([string]$Design, [string]$Corner) {
   Ui-StartApp $Design
-  Ui-Step 'the BUILD tab'                { Ui-ClickLogged 'Ribbon tab BUILD' }
+  Ui-Step 'the BUILD tab'                { Ui-ClickTab 'BUILD' }
   Ui-ExpectLog 'Ribbon BUILD/TIMBER at' 'its TIMBER group (mitcad#520)'
   Ui-ExpectLog 'Ribbon button build.wall at' 'the Wall button'
   Ui-Mark

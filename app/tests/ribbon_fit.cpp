@@ -5,7 +5,9 @@
 // buttons fold first, the last one first, and the group collapses only
 // when its own buttons do not fit either; a group of pins only collapses
 // once they have all folded; a group whose buttons fit under its name
-// does not collapse (mitcad#696).
+// does not collapse (mitcad#696). The groups take their turns by their
+// places in the default layout, not where the user moved them
+// (mitcad#1998).
 #include "UnitTests.hpp"
 #include "framework/RibbonFit.hpp"
 
@@ -86,12 +88,33 @@ void pinsOnlyAndUnderNameTests() {
   CHECK(!none.collapsed[0] && none.shown[0] == 0);
 }
 
+// A group the user moved to the left (the default's third shown second)
+// still folds first, then the default's second, though it is now the
+// rightmost; without ranks the rightmost first.
+void rankTests() {
+  std::vector<RibbonFitGroup> groups = {group(2, 50, {100}), group(2, 50, {100}), group(2, 50, {100})};
+  RibbonFit fit = fitRibbonGroups(groups, 0, 260);
+  CHECK(!fit.collapsed[0] && !fit.collapsed[1] && fit.collapsed[2]);
+  groups[0].rank = 0;
+  groups[1].rank = 2;
+  groups[2].rank = 1;
+  fit = fitRibbonGroups(groups, 0, 300);
+  CHECK(!fit.collapsed[0] && !fit.collapsed[1] && !fit.collapsed[2]);
+  fit = fitRibbonGroups(groups, 0, 260);
+  CHECK(!fit.collapsed[0] && fit.collapsed[1] && !fit.collapsed[2]);
+  fit = fitRibbonGroups(groups, 0, 200);
+  CHECK(!fit.collapsed[0] && fit.collapsed[1] && fit.collapsed[2]);
+  fit = fitRibbonGroups(groups, 0, 150);
+  CHECK(fit.collapsed[0] && fit.collapsed[1] && fit.collapsed[2]);
+}
+
 } // namespace
 
 int ribbonFitTests() {
   pinFoldsBeforeGroupTests();
   lastPinFirstTests();
   pinsOnlyAndUnderNameTests();
+  rankTests();
   return failures;
 }
 MITCAD_UNIT_TEST(ribbonFitTests);

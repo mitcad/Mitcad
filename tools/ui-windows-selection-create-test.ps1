@@ -153,8 +153,8 @@ Section-Fits 'Create'
 
 Write-Host '--- 3b. The Make tab: no Create row, the Make section in its place'
 Ui-Mark
-Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
-Ui-ExpectNew 'Ribbon tab shown: MAKE' 'the Make tab shown'
+Ui-Step 'the 3D Print tab'                 { Ui-ClickTab 'MAKE_PRINT' }
+Ui-ExpectNew 'Ribbon tab shown: MAKE_PRINT' 'the Make tab shown'
 Expect-Create 'none' 'no Create row on the Make tab'
 Ui-ExpectNew 'Make card: Body1: ' 'the Make section of the face''s body'
 Ui-ExpectNew 'Selection card section Make: ' 'its place logged'
@@ -164,7 +164,7 @@ if (Ui-NewLines | Where-Object { $_.Contains('Selection card section Create: ') 
 }
 Write-Host 'ok   no Create row laid out on the Make tab'
 Ui-Mark
-Ui-Step 'the Solid tab'                    { Ui-ClickLogged 'Ribbon tab SOLID' }
+Ui-Step 'the Solid tab'                    { Ui-ClickTab 'SOLID' }
 Ui-ExpectNew 'Ribbon tab shown: SOLID' 'the Solid tab shown'
 Ui-ExpectNew 'Selection card create: Thread' 'the Create row back, Thread first'
 Ui-ExpectNew 'Make card: none' 'no Make section on the Solid tab'

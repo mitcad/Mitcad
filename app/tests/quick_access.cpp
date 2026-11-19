@@ -9,7 +9,10 @@
 // the command and its key, and why it is disabled, in at most 80
 // characters. Whether the group shows at all (mitcad#1189) is a setting of
 // its own, shown by default, told to the group when it changes, and leaves
-// the choice of commands as it is.
+// the choice of commands as it is. The Floating top bar has no default
+// commands (mitcad#1990), and a saved choice still wins there; a command's
+// Add to Quick Access and Remove from Quick Access save the choice at once
+// and tell the groups.
 #include "UnitTests.hpp"
 #include "files/FileCommands.hpp"
 #include "framework/CommandRegistry.hpp"
@@ -89,7 +92,6 @@ void fileCommandTests() {
     CHECK(def->name == QString::fromUtf8(entry.name));
     CHECK(def->kind == CommandDef::Kind::Action);
     CHECK(def->mode == CommandDef::Mode::Any && def->duringCommands);
-    CHECK(def->tab.isEmpty()); // the File menu, no toolbar group
     CHECK(!def->tooltip.isEmpty() && def->tooltip.size() <= 80 && !def->tooltip.endsWith(QLatin1Char('.')));
     CHECK(!def->icon.isEmpty() && !def->keywords.isEmpty());
     CHECK(def->shortcut == entry.key);
@@ -132,6 +134,19 @@ void settingsTests() {
   const QString key = QuickAccessSettings::settingsKey();
   CHECK(key == QStringLiteral("quickAccess/commands"));
   QSettings().remove(key);
+  // The Floating top bar's defaults (mitcad#1990): none, so no key reads
+  // as none there; a saved choice still wins.
+  CHECK(!QuickAccessSettings::topBarDefaults());
+  QuickAccessSettings::setTopBarDefaults(true);
+  CHECK(QuickAccessSettings::topBarDefaults());
+  CHECK(QuickAccessSettings::defaults().isEmpty());
+  CHECK(QuickAccessSettings::load().chosen.isEmpty());
+  QSettings().setValue(key, QStringLiteral("file.open,view.look_at"));
+  CHECK((QuickAccessSettings::load().chosen ==
+         QStringList{QStringLiteral("file.open"), QStringLiteral("view.look_at")}));
+  QSettings().remove(key);
+  QuickAccessSettings::setTopBarDefaults(false);
+  CHECK(QuickAccessSettings::defaults() == defaults);
   // No key: the defaults.
   CHECK(QuickAccessSettings::load().chosen == defaults);
   // A choice is written at once and read back.
@@ -240,6 +255,44 @@ void visibilityTests() {
   QSettings().remove(key);
 }
 
+// A command's Add to Quick Access and Remove from Quick Access
+// (mitcad#1990): saved at once, told to the groups, nothing told when
+// nothing changed; from the top bar's empty default too.
+void chooseTests() {
+  const QString key = QuickAccessSettings::settingsKey();
+  QSettings().remove(key);
+  int told = 0;
+  const QMetaObject::Connection connection =
+      QObject::connect(&mitcad::QuickAccessNotifier::instance(), &mitcad::QuickAccessNotifier::commandsChanged,
+                       [&told] { ++told; });
+  QuickAccessSettings::setTopBarDefaults(true);
+  CHECK(!QuickAccessSettings::isChosen(QStringLiteral("inspect.measure")));
+  CHECK(QuickAccessSettings::choose(QStringLiteral("inspect.measure"), true));
+  CHECK(told == 1);
+  CHECK(QuickAccessSettings::isChosen(QStringLiteral("inspect.measure")));
+  CHECK((QuickAccessSettings::load().chosen == QStringList{QStringLiteral("inspect.measure")}));
+  // Added already: nothing saved again, nothing told.
+  CHECK(!QuickAccessSettings::choose(QStringLiteral("inspect.measure"), true));
+  CHECK(told == 1);
+  // Removed: an empty value, which stays none (not the defaults).
+  CHECK(QuickAccessSettings::choose(QStringLiteral("inspect.measure"), false));
+  CHECK(told == 2);
+  CHECK(QSettings().contains(key));
+  CHECK(QuickAccessSettings::load().chosen.isEmpty());
+  CHECK(!QuickAccessSettings::choose(QStringLiteral("inspect.measure"), false));
+  CHECK(!QuickAccessSettings::choose(QString(), true));
+  CHECK(told == 2);
+  QuickAccessSettings::setTopBarDefaults(false);
+  // Elsewhere the defaults are the start: one added keeps them.
+  QSettings().remove(key);
+  CHECK(QuickAccessSettings::choose(QStringLiteral("view.look_at"), true));
+  QStringList expected = QuickAccessSettings::defaults();
+  expected.append(QStringLiteral("view.look_at"));
+  CHECK(QuickAccessSettings::load().chosen == expected);
+  QObject::disconnect(connection);
+  QSettings().remove(key);
+}
+
 } // namespace
 
 int quickAccessTests() {
@@ -260,6 +313,7 @@ int quickAccessTests() {
   settingsTests();
   shownTests();
   visibilityTests();
+  chooseTests();
 
   QSettings().clear();
   QCoreApplication::setOrganizationName(organization);

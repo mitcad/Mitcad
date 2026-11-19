@@ -35,11 +35,14 @@
 #   8. A design (mitcad-cli, mitcad#904): Sketch1 with a line and a circle
 #      on XY, Sketch2 on XY after it. Project in Sketch2: its selection
 #      filter has the row for other sketches' curves and points, a click
-#      takes Sketch1's line, and OK logs it by name.
+#      takes Sketch1's line; Sketch1 is still drawn after that pick
+#      (projecting does not use it, mitcad#2045), so a click takes its
+#      circle round (0, -10) in the same Project, and OK logs both by name.
 #   9. The same design (mitcad#1031): Sketch1 also has a circle round
 #      (30, 0) of radius 5, and Sketch3 lies on XZ. Intersect in Sketch3: its
 #      selection filter has the row for other sketches' curves and points,
-#      Sketch1 picked in the browser goes in whole, and OK gives two fixed
+#      Sketch1 is drawn (Sketch2's projection does not hide it), Sketch1
+#      picked in the browser goes in whole, and OK gives two fixed
 #      points where its circle crosses XZ (x = 25 and 35); the saved design
 #      has them as one linked section of the circle.
 #
@@ -414,6 +417,17 @@ Set-Content -Encoding ascii $script @'
 $made = & $cli run $script --save $design
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $design)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
 
+# Expect-Sketch1Drawn "description": the view's last "Sketches shown" line
+# has Sketch1 (F1) among the sketches it draws.
+function Expect-Sketch1Drawn([string]$Description) {
+  Ui-Sync
+  $shown = Ui-LastMatch 'Sketches shown: (.*)$'
+  if (-not $shown -or (', ' + $shown.Trim() + ', ') -notlike '*, F1, *') {
+    Ui-Fail "${Description}: the view shows '$shown'"
+  }
+  Write-Host "ok   $Description"
+}
+
 Ui-StartApp 'sketches' @('--open', $design)
 Ui-ExpectLog 'sketches.mitcad' 'the design opened'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
@@ -431,10 +445,19 @@ Ui-Step 'pick Sketch1''s line'           { Ui-ClickLogged 'Sketch entity F1/c3' 
 Ui-ExpectNew 'Project Geometry: 1 sketch curve [sketch curve c3 of F1]' 'the line went to Project'
 Ui-ExpectNew 'Preview Project: ok' 'the projection previewed' 30
 Ui-WaitIdle
+Expect-Sketch1Drawn 'Sketch1 still drawn after its line went to Project (mitcad#2045)'
+Ui-Mark
+Ui-Step 'pick Sketch1''s circle'         { Ui-ClickLogged 'Sketch entity F1/c5' }
+Ui-ExpectNew 'Project Geometry: 2 sketch curves' 'the circle went to the same Project'
+Ui-ExpectNew 'Preview Project: ok' 'both previewed' 30
+Ui-WaitIdle
+Expect-Sketch1Drawn 'Sketch1 still drawn after its circle went to Project'
 Ui-FocusMain
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
-Ui-ExpectNew 'Projected 1 item(s): sketch curve c3 of F1' 'the log names the projected curve'
+Ui-ExpectNew 'Projected 2 item(s): ' 'both projected'
+Ui-ExpectNew 'sketch curve c3 of F1' 'the log names the line'
+Ui-ExpectNew 'sketch curve c5 of F1' 'the log names the circle'
 Ui-Mark
 Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
 Ui-ExpectNew 'Sketch finished' 'Sketch2 finished'
@@ -451,9 +474,9 @@ Ui-Sync
 Ui-Mark
 Ui-Step 'intersect (Shift+F7)'           { Ui-Key 'shift+F7' }
 Ui-ExpectNew 'other-sketch-geometry=cross' 'Intersect''s filter has the row for other sketches'' geometry'
-# In the view the circle is seen edge on, and Sketch1 is hidden once
-# Sketch2 projects it: Sketch1 is picked whole in the browser (its line and
-# other circle do not cross XZ).
+Expect-Sketch1Drawn 'Sketch1 drawn before it is picked (Sketch2''s projection does not hide it)'
+# In the view the circle is seen edge on: Sketch1 is picked whole in the
+# browser (its line and other circle do not cross XZ).
 Ui-ExpectLog 'Browser Root/Sketches/Sketch1 at' 'Sketch1 in the browser'
 Ui-Step 'pick Sketch1 in the browser'    { Ui-ClickLogged 'Browser Root/Sketches/Sketch1' }
 Ui-ExpectNew 'Intersect Geometry: 1 sketch' 'Sketch1 went to Intersect'

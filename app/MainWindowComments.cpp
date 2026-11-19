@@ -87,13 +87,9 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
     // Started by the Comments panel's Retarget for the comment chosen
     // there; nothing to do without one.
     def.tooltip = tr("Pins the chosen comment to another face, edge, body or point");
-    def.tab.clear();
-    def.group.clear();
     def.enabled = [this] { return !m_commentRetarget.isEmpty(); };
   } else {
     def.tooltip = tr("Pins a note for an AI agent to a face, edge, body, point or the whole design");
-    def.tab = QStringLiteral("SOLID");
-    def.group = QStringLiteral("INSPECT");
     def.shortcut = QKeySequence(Qt::SHIFT | Qt::Key_N);
   }
   // One model command: its undo step is the model's ("Add Comment C1",
@@ -211,8 +207,6 @@ void MainWindow::registerCommentCommands() {
   comments.tooltip = tr("Lists the comments for AI agents: resolve, reopen, reply to and delete them");
   comments.kind = CommandDef::Kind::Action;
   comments.mode = CommandDef::Mode::Any;
-  comments.tab.clear(); // the View menu and the command search
-  comments.group.clear();
   comments.duringCommands = true;
   comments.keywords = {QStringLiteral("comments"), QStringLiteral("notes"), QStringLiteral("agent"),
                        QStringLiteral("ai"),       QStringLiteral("review"), QStringLiteral("resolve")};
@@ -228,8 +222,6 @@ void MainWindow::registerCommentCommands() {
   pins.tooltip = tr("Shows or hides the comments' pins in the view");
   pins.kind = CommandDef::Kind::Action;
   pins.mode = CommandDef::Mode::Any;
-  pins.tab.clear();
-  pins.group.clear();
   pins.duringCommands = true;
   pins.keywords = {QStringLiteral("comments"), QStringLiteral("pins"), QStringLiteral("markers"),
                    QStringLiteral("notes")};

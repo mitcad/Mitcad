@@ -96,6 +96,15 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
 ShapePtr distance_side(const SweepFace& face, double distance, double taper, const gp_Dir& along,
                        const NameList& near, const NameList& far);
 
+// One side of an extrusion up to its target (extrude.cpp): the face's prism
+// along `along` past the target, tapered by `taper` (a planar face along its
+// normal only; an untapered face may be curved, mitcad#2033), then trimmed
+// where it reaches the target (see `trimmed`, `straight`); the cap at the
+// face `near`, the target's faces in the result `far`. Throws when the
+// target lies behind the face.
+ShapePtr target_side(const std::string& feature, const SweepFace& face, const Target& target, double taper,
+                     const gp_Dir& along, const NameList& near, const NameList& far);
+
 // A side's solid past `distance` along `along` from the plane `start` it
 // starts on (extrude.cpp, mitcad#765: the other side of two ends there, on
 // this side's side): split by `start` moved that far, the part away from

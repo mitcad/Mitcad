@@ -10,10 +10,12 @@
 # the Docked and the Floating layout:
 #   - the CREATE menu: Lines, Point (an entry of its own, mitcad#1545),
 #     Rectangles, Circles, Arcs, Other Geometry, Text, Patterns,
-#     References (Project, Intersect, Clean Up Projections, Clean Up Stale
-#     Projections, Project Again) and Sketch Dimension, every sketch
-#     creation command exactly once; Offset (and Edit Text) in MODIFY, not
-#     in CREATE;
+#     Project / Include (mitcad#1975; its key References: Project,
+#     Intersect, Clean Up Projections, Clean Up Stale Projections, Project
+#     Again) and Sketch Dimension, every sketch
+#     creation command exactly once; Offset in MODIFY, not in CREATE; Edit
+#     Text off the toolbar (mitcad#1975: the text's right-click and
+#     double-click);
 #   - split buttons for Lines (mitcad#1393), Rectangles, Circles and Arcs, none for Other
 #     Geometry and Patterns: the Circles button starts Center Diameter
 #     Circle, its arrow opens the circle variants, which start from there;
@@ -21,11 +23,12 @@
 #   - the keyboard: the CREATE menu's Circles submenu with the arrow keys,
 #     the shortcut C and the command search;
 #   - in a narrow window the groups stay within it;
-#   - the SOLID CREATE menu in its sections with separators (mitcad#579):
-#     Create Sketch; from profiles; on a body's faces; the primitives; the
-#     Pattern submenu and Mirror; the Machine Elements submenu (Gear, Gear
-#     Pair, Pulley, Belt Drive, Bearing), from which Gear starts by the
-#     keyboard.
+#   - the SOLID CREATE menu in its sections with separators (mitcad#579,
+#     mitcad#1975): New Component and Create Sketch; from profiles; on a
+#     body's faces; the primitives; the Pattern submenu, Mirror and
+#     Thicken; the Curves submenu; the plastic, envelope, form and flex
+#     features; the Machine Elements submenu (Gear, Gear Pair, Pulley,
+#     Belt Drive, Bearing), from which Gear starts by the keyboard.
 #   - Pin to Toolbar (mitcad#1001), in both layouts in a 1600 x 900 window,
 #     with a rectangle sketched first (Sweep needs a profile): Sweep pinned
 #     from the ⋮ button of its row in the SOLID CREATE menu is a button in
@@ -38,7 +41,7 @@
 #     Floating also folds Draft in a narrow window; Sweep unpinned
 #     from its button's right-click, Draft and Loft from their rows' menus,
 #     no pinned buttons left; never a separate Pinned group; the preference
-#     follows each step (toolbarPins/SOLID). Docked also Change Keyboard
+#     follows each step (the command layout's user layer). Docked also Change Keyboard
 #     Shortcut…: Keyboard Shortcuts at Sweep.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -57,14 +60,16 @@ PATTERNS="Rectangular Pattern | Circular Pattern | Mirror"
 REFERENCES="Project | Intersect | Clean Up Projections | Clean Up Stale Projections | Project Again"
 CREATE="Lines > [Line | Midpoint Line] | Point | Rectangles > [$RECTANGLES] | Circles > [$CIRCLES]"
 CREATE="$CREATE | Arcs > [$ARCS] | Other Geometry > [$OTHER]"
-CREATE="$CREATE | Text > [Text | QR Code] | Patterns > [$PATTERNS] | References > [$REFERENCES] | Sketch Dimension"
+CREATE="$CREATE | Text > [Text | QR Code] | Patterns > [$PATTERNS] | Project / Include > [$REFERENCES] | Sketch Dimension"
 # The SOLID CREATE menu (mitcad#579), up to the Machine Elements submenu's
 # Bearing: later machine elements may follow it in the submenu.
 SOLID_PATTERNS="Rectangular Pattern | Circular Pattern | Pattern on Path | Pattern at Points"
-SOLID_CREATE="Create Sketch | - | Extrude | Revolve | Sweep | Loft | Rib | Web | Emboss"
-SOLID_CREATE="$SOLID_CREATE | - | Hole | Thread | Plastic Feature"
-SOLID_CREATE="$SOLID_CREATE | - | Box | Cylinder | Sphere | Torus | Coil | Helix | Pipe | Intersection Curve | Helix Curve"
-SOLID_CREATE="$SOLID_CREATE | - | Pattern > [$SOLID_PATTERNS] | Mirror | - | Envelope | - | Form | - | Flex"
+SOLID_CREATE="New Component | Create Sketch | - | Extrude | Revolve | Sweep | Loft | Rib | Web | Emboss"
+SOLID_CREATE="$SOLID_CREATE | - | Hole | Thread"
+SOLID_CREATE="$SOLID_CREATE | - | Box | Cylinder | Sphere | Torus | Coil | Pipe"
+SOLID_CREATE="$SOLID_CREATE | - | Pattern > [$SOLID_PATTERNS] | Mirror | Thicken"
+SOLID_CREATE="$SOLID_CREATE | - | Curves > [Helix | Intersection Curve | Helix Curve]"
+SOLID_CREATE="$SOLID_CREATE | - | Plastic Feature | Envelope | Form | Flex"
 SOLID_CREATE="$SOLID_CREATE | - | Machine Elements > [Gear | Gear Pair | Pulley | Belt Drive | Bearing"
 
 # last_line "prefix": the last log line starting with the prefix, without it.
@@ -133,10 +138,14 @@ check_layout() {
   *" | Offset | "*) echo "ok   $layout: Offset in MODIFY" ;;
   *) ui_fail "$layout: no Offset in MODIFY: '$modify'" ;;
   esac
-  case " | $modify | " in
-  *" | Edit Text | "*) echo "ok   $layout: Edit Text in MODIFY" ;;
-  *) ui_fail "$layout: no Edit Text in MODIFY: '$modify'" ;;
-  esac
+  # Off the toolbar (mitcad#1975): the edits of one object and the
+  # clipboard, on the object's right-click menu and their keys.
+  for gone in "Edit Text" "Edit Pattern" "Edit Offset" "Edit QR Code" Delete Cut Copy Paste; do
+    case " | $modify | " in
+    *" | $gone | "*) ui_fail "$layout: $gone still in MODIFY: '$modify'" ;;
+    esac
+  done
+  echo "ok   $layout: no object edits or clipboard commands in MODIFY"
 
   echo "--- The Circles split button"
   ui_mark
@@ -183,13 +192,16 @@ check_layout() {
   ui_expect_new "Sketch finished" "$layout: sketch left"
 }
 
-# pins_saved "ids" description: the settings' toolbarPins/SOLID is the ids
-# ("" none).
+# pins_saved "ids" description: the Solid tab's pins saved in the command
+# layout's user layer (commandLayout/user's "pins", mitcad#1951; an older
+# version's toolbarPins/SOLID is moved there) are the ids ("" none).
 pins_saved() {
   local conf=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf value
-  value=$(sed -n '/^\[toolbarPins\]/,/^\[/p' "$conf" 2> /dev/null | sed -n 's/^SOLID=//p' | tr -d '" ')
-  [ "$value" = "$1" ] || ui_fail "$2: toolbarPins/SOLID is '$value', not '$1'"
-  echo "ok   $2: toolbarPins/SOLID '$1'"
+  value=$(sed -n '/^\[commandLayout\]/,/^\[/p' "$conf" 2> /dev/null | sed -n 's/^user=//p' |
+    grep -o '\\"pins\\":{[^}]*}' | grep -o '\\"SOLID\\":\[[^]]*\]' |
+    sed 's/^[^[]*\[//; s/\]$//; s/\\"//g; s/ //g')
+  [ "$value" = "$1" ] || ui_fail "$2: the Solid tab's saved pins are '$value', not '$1'"
+  echo "ok   $2: the Solid tab's saved pins '$1'"
 }
 
 # row_menu "path" id "entry": the ⋮ of the command's row in the open menu
@@ -324,7 +336,7 @@ pins_fold_create() {
   *" | Revolve | Sweep | Loft | "*) echo "ok   $layout: the folded Sweep in the CREATE menu" ;;
   *) ui_fail "$layout: no Sweep in the CREATE menu: '$(last_line "Ribbon menu SOLID/CREATE: ")'" ;;
   esac
-  ui_step "Sweep's row (Enter)"            ui_key Down Down Down Down Return
+  ui_step "Sweep's row (Enter)"            ui_key Down Down Down Down Down Return
   ui_expect_new "Command Sweep started" "$layout: the folded Sweep starts from the CREATE menu"
   ui_mark
   ui_step "cancel (Esc)"                   ui_key Escape
@@ -333,7 +345,7 @@ pins_fold_create() {
   ui_mark
   ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
   ui_expect_new "Ribbon menu SOLID/CREATE: " "$layout: the menu opened"
-  ui_step "Sweep's row, the Menu key"      ui_key Down Down Down Down Menu
+  ui_step "Sweep's row, the Menu key"      ui_key Down Down Down Down Down Menu
   ui_expect_new "Toolbar menu SOLID/CREATE solid.sweep: Unpin from Toolbar | " "$layout: Sweep's row menu: Unpin from Toolbar"
   ui_step "Unpin from Toolbar (Enter)"     ui_key Return
   ui_expect_new "Unpinned: Sweep (Solid)" "$layout: the folded Sweep unpinned"
@@ -347,7 +359,7 @@ pins_fold_create() {
   ui_mark
   ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
   ui_expect_new "Ribbon menu SOLID/CREATE: " "$layout: the menu opened"
-  ui_step "Sweep's row, the Menu key"      ui_key Down Down Down Down Menu
+  ui_step "Sweep's row, the Menu key"      ui_key Down Down Down Down Down Menu
   ui_expect_new "Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar | " "$layout: Sweep's row menu: Pin to Toolbar"
   ui_step "Pin to Toolbar (Enter)"         ui_key Return
   ui_expect_new "Pinned to toolbar: Sweep (Solid)" "$layout: Sweep pinned again"
@@ -386,11 +398,11 @@ pin_toolbar() {
   ui_expect_new "Command Sweep cancelled" "$layout: Sweep cancelled"
   pins_fold_create "$layout"
 
-  # Loft by the keys: its row (the fifth), the Menu key, its first entry.
+  # Loft by the keys: its row (the sixth, after New Component, mitcad#1975), the Menu key, its first entry.
   ui_mark
   ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
   ui_expect_new "Ribbon menu SOLID/CREATE: " "$layout: the menu opened"
-  ui_step "Loft's row, the Menu key"       ui_key Down Down Down Down Down Menu
+  ui_step "Loft's row, the Menu key"       ui_key Down Down Down Down Down Down Menu
   ui_expect_new "Toolbar menu SOLID/CREATE solid.loft: Pin to Toolbar | " "$layout: Loft's row menu by the Menu key"
   ui_step "Pin to Toolbar (Enter)"         ui_key Return
   ui_expect_new "Pinned to toolbar: Loft (Solid)" "$layout: Loft pinned"
@@ -418,7 +430,7 @@ pin_toolbar() {
   ui_expect_new "Ribbon group SOLID/MODIFY pinned: solid.draft" "$layout: Draft in the MODIFY group"
   ui_sync
   ui_expect_new "Ribbon pinned SOLID/MODIFY/solid.draft at " "$layout: Draft's button in MODIFY"
-  pinned_in_group SOLID/MODIFY solid.draft "SOLID/SHEET METAL" solid.shell solid.fillet
+  pinned_in_group SOLID/MODIFY solid.draft "SOLID/ASSEMBLE" solid.shell solid.fillet
   [ "$(x_of "Ribbon SOLID/CREATE")" -lt "$(x_of "Ribbon pinned SOLID/MODIFY/solid.draft")" ] ||
     ui_fail "$layout: Draft's button not right of the CREATE group"
   no_pinned_group "$layout"
@@ -510,7 +522,7 @@ ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Gear cancelled" "Gear cancelled"
 # None of their commands is pinned: no split buttons, the buttons as before.
 grep -qF "Ribbon split SOLID/CREATE/" "$UI_LOG" && ui_fail "a split button for a SOLID CREATE submenu"
-echo "ok   no split buttons for the Pattern and Machine Elements submenus"
+echo "ok   no split buttons for the Pattern, Curves and Machine Elements submenus"
 for id in sketch.create solid.extrude solid.revolve solid.hole; do
   ui_expect_log "Ribbon button $id at " "the $id button"
 done
@@ -522,6 +534,9 @@ echo "ok   no buttons for the patterns, Mirror, Plastic Feature and the machine 
 pin_toolbar "Docked"
 check_layout "Docked"
 ui_stop_app
+# The pins' folds as the groups were laid out without labels (the Floating
+# toolbar panel shows labels by default, mitcad#1990).
+ui_icons_only
 ui_start_app --chrome=floating
 pin_toolbar "Floating"
 check_layout "Floating"

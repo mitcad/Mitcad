@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/Ribbon.cpp app/framework/Ribbon.hpp app/MainWindowMake.cpp app/print/MakeBodyCard.cpp
+# check-all sources: app/resources/layout/default.json
 # check-all sources: app/browser/BrowserPanel.cpp app/MainWindowContextMenu.cpp app/commands/MeasureHistoryView.cpp
 # check-all sources: app/MainWindowMeasurements.cpp app/MainWindowSheet.cpp app/files/MainWindowPrint.cpp
 # check-all sources: core/model-api/src/body_notes.rs core/model-api/src/cut_sheets.rs core/model/src/document/annotations.rs tools/cli
@@ -8,28 +9,33 @@
 # check-all sources: app/print/PrintValueChoices.cpp app/print/PrintValuePicker.cpp app/MainWindowSelectionCreate.cpp
 # check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/print/ProfilePickerRows.cpp
 # check-all sources: app/print/SlicerMaterialRows.cpp app/print/MaterialsDialog.cpp app/print/MaterialMenuChoices.cpp
-# The Make tab (mitcad#1049) through the real UI, in the Floating layout,
+# The Make workspace's tabs (mitcad#1049; 3D Print, Laser and CNC since
+# the owner's split of 18.11.2026) through the real UI, in the Floating layout,
 # then in the Docked one, on a design mitcad-cli makes: a sheet-metal
 # plate with its flat pattern (Body1) and a 40 x 30 x 10 block with a
 # counterbored hole (Body2) that sets Walls 5 of its own; the design prints
 # with the printer Bench and the process Standard:
-#   - The tabs Solid, Build and Make; the Solid tab's groups without the
-#     moved commands (Modify without Edit Materials…, Inspect without Print
-#     Analysis, Sheet Metal without Export Flat Pattern…, Render with Render
-#     Image… alone).
-#   - The Make tab's groups Materials, Annotate, 3D Print, CNC and Laser
-#     with their menus (CNC's commands listed, those that need a setup
-#     disabled, mitcad#1013).
-#   - Each moved command run from its new place: Edit Materials…,
-#     Printers… and Processes… (mitcad#1135), Print Analysis, Send to Slicer (once 3D
-#     Print) and Export Flat Pattern… (its DXF written); Export Face as
-#     DXF… on Body2's top face from the Laser group and from the face's
-#     context menu.
+#   - The tabs Solid, Surface, Sheet Metal, Build and Manage
+#     (mitcad#1975), 3D Print, Laser and CNC in the Make workspace; the Solid tab's groups without the moved commands
+#     (Modify without Edit Materials…, Inspect without Remove Section
+#     Analysis, Assemble without Insert Component, no Sheet Metal or
+#     Surface group, Render with Render Image… alone).
+#   - 3D Print's groups Printers and Prepare (every command a button),
+#     Laser's Export, CNC's Setup, 2D Milling, 3D Milling, Turning and
+#     Toolpath, and on each tab Materials (the Material tool, mitcad#1975),
+#     Annotate and Inspect (the Solid tab's, mitcad#1975), with their menus
+#     (CNC's commands listed, those that need a setup disabled,
+#     mitcad#1013); the Manage tab's Materials group.
+#   - Each moved command run from its new place: Edit Materials… (Manage
+#     › Materials), Printers… and Processes… (mitcad#1135), Print Analysis,
+#     Send to Slicer (once 3D Print) and Export Flat Pattern… (its DXF
+#     written, from the Laser tab); Export Face as DXF… on Body2's top face
+#     from the Laser tab's Export group and from the face's context menu.
 #   - The Annotate group places each kind: Dimension (the counterbore's
 #     diameter), Note (its text typed; its preview before Add, the note
 #     added where the preview was, mitcad#1097), Datum Label (A), Feature Control
-#     Frame (its tolerance from Tolerance…), Hole Callout, Material and
-#     Process Note (Printer: Bench / Process: Standard / Walls: 5). The
+#     Frame (its tolerance from Tolerance…), Hole Callout, Material Note
+#     and Process Note (Printer: Bench / Process: Standard / Walls: 5). The
 #     Measure panel measures: no Keep as Dimension any more.
 #   - Body2 selected on the Make tab: the card shows its material and its
 #     print settings with Walls 5 set on the body; Walls typed 3 in the
@@ -61,7 +67,8 @@
 #     design (under This design then, the picker on it); one Undo takes both
 #     back; Edit materials…, the picker's last row, opens the Materials
 #     window for the body and changes nothing.
-#   - Docked: the Make tab with its four groups.
+#   - Docked: the 3D Print, Laser and CNC tabs beside the others, 3D
+#     Print's groups.
 # tools/ui-windows-make-tab-test.ps1 does the same in the Windows VM.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -178,23 +185,33 @@ group_menu() {
 # next step reads them; without the sync the pick read the places logged
 # as the input started, one of them under the card.
 annotate_entry() {
-  ui_step "open the Annotate menu"          ui_click_logged "Ribbon MAKE/ANNOTATE"
-  ui_expect_new "Ribbon menu MAKE/ANNOTATE: " "the Annotate menu opened"
+  ui_step "open the Annotate menu"          ui_click_logged "Ribbon MAKE_PRINT/ANNOTATE"
+  ui_expect_new "Ribbon menu MAKE_PRINT/ANNOTATE: " "the Annotate menu opened"
   xdotool key --delay 80 --repeat "$1" Down
   ui_step "choose entry $1 (Enter)"         ui_key Return
 }
 
 ui_start_display
+# Every Make button clicked in sight: without labels, which the Floating
+# toolbar panel shows by default (mitcad#1990) and which fold the groups at
+# the right in a narrower window.
+ui_icons_only
 ui_start_app --open "$WORK/make.mitcad" --no-native-dialogs --chrome=floating
 ui_expect_log "Opened $WORK/make.mitcad" "the design opened"
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Browser Make markers: none" "no markers on the Solid tab"
 
 echo "--- The tabs, and the Solid tab without the moved commands"
-ui_expect_log "Ribbon tab SOLID at" "the Solid tab"
-ui_expect_log "Ribbon tab BUILD at" "the Build tab"
-ui_expect_log "Ribbon tab MAKE at" "the Make tab after them"
-for group in "SOLID/MODIFY:Edit Materials" "SOLID/INSPECT:Print Analysis" "SOLID/SHEET METAL:Export Flat Pattern"; do
+# The toolbar panel shows the Design workspace's tabs; Make is a workspace
+# of its own, chosen from the selector (mitcad#1990, ui_click_tab).
+for tab in SOLID SURFACE "SHEET METAL" BUILD MANAGE; do
+  ui_expect_log "Ribbon tab $tab at" "the $tab tab"
+done
+for tab in MAKE_PRINT MAKE_LASER MAKE_CNC; do
+  ui_expect_log "Ribbon tab $tab out of sight" "the $tab tab in the Make workspace"
+done
+ui_expect_log "Ribbon workspace at" "the workspace selector"
+for group in "SOLID/MODIFY:Edit Materials" "SOLID/INSPECT:Remove Section Analysis" "SOLID/ASSEMBLE:Insert Component"; do
   ui_mark
   ui_step "open the ${group%%:*} menu"      ui_click_logged "Ribbon ${group%%:*}"
   ui_expect_new "Ribbon menu ${group%%:*}: " "the ${group%%:*} menu opened"
@@ -205,38 +222,81 @@ for group in "SOLID/MODIFY:Edit Materials" "SOLID/INSPECT:Print Analysis" "SOLID
   echo "ok   ${group#*:} has left ${group%%:*}"
   ui_step "close it (Esc)"                  ui_key Escape
 done
-group_menu "SOLID/RENDER" "Render Image…"
-# The Solid tab's group of Render Image is Render (mitcad#1070), so Make
-# names only the tab.
+# Render Image's home is the Render workspace: the Solid tab has no Render
+# group (the owner, 18.11.2026), and none named Make (mitcad#1070).
+grep -F "Ribbon SOLID/RENDER at" "$UI_LOG" && ui_fail "a Render group on the Solid tab"
+echo "ok   no Render group on the Solid tab"
 grep -F "Ribbon SOLID/MAKE" "$UI_LOG" && ui_fail "a Make group on the Solid tab"
 echo "ok   no Make group on the Solid tab"
+# Surface and Sheet Metal are tabs of their own (mitcad#1975).
+grep -E "Ribbon SOLID/(SURFACE|SHEET METAL) at" "$UI_LOG" && ui_fail "a Surface or Sheet Metal group on the Solid tab"
+echo "ok   no Surface or Sheet Metal group on the Solid tab"
 
-echo "--- The Make tab and its groups"
+echo "--- The Make workspace's tabs and their groups"
 ui_mark
-ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
-ui_expect_new "Ribbon tab shown: MAKE" "the Make tab shown"
-for group in MATERIALS ANNOTATE "3D PRINT" CNC LASER; do
-  ui_expect_new "Ribbon MAKE/$group at" "its $group group"
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
+ui_expect_new "Ribbon tab shown: MAKE_PRINT" "the 3D Print tab shown"
+ui_expect_new "Ribbon workspace: MAKE (tabs MAKE_PRINT, MAKE_LASER, MAKE_CNC)" "the Make workspace's three tabs"
+for group in SLICE PRINTERS PREPARE MATERIALS ANNOTATE INSPECT; do
+  ui_expect_new "Ribbon MAKE_PRINT/$group at" "its $group group"
 done
 ui_expect_new "Browser Make markers: Root/Bodies/Body2: Own print settings: Walls" \
   "the Browser marks Body2, which sets Walls of its own"
 grep -F "Browser Make markers: " "$UI_LOG" | tail -1 | grep -qF "Body1" && ui_fail "Body1 marked"
 echo "ok   Body1 not marked"
-group_menu "MAKE/MATERIALS" "Edit Materials… | Material"
-group_menu "MAKE/ANNOTATE" \
-  "Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations…"
-group_menu "MAKE/3D PRINT" "Print Analysis | Send to Slicer | Printers… | Processes… | Plates…"
-group_menu "MAKE/CNC" \
-  "New Setup | - | Facing | Contour | Pocket | Adaptive Clearing | Rest Machining | Drill | 3D Roughing | Raster Finishing | Waterline Finishing | - | Generate | Simulate | Post Process… | - | Machines and Tools…"
-group_menu "MAKE/LASER" "Export Flat Pattern… | Export Face as DXF…"
+annotate="Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material Note | Process Note | - | Annotations…"
+inspect="Measure | Interference | Section Analysis | Physical Properties | Center of Mass | Add Comment"
+group_menu "MAKE_PRINT/SLICE" "Send to Slicer"
+group_menu "MAKE_PRINT/PRINTERS" "Printers… | Processes… | Plates…"
+group_menu "MAKE_PRINT/PREPARE" "Print Analysis"
+group_menu "MAKE_PRINT/MATERIALS" "Material"
+group_menu "MAKE_PRINT/ANNOTATE" "$annotate"
+group_menu "MAKE_PRINT/INSPECT" "$inspect"
+# Every command of 3D Print's own groups a button of its own (the owner,
+# 18.11.2026).
+for id in make.printers make.processes make.plates inspect.print_analysis make.print3d; do
+  ui_expect_log "Ribbon button $id at" "$id a button on the 3D Print tab"
+done
+ui_mark
+ui_step "the Laser tab"                    ui_click_tab "MAKE_LASER"
+ui_expect_new "Ribbon tab shown: MAKE_LASER" "the Laser tab shown"
+for group in EXPORT MATERIALS ANNOTATE INSPECT; do
+  ui_expect_new "Ribbon MAKE_LASER/$group at" "its $group group"
+done
+group_menu "MAKE_LASER/EXPORT" "Export Flat Pattern… | Export Face as DXF…"
+group_menu "MAKE_LASER/ANNOTATE" "$annotate"
+ui_mark
+ui_step "the CNC tab"                      ui_click_tab "MAKE_CNC"
+ui_expect_new "Ribbon tab shown: MAKE_CNC" "the CNC tab shown"
+for group in SETUP "2D MILLING" "3D MILLING" TURNING TOOLPATH MATERIALS ANNOTATE INSPECT; do
+  ui_expect_new "Ribbon MAKE_CNC/$group at" "its $group group"
+done
+group_menu "MAKE_CNC/SETUP" "New Setup | Machines and Tools…"
+group_menu "MAKE_CNC/2D MILLING" "Facing | Contour | Pocket | Adaptive Clearing | Rest Machining | Drill"
+group_menu "MAKE_CNC/3D MILLING" "3D Roughing | Raster Finishing | Waterline Finishing"
+group_menu "MAKE_CNC/TURNING" "Turn Facing | Turn Roughing | Turn Finishing | Grooving | Parting Off | Threading"
+group_menu "MAKE_CNC/TOOLPATH" "Generate | Simulate | Post Process…"
+group_menu "MAKE_CNC/INSPECT" "$inspect"
 
 echo "--- The moved commands from their new places"
+# Manage is Design's: that workspace chosen first.
+ui_step "the Design workspace"             ui_workspace DESIGN
 ui_mark
-ui_step "Edit Materials…"                  ui_click_logged "Ribbon button solid.materials"
-ui_expect_new "Materials opened" "the Materials window from the Materials group"
+ui_step "the Manage tab"                   ui_click_tab "MANAGE"
+ui_expect_new "Ribbon tab shown: MANAGE" "the Manage tab shown"
+group_menu "MANAGE/MATERIALS" "Edit Materials… | Edit Appearances…"
+ui_mark
+ui_step "open the Manage Materials menu"   ui_click_logged "Ribbon MANAGE/MATERIALS"
+ui_expect_new "Ribbon menu MANAGE/MATERIALS: " "the Materials menu opened"
+xdotool key --delay 80 --repeat 1 Down
+ui_step "Edit Materials… (Enter)"          ui_key Return
+ui_expect_new "Materials opened" "the Materials window from the Manage tab's Materials group"
 ui_focus_dialog '^Materials$'
 ui_step "close it (Esc)"                   ui_key Escape
 ui_focus_main
+ui_mark
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
+ui_expect_new "Ribbon tab shown: MAKE_PRINT" "the 3D Print tab shown again"
 ui_mark
 ui_step "Printers…"                        ui_click_logged "Ribbon button make.printers"
 ui_expect_new "Printers opened" "the Printers manager from the 3D Print group (mitcad#1135)"
@@ -260,10 +320,13 @@ ui_expect_new "Command Send to Slicer started" "Send to Slicer (once 3D Print) f
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Send to Slicer cancelled" "cancelled"
 ui_mark
+ui_step "the Laser tab"                    ui_click_tab "MAKE_LASER"
+ui_expect_new "Ribbon tab shown: MAKE_LASER" "the Laser tab shown again"
+ui_mark
 ui_step "Export Flat Pattern…"             ui_click_logged "Ribbon button sheet.export_dxf"
 ui_type_path "Export Flat Pattern" "$WORK/flat.dxf"
 ui_focus_main
-ui_expect_new "Exported $WORK/flat.dxf: dxf flat pattern of Body1" "the flat pattern written from the Laser group" 30
+ui_expect_new "Exported $WORK/flat.dxf: dxf flat pattern of Body1" "the flat pattern written from the Laser tab" 30
 [ -s "$WORK/flat.dxf" ] || ui_fail "no flat pattern DXF"
 
 echo "--- Export Face as DXF… (Laser and the face's context menu)"
@@ -284,16 +347,19 @@ ui_type_path "Export Face as DXF" "$WORK/face2.dxf"
 ui_focus_main
 ui_expect_new "Exported $WORK/face2.dxf: dxf outline of Body2 along F5:end(" "written from the context menu" 30
 ui_expect_log "Selected: 1 face" "the top face selected by the right click"
-# The face still selected: the Laser group's button.
+# The face still selected: the Laser tab's button.
 ui_mark
 ui_step "Export Face as DXF…"              ui_click_logged "Ribbon button make.export_face_dxf"
 ui_type_path "Export Face as DXF" "$WORK/face.dxf"
 ui_focus_main
-ui_expect_new "Exported $WORK/face.dxf: dxf outline of Body2 along F5:end(" "written from the Laser group" 30
+ui_expect_new "Exported $WORK/face.dxf: dxf outline of Body2 along F5:end(" "written from the Laser tab" 30
 [ -s "$WORK/face.dxf" ] || ui_fail "no face DXF"
 ui_step "clear the selection (Esc)"        ui_key Escape
 
 echo "--- The Annotate group places each kind"
+ui_mark
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
+ui_expect_new "Ribbon tab shown: MAKE_PRINT" "the 3D Print tab shown for Annotate"
 ui_mark
 ui_step "Dimension"                        ui_click_logged "Ribbon button make.dimension"
 ui_expect_new "Command Dimension started" "Dimension started"
@@ -355,7 +421,7 @@ ui_expect_new "HoleCallout1 = Ø6.6 THRU / ⌴ Ø11 ↧ 4" "written from the hol
 
 ui_mark
 annotate_entry 6
-ui_expect_new "Command Material started" "Material from the Annotate menu"
+ui_expect_new "Command Material Note started" "Material Note from the Annotate menu"
 ui_step "pick the top face"                ui_click_pick "face F5.b0/F5:end(r{c1"
 ui_step "add (Enter)"                      ui_key Return
 ui_expect_new "Annotation kept: Material1" "the material note added"
@@ -448,7 +514,7 @@ ui_mark
 ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
 ui_expect_new "own: Walls = 4 (body Body1)" "one undo step: 4 again"
 ui_mark
-ui_step "the Solid tab"                    ui_click_logged "Ribbon tab SOLID"
+ui_step "the Solid tab"                    ui_click_tab "SOLID"
 ui_expect_new "Ribbon tab shown: SOLID" "the Solid tab shown"
 ui_expect_new "Make card: none" "no card on the Solid tab"
 ui_expect_new "Browser Make markers: none" "no markers on the Solid tab"
@@ -475,8 +541,8 @@ ui_stop_app
 ui_start_app --open "$WORK/pickers.mitcad" --no-native-dialogs --chrome=floating
 ui_expect_log "Opened $WORK/pickers.mitcad" "the design without a printer opened"
 ui_mark
-ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
-ui_expect_new "Ribbon tab shown: MAKE" "the Make tab shown"
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
+ui_expect_new "Ribbon tab shown: MAKE_PRINT" "the 3D Print tab shown"
 ui_mark
 ui_step "select Body1 in the Browser"      ui_click_logged "Browser Root/Bodies/Body1"
 ui_expect_new "Make card: Body1: material " "Body1's card"
@@ -544,8 +610,8 @@ ui_stop_app
 ui_start_app --open "$PROJECT/material.mitcad" --no-native-dialogs --chrome=floating
 ui_expect_log "Opened $PROJECT/material.mitcad" "the box in the project opened"
 ui_mark
-ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
-ui_expect_new "Ribbon tab shown: MAKE" "the Make tab shown"
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
+ui_expect_new "Ribbon tab shown: MAKE_PRINT" "the 3D Print tab shown"
 ui_mark
 ui_step "select Body1 in the Browser"      ui_click_logged "Browser Root/Bodies/Body1"
 ui_expect_new "Make card: Body1: material Steel (default)" "Body1 of the design's default"
@@ -601,14 +667,16 @@ if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Make card material of "; then
 fi
 echo "ok   Edit materials… keeps the material"
 
-echo "--- Docked: the Make tab and its groups"
+echo "--- Docked: the Make workspace's tabs and their groups"
 ui_stop_app
 ui_start_app --open "$WORK/make.mitcad" --no-native-dialogs --chrome=docked
-ui_expect_log "Ribbon tab MAKE at" "the Make tab in the Docked layout"
+for tab in MAKE_PRINT MAKE_LASER MAKE_CNC MANAGE; do
+  ui_expect_log "Ribbon tab $tab at" "the $tab tab in the Docked layout"
+done
 ui_mark
-ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
-for group in MATERIALS ANNOTATE "3D PRINT" CNC LASER; do
-  ui_expect_new "Ribbon MAKE/$group at" "its $group group, Docked"
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
+for group in SLICE PRINTERS PREPARE MATERIALS ANNOTATE INSPECT; do
+  ui_expect_new "Ribbon MAKE_PRINT/$group at" "its $group group, Docked"
 done
 ui_mark
 ui_step "Dimension (Docked)"               ui_click_logged "Ribbon button make.dimension"
@@ -616,4 +684,4 @@ ui_expect_new "Command Dimension started" "Dimension started from the Docked too
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Dimension cancelled" "cancelled"
 
-ui_finish "the Make tab"
+ui_finish "the Make workspace's tabs"

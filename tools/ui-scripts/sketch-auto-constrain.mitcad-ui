@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+# Auto Constrain (mitcad#2019) on sketch-auto-constrain.json (Sketch1 on
+# XY: a 30 x 20 rectangle from (10, 5) drawn as four lines with points of
+# their own, 16 degrees of freedom):
+#   1. Auto Constrain (the Constraints group's command) with nothing
+#      selected previews the whole sketch: the corners joined, two lines
+#      level and two upright, two lengths and the corner's two distances
+#      from the origin, the sketch fully constrained.
+#   2. Dimensions unchecked: the relations only, 4 degrees of freedom left.
+#   3. Checked again and OK: one undo step; undone, the 16 degrees of
+#      freedom are back.
+# Run by tools/ui-sketch-auto-constrain-test.sh (Linux),
+# tools/ui-windows-sketch-auto-constrain-test.ps1 (Windows) and
+# tools/ui-macos-sketch-auto-constrain-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-log '^Sketch Sketch1: 16 DOF$'
+command view.fit
+wait-idle
+capture-undo-depth baseline
+
+# 1. The whole sketch.
+mark
+command sketch.auto_constrain
+wait-log '^Command Auto Constrain started'
+wait-log '^Preview Auto Constrain added: coincident 4, horizontal 2, horizontal_distance 1, length 2, vertical 2, vertical_distance 1 \(dof 0\)$'
+wait-log '^Preview Auto Constrain: ok'
+expect-no-log '^Preview Auto Constrain: failed'
+
+# 2. The relations only.
+mark
+click-logged '^Panel Auto Constrain input dimensions at '
+wait-log '^Preview Auto Constrain added: coincident 4, horizontal 2, vertical 2 \(dof 4\)$'
+expect-no-log '^Preview Auto Constrain: failed'
+
+# 3. Both again, and OK.
+mark
+click-logged '^Panel Auto Constrain input dimensions at '
+wait-log '^Preview Auto Constrain added: coincident 4, horizontal 2, horizontal_distance 1, length 2, vertical 2, vertical_distance 1 \(dof 0\)$'
+wait-log '^Preview Auto Constrain: ok'
+screenshot '${MITCAD_TEST_WORK}/sketch-auto-constrain.png'
+mark
+key Return
+wait-log '^Added Auto Constrain$'
+expect-log '^Auto Constrain added: .* \(dof 0\)$'
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+expect-undo-depth ${baseline} 0
+wait-log '^Sketch Sketch1: 16 DOF$'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

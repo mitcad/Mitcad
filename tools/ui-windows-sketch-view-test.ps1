@@ -7,8 +7,9 @@
 #   2. A rectangle from the origin, its width and height typed: fully
 #      constrained.
 #   3. The dark background recolours its fully constrained lines light, the
-#      light one dark again (mitcad#253), their halos with them
-#      (mitcad#302).
+#      light one dark again (mitcad#253), their halos with them on the
+#      dark one (mitcad#302), none on the light one over no face
+#      (mitcad#2034).
 #   4. Clicks at known sketch points (no tool): the view reports their
 #      sketch coordinates in mm (mitcad#254).
 #   5. Outside sketch editing the shown sketch keeps the fully constrained
@@ -23,7 +24,9 @@
 #      three dimensions: each is drawn over a halo in the background's tone,
 #      dark on the dark background and light on the light one, read from
 #      the log ("Sketch dimension halos:"; mitcad#633; the pixels are
-#      checked by tools/ui-sketch-view-test.sh).
+#      checked by tools/ui-sketch-view-test.sh); its fully constrained
+#      circles have halos on the dark background, none on the light one
+#      over the default body (mitcad#2034).
 #   8. A sketch on a block's top face, edited from the front view (the face
 #      edge-on, the view's middle far in front of it in depth): the face's
 #      middle in the middle of the free area (mitcad#772).
@@ -57,10 +60,16 @@ function Expect-Recoloured([string]$Background) {
   $count = Ui-LastMatch "Sketch entities recoloured for a $Background background: (\d+) fully constrained"
   if (-not $count -or [int]$count -lt 4) { Ui-Fail "$Background background: $count fully constrained entities recoloured, expected 4 or more" }
   Write-Host "ok   $count fully constrained entities recoloured for the $Background background"
-  # Their halos took the background's tone too (mitcad#302).
+  # Their halos took the background's tone too (mitcad#302) on a dark
+  # background; on a light one a sketch on an origin plane has none
+  # (mitcad#2034: only over a dark face).
   $halos = Ui-LastMatch 'Sketch halos: (\d+ (?:dark|light))$'
-  if ($halos -notmatch "^(\d+) $Background$" -or [int]$Matches[1] -lt 4) {
-    Ui-Fail "$Background background: the last halos are '$halos', expected 4 or more $Background"
+  if ($Background -eq 'dark') {
+    if ($halos -notmatch "^(\d+) dark$" -or [int]$Matches[1] -lt 4) {
+      Ui-Fail "dark background: the last halos are '$halos', expected 4 or more dark"
+    }
+  } elseif ($halos -ne '0 light') {
+    Ui-Fail "light background: the last halos are '$halos', expected '0 light'"
   }
   Write-Host "ok   halos for the $Background background: $halos"
 }
@@ -274,10 +283,30 @@ function Expect-DimensionHalos([string]$Tone) {
   Ui-Fail "dimension halos: the last line is '$last', expected '3 $Tone'"
 }
 
+# Expect-Halos "2 dark": within six seconds the last "Sketch halos:" line
+# says so.
+function Expect-Halos([string]$Expected) {
+  $last = $null
+  for ($i = 0; $i -lt 30; $i++) {
+    $last = Ui-LastMatch 'Sketch halos: (\d+ (?:dark|light))$'
+    if ($last -eq $Expected) {
+      Write-Host "ok   halos: $last"
+      return
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  Ui-Fail "halos: the last line is '$last', expected '$Expected'"
+}
+
+# The two fully constrained circles get their halos on the dark background,
+# none on the light one over the default body (mitcad#2034; over a dark
+# body: app.ui-windows-sketch-halo-face).
 Ui-Step 'dark background (F8)'           { Ui-Key 'F8' }
 Expect-DimensionHalos 'dark'
+Expect-Halos '2 dark'
 Ui-Step 'light background (F9)'          { Ui-Key 'F9' }
 Expect-DimensionHalos 'light'
+Expect-Halos '0 light'
 
 Write-Host '--- A sketch on a face seen edge-on stays in view (mitcad#772)'
 # mitcad-cli builds a 40 x 40 x 20 block far in front (y -400 to -360) and

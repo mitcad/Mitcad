@@ -177,7 +177,7 @@ ui_start_app --no-native-dialogs
 
 echo "--- 1. Wall: the fastener, its size and count"
 ui_mark
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_expect_new "Ribbon BUILD/TIMBER at" "its TIMBER group (mitcad#520)"
 ui_mark
 ui_step "Wall (command search)"            ui_command "Wall"
@@ -264,7 +264,7 @@ ui_stop_app
 
 echo "--- 3. Spacing with fasteners"
 ui_start_app --no-native-dialogs
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_mark
 ui_step "Timber (command search)"          ui_command "Timber"
 ui_expect_new "Command Timber started" "Timber started"

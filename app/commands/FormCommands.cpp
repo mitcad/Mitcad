@@ -133,8 +133,6 @@ CommandDef formCommand(const CommandContext& context) {
   def.name = QObject::tr("Form");
   def.icon = QStringLiteral("form");
   def.tooltip = QObject::tr("A smooth body shaped by a control cage that you edit");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("form"); // a section of its own (mitcad#1757)
   def.keywords = {QStringLiteral("subdivision"), QStringLiteral("cage"), QStringLiteral("organic"),
                   QStringLiteral("smooth"), QStringLiteral("freeform"), QStringLiteral("sculpt")};
   // form.create applied for the preview and taken back; OK keeps it.
@@ -558,8 +556,6 @@ CommandDef formEditCommand(DocumentHost& host, const FormEditHooks& hooks) {
   def.name = QObject::tr("Edit Form");
   def.icon = QStringLiteral("form");
   def.tooltip = QObject::tr("Changes a Form's control cage");
-  def.tab.clear(); // a Form's double-click or Edit Feature opens it
-  def.group = QStringLiteral("CREATE");
   def.keywords = {QStringLiteral("cage"), QStringLiteral("subdivision")};
   def.okLabel = QObject::tr("Apply");
   def.repeats = true; // each edit one undo step; Close keeps them

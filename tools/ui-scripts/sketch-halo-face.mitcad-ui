@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Where fully constrained curves and centre lines get their halo
+# (mitcad#2034), on sketch-halo-face.json (Sketch1 on the block's top face:
+# two fully constrained circles and a centre line, three halos at most),
+# from the "Sketch halos: <n> dark|light" log: on a dark background
+# always; on a light one only while the face the sketch lies on is dark
+# (its own appearance, else its body's), following each change of the
+# appearances and their undo and redo, finished or edited alike. Shared by
+# the Linux (tools/ui-sketch-view-test.sh, which then checks the pixels),
+# Windows and macOS tests.
+expect-ever 'View area'
+wait-idle
+expect-ever 'Sketches shown: F2'
+command view.environment.light
+wait-log '^Sketch halos: 0 light$'
+
+# The body black: the curves on its face get their halos.
+mark
+model-command '{"cmd":"set_body_appearance","uid":"F1.b0","appearance":"paint_black"}'
+wait-log '^Sketch halos: 3 light$'
+mark
+command view.environment.dark
+wait-log '^Sketch halos: 3 dark$'
+mark
+command view.environment.light
+wait-log '^Sketch halos: 3 light$'
+
+# The face itself white: none, although the body is black; undone, back.
+mark
+model-command '{"cmd":"set_face_appearance","uid":"F1.b0","faces":["F1:top"],"appearance":"paint_white"}'
+wait-log '^Sketch halos: 0 light$'
+mark
+command edit.undo
+wait-log '^Sketch halos: 3 light$'
+
+# The body's appearance undone and redone.
+mark
+command edit.undo
+wait-log '^Sketch halos: 0 light$'
+mark
+command edit.redo
+wait-log '^Sketch halos: 3 light$'
+
+# Edited, the sketch keeps them.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F2 \(Sketch1\)'
+wait-idle
+expect-no-log '^Sketch halos: '

@@ -53,6 +53,9 @@ pub struct TextOutline {
     /// curve): left out of the profiles, and told by the sketch
     /// (mitcad#1993).
     pub dropped: Vec<DroppedContour>,
+    /// The lines the text was laid out in: its line breaks' and, wrapped
+    /// in a frame, the wrap's (mitcad#2029); 0 for a QR code.
+    pub lines: usize,
 }
 
 /// A glyph contour that bounds no profile ([`TextOutline::dropped`]): the
@@ -590,6 +593,7 @@ pub fn layout(
     // Each line's characters in the order they are seen (mitcad#473): a
     // right-to-left run reads from right to left.
     let lines: Vec<Vec<usize>> = visual_lines(&text.text, &lines);
+    let line_count = lines.len();
     let (ascender, descender, spacing) = (
         glyphs.ascender * h,
         glyphs.descender * h,
@@ -850,6 +854,7 @@ pub fn layout(
         stored: false,
         contours,
         dropped,
+        lines: line_count,
     })
 }
 

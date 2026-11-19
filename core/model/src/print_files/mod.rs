@@ -471,6 +471,7 @@ pub(crate) fn material_from_filament(
     values.retain(|key, value| material::check_filament_value(key, value).is_ok());
     values.remove("filament_colour");
     let material = Material {
+        sheet_process: None,
         id,
         name,
         density,

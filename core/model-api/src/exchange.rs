@@ -1090,6 +1090,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         let options = FlatDxfOptions {
             unit,
             tangents: command.tangents,
+            ..FlatDxfOptions::default()
         };
         let (def, drawing) = self.export_flat_pattern_dxf(
             body,

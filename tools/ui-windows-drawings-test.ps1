@@ -300,7 +300,7 @@ $before = View-Y 1
 Ui-Mark
 Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'the 3D view again'
-Ui-ExpectNew 'Ribbon tabs: START, SOLID, BUILD, MAKE (shown SOLID)' "the model's tabs back, the one it was opened from shown"
+Ui-ExpectNew 'Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)' "the model's tabs back, the one it was opened from shown"
 Ui-Mark
 Ui-Step 'edit Extrude1 (double-click)'    { Ui-DoubleClickLogged 'Timeline Extrude1' }
 Ui-ExpectNew ' with Extrude' 'editing Extrude1'
@@ -310,7 +310,7 @@ Ui-Step 'OK (Enter)'                      { Ui-Key 'Return' }
 Ui-ExpectNew 'Edited F' 'Extrude1 edited'
 # Opened from the Build tab, the drawing closes back to it (mitcad#1008).
 Ui-Mark
-Ui-Step 'the Build tab'                   { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the Build tab'                   { Ui-ClickTab 'BUILD' }
 Ui-ExpectNew 'Ribbon BUILD/PROFILE at' 'the Build tab shown'
 Ui-Mark
 Ui-Step 'open Drawing1 (double-click)'    { Ui-DoubleClickLogged 'Browser Root/Drawings/Drawing1' }
@@ -327,7 +327,7 @@ Write-Host '--- 4. Saved and opened again'
 Ui-Mark
 Ui-Step 'back to the model'               { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'closed'
-Ui-ExpectNew 'Ribbon tabs: START, SOLID, BUILD, MAKE (shown BUILD)' 'back on the Build tab it was opened from'
+Ui-ExpectNew 'Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)' 'back on the Build tab it was opened from'
 Ui-Step 'save (Ctrl+S)'                   { Ui-Key 'ctrl+s' }
 Ui-ExpectNew 'Saved ' 'saved'
 if (-not (Select-String -Path $design -Pattern '"drawings"' -Quiet)) { Ui-Fail 'the design file has no drawings' }

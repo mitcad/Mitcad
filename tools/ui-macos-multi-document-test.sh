@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/WindowManager app/DocumentFrame app/framework/DocumentSession app/framework/TestDriver
 # check-all sources: app/files/Autosave app/files/Recovery app/mcp app/render
+# check-all sources: app/platform/MacTestApplication app/platform/macos/MacChrome
 # Actual macOS Qt/AppKit document workflows. The normal UI harness owns the
 # shared Aqua lock; its client process uses only the real stdio MCP bridge.
 set -uo pipefail
@@ -76,6 +77,12 @@ workflow() {
 
 if [ "$mode" = frames ]; then
   export MITCAD_TEST_DOCUMENT_FRAMES=1
+  new_case frames-system-menu
+  python3 "$here/ui-scripts/multi-document-frames-script.py" "$MITCAD_TEST_WORK" system-menu > "$UI_OUT/frames-system-menu.mitcad-ui"
+  MITCAD_TEST_INPUT=$UI_OUT/frames-system-menu.mitcad-ui ui_run_app frames-system-menu --ui=qt --chrome=floating \
+    --no-native-dialogs --no-mcp --no-recovery
+  check_run
+  ui_expect_log '^TestDriver: quit' 'system menu workflow completed'
   for chrome in floating docked; do
     new_case "frames-$chrome"
     python3 "$here/ui-scripts/multi-document-frames-script.py" "$MITCAD_TEST_WORK" full > "$UI_OUT/frames-$chrome.mitcad-ui"

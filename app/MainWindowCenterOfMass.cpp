@@ -30,8 +30,6 @@ void MainWindow::registerCenterOfMassCommand() {
   def.icon = QStringLiteral("center-of-mass");
   def.tooltip = tr("Shows a marker at the center of mass of the design's bodies");
   def.kind = CommandDef::Kind::Action;
-  def.tab = QStringLiteral("SOLID");
-  def.group = QStringLiteral("INSPECT");
   def.keywords = {QStringLiteral("center of mass"), QStringLiteral("centre of mass"), QStringLiteral("balance"),
                   QStringLiteral("centroid"), QStringLiteral("mass"), QStringLiteral("weight")};
   def.enabled = [this] { return !m_snapshot.bodies.isEmpty(); };

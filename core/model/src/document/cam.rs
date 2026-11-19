@@ -54,6 +54,8 @@ use mitcad_vec3::{cross, norm, scale, sub};
 
 // The stock simulation's query (mitcad#1013, phase 3).
 mod simulate;
+// Turning setups on a lathe (mitcad#1869).
+mod turning;
 
 /// A setup's work coordinates and stock at the timeline marker.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -759,6 +761,9 @@ impl<K: Kernel> Document<K> {
         op: &CamOperation,
     ) -> Result<ProgramOp, String> {
         use ValueKind::{Length, Number};
+        if op.kind.is_turning() {
+            return Err("Turning operations need a lathe as the setup's machine.".to_owned());
+        }
         let tool = machine.tools.get(op.tool).ok_or_else(|| {
             "The operation's tool is not in the machine's tool library.".to_owned()
         })?;
@@ -996,6 +1001,14 @@ impl<K: Kernel> Document<K> {
                     |o| engine::ops::drill(o, &engine_tool),
                 )?
             }
+            OperationKind::TurnFace
+            | OperationKind::TurnRough { .. }
+            | OperationKind::TurnFinish { .. }
+            | OperationKind::TurnGroove { .. }
+            | OperationKind::TurnPartOff { .. }
+            | OperationKind::TurnThread { .. } => {
+                unreachable!("turning operations are refused above")
+            }
         };
         Ok(ProgramOp {
             name: op.name.clone(),
@@ -1054,7 +1067,7 @@ impl<K: Kernel> Document<K> {
         }
         // A 3-axis operation without bodies of its own machines the
         // setup's: their versions and placements.
-        if op.kind.machines_surfaces()
+        if (op.kind.machines_surfaces() || op.kind.is_turning())
             && !op.inputs.iter().any(|i| matches!(i, CamInput::Body { .. }))
         {
             match self.cam_setup_bodies(setup) {
@@ -1313,6 +1326,20 @@ impl<K: Kernel> Document<K> {
                 op.tool
             )));
         }
+        // Turning on a lathe, milling on a mill (mitcad#1869).
+        if let Some(machine) = setup.machine.as_deref().and_then(|m| cam.machine(m)) {
+            let lathe = machine.machine.lathe.is_some();
+            if lathe && !op.kind.is_turning() {
+                return Err(invalid(
+                    "The setup's machine is a lathe: give it turning operations.",
+                ));
+            }
+            if !lathe && op.kind.is_turning() {
+                return Err(invalid(
+                    "Turning operations need a lathe as the setup's machine.",
+                ));
+            }
+        }
         for input in &op.inputs {
             let (body, sketch) = input.source();
             if body.is_some_and(|b| self.body_shape(b).is_none()) {
@@ -1378,6 +1405,7 @@ impl<K: Kernel> Document<K> {
             placement: None,
             visible: true,
             operations: Vec::new(),
+            lathe: None,
         };
         input.apply(&mut setup);
         self.check_cam_setup(&cam, &setup)?;
@@ -1461,7 +1489,7 @@ impl<K: Kernel> Document<K> {
         }
         let kind = input.kind.clone().ok_or_else(|| {
             invalid(
-                "An operation needs its kind: Facing, Contour, Pocket, Adaptive Clearing, Rest Machining, Drill, 3D Roughing, Raster Finishing or Waterline Finishing.",
+                "An operation needs its kind: Facing, Contour, Pocket, Adaptive Clearing, Rest Machining, Drill, 3D Roughing, Raster Finishing, Waterline Finishing, or on a lathe Turn Facing, Turn Roughing, Turn Finishing, Grooving, Parting Off or Threading.",
             )
         })?;
         let tool = input
@@ -1493,6 +1521,7 @@ impl<K: Kernel> Document<K> {
             lead: None,
             suppressed: false,
             generated: None,
+            turning: None,
         };
         input.apply(&mut op);
         self.check_cam_operation(&cam, &cam.setups[s], &op)?;
@@ -1620,6 +1649,15 @@ impl<K: Kernel> Document<K> {
         let index = self.cam_machine_index(machine)?;
         let tool = tool.resolve(self.parameters()).map_err(invalid)?;
         let mut cam = self.state.cam.clone();
+        // Lathe tools on a lathe, milling tools on a mill (mitcad#1869).
+        let m = &cam.machines[index].machine;
+        if tool.shape.is_turning() != m.lathe.is_some() {
+            return Err(invalid(if m.lathe.is_some() {
+                format!("The lathe {} takes lathe tools only.", m.name)
+            } else {
+                format!("The machine {} takes milling tools only.", m.name)
+            }));
+        }
         let tools = &mut cam.machines[index].tools;
         if tools.get(tool.number).is_none() && tools.tools.len() >= crate::cam::MAX_TOOLS {
             return Err(invalid(format!(
@@ -1655,6 +1693,10 @@ impl<K: Kernel> Document<K> {
         let mut cam = self.state.cam.clone();
         let mut setups = Vec::new();
         for index in indices {
+            if self.cam_on_lathe(&self.state.cam.setups[index]) {
+                setups.push(self.generate_turning(index, &mut cam)?);
+                continue;
+            }
             let run = self.compute_cam_setup(index, None);
             let rapid = run.machine.map_or(5000.0, |m| m.machine.rapid_feed);
             let mut operations = Vec::new();
@@ -1730,7 +1772,13 @@ impl<K: Kernel> Document<K> {
         // Always reported (the file writes it only when off).
         value["visible"] = json!(setup.visible);
         value["operations"] = json!(operations);
-        value["work"] = Self::cam_frame_json(&frame);
+        if self.cam_on_lathe(setup) {
+            // A lathe setup's work: on the spindle axis (mitcad#1869).
+            value["work"] = Self::turn_frame_json(&self.turn_frame(setup));
+            value["turning"] = json!(true);
+        } else {
+            value["work"] = Self::cam_frame_json(&frame);
+        }
         let dialect = setup
             .dialect
             .clone()
@@ -1776,6 +1824,9 @@ impl<K: Kernel> Document<K> {
         operations: Option<&[u32]>,
     ) -> Result<Value, ModelError> {
         let index = self.cam_setup_index(setup)?;
+        if self.cam_on_lathe(&self.state.cam.setups[index]) {
+            return self.turning_toolpaths_json(index, operations);
+        }
         let setup = &self.state.cam.setups[index];
         let run = self.compute_cam_setup(index, operations);
         let rapid = run.machine.map_or(5000.0, |m| m.machine.rapid_feed);
@@ -1828,6 +1879,9 @@ impl<K: Kernel> Document<K> {
         units: Option<engine::Units>,
     ) -> Result<Value, ModelError> {
         let index = self.cam_setup_index(setup)?;
+        if self.cam_on_lathe(&self.state.cam.setups[index]) {
+            return self.turning_post_json(index, dialect, units);
+        }
         let setup = &self.state.cam.setups[index];
         let run = self.compute_cam_setup(index, None);
         let machine = run.machine.ok_or_else(|| invalid(NO_MACHINE))?;

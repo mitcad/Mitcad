@@ -1104,6 +1104,7 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                     place: "junction",
                     fits: None,
                     set: Vec::new(),
+                    members: Vec::new(),
                 },
             ))
         })
@@ -1780,6 +1781,7 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                     place: "panel",
                     fits: Some((plan.fits, plan.reason.clone())),
                     set: Vec::new(),
+                    members: Vec::new(),
                 },
             ))
         })
@@ -2055,6 +2057,9 @@ impl<K: Kernel> ConnectCrateOps<K> for Document<K> {
         // on stays too. Side a is the one a joint places.
         let mut sides = Vec::new();
         let mut placed = Vec::new();
+        // The paths of the sides that stay: a free part of a flexible
+        // occurrence among them stays as that occurrence's own (mitcad#2017).
+        let mut paths: Vec<Vec<OccurrenceUid>> = Vec::new();
         for entry in self.features() {
             let FeatureDef::Joint(j) = &entry.def else {
                 continue;
@@ -2081,6 +2086,9 @@ impl<K: Kernel> ConnectCrateOps<K> for Document<K> {
                 if gone {
                     continue;
                 }
+                if !paths.contains(&side.occurrence.0) {
+                    paths.push(side.occurrence.0.clone());
+                }
                 if !sides.contains(first) {
                     sides.push(*first);
                 }
@@ -2094,6 +2102,7 @@ impl<K: Kernel> ConnectCrateOps<K> for Document<K> {
             .iter()
             .filter_map(|o| held.get(o).map(|t| (*o, *t)))
             .collect();
+        let keep_free = self.held_free_parts(paths.iter().map(Vec::as_slice));
         let freed = placed
             .iter()
             .filter(|o| {
@@ -2110,6 +2119,7 @@ impl<K: Kernel> ConnectCrateOps<K> for Document<K> {
             features,
             others,
             keep,
+            keep_free,
             freed,
         })
     }
@@ -2126,6 +2136,9 @@ pub(crate) struct RemovePlan {
     pub features: BTreeSet<FeatureUid>,
     pub others: Vec<(ComponentUid, FeatureUid, FeatureUid)>,
     pub keep: Vec<(OccurrenceUid, Transform)>,
+    /// The free parts of flexible occurrences to keep where they are
+    /// (mitcad#2017).
+    pub keep_free: Vec<mitcad_model::HeldFreePart>,
     /// The occurrences placed on what goes, not grounded: they stay,
     /// freed of it (mitcad#1811).
     pub freed: Vec<OccurrenceUid>,
@@ -2149,6 +2162,7 @@ pub(crate) fn apply_remove(
     // What its joints placed stays where it is (mitcad#1811).
     let held: BTreeMap<OccurrenceUid, Transform> = plan.keep.iter().copied().collect();
     state.hold_placements(plan.keep.iter().map(|(o, _)| *o), &held);
+    state.hold_free_parts(&plan.keep_free);
     // A spacing set's lead hands the set to the next member (mitcad#478),
     // and joinery with the parts that go is taken out of the others.
     crate::spacing::hand_over_set(state, components);

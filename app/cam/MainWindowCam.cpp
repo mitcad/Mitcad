@@ -68,8 +68,6 @@ namespace {
 
 using Choices = QVector<QPair<QString, QString>>;
 
-const QString kMake = QStringLiteral("MAKE");
-const QString kCnc = QStringLiteral("CNC");
 // A choice that stands for no machine, and for the machine's controller.
 const QString kNoMachine = QStringLiteral("__none");
 const QString kMachineDialect = QStringLiteral("__machine");
@@ -236,6 +234,14 @@ QString effectiveDialect(const CommandState& state) {
   }
   const QJsonObject machine = machineOf(camData(state), state.choice(QStringLiteral("machine")));
   return str(machine.value(QStringLiteral("machine")).toObject(), "controller");
+}
+
+// Whether a setup panel's machine is a lathe (mitcad#1869).
+bool onLatheMachine(const CommandState& state) {
+  return machineOf(camData(state), state.choice(QStringLiteral("machine")))
+      .value(QStringLiteral("machine"))
+      .toObject()
+      .contains(QStringLiteral("lathe"));
 }
 
 // A value input as the model takes it (a CamValue): an expression with its
@@ -514,6 +520,24 @@ QJsonObject setupFields(const CommandState& state, QString* why, QString* input)
   setup.insert(QStringLiteral("post"), post);
   setup.insert(QStringLiteral("probe_work_zero"),
                effectiveDialect(state) == QStringLiteral("millenniumos") && state.checked(QStringLiteral("probe")));
+  // A lathe's own values (mitcad#1869): the stock's bore and the program
+  // number, kept with the other values of an edited setup's lathe.
+  if (onLatheMachine(state)) {
+    QJsonObject lathe = state.object(QStringLiteral("edited")).value(QStringLiteral("lathe")).toObject();
+    lathe.remove(QStringLiteral("stock_bore"));
+    lathe.remove(QStringLiteral("program_number"));
+    const QJsonValue bore = value("stock_bore", ValueKind::Length, MainWindow::tr("Stock Bore"));
+    if (!bore.isNull()) {
+      lathe.insert(QStringLiteral("stock_bore"), bore);
+    }
+    const QJsonValue number = value("program_number", ValueKind::Unitless, MainWindow::tr("Program Number"));
+    if (!number.isNull()) {
+      lathe.insert(QStringLiteral("program_number"), static_cast<int>(std::lround(number.toDouble())));
+    }
+    setup.insert(QStringLiteral("lathe"), lathe);
+  } else if (edit) {
+    setup.insert(QStringLiteral("lathe"), QJsonValue(QJsonValue::Null));
+  }
   if (!why->isEmpty()) {
     return {};
   }
@@ -686,8 +710,10 @@ void MainWindow::registerCamCommands() {
   for (const OperationKind& kind : kOperationKinds) {
     m_registry->add(camOperationCommand(QString::fromLatin1(kind.type)));
   }
+  // Turning on a lathe (mitcad#1869, cam/MainWindowCamTurning.cpp).
+  registerCamTurningCommands();
   const auto action = [](const char* id, const QString& name, const char* icon, const QString& tooltip,
-                         const char* section, std::function<void()> run) {
+                         std::function<void()> run) {
     CommandDef def;
     def.id = QString::fromLatin1(id);
     def.name = name;
@@ -695,30 +721,26 @@ void MainWindow::registerCamCommands() {
     def.tooltip = tooltip;
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Model;
-    def.tab = kMake;
-    def.group = kCnc;
-    def.section = QString::fromLatin1(section);
     def.run = std::move(run);
     return def;
   };
   const auto hasSetups = [this] { return !m_snapshot.camSetups.isEmpty(); };
   CommandDef generate = action("make.cam_generate", tr("Generate"), "cnc-generate",
-                               tr("Computes the toolpaths of the setups' operations"), "toolpaths",
+                               tr("Computes the toolpaths of the setups' operations"),
                                [this] { generateCam(0); });
-  generate.pinned = true;
   generate.enabled = hasSetups;
   generate.keywords = {QStringLiteral("cam"), QStringLiteral("cnc"), QStringLiteral("toolpath"),
                        QStringLiteral("generate"), QStringLiteral("compute")};
   m_registry->add(generate);
   CommandDef simulate = action("make.cam_simulate", tr("Simulate"), "cnc-simulate",
-                               tr("Plays a setup's toolpaths back with the tool drawn where it is"), "toolpaths",
+                               tr("Plays a setup's toolpaths back with the tool drawn where it is"),
                                [this] { simulateCam(0); });
   simulate.enabled = hasSetups;
   simulate.keywords = {QStringLiteral("cam"), QStringLiteral("cnc"), QStringLiteral("toolpath"),
                        QStringLiteral("playback"), QStringLiteral("simulation")};
   m_registry->add(simulate);
   CommandDef post = action("make.cam_post", tr("Post Process…"), "cnc-post",
-                           tr("Writes a setup's program as G-code for its machine's controller"), "toolpaths",
+                           tr("Writes a setup's program as G-code for its machine's controller"),
                            [this] { postProcessCam(0); });
   post.enabled = hasSetups;
   post.keywords = {QStringLiteral("cam"),  QStringLiteral("cnc"),   QStringLiteral("g-code"), QStringLiteral("gcode"),
@@ -726,7 +748,7 @@ void MainWindow::registerCamCommands() {
                    QStringLiteral("export")};
   m_registry->add(post);
   CommandDef machines = action("make.cam_machines", tr("Machines and Tools…"), "cnc-machines",
-                               tr("Edits the design's CNC machines and their tool libraries"), "machines",
+                               tr("Edits the design's CNC machines and their tool libraries"),
                                [this] { openCamMachines(); });
   machines.keywords = {QStringLiteral("cam"),  QStringLiteral("cnc"),     QStringLiteral("machine"),
                        QStringLiteral("tool"), QStringLiteral("library"), QStringLiteral("end mill"),
@@ -778,10 +800,6 @@ CommandDef MainWindow::camSetupCommand() {
   def.name = tr("New Setup");
   def.icon = QStringLiteral("cnc-setup");
   def.tooltip = tr("Adds a CNC setup: the bodies, the stock, the work zero and the machine");
-  def.tab = kMake;
-  def.group = kCnc;
-  def.section = QStringLiteral("setup");
-  def.pinned = true;
   def.keywords = {QStringLiteral("cam"),   QStringLiteral("cnc"),       QStringLiteral("setup"),
                   QStringLiteral("stock"), QStringLiteral("work zero"), QStringLiteral("wcs"),
                   QStringLiteral("mill"),  QStringLiteral("router"),    QStringLiteral("g54")};
@@ -792,6 +810,7 @@ CommandDef MainWindow::camSetupCommand() {
   const auto atPoint = [](const CommandState& state) {
     return state.choice(QStringLiteral("origin")) == QStringLiteral("point");
   };
+  const auto onLathe = [](const CommandState& state) { return onLatheMachine(state); };
   const Choices origins = {
       {QStringLiteral("top_front_left"), tr("Stock top, front left corner")},
       {QStringLiteral("top_front_right"), tr("Stock top, front right corner")},
@@ -867,6 +886,16 @@ CommandDef MainWindow::camSetupCommand() {
       checkInput(QStringLiteral("probe"), tr("Probe the work zero first"))
           .withTooltip(tr("The program starts by probing the work zero on the stock"))
           .withVisible([](const CommandState& state) { return effectiveDialect(state) == QStringLiteral("millenniumos"); }),
+      // A lathe's own values (mitcad#1869).
+      valueInput(QStringLiteral("stock_bore"), tr("Stock Bore"), ValueKind::Length, QString())
+          .withHeading(tr("Lathe"))
+          .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("Solid bar"); })
+          .withTooltip(tr("The diameter of the stock's hole: a tube or a drilled hole"))
+          .withVisible(onLathe),
+      valueInput(QStringLiteral("program_number"), tr("Program Number"), ValueKind::Unitless, QString())
+          .withAuto([](const CommandState&, const CommandContext&) { return QStringLiteral("1000"); })
+          .withTooltip(tr("The number the lathe's control keeps the program under"))
+          .withVisible(onLathe),
   };
   def.init = [this](CommandState& state, const CommandContext&) {
     state.setObject(QStringLiteral("cam"), camPanelData());
@@ -936,6 +965,10 @@ CommandDef MainWindow::camSetupCommand() {
                         ? QStringLiteral("inches")
                         : QStringLiteral("millimetres"));
     state.setChecked(QStringLiteral("probe"), setup.value(QStringLiteral("probe_work_zero")).toBool());
+    const QJsonObject lathe = setup.value(QStringLiteral("lathe")).toObject();
+    loadCamValue(state, QStringLiteral("stock_bore"), lathe.value(QStringLiteral("stock_bore")), ValueKind::Length, context);
+    loadCamValue(state, QStringLiteral("program_number"), lathe.value(QStringLiteral("program_number")),
+                 ValueKind::Unitless, context);
   };
   def.build = [](const CommandState& state, const CommandContext&) -> Built {
     QString why;
@@ -998,10 +1031,6 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     }
   }
   def.tooltip = operationTooltip(type);
-  def.tab = kMake;
-  def.group = kCnc;
-  def.section = QStringLiteral("operations");
-  def.pinned = contour;
   def.keywords = {QStringLiteral("cam"), QStringLiteral("cnc"), QStringLiteral("toolpath"), QStringLiteral("operation"),
                   QStringLiteral("mill"), type};
   if (drill) {

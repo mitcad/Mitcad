@@ -1152,8 +1152,10 @@ fn follow_references(
                     frame_override: None,
                 };
                 follow_origin(&mut origin, component, &ends_in_source, moved, occurrence);
-                if origin.occurrence == edge.occurrence {
-                    origin.geometry = edge.face.clone();
+                if origin.occurrence == edge.occurrence
+                    && let Some(face) = &edge.face
+                {
+                    origin.geometry = face.clone();
                     follow_origin(&mut origin, component, &ends_in_source, moved, occurrence);
                 }
                 edge.occurrence = origin.occurrence;

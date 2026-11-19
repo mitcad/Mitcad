@@ -86,7 +86,6 @@ using build::BuildPart;
 using build::Part;
 using cmd::Choices;
 
-const QString kTab = QStringLiteral("BUILD");
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kPi = 3.14159265358979323846;
 constexpr SelectFilter kPartKinds = SelectKind::Face | SelectKind::Body;
@@ -891,6 +890,10 @@ const Choices kEnds = {{QStringLiteral("a"), QStringLiteral("End A")}, {QStringL
 // to the click), what the preview said of the end picked last (its zone,
 // direction, turns and mitre), and the side or end face under the mouse.
 const QString kOffsetTyped = QStringLiteral("offset_typed");
+// On a plane or a face (mitcad#2046): off it along its normal, and turned
+// about the component's axis by any angle.
+const QString kGroundOffset = QStringLiteral("ground_offset");
+const QString kGroundRotate = QStringLiteral("ground_rotate");
 const QString kEndPick = QStringLiteral("end_pick");
 // The face a click would pick: the hover shows only that (mitcad#489,
 // mitcad#508).
@@ -975,6 +978,14 @@ Against against(const Shared& shared, const QString& role, const CommandState& s
 bool groundFace(const Shared& shared, const QString& role, const CommandState& state) {
   const Selection& items = state.items(kAt);
   return !items.isEmpty() && items.first().kind == SelectKind::Face &&
+         against(shared, role, state) == Against::Ground;
+}
+
+// A plane or a face picked for a ground placement (mitcad#2046): Offset
+// moves the part off it along its normal, Rotate turns it by any angle.
+bool groundPlaced(const Shared& shared, const QString& role, const CommandState& state) {
+  const Selection& items = state.items(kAt);
+  return !items.isEmpty() && (items.first().kind == SelectKind::Face || items.first().kind == SelectKind::Plane) &&
          against(shared, role, state) == Against::Ground;
 }
 
@@ -1376,13 +1387,19 @@ Placement placement(const Shared& shared, const QString& role, const CommandStat
       at->insert(QStringLiteral("direction"), axisVector(axis));
     }
     // A planar face: at its centre of area, its sides along its longest
-    // straight edge; Rotate turns it on the face (mitcad#2000).
+    // straight edge (mitcad#2000).
     if (snapsToFaceCentre(shared, role, state)) {
       at->remove(QStringLiteral("point"));
     }
-    const QString turn = state.choice(QStringLiteral("rotate"));
-    if (groundFace(shared, role, state) && !turn.isEmpty() && turn != QStringLiteral("0")) {
-      fields.insert(QStringLiteral("rotate"), angleValue(turn));
+    // On a plane or a face: off it along its normal and turned by any
+    // angle (mitcad#2046).
+    if (groundPlaced(shared, role, state)) {
+      if (cmd::nonZero(state, kGroundOffset)) {
+        at->insert(QStringLiteral("offset"), state.expression(kGroundOffset));
+      }
+      if (cmd::nonZero(state, kGroundRotate)) {
+        fields.insert(QStringLiteral("rotate"), state.expression(kGroundRotate));
+      }
     }
     if (role == QStringLiteral("timber")) {
       const QString lie = state.choice(QStringLiteral("lie"));
@@ -1863,6 +1880,19 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
               : place == QStringLiteral("grounded") ? QObject::tr("At the origin")
                                                     : QObject::tr("On the picked geometry"));
   }
+  // Off the plane or face and turned (mitcad#2046), as typed.
+  const bool offPicked = placed.how == Against::Ground && groundPlaced(*shared, role, state);
+  if (offPicked && (cmd::nonZero(state, kGroundOffset) || cmd::nonZero(state, kGroundRotate))) {
+    const auto typed = [&state](const QString& key) {
+      const double value = state.value(key);
+      return std::isfinite(value) ? value : 0.0;
+    };
+    const QString rotated =
+        QString::number(std::round(typed(kGroundRotate) * 180.0 / kPi * 100.0) / 100.0 + 0.0) + QStringLiteral("°");
+    lines << QObject::tr("Offset %1 along the normal, rotated %2")
+                 .arg(cmd::lengthText(typed(kGroundOffset), context), rotated)
+                 .toHtmlEscaped();
+  }
   // On a side (mitcad#417): the offset from the reference the placement is
   // bound to, which a change of From keeps in place.
   QString sideLog;
@@ -2004,6 +2034,10 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     const auto tenths = [](double v) { return QString::number(std::round(v * 10.0) / 10.0 + 0.0, 'f', 1); };
     result.log += QStringLiteral("; end A at %1, %2, %3")
                       .arg(tenths(frame.origin.X()), tenths(frame.origin.Y()), tenths(frame.origin.Z()));
+  }
+  if (offPicked) {
+    result.log += QStringLiteral("; offset %1, rotate %2")
+                      .arg(state.expression(kGroundOffset), state.expression(kGroundRotate));
   }
   // A corner the length closes, bound (mitcad#485) or typed to end there
   // (mitcad#492).
@@ -2319,6 +2353,13 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
             return axis != kFaceNormal || groundFace(*shared, role, state);
           })
           .withTooltip(QObject::tr("The axis the component runs along from where it goes")),
+      // On a plane or a face (mitcad#2046).
+      valueInput(kGroundOffset, QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withVisible([shared, role](const CommandState& state) { return groundPlaced(*shared, role, state); })
+          .withTooltip(QObject::tr("Off the plane or face along its normal; negative goes into it")),
+      valueInput(kGroundRotate, QObject::tr("Rotate"), ValueKind::Angle, QStringLiteral("0 deg"))
+          .withVisible([shared, role](const CommandState& state) { return groundPlaced(*shared, role, state); })
+          .withTooltip(QObject::tr("About the component's axis, at any angle")),
       // On an end (mitcad#417): the click's zone of the end face decides
       // (its inner half straight on, the band along an edge turned towards
       // that edge), or as chosen.
@@ -2372,11 +2413,10 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
                     })
                     .withTooltip(QObject::tr("What the offset is measured from; the component stays bound to it when "
                                              "what it is on changes length")));
-  // On a part, and on a face picked for a ground placement (mitcad#2000).
+  // On a part's side or end; on a plane or a face Rotate takes any angle
+  // (kGroundRotate, mitcad#2046).
   inputs.append(choiceInput(QStringLiteral("rotate"), QObject::tr("Rotate"), kRotations, QStringLiteral("0"))
-                    .withVisible([onPart, shared, role](const CommandState& state) {
-                      return onPart(state) || groundFace(*shared, role, state);
-                    })
+                    .withVisible(onPart)
                     .withTooltip(QObject::tr("About the component's axis, in 90 degree steps")));
   if (profile) {
     // On a side (mitcad#444): a brace leaning along the part it stands on,
@@ -2436,7 +2476,11 @@ bool placeNow(Shared& shared, DocumentHost& host, const QString& role, const Par
   const QJsonValue count = result.value(QStringLiteral("count"));
   // A set fastened to its hosts (mitcad#497): the junctions fastened.
   const QJsonValue fastened = result.value(QStringLiteral("fasteners"));
-  QString set = count.isDouble() ? QStringLiteral("; a set of %1").arg(count.toInt()) : QString();
+  // Profiles along sketch lines (mitcad#1965): their count.
+  const bool onLines = result.contains(QStringLiteral("members"));
+  QString set = !count.isDouble() ? QString()
+                : onLines         ? QStringLiteral("; %1 profile(s) along sketch lines").arg(count.toInt())
+                                  : QStringLiteral("; a set of %1").arg(count.toInt());
   if (fastened.isDouble()) {
     set += QStringLiteral(", %1 junction(s) fastened").arg(fastened.toInt());
   }
@@ -2464,6 +2508,92 @@ bool placeNow(Shared& shared, DocumentHost& host, const QString& role, const Par
   return true;
 }
 
+// --- Profile along sketch lines (mitcad#1965; app/COMMANDS.md, Profile)
+//
+// Profile's Method: By clicks (the placements above) or Along sketch
+// lines: the sketch lines (or whole sketches) picked get one profile each,
+// following its line, its section aligned to it; the corners mitered (an
+// L) and butted (a T) (build_place with `lines`).
+
+const QString kProfileHow = QStringLiteral("profile_how");
+const QString kByClicks = QStringLiteral("click");
+const QString kAlongLines = QStringLiteral("lines");
+const Choices kProfileHows = {{kByClicks, QStringLiteral("By clicks: on a plane, a face, a side or an end")},
+                              {kAlongLines, QStringLiteral("Along sketch lines: a profile on each line")}};
+const QString kLinesPick = QStringLiteral("lines_pick");
+const QString kLinesChain = QStringLiteral("lines_chain");
+const QString kLinesAlign = QStringLiteral("lines_align");
+const QString kLinesCorners = QStringLiteral("lines_corners");
+const Choices kLineAligns = {{QStringLiteral("center"), QStringLiteral("Centered on the line")},
+                             {QStringLiteral("above"), QStringLiteral("On top of the sketch plane")},
+                             {QStringLiteral("below"), QStringLiteral("Under the sketch plane")},
+                             {QStringLiteral("left_above"), QStringLiteral("Corner: left, on top")},
+                             {QStringLiteral("right_above"), QStringLiteral("Corner: right, on top")},
+                             {QStringLiteral("left_below"), QStringLiteral("Corner: left, under")},
+                             {QStringLiteral("right_below"), QStringLiteral("Corner: right, under")}};
+
+bool alongLines(const CommandState& state) { return state.choice(kProfileHow) == kAlongLines; }
+
+// The inspection and the placing of profiles along sketch lines, below.
+Inspection inspectLines(const SharedPtr& shared, const CommandState& state, const CommandContext& context);
+bool placeLines(const SharedPtr& shared, DocumentHost& host, CommandState& state, const CommandContext& context);
+
+// Profile's inputs of Along sketch lines; the placement inputs by clicks
+// hidden with it, but Rotate and Flip, which it shares.
+void addLineInputs(QVector<InputDef>& inputs) {
+  for (InputDef& input : inputs) {
+    if (input.id == kProfileHow) {
+      continue;
+    }
+    const std::function<bool(const CommandState&)> own = input.visible;
+    if (input.id == QStringLiteral("rotate") || input.id == QStringLiteral("flip")) {
+      input.visible = [own](const CommandState& state) { return alongLines(state) || !own || own(state); };
+    } else if (input.id == kAt || input.id == QStringLiteral("length_mode") || input.id == QStringLiteral("length") ||
+               input.id == kLengthFace || input.id == kLengthOffset || input.id == QStringLiteral("axis") ||
+               input.id == QStringLiteral("direction") || input.id == QStringLiteral("corner_offset") ||
+               input.id == QStringLiteral("mitre") || input.id == QStringLiteral("mitre_angle") ||
+               input.id == QStringLiteral("offset") || input.id == QStringLiteral("from") ||
+               input.id == QStringLiteral("tilt") || input.id == QStringLiteral("place")) {
+      input.visible = [own](const CommandState& state) { return !alongLines(state) && (!own || own(state)); };
+    }
+  }
+  const auto lines = [](const CommandState& state) { return alongLines(state); };
+  InputDef linesPick =
+      selectionInput(kLinesPick, QObject::tr("Lines"), SelectKind::SketchCurve | SelectKind::Sketch, 1, 0)
+          .withVisible(lines)
+          .withOnPick(
+              [](const SelectionItem& item, CommandState&, const CommandContext&) {
+                qInfo().noquote() << QStringLiteral("BUILD profile along sketch lines: %1 picked").arg(item.logDescription());
+              },
+              false)
+          .withTooltip(QObject::tr("The sketch lines the profiles go along, or a whole sketch from the Browser"));
+  // Not Profile's first selection, though it comes first in the panel: a
+  // face or a plane selected before the command is still where the part
+  // goes (At), and the view's context menu still offers Profile for it.
+  linesPick.notPrimary = true;
+  QVector<InputDef> added = {
+      linesPick,
+      checkInput(kLinesChain, QObject::tr("Chain"), false)
+          .withVisible(lines)
+          .withTooltip(QObject::tr("Adds the lines joined end to end to the picked ones")),
+      choiceInput(kLinesAlign, QObject::tr("Align"), kLineAligns, QStringLiteral("center"))
+          .withVisible(lines)
+          .withTooltip(QObject::tr("How each profile's section sits on its line")),
+      checkInput(kLinesCorners, QObject::tr("Corners"), true)
+          .withVisible(lines)
+          .withTooltip(QObject::tr("Miters where two lines meet at their ends, butts where a line ends on another")),
+  };
+  // After Method, before the placement inputs by clicks.
+  int at = 0;
+  while (at < inputs.size() && inputs[at].id != kProfileHow) {
+    ++at;
+  }
+  at = at < inputs.size() ? at + 1 : static_cast<int>(inputs.size());
+  for (int i = 0; i < added.size(); ++i) {
+    inputs.insert(at + i, added[i]);
+  }
+}
+
 CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QString& role) {
   const bool profile = role == QStringLiteral("profile");
   CommandDef def;
@@ -2472,9 +2602,6 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
   def.icon = profile ? QStringLiteral("build-profile") : QStringLiteral("build-linear");
   def.tooltip = profile ? QObject::tr("Places slot profiles; their length runs to the component in the way")
                         : QObject::tr("Places rails, carriages, bearings and motor plates");
-  def.tab = kTab;
-  def.group = QStringLiteral("PROFILE");
-  def.pinned = true;
   def.keywords = profile ? QStringList{QStringLiteral("aluminium"), QStringLiteral("extrusion"), QStringLiteral("frame"),
                                        QStringLiteral("slot"), QStringLiteral("build")}
                          : QStringList{QStringLiteral("rail"), QStringLiteral("carriage"), QStringLiteral("guide"),
@@ -2493,7 +2620,15 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
     });
   };
   def.inputs = pickerInputs(shared, role);
+  if (profile) {
+    // Method (mitcad#1965): by clicks, or along sketch lines.
+    def.inputs.append(choiceInput(kProfileHow, QObject::tr("Method"), kProfileHows, kByClicks)
+                          .withTooltip(QObject::tr("Where the profiles go: by clicks, or one along each sketch line")));
+  }
   def.inputs += placementInputs(shared, role, profile, true);
+  if (profile) {
+    addLineInputs(def.inputs);
+  }
   def.init = [shared, role](CommandState& state, const CommandContext& context) {
     startPicker(*shared, role, state, context);
     qInfo().noquote() << QStringLiteral("BUILD %1 adds to %2%3")
@@ -2505,13 +2640,18 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
   };
   def.ended = pickerEnded(shared, def.id);
   def.inspect = [shared, role, profile](const CommandState& state, const CommandContext& context) {
+    if (profile && alongLines(state)) {
+      return inspectLines(shared, state, context);
+    }
     return inspectPlacement(shared, role, state, context, profile);
   };
   def.previewMarkers = markersOf;
   // The mouse on a side or an end face shows only the face a click picks;
   // the preview stays the click's (mitcad#508: following the mouse lagged).
   def.hoverPreview = [shared, role](const SelectionItem& item, CommandState& state, const CommandContext&) {
-    hoverPickOnly(*shared, role, item, state);
+    if (!alongLines(state)) {
+      hoverPickOnly(*shared, role, item, state);
+    }
     return false;
   };
   // A chosen plane (mitcad#1196): the preview follows the mouse on it, the
@@ -2534,6 +2674,10 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
     return true;
   };
   def.apply = [shared, &host, role, profile](CommandState& state, const CommandContext& context) {
+    // Along sketch lines (mitcad#1965).
+    if (profile && alongLines(state)) {
+      return placeLines(shared, host, state, context);
+    }
     Part part;
     if (!chosenPart(*shared, state, part)) {
       host.showStatus(noPartsText(*shared, role), NoticeLevel::Error);
@@ -2585,7 +2729,6 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
 
 const QString kTimberRole = QStringLiteral("timber");
 // The TIMBER group's commands (mitcad#520).
-const QString kTimberGroup = QStringLiteral("TIMBER");
 const QString kTimberCommand = QStringLiteral("build.timber");
 const QString kWallCommand = QStringLiteral("build.wall");
 const QString kFloorRoofCommand = QStringLiteral("build.floor_roof");
@@ -3334,6 +3477,143 @@ Inspection inspectAlong(const SharedPtr& shared, const CommandState& state, cons
   }
   result.text = lines.join(QStringLiteral("<br>"));
   return result;
+}
+
+// --- Profile along sketch lines (mitcad#1965), declared with Profile's
+// inputs above.
+
+// build_place's fields for profiles along the picked sketch lines, or why
+// there are none yet.
+struct LinesPlacement {
+  QJsonObject fields;
+  QString problem;
+};
+
+LinesPlacement linesPlacement(const CommandState& state, const CommandContext& context, const Part& part) {
+  LinesPlacement result;
+  const Selection& picked = state.items(kLinesPick);
+  if (picked.isEmpty()) {
+    result.problem = QObject::tr("Click the sketch lines the profiles go along, or select a sketch in the Browser.");
+    return result;
+  }
+  QJsonArray curves;
+  std::optional<QString> path;
+  for (const SelectionItem& item : picked) {
+    const std::optional<QString> here = build::pathFromHost(item, context);
+    if (!here) {
+      result.problem = QObject::tr("The sketch is not in the component the profiles go into.");
+      return result;
+    }
+    if (path && *path != *here) {
+      result.problem = QObject::tr("Pick lines of sketches in one component.");
+      return result;
+    }
+    path = here;
+    curves.append(item.reference());
+  }
+  QJsonObject lines{{QStringLiteral("curves"), curves},
+                    {QStringLiteral("chain"), state.checked(kLinesChain)},
+                    {QStringLiteral("align"), state.choice(kLinesAlign).isEmpty() ? QStringLiteral("center")
+                                                                                  : state.choice(kLinesAlign)},
+                    {QStringLiteral("corners"), state.checked(kLinesCorners)}};
+  if (path && !path->isEmpty()) {
+    lines.insert(QStringLiteral("occurrence"), *path);
+  }
+  result.fields = {{QStringLiteral("part"), part.ref()},
+                   {QStringLiteral("lines"), lines},
+                   {QStringLiteral("rotate"), angleValue(state.choice(QStringLiteral("rotate")).isEmpty()
+                                                             ? QStringLiteral("0")
+                                                             : state.choice(QStringLiteral("rotate")))},
+                   {QStringLiteral("flip"), state.checked(QStringLiteral("flip"))}};
+  return result;
+}
+
+// The inspection of profiles along sketch lines: how many and their
+// lengths, as the model previews them (the corners square there); the
+// model's refusal (an arc among the lines) in its words.
+Inspection inspectLines(const SharedPtr& shared, const CommandState& state, const CommandContext& context) {
+  Inspection result;
+  Part part;
+  if (!chosenPart(*shared, state, part)) {
+    result.error = noPartsText(*shared, QStringLiteral("profile"));
+    return result;
+  }
+  const build::Host host = build::buildHost(context);
+  QStringList lines{QStringLiteral("<b>%1</b>").arg(part.name.toHtmlEscaped()),
+                    QObject::tr("Adds to: %1").arg(host.name).toHtmlEscaped()};
+  const LinesPlacement placed = linesPlacement(state, context, part);
+  if (!placed.problem.isEmpty()) {
+    result.viewHint = QObject::tr("Click the sketch lines, or select a sketch in the Browser");
+    result.text = lines.join(QStringLiteral("<br>"));
+    result.error = placed.problem;
+    result.log = QStringLiteral("along sketch lines waiting: %1; adds to %2; part %3").arg(placed.problem, host.name, part.name);
+    return result;
+  }
+  const Previewed preview = previewOf(placed.fields, context);
+  const QString refused = userText(preview.error);
+  if (!refused.isEmpty()) {
+    result.text = lines.join(QStringLiteral("<br>"));
+    result.error = refused;
+    result.log = QStringLiteral("along sketch lines refused: %1; adds to %2; part %3").arg(refused, host.name, part.name);
+    return result;
+  }
+  result.shape = preview.shape;
+  const QJsonObject along = preview.answer.value(QStringLiteral("lines")).toObject();
+  const int count = along.value(QStringLiteral("count")).toInt();
+  const QJsonArray lengths = along.value(QStringLiteral("lengths")).toArray();
+  const QJsonArray frames = along.value(QStringLiteral("frames")).toArray();
+  QStringList shown;
+  QJsonArray markers;
+  for (int i = 0; i < lengths.size(); ++i) {
+    const double length = build::lengthOf(lengths.at(i));
+    if (!std::isfinite(length)) {
+      continue;
+    }
+    shown << QStringLiteral("%1").arg(length, 0, 'f', 1);
+    if (i < frames.size()) {
+      const build::Frame frame = build::frameOf(frames.at(i));
+      if (frame.valid) {
+        markers.append(marker(QStringLiteral("%1 mm").arg(length, 0, 'f', 1),
+                              frame.origin.Translated(gp_Vec(frame.z) * (length / 2.0))));
+      }
+    }
+  }
+  const bool corners = state.checked(kLinesCorners);
+  lines << QObject::tr("%n profile(s), one on each line", nullptr, count);
+  lines << QObject::tr("Each follows its line when the sketch changes");
+  lines << (corners ? QObject::tr("Corners: miters at the ends that meet, butts where a line ends on another")
+                    : QObject::tr("Corners: left square"));
+  result.report = {{QStringLiteral("markers"), markers}};
+  result.text = lines.join(QStringLiteral("<br>"));
+  result.log = QStringLiteral("along sketch lines: %1 profile(s), lengths %2 mm (corners square in the preview); "
+                              "align %3, rotate %4, flip %5, corners %6; adds to %7; part %8")
+                   .arg(count)
+                   .arg(shown.join(QStringLiteral(", ")))
+                   .arg(state.choice(kLinesAlign), state.choice(QStringLiteral("rotate")),
+                        state.checked(QStringLiteral("flip")) ? QStringLiteral("on") : QStringLiteral("off"),
+                        corners ? QStringLiteral("on") : QStringLiteral("off"), host.name, part.name);
+  return result;
+}
+
+// Places the profiles along the picked lines (Place): one undo step; the
+// lines picked again for the next ones.
+bool placeLines(const SharedPtr& shared, DocumentHost& host, CommandState& state, const CommandContext& context) {
+  Part part;
+  if (!chosenPart(*shared, state, part)) {
+    host.showStatus(noPartsText(*shared, QStringLiteral("profile")), NoticeLevel::Error);
+    return false;
+  }
+  const LinesPlacement placed = linesPlacement(state, context, part);
+  if (!placed.problem.isEmpty()) {
+    host.showStatus(placed.problem, NoticeLevel::Error);
+    return false;
+  }
+  if (!placeNow(*shared, host, QStringLiteral("profile"), part, placed.fields,
+                QStringLiteral("along sketch lines"), state, context)) {
+    return false;
+  }
+  state.setItems(kLinesPick, {});
+  return true;
 }
 
 // Shows an input of Profile's placement only while the Timber panel places
@@ -4742,9 +5022,6 @@ CommandDef wallCommand(const SharedPtr& shared, DocumentHost& host) {
   def.name = QObject::tr("Wall");
   def.icon = QStringLiteral("build-wall");
   def.tooltip = QObject::tr("Places a timber wall frame: plates, studs and the framing of its openings");
-  def.tab = kTab;
-  def.group = kTimberGroup;
-  def.pinned = true;
   def.keywords = {QStringLiteral("frame"),  QStringLiteral("stud"),   QStringLiteral("plate"),
                   QStringLiteral("header"), QStringLiteral("window"), QStringLiteral("door"),
                   QStringLiteral("timber"), QStringLiteral("wood"),   QStringLiteral("build")};
@@ -4873,9 +5150,6 @@ CommandDef floorRoofCommand(const SharedPtr& shared, DocumentHost& host) {
   def.name = QObject::tr("Floor / Roof");
   def.icon = QStringLiteral("build-floor-roof");
   def.tooltip = QObject::tr("Places a timber floor or ceiling frame, or a roof on two wall frames");
-  def.tab = kTab;
-  def.group = kTimberGroup;
-  def.pinned = true;
   def.keywords = {QStringLiteral("floor"),  QStringLiteral("ceiling"), QStringLiteral("joist"),
                   QStringLiteral("roof"),   QStringLiteral("rafter"),  QStringLiteral("gable"),
                   QStringLiteral("frame"),  QStringLiteral("timber"),  QStringLiteral("build")};
@@ -5026,9 +5300,6 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
   def.name = QObject::tr("Timber");
   def.icon = QStringLiteral("build-timber");
   def.tooltip = QObject::tr("Places loose timber: on a member, at a spacing, by two points or along an edge");
-  def.tab = kTab;
-  def.group = kTimberGroup;
-  def.pinned = true;
   def.keywords = {QStringLiteral("wood"),   QStringLiteral("lumber"), QStringLiteral("stud"),
                   QStringLiteral("joist"),  QStringLiteral("rafter"), QStringLiteral("deck"),
                   QStringLiteral("board"),  QStringLiteral("batten"), QStringLiteral("build")};
@@ -5423,9 +5694,6 @@ CommandDef spacingCommand(const SharedPtr& shared, DocumentHost& host, const Com
   def.name = QObject::tr("Spacing Set");
   def.icon = QStringLiteral("build-timber-spacing");
   def.tooltip = QObject::tr("Changes a spacing set's distance, count and members' size");
-  def.tab = kTab;
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("spacing"), QStringLiteral("joists"), QStringLiteral("studs"),
                   QStringLiteral("boards"), QStringLiteral("set"), QStringLiteral("build")};
   // The view's context menu offers it for members of a set only (mitcad#494).
@@ -5641,9 +5909,6 @@ CommandDef frameCommand(const SharedPtr& shared, DocumentHost& host, const Comma
   def.name = QObject::tr("Timber Frame");
   def.icon = QStringLiteral("build-timber-frame");
   def.tooltip = QObject::tr("Changes a timber frame's length, height, spacing, openings and members' size");
-  def.tab = kTab;
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("frame"), QStringLiteral("wall"), QStringLiteral("floor"), QStringLiteral("roof"),
                   QStringLiteral("studs"), QStringLiteral("joists"), QStringLiteral("rafters"), QStringLiteral("build")};
   // Only a frame's member completes it; another is offered under More in
@@ -5947,9 +6212,6 @@ CommandDef panelCommand(const SharedPtr& shared, DocumentHost& host) {
   def.name = QObject::tr("Panel");
   def.icon = QStringLiteral("build-panel");
   def.tooltip = QObject::tr("Fills a frame with a sheet, in its slots or on its face");
-  def.tab = kTab;
-  def.group = QStringLiteral("PROFILE");
-  def.pinned = true;
   def.keywords = {QStringLiteral("sheet"), QStringLiteral("plate"), QStringLiteral("infill"), QStringLiteral("build")};
   def.okLabel = QObject::tr("Place");
   def.repeats = true;
@@ -6252,9 +6514,6 @@ CommandDef connectorCommand(const SharedPtr& shared, DocumentHost& host, const C
   def.name = QObject::tr("Connector");
   def.icon = QStringLiteral("build-connector");
   def.tooltip = QObject::tr("Connects two profiles where they meet with a connector that fits");
-  def.tab = kTab;
-  def.group = QStringLiteral("CONNECT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("bracket"), QStringLiteral("corner"), QStringLiteral("angle"),
                   QStringLiteral("junction"), QStringLiteral("build")};
   def.okLabel = QObject::tr("Connect");
@@ -6710,9 +6969,6 @@ CommandDef fastenersCommand(const SharedPtr& shared, DocumentHost& host, const C
   def.name = QObject::tr("Fasteners");
   def.icon = QStringLiteral("build-fasteners");
   def.tooltip = QObject::tr("The nuts and screws of a connector: another size, taken off, or added again");
-  def.tab = kTab;
-  def.group = QStringLiteral("CONNECT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("nut"), QStringLiteral("screw"), QStringLiteral("t-nut"), QStringLiteral("bolt"),
                   QStringLiteral("build")};
   const QString kFastener = QStringLiteral("fastener");
@@ -6955,8 +7211,6 @@ CommandDef swapFastenerCommand(const SharedPtr& shared, DocumentHost& host, cons
   def.name = QObject::tr("Swap Fastener");
   def.icon = QStringLiteral("build-fasteners");
   def.tooltip = QObject::tr("Replaces the fasteners selected with another fastener or size, where they are");
-  def.tab = kTab;
-  def.group = QStringLiteral("CONNECT");
   def.keywords = {QStringLiteral("screw"), QStringLiteral("nail"), QStringLiteral("nut"), QStringLiteral("replace"),
                   QStringLiteral("fastener"), QStringLiteral("build")};
   def.okLabel = QObject::tr("Swap");
@@ -7169,9 +7423,6 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
   def.name = QObject::tr("Length");
   def.icon = QStringLiteral("build-length");
   def.tooltip = QObject::tr("Binds a component's length to the component it runs to, or makes it a number");
-  def.tab = kTab;
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("bind"), QStringLiteral("detach"), QStringLiteral("cut"), QStringLiteral("build")};
   const auto typed = [](const CommandState& state) { return state.choice(QStringLiteral("mode")) == kTyped; };
   const auto bound = [](const CommandState& state) { return state.choice(QStringLiteral("mode")) != kTyped; };
@@ -7433,9 +7684,6 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
   def.name = QObject::tr("Ends");
   def.icon = QStringLiteral("build-ends");
   def.tooltip = QObject::tr("A component's end cut: a miter's angle and the axis it turns about");
-  def.tab = kTab;
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("mitre"), QStringLiteral("miter"), QStringLiteral("angle"), QStringLiteral("cut"),
                   QStringLiteral("bore"), QStringLiteral("tap"), QStringLiteral("machining"), QStringLiteral("build")};
   const Choices kMachining = {{QStringLiteral("keep"), QObject::tr("As it is")},
@@ -7661,7 +7909,36 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
   return def;
 }
 
-// Flip and Rotate 90 deg: build_edit of each part picked, one undo step.
+// Whether a part is on a plane or a face (build_parts' `ground`,
+// mitcad#2046).
+bool groundOf(const BuildPart& part) {
+  return part.raw.value(QStringLiteral("ground")).toBool();
+}
+
+// A part's turn about its axis in degrees, to a millionth, no negative
+// zero: on a plane or a face any angle (build_parts' `rotate`, radians,
+// mitcad#2046), else the quarter turn BuildPart keeps.
+double rotateDegrees(const BuildPart& part) {
+  if (!groundOf(part)) {
+    return part.rotate;
+  }
+  const double degrees = part.raw.value(QStringLiteral("rotate")).toDouble(0.0) * 180.0 / kPi;
+  return std::round(degrees * 1e6) / 1e6 + 0.0;
+}
+
+// The turn a quarter further, 0 up to 360 degrees.
+double quarterOn(const BuildPart& part) {
+  const double turned = std::fmod(rotateDegrees(part) + 90.0, 360.0);
+  return std::round((turned < 0.0 ? turned + 360.0 : turned) * 1e6) / 1e6 + 0.0;
+}
+
+// The turn as Rotate takes it ("30 deg").
+QString rotateText(const BuildPart& part) {
+  return QString::number(rotateDegrees(part)) + QStringLiteral(" deg");
+}
+
+// Flip and Rotate 90 deg: build_edit of each part picked, one undo step;
+// a part on a plane or a face turns a quarter from any angle (mitcad#2046).
 CommandDef turnCommand(DocumentHost& host, const CommandContext& context, bool rotate) {
   CommandDef def;
   def.id = rotate ? QStringLiteral("build.rotate") : QStringLiteral("build.flip");
@@ -7669,9 +7946,6 @@ CommandDef turnCommand(DocumentHost& host, const CommandContext& context, bool r
   def.icon = rotate ? QStringLiteral("build-rotate") : QStringLiteral("flip");
   def.tooltip = rotate ? QObject::tr("Turns components a quarter turn about their axes; Enter turns them again")
                        : QObject::tr("Turns components end for end: the other end first");
-  def.tab = kTab;
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = rotate ? QStringList{QStringLiteral("turn"), QStringLiteral("90"), QStringLiteral("build")}
                         : QStringList{QStringLiteral("reverse"), QStringLiteral("other end"), QStringLiteral("build")};
   def.okLabel = rotate ? QObject::tr("Rotate") : QObject::tr("Flip");
@@ -7690,8 +7964,8 @@ CommandDef turnCommand(DocumentHost& host, const CommandContext& context, bool r
     for (const BuildPart& part : parts) {
       const QString line = rotate ? QObject::tr("%1: %2°, then %3°")
                                         .arg(part.shownName())
-                                        .arg(part.rotate)
-                                        .arg((part.rotate + 90) % 360)
+                                        .arg(rotateDegrees(part))
+                                        .arg(quarterOn(part))
                                   : QObject::tr("%1: %2").arg(part.shownName(), part.flip ? QObject::tr("flipped, then as placed")
                                                                                           : QObject::tr("the other end first"));
       lines << line.toHtmlEscaped();
@@ -7710,7 +7984,7 @@ CommandDef turnCommand(DocumentHost& host, const CommandContext& context, bool r
     for (const BuildPart& part : parts) {
       QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("build_edit")}, {QStringLiteral("component"), part.component}};
       if (rotate) {
-        command.insert(QStringLiteral("rotate"), angleValue(QString::number((part.rotate + 90) % 360)));
+        command.insert(QStringLiteral("rotate"), angleValue(QString::number(quarterOn(part))));
       } else {
         command.insert(QStringLiteral("flip"), !part.flip);
       }
@@ -7722,6 +7996,16 @@ CommandDef turnCommand(DocumentHost& host, const CommandContext& context, bool r
       return false;
     }
     qInfo().noquote() << label;
+    if (rotate) {
+      // Each part's turn, from and to (mitcad#2046: any angle on a plane
+      // or a face).
+      for (const BuildPart& part : parts) {
+        qInfo().noquote() << QStringLiteral("BUILD rotate %1: %2 deg to %3 deg")
+                                 .arg(part.component)
+                                 .arg(rotateDegrees(part))
+                                 .arg(quarterOn(part));
+      }
+    }
     return true;
   };
   return def;
@@ -7737,6 +8021,10 @@ const QString kPlacementOffset = QStringLiteral("offset");
 const QString kPlacementFrom = QStringLiteral("from");
 // The Offset's text as the pick loaded it.
 const QString kPlacementLoaded = QStringLiteral("loaded_offset");
+// A component on a plane or a face (mitcad#2046): its Offset is along the
+// normal, Rotate turns it about its axis by any angle; no From.
+const QString kPlacementRotate = QStringLiteral("rotate");
+const QString kPlacementGround = QStringLiteral("on_ground");
 
 // What a part on a side or a rail is placed from (build_parts' `from`);
 // empty for a part placed otherwise.
@@ -7754,11 +8042,9 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
   def.id = QStringLiteral("build.placement");
   def.name = QObject::tr("Placement");
   def.icon = QStringLiteral("build-place-side");
-  def.tooltip = QObject::tr("Moves a component along the side or rail it is on: its Offset and From");
-  def.tab = kTab;
-  def.group = QStringLiteral("MODIFY");
+  def.tooltip = QObject::tr("Moves a component along its side or rail, or off the plane or face it is on");
   def.keywords = {QStringLiteral("offset"), QStringLiteral("from"), QStringLiteral("side"), QStringLiteral("move"),
-                  QStringLiteral("build")};
+                  QStringLiteral("rotate"), QStringLiteral("plane"), QStringLiteral("face"), QStringLiteral("build")};
   def.inputs = {
       selectionInput(kPart, QObject::tr("Component"), kPartKinds, 1, 1)
           .withOnPick(
@@ -7771,23 +8057,39 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
                 if (!from.isEmpty()) {
                   state.setChoice(kPlacementFrom, from);
                 }
-                // Its offset from that reference (build_parts' `offset`).
+                // Its offset from that reference, or off its plane or face
+                // (build_parts' `offset`), and there its turn (mitcad#2046).
                 const QJsonValue offset = part->raw.value(QStringLiteral("offset"));
                 if (offset.isDouble()) {
                   state.setText(kPlacementOffset, cmd::lengthText(offset.toDouble(), model));
                   state.setValue(kPlacementOffset, kNaN);
                 }
                 state.setText(kPlacementLoaded, state.text(kPlacementOffset));
+                const bool ground = groundOf(*part);
+                state.setChecked(kPlacementGround, ground);
+                if (ground) {
+                  state.setText(kPlacementRotate, rotateText(*part));
+                  state.setValue(kPlacementRotate, kNaN);
+                  qInfo().noquote()
+                      << QStringLiteral("BUILD placement of %1: on a plane or a face, offset %2, rotate %3")
+                             .arg(part->component, state.text(kPlacementOffset), state.text(kPlacementRotate));
+                  return;
+                }
                 qInfo().noquote() << QStringLiteral("BUILD placement of %1: from %2, offset %3")
                                          .arg(part->component, from.isEmpty() ? QStringLiteral("none") : from,
                                               state.text(kPlacementOffset));
               },
               false),
       valueInput(kPlacementOffset, QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(QObject::tr("The distance from the reference From names; 0 is flush, or centered")),
+          .withTooltip(QObject::tr("The distance from the reference From names, or off the plane or face along "
+                                   "its normal")),
       choiceInput(kPlacementFrom, QObject::tr("From"), kSideFroms, QStringLiteral("a"))
+          .withVisible([](const CommandState& state) { return !state.checked(kPlacementGround); })
           .withTooltip(QObject::tr("What the offset is measured from; the component stays bound to it when "
                                    "what it is on changes length")),
+      valueInput(kPlacementRotate, QObject::tr("Rotate"), ValueKind::Angle, QStringLiteral("0 deg"))
+          .withVisible([](const CommandState& state) { return state.checked(kPlacementGround); })
+          .withTooltip(QObject::tr("About the component's axis, at any angle")),
       textInput(kPlacementLoaded, kPlacementLoaded).withVisible([](const CommandState&) { return false; }),
   };
   def.enabled = [&context] { return build::hasBuildParts(context); };
@@ -7799,11 +8101,26 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
       return result;
     }
     const BuildPart& part = parts.first();
+    // On a plane or a face (mitcad#2046): off it and turned.
+    if (groundOf(part)) {
+      // The turn in degrees as typed, "°" once evaluated.
+      const double turn = state.value(kPlacementRotate);
+      const double degrees = std::round(turn * 180.0 / kPi * 100.0) / 100.0 + 0.0;
+      const QString rotated =
+          std::isfinite(turn) ? QString::number(degrees) + QStringLiteral("°") : state.text(kPlacementRotate);
+      const QString line =
+          QObject::tr("Offset %1 along the normal, rotated %2").arg(state.text(kPlacementOffset), rotated);
+      result.text = QStringLiteral("<b>%1</b><br>%2").arg(part.shownName().toHtmlEscaped(), line.toHtmlEscaped());
+      result.log = QStringLiteral("%1 on a plane or a face, offset %2, rotate %3")
+                       .arg(part.component, state.expression(kPlacementOffset), state.expression(kPlacementRotate));
+      return result;
+    }
     if (sideFromOf(part).isEmpty()) {
       // Said in words: where its place is changed instead.
-      result.error = QObject::tr("%1 is not on a side or a rail: its place is set by its joint, which Joint edits.")
+      result.error = QObject::tr("%1 is not on a side, a rail, a plane or a face: its place is set by its joint, "
+                                 "which Joint edits.")
                          .arg(part.shownName());
-      result.log = QStringLiteral("%1 is not on a side or a rail").arg(part.component);
+      result.log = QStringLiteral("%1 is not on a side, a rail, a plane or a face").arg(part.component);
       return result;
     }
     // The choice's label in the interface language, as the panel shows it.
@@ -7825,8 +8142,23 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
       return false;
     }
     const BuildPart& part = parts.first();
+    // On a plane or a face (mitcad#2046): its Offset along the normal and
+    // its turn, in one undo step.
+    if (groundOf(part)) {
+      const QString offset = state.expression(kPlacementOffset);
+      const QString rotate = state.expression(kPlacementRotate);
+      if (!host.runModelCommand(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
+                                            {QStringLiteral("component"), part.component},
+                                            {QStringLiteral("at"), QJsonObject{{QStringLiteral("offset"), offset}}},
+                                            {QStringLiteral("rotate"), rotate}})) {
+        return false;
+      }
+      qInfo().noquote() << QStringLiteral("Placement of %1: offset %2, rotate %3").arg(part.component, offset, rotate);
+      return true;
+    }
     if (sideFromOf(part).isEmpty()) {
-      host.showStatus(QObject::tr("%1 is not on a side or a rail: its place is set by its joint, which Joint edits.")
+      host.showStatus(QObject::tr("%1 is not on a side, a rail, a plane or a face: its place is set by its joint, "
+                                  "which Joint edits.")
                           .arg(part.shownName()),
                       NoticeLevel::Error);
       return false;
@@ -7862,9 +8194,6 @@ CommandDef listCommand(const CommandContext& context, QWidget* window, std::func
   def.icon = cut ? QStringLiteral("build-cut-list") : QStringLiteral("parts-list");
   def.tooltip = cut ? QObject::tr("The components to cut, with their lengths, end angles and stock")
                     : QObject::tr("Every component with its quantity, supplier and part number, as CSV or PDF");
-  def.tab = kTab;
-  def.group = QStringLiteral("OUTPUT");
-  def.pinned = true;
   def.keywords = cut ? QStringList{QStringLiteral("saw"), QStringLiteral("lengths"), QStringLiteral("csv"),
                                    QStringLiteral("pdf"), QStringLiteral("build")}
                      : QStringList{QStringLiteral("parts list"), QStringLiteral("bom"), QStringLiteral("csv"),

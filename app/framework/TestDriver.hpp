@@ -105,6 +105,13 @@
 //                           slots, toolbar containment and loaded project count
 //   expect-sketch-finish-layout  no title-row Finish Sketch or reserved gap;
 //                           ribbon and palette retain the enabled action
+//   workspace DESIGN|MAKE|RENDER|DRAWING  the toolbar panel's workspace chosen as
+//                           its selector's list does (mitcad#1990); nothing
+//                           without the selector (Docked, macOS)
+//   leave-start-page        the Start page left by a click: on the design's
+//                           tab where the toolbar panel is hidden over the
+//                           page (Floating on Windows and Linux,
+//                           mitcad#1990), else on the SOLID tab
 //   expect-ribbon-labels <label>...  actual workspace labels, including
 //                           accessibility, and no all-caps group captions
 //                           (but the acronyms listed in testRibbonLabels,
@@ -352,6 +359,7 @@
 //                           (a number in the path indexes an array)
 //   expect-document-cache-sharing <total bytes> actual per-document budgets
 //   system-window-menu <entry> the owned macOS Window menu's actual action
+//   expect-system-menu-bar <titles...> the active macOS frame's usable menus and application roles
 //   expect-document-windows <count> the actual process window registry's count
 //   expect-document-window-gone <name> its normal close removed that document
 //   expect-document-tabs <count> actual macOS NSWindow tab group membership

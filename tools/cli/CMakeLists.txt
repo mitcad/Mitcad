@@ -1441,6 +1441,9 @@ if(BUILD_TESTING)
       COMMAND mitcad-cli run "${scripts}/${sheet_case}_reopen.json" --open "${sheet_file}")
     set_tests_properties(cli.${sheet_case}_reopen PROPERTIES FIXTURES_REQUIRED cli_${sheet_case})
   endforeach()
+  # Convert to Sheet Metal of a level and an inclined tray, its corners
+  # ripped (mitcad#1949).
+  add_test(NAME cli.sheet_convert_tray COMMAND mitcad-cli run "${scripts}/sheet_convert_tray.json")
   # Construction planes, axes and points on the edges and vertices of sheet
   # bodies, whose straight edges are B-spline curves (mitcad#1537).
   add_test(NAME cli.sheet_datums COMMAND mitcad-cli run "${scripts}/sheet_datums.json")
@@ -1556,6 +1559,16 @@ if(BUILD_TESTING)
   file(MAKE_DIRECTORY "${mesh_convert_faceted}")
   add_test(NAME cli.mesh_convert_faceted COMMAND mitcad-cli run "${scripts}/mesh_convert_faceted.json")
   set_tests_properties(cli.mesh_convert_faceted PROPERTIES WORKING_DIRECTORY "${mesh_convert_faceted}")
+endif()
+
+# Mesh tools for reverse engineering (mitcad#1871): a cylinder's and a
+# box's STL meshes sectioned into sketches, repaired, decimated, cut by a
+# lasso, segmented and their regions fitted with surfaces.
+if(BUILD_TESTING)
+  set(mesh_tools "${CMAKE_CURRENT_BINARY_DIR}/mesh-tools")
+  file(MAKE_DIRECTORY "${mesh_tools}")
+  add_test(NAME cli.mesh_tools COMMAND mitcad-cli run "${scripts}/mesh_tools.json")
+  set_tests_properties(cli.mesh_tools PROPERTIES WORKING_DIRECTORY "${mesh_tools}")
 endif()
 
 # Wrap (mitcad#473): Extrude's wrap onto a rod as an emboss, raised and
@@ -2632,6 +2645,33 @@ endif()
 # first, the square edge on its result.
 if(BUILD_TESTING)
   add_test(NAME cli.fillet_knife_chain COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/fillet_knife_chain.json")
+endif()
+
+# Sheet parts by material and process (mitcad#1939): process profiles and
+# their allowance methods, laser sheet's finger joints and T-nut slots, a
+# kerf bend's slit lattice, the flat-pack generator and board's standard
+# boxes, with OCCT's volumes and flat patterns.
+if(BUILD_TESTING)
+  foreach(script sheet_process_allowances sheet_laser_joints sheet_kerf_bend sheet_flat_pack sheet_board_box sheet_board_polypropylene sheet_glue_flap)
+    add_test(NAME cli.${script} COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/${script}.json")
+  endforeach()
+endif()
+
+# The reported nut design's two roundings that left pieces between their own
+# blend faces (mitcad#1858), found by its content id under
+# MITCAD_MITCAD_REPORTED and recomputed in a copy: both ok, no warning, each
+# under 10 s (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.dressup_blend_remnants_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/dressup-blend-remnants-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/dressup-blend-remnants-reported-test.cmake")
+  set_tests_properties(cli.dressup_blend_remnants_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "dressup blend remnants reported: skipped" TIMEOUT 1800)
+  if(WIN32)
+    set_property(TEST cli.dressup_blend_remnants_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
 endif()
 
 # A test's PASS_REGULAR_EXPRESSION is a list: a ';' in its text splits it

@@ -25,7 +25,7 @@ param(
 
 # The Projects panel shown at the start, as for a user who turned it on
 # (mitcad#1020: hidden until then).
-Ui-Init $App $Out $QtBin @{ 'projects/panel' = 'true' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'projects/panel' = 'true'; 'projects/panelTopBar' = 'true' } -StepPause 0
 
 $work = Join-Path $script:UiOut 'files'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

@@ -36,6 +36,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "add_cut_sheet_parts",
     "edit_cut_sheet_part",
     "delete_cut_sheet_parts",
+    "nest_cut_sheet",
 ];
 
 /// The named sheet sizes (`SheetSize`).
@@ -597,7 +598,9 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "height": number("The material's height, mm (default 300)"),
                 "bodies": part_bodies("The bodies it starts with as parts"),
                 "count": count(),
-                "flat": flat()
+                "flat": flat(),
+                "kerf": number("The cutting beam's width, mm (0 to 10): the export moves outer outlines out and holes in by half of it"),
+                "nest": flag(false, "The parts placed by simple automatic nesting")
             },
             "required": [],
             "examples": [
@@ -611,7 +614,8 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "drawing": cut_sheet(),
                 "name": text("Its new name"),
                 "width": number("The material's width, mm"),
-                "height": number("The material's height, mm")
+                "height": number("The material's height, mm"),
+                "kerf": number("The cutting beam's width, mm (0 to 10; 0: none)")
             },
             "required": ["drawing"],
             "examples": [{"cmd": "edit_cut_sheet", "drawing": "D1", "width": 1220}]
@@ -624,7 +628,8 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "face": id("The planar face they are seen along, by its topological name (one body only); the largest when left out"),
                 "count": count(),
                 "at": p2("Where the first one's middle goes; a free place when left out"),
-                "flat": flat()
+                "flat": flat(),
+                "marks": marks()
             },
             "required": ["drawing", "bodies"],
             "examples": [{"cmd": "add_cut_sheet_parts", "drawing": "D1", "bodies": ["Side"], "count": 2}]
@@ -638,7 +643,8 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "move": p2("Moved by this"),
                 "rotation": number("Its angle, degrees counter-clockwise"),
                 "turn": number("Turned by this many degrees more (90: a quarter turn left)"),
-                "face": json!({"type": ["string", "null"], "description": "A planar face of its body it is seen along, by its topological name; null for the largest"})
+                "face": json!({"type": ["string", "null"], "description": "A planar face of its body it is seen along, by its topological name; null for the largest"}),
+                "marks": marks()
             },
             "required": ["drawing", "part"],
             "examples": [{"cmd": "edit_cut_sheet_part", "drawing": "D1", "part": 2, "turn": 90}]
@@ -652,9 +658,35 @@ fn cut_sheets(name: &str) -> Option<Value> {
             "required": ["drawing", "parts"],
             "examples": [{"cmd": "delete_cut_sheet_parts", "drawing": "D1", "parts": [2, 3]}]
         }),
+        "nest_cut_sheet" => json!({
+            "description": "Places every part of a cut sheet by simple automatic nesting: each turned so its longer side lies along the sheet's width, in rows from the lower left corner, the tallest first (mitcad#1939). Result: drawing, warnings.",
+            "properties": {
+                "drawing": cut_sheet(),
+                "gap": number("The room between parts and from the edges, mm; 5 when left out")
+            },
+            "required": ["drawing"],
+            "examples": [{"cmd": "nest_cut_sheet", "drawing": "D1", "gap": 5}]
+        }),
         _ => return None,
     };
     Some(spec)
+}
+
+/// A part's marks (mitcad#1939): sketches engraved or scored on it.
+fn marks() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "sketch": {"type": "string", "description": "A sketch by its uid (F9)"},
+                "kind": {"type": "string", "enum": ["engrave", "score"], "description": "Engraved or scored"}
+            },
+            "required": ["sketch", "kind"],
+            "additionalProperties": false
+        },
+        "description": "Sketches whose curves and texts are engraved or scored on the part, laid along the face it is seen along"
+    })
 }
 
 /// A drawing or cut sheet command's schema as [`super`] writes its own.

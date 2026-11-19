@@ -440,3 +440,10 @@ mod assembly_path_tests;
 pub use document::{ComponentKind, SheetMetalRow};
 // A component's BOM Structure and the Bill of Materials' views (mitcad#1985).
 pub use document::{BomStructure, BomView, BomViewList, BomViewRow};
+// Free parts of flexible occurrences kept where the joints that placed
+// them left them when those joints go (mitcad#2017).
+pub use document::HeldFreePart;
+// Mesh tools for reverse engineering: sections, decimation, repair, region
+// removal, segmentation and surface fitting (mitcad#1871).
+pub mod mesh_tools;
+pub use document::{MAX_SECTIONS, MeshSectionRequest, MeshSections, SectionTarget};

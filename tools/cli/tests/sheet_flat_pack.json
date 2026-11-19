@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The flat-pack generator (mitcad#1939): a box 200 x 120 x 80 turned into six 6 mm plates with finger joints of about 15 at every edge, on a nested cut sheet. The plates fill the box's shell, 200 120 80 - 188 108 68 = 539328, less the clearance of every finger: the edges along x have 13 fingers over 188 (12 boundaries each), along y 7 over 108 (6), along z 5 over 68 (4): 4 (12 + 6 + 4) = 88 gaps of 0.1 6 6 = 316.8, so 539011.2. The block is removed; the plates are FlatPack1's bodies F2.b0 to F2.b5."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 200, "width": 120, "height": 80, "operation": "new_body"}},
+  {"cmd": "add_flat_pack", "body": "F1.b0", "thickness": 6, "finger_width": 15, "width": 1000, "height": 600},
+  {"expect": {"feature": "FlatPack1", "status": "ok"}},
+  {"expect": {"bodies": 6, "total_volume": 539011.2}},
+  {"expect": {"body": "F2.b0", "min": [0, 0, 0], "max": [200, 120, 6]}},
+  {"expect": {"body": "F2.b5", "min": [194, 0, 0], "max": [200, 120, 80]}},
+  {"expect": {"query": {"query": "drawing", "drawing": "CutSheet1"}, "result": {"kind": "cut_sheet", "width": 1000, "height": 600, "kerf": 0}}},
+  {"cmd": "export_cut_sheet", "drawing": "CutSheet1", "path": "sheet_flat_pack.dxf"},
+
+  {"comment": "The Flat Pack edited to 4 mm sheet: its six plates made again (the cut sheet keeps its parts, the same bodies)."},
+  {"cmd": "edit_feature", "uid": "F2", "def": {"type": "flat_pack", "body": "F1.b0", "thickness": 4, "finger_width": 15}},
+  {"expect": {"feature": "FlatPack1", "status": "ok", "bodies": 6}},
+  {"expect": {"body": "F2.b0", "min": [0, 0, 0], "max": [200, 120, 4]}}
+]

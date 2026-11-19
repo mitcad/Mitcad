@@ -582,6 +582,11 @@ impl SketchOutput {
     /// as like the key ([`best_matches`], mitcad#1993). None when no region
     /// shares a curve with it.
     pub fn found(&self, key: &RegionKey) -> Option<FoundRegions<'_>> {
+        // A supporting face's edges that a stored curve on them stands for
+        // now (projected, or their projection converted) are that curve
+        // (mitcad#2051).
+        let aliased = self.layout.aliased(key);
+        let key = aliased.as_ref().unwrap_or(key);
         if let Some(region) = self.region_info.iter().find(|r| &r.profile.key == key) {
             return Some(FoundRegions {
                 regions: vec![region],

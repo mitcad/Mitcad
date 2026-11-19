@@ -225,7 +225,8 @@ pub(super) struct OptionsUpdate {
 
 /// A library part's record after its options, row or version changed:
 /// the combination's row and designation; a part whose name was its old
-/// designation takes the new one.
+/// designation (or that with a free name's ` (k)`, mitcad#2030) takes the
+/// new one.
 fn refresh_record(state: &mut DocState, component: ComponentUid, configured: &DocState) {
     let Some(c) = state.assembly.component(component) else {
         return;
@@ -251,7 +252,7 @@ fn refresh_record(state: &mut DocState, component: ComponentUid, configured: &Do
     let reference = record_of(source, &combination);
     let rename = !old.designation.is_empty()
         && !reference.designation.is_empty()
-        && c.name == old.designation
+        && crate::build::is_automatic_name(&c.name, &old.designation)
         && reference.designation != old.designation;
     let new_name = rename.then(|| state.free_component_name(&reference.designation));
     let c = state.assembly.component_mut(component).expect("checked");

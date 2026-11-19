@@ -3,13 +3,14 @@
 # window of 1280 x 800, a new design:
 #   - The Command dock hidden from the window's menu of its panels (a
 #     right-click on its title row, Command unticked) and with its close
-#     button: each time View > Command shows it again (it had no View
-#     entry, and nothing brought it back).
-#   - The Projects dock likewise with View > Projects (hidden at the start
-#     of a fresh profile, so View > Projects first shows it).
+#     button: each time View > Panels > Command shows it again (it had no
+#     View entry, and nothing brought it back; the panels' entries are in
+#     View > Panels since mitcad#1975).
+#   - The Projects dock likewise with View > Panels > Projects (hidden at
+#     the start of a fresh profile, so it first shows it).
 #   - The window's menu of its panels offers no Configuration: that dock
 #     shows while the design has options and has no View entry.
-# expect-dock checks the dock and its View menu entry's check mark together.
+# expect-dock checks the dock and its View > Panels entry's check mark together.
 # Run by tools/ui-docked-panels-test.sh (Linux) and
 # tools/ui-windows-docked-panels-test.ps1 (Windows), both Docked.
 expect-ever 'View area' 30
@@ -28,32 +29,32 @@ key Escape
 wait-idle
 expect-dock commandDock shown
 
-# Command: hidden from the window's menu, back with View > Command.
+# Command: hidden from the window's menu, back with View > Panels > Command.
 dock-title-context commandDock
 popup Command
 expect-dock commandDock hidden
-menu View/Command
+menu View/Panels/Command
 expect-dock commandDock shown
 
-# Command: hidden with its close button, back with View > Command.
+# Command: hidden with its close button, back with View > Panels > Command.
 dock-close commandDock
 expect-dock commandDock hidden
-menu View/Command
+menu View/Panels/Command
 expect-dock commandDock shown
 
-# Projects: shown with View > Projects, hidden from the window's menu and
-# with its close button, back with View > Projects each time.
+# Projects: shown with View > Panels > Projects, hidden from the window's menu and
+# with its close button, back with it each time.
 expect-dock projectsDock hidden
-menu View/Projects
+menu View/Panels/Projects
 expect-dock projectsDock shown
 dock-title-context projectsDock
 popup Projects
 expect-dock projectsDock hidden
-menu View/Projects
+menu View/Panels/Projects
 expect-dock projectsDock shown
 dock-close projectsDock
 expect-dock projectsDock hidden
-menu View/Projects
+menu View/Panels/Projects
 expect-dock projectsDock shown
 
 # The other docks stayed.

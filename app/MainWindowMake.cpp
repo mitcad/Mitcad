@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
-// The Make tab (mitcad#1049, app/COMMANDS.md "The Make tab"): what making a
+// The Make tab (mitcad#1049, app/COMMANDS.md "The Make tabs"): what making a
 // design needs, by manufacturing method. Its groups are Materials,
-// Annotate, 3D Print and Laser (Ribbon::groups); the commands moved there
-// (Edit Materials…, Printers… and Processes…, Print Analysis, Send to
-// Slicer, Export Flat Pattern…) keep their ids and are registered where
-// they were. Here:
+// Annotate, 3D Print, CNC, Laser and Inspect (app/resources/layout/
+// default.json); the commands shown there (the Material tool, Printers…
+// and Processes…, Print Analysis, Send to Slicer, Export Flat Pattern…,
+// the Inspect group's) keep their ids and are registered where they were.
+// `make.assign_material`, the Material tool's own entry here before
+// mitcad#1975, is an alias of solid.material, shown in the Materials group
+// as a second place. Here:
 //
-//   - Material (Materials, `make.assign_material`): the Material tool
-//     (solid.material, mitcad#1059) started from the Make tab with the
-//     selection, its place in this tab (its own is Solid › Modify);
 //   - the Annotate group's panels, which pick and add an annotation (one
 //     undo step outside the panel's range, as Measure's Keep did before
 //     its buttons moved here): Dimension, Note, Datum Label, Feature
@@ -66,7 +66,10 @@
 namespace mitcad {
 namespace {
 
+// The Make workspace (Ribbon::workspaceOfTab): its tabs, one per
+// manufacturing method (3D Print, Laser, CNC; the owner, 18.11.2026).
 const QString kMake = QStringLiteral("MAKE");
+bool makeTabShown(const Ribbon* ribbon) { return Ribbon::workspaceOfTab(ribbon->currentTab()) == kMake; }
 
 QString text(const QJsonObject& object, const char* key) { return object.value(QLatin1String(key)).toString(); }
 
@@ -107,9 +110,6 @@ void MainWindow::registerAnnotateCommands() {
     def.name = name;
     def.icon = QString::fromLatin1(icon);
     def.tooltip = tooltip;
-    def.tab = kMake;
-    def.group = QStringLiteral("ANNOTATE");
-    def.section = QStringLiteral("add"); // the Annotations window after a separator
     def.keywords = keywords;
     def.keywords << QStringLiteral("annotation") << QStringLiteral("annotate");
     def.okLabel = tr("Add");
@@ -138,7 +138,6 @@ void MainWindow::registerAnnotateCommands() {
                tr("Keeps the distance, angle, radius or diameter of one or two picks as a dimension"),
                {QStringLiteral("dimension"), QStringLiteral("distance"), QStringLiteral("measure"),
                 QStringLiteral("keep"), QStringLiteral("diameter"), QStringLiteral("radius")});
-  dimension.pinned = true;
   dimension.inputs = {selectionInput(QStringLiteral("a"), tr("Selection 1"), picks, 1, 1),
                       selectionInput(QStringLiteral("b"), tr("Selection 2"), picks, 0, 1)};
   dimension.build = [](const CommandState& state, const CommandContext&) {
@@ -161,7 +160,6 @@ void MainWindow::registerAnnotateCommands() {
   CommandDef note = annotate("make.note", tr("Note"), "drawing-note",
                              tr("Adds a note with an arrow to the face, edge or vertex picked"),
                              {QStringLiteral("note"), QStringLiteral("leader"), QStringLiteral("text")});
-  note.pinned = true;
   note.inputs = {selectionInput(QStringLiteral("a"), tr("Pick"), picks | SelectKind::Body, 1, 1),
                  textInput(QStringLiteral("text"), tr("Text"))};
   note.build = [leaderPick, noteText](const CommandState& state, const CommandContext&) {
@@ -265,7 +263,7 @@ void MainWindow::registerAnnotateCommands() {
 
   // Material and Process Note (mitcad#1049): notes written from the body,
   // which follow its material and its print settings.
-  CommandDef material = annotate("make.material_note", tr("Material"), "material",
+  CommandDef material = annotate("make.material_note", tr("Material Note"), "material",
                                  tr("Adds a note of the body's material, which follows it"),
                                  {QStringLiteral("material"), QStringLiteral("note"), QStringLiteral("material note")});
   material.inputs = {selectionInput(QStringLiteral("a"), tr("Body"), onBodies, 1, 1)};
@@ -326,28 +324,10 @@ bool MainWindow::addAnnotationFrom(const CommandState& state, const QString& kin
 }
 
 void MainWindow::registerMakeCommands() {
-  const auto action = [](const char* id, const QString& name, const char* icon, const QString& group,
-                         std::function<void()> run) {
-    CommandDef def;
-    def.id = QString::fromLatin1(id);
-    def.name = name;
-    def.icon = QString::fromLatin1(icon);
-    def.kind = CommandDef::Kind::Action;
-    def.mode = CommandDef::Mode::Model;
-    def.tab = kMake;
-    def.group = group;
-    def.run = std::move(run);
-    return def;
-  };
   // The Material tool in the Materials group (mitcad#1059: one command,
-  // a place in each tab): it starts solid.material with the selection, as
-  // the Solid tab's Modify group does; the id stays for shortcuts.
-  CommandDef assign = action("make.assign_material", tr("Material"), "material", QStringLiteral("MATERIALS"),
-                             [this] { assignMaterial(); });
-  assign.tooltip = tr("Gives bodies, or a component's default, a material");
-  assign.keywords = {QStringLiteral("material"), QStringLiteral("assign"), QStringLiteral("density"),
-                     QStringLiteral("filament")};
-  m_registry->add(assign);
+  // a place in each tab; mitcad#1975: the tool itself shown there): the
+  // former id stays an alias, for shortcuts and saved layouts.
+  m_registry->alias(QStringLiteral("make.assign_material"), QStringLiteral("solid.material"));
 
   // Export Face as DXF… (Laser): the selected planar face's body seen
   // along it, its outline written for a laser, waterjet or plasma cutter.
@@ -359,9 +339,6 @@ void MainWindow::registerMakeCommands() {
   face.id = QStringLiteral("make.export_face_dxf");
   face.name = tr("Export Face as DXF…");
   face.icon = QStringLiteral("export-dxf");
-  face.tab = kMake;
-  face.group = QStringLiteral("LASER");
-  face.pinned = true;
   face.tooltip = tr("Writes the body's outline seen along the selected planar face as DXF");
   face.keywords = {QStringLiteral("dxf"), QStringLiteral("laser"), QStringLiteral("waterjet"), QStringLiteral("plasma"),
                    QStringLiteral("cut"), QStringLiteral("outline"), QStringLiteral("face"), QStringLiteral("export")};
@@ -396,15 +373,6 @@ void MainWindow::registerMakeCommands() {
     return !picked.isEmpty() && exportFaceDxf(picked.first());
   };
   m_registry->add(face);
-}
-
-void MainWindow::assignMaterial() {
-  // The Material tool with what is selected (its Bodies take bodies,
-  // components and the bodies of faces), as from Solid › Modify.
-  if (QAction* tool = m_registry->action(QStringLiteral("solid.material"))) {
-    qDebug().noquote() << QStringLiteral("Make: the Material tool");
-    tool->trigger();
-  }
 }
 
 bool MainWindow::exportFaceDxf(const SelectionItem& face) {
@@ -769,7 +737,7 @@ void MainWindow::updateMakeCard() {
   }
   QString body;
   QString occurrence;
-  const bool shown = m_mode == Mode::Idle && m_ribbon->currentTab() == kMake &&
+  const bool shown = m_mode == Mode::Idle && makeTabShown(m_ribbon) &&
                      selectedBody(m_selection, &body, &occurrence) && m_snapshot.bodies.contains(body);
   if (!shown) {
     if (m_makeCard->isVisible()) {
@@ -893,7 +861,7 @@ void MainWindow::updateMakeMarkers() {
     return;
   }
   QHash<QString, QString> markers;
-  if (m_ribbon->currentTab() == kMake) {
+  if (makeTabShown(m_ribbon)) {
     if (modelBusy()) {
       return; // as they are until the model is idle
     }

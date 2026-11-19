@@ -197,3 +197,67 @@ fn face_edges_beside_a_sketch_line_make_no_sliver() {
     let own = found.iter().find(|r| r.centroid[1] > 10.0).unwrap();
     assert!(own.profile.key.segments().all(|s| !s.curve.is_face_edge()));
 }
+
+/// The edges of a rectangular face from `lo` to `hi`.
+fn face_rectangle(lo: [f64; 2], hi: [f64; 2]) -> Vec<RegionCurve> {
+    let mut curves = rectangle(1, lo, hi);
+    for (index, curve) in curves.iter_mut().enumerate() {
+        let edge = EdgeName::new(
+            FaceName::new(FeatureUid(2), "end", None),
+            FaceName::new(FeatureUid(2), "side", None),
+        )
+        .with_index(index as u32);
+        curve.uid = CurveId::FaceEdge(Box::new(edge.into()));
+    }
+    curves
+}
+
+#[test]
+fn a_projected_face_outline_counts_once_and_old_keys_find_its_regions() {
+    // A sketch on a 60 x 40 face with a circle inside, without and with the
+    // face's outline as stored curves on its edges (mitcad#2051).
+    let circle = RegionCurve::new(
+        EntityUid(9),
+        Curve2::Circle {
+            center: [30.0, 20.0],
+            radius: 5.0,
+            start: 0.0,
+        },
+    );
+    let mut bare = face_rectangle([0.0, 0.0], [60.0, 40.0]);
+    bare.push(circle.clone());
+    let (before, _) = face_bounded_regions(&bare);
+    let mut outlined = bare.clone();
+    outlined.extend(rectangle(1, [0.0, 0.0], [60.0, 40.0]));
+    let (after, layout) = face_bounded_regions(&outlined);
+    // The same regions: no doubled boundary, no region of no area.
+    assert_eq!(before.len(), 2, "{before:?}");
+    assert_eq!(after.len(), 2, "{after:?}");
+    let areas = |found: &[crate::regions::Region]| {
+        let mut list: Vec<f64> = found.iter().map(|r| r.area).collect();
+        list.sort_by(f64::total_cmp);
+        list
+    };
+    for (a, b) in areas(&before).into_iter().zip(areas(&after)) {
+        assert!((a - b).abs() < 1e-6, "{a} against {b}");
+        assert!(b > 1.0);
+    }
+    // The outline's curves stand for the face's edges: the ring's key
+    // names them, and its key from before finds it by them.
+    let ring = |found: &[crate::regions::Region]| {
+        found
+            .iter()
+            .find(|r| r.profile.loops.len() == 2)
+            .unwrap()
+            .profile
+            .key
+            .clone()
+    };
+    let (old, new) = (ring(&before), ring(&after));
+    assert!(new.segments().all(|s| !s.curve.is_face_edge()), "{new}");
+    assert_eq!(layout.aliased(&old), Some(new.clone()));
+    assert_eq!(layout.aliased(&new), None);
+    // Without the outline nothing stands for the face's edges.
+    let (_, plain) = face_bounded_regions(&bare);
+    assert_eq!(plain.aliased(&old), None);
+}

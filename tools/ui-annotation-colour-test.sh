@@ -165,7 +165,7 @@ ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Command Measure started" "measure started"
 ui_expect_new "Measure history at" "the panel laid out"
-ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
 ui_expect_new "Ribbon button view.annotations at" "the Annotate group's Annotations…"
 ui_step "Annotations…"                     ui_click_logged "Ribbon button view.annotations"
 ui_expect_new "Annotations window opened: 2 annotation(s)" "the window opened while Measure is open"

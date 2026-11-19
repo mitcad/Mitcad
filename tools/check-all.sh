@@ -148,6 +148,9 @@
 #                   (systemd-detect-virt --vm, WSL, the hypervisor flag in
 #                   /proc/cpuinfo), whose free memory can read low (dynamic
 #                   memory, ballooning), "auto" is the fixed 12G as before.
+#                   "dynamic": the budget from the free memory as on bare
+#                   metal, also in a virtual machine whose memory is fixed
+#                   (no ballooning, no dynamic memory).
 #                   The run's first lines say which applied.
 #   --overlap MODE  "auto" (default, $MITCAD_CHECK_OVERLAP) or "off": with
 #                   "auto" the lint steps (fmt, clippy, deps, guide,
@@ -413,8 +416,9 @@ meminfo_mib() {
 DYNAMIC=""
 RESERVE_MIB=""
 MEMORY_MODE=""
-if [ "$MEMORY_ASKED" = auto ]; then
-  vm=$(virtual_machine)
+if [ "$MEMORY_ASKED" = auto ] || [ "$MEMORY_ASKED" = dynamic ]; then
+  vm=""
+  [ "$MEMORY_ASKED" = dynamic ] || vm=$(virtual_machine)
   if [ -n "$vm" ]; then
     [ "$DRY" = 1 ] || MEMORY=12G
     MEMORY_MODE="memory: a fixed 12G, the machine is $vm (the budget from the free memory is for bare metal; --memory or MITCAD_CHECK_MEMORY sets the size)"
@@ -427,7 +431,9 @@ if [ "$MEMORY_ASKED" = auto ]; then
     hard=$((total - RESERVE_MIB))
     [ "$hard" -ge 4096 ] || hard=4096
     [ "$DRY" = 1 ] || MEMORY=${hard}M
-    MEMORY_MODE="memory: the budget from the free memory (bare metal): tests and corpus children start while the memory available exceeds a reserve of ${RESERVE_MIB}M by what they take, read again before each start (available now $(meminfo_mib MemAvailable)M of ${total}M); the slice's limit ${hard}M"
+    how="bare metal"
+    [ "$MEMORY_ASKED" = auto ] || how="dynamic: --memory or MITCAD_CHECK_MEMORY"
+    MEMORY_MODE="memory: the budget from the free memory ($how): tests and corpus children start while the memory available exceeds a reserve of ${RESERVE_MIB}M by what they take, read again before each start (available now $(meminfo_mib MemAvailable)M of ${total}M); the slice's limit ${hard}M"
   fi
 elif [ "$MEMORY_ASKED" = none ]; then
   MEMORY_MODE="memory: no limit (--memory none)"

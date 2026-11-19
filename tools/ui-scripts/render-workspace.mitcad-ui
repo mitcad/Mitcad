@@ -1,0 +1,216 @@
+# SPDX-License-Identifier: MIT
+# The Render workspace (mitcad#2013) on render-workspace.json: a red box,
+# a cylinder in the default look and a hidden box; small final images, in
+# a 1024 x 768 window:
+#   1. Render chosen in the toolbar panel's workspace selector (mitcad#1990)
+#      opens the workspace: its stages as the tab row itself (no Render tab
+#      and no + there, no groups under it), Render and Cancel at the row's
+#      right, under it the stage's actions as the toolbar's groups (icon
+#      buttons with labels, a caption with ˅ under each group: Live with
+#      Pause and the method, its caption the live view's status; Look's
+#      Pick group with Body / Face / Component and its Look group with
+#      Paint and Pick Up), each stage its own list at the left and card at
+#      the right in place of the other panels (Appearances | Look), the
+#      live view refining.
+#   2. Look: Body2 picked in the view: the card names it and shows its
+#      appearance (the default); an appearance from the library given to
+#      it (one undo step).
+#   3. Light: its list (the Environment, the lights) and the chosen row's
+#      settings (Lights | Environment; the Light group's Add Light and
+#      Reset Environment); a light added from Add Light's menu, its name
+#      the card's title; a click on the Environment row and back on the light shows
+#      each one's settings, Light staying shown; the light turned off by
+#      its eye. Position's and Direction's X, Y and Z (under their labels)
+#      and Aim at Face and At Camera (a row of their own) show their whole
+#      values and texts ("Render card Light1 fields cut: none").
+#   4. Frame: its list of shots; two shots saved from the camera by the
+#      Frame group's Save Shot (each an undo step), the second renamed, the first looked through from the
+#      list (Shots | Shot1), Frame staying shown.
+#   5. Output: the shots to render listed (the view, the shots); the
+#      Output group's Check Now finds the hidden body (Ready to render);
+#      its Render All Shots renders both shots with 4 samples and saves
+#      them into the design's folder.
+#   6. Design chosen again closes the workspace; the other panels come back.
+# Each stage's card and list show every field whole ("Render card <title>
+# fields cut: none", "Render list <title> fields cut: none").
+# A picture of each stage (render-look.png, render-light.png,
+# render-frame.png, render-output.png) goes into MITCAD_TEST_PICTURES.
+# The Render workspace is the toolbar panel's (the Floating layout).
+# Run by tools/ui-render-workspace-test.sh (Linux),
+# tools/ui-windows-render-workspace-test.ps1 (Windows) and
+# tools/ui-macos-render-workspace-test.sh (macOS, where it ends at once when
+# there is no workspace selector).
+expect-ever 'View area' 60
+window-resize 1024 768
+wait-idle 600
+expect-ever '^Ribbon workspace at ' 30
+
+# 1. Render from the workspace selector: the third entry, after Make.
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+key Down
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: RENDER$'
+wait-log '^Render workspace opened$'
+wait-log '^Render workspace panels: '
+wait-log '^Render stage Look$'
+wait-log '^Rendered view on' 60
+wait-log '^Render live: \d+ x \d+, \d+/\d+ samples' 300
+expect-ever '^Ribbon tab RENDER: its own row$' 30
+expect-ever '^Render stage Output at ' 30
+expect-ever '^Render workspace render at ' 30
+expect-ever '^Render workspace cancel at ' 30
+expect-ever '^Render live pause at ' 30
+expect-ever '^Render live method at ' 30
+expect-ever '^Render look mode component at ' 30
+expect-ever '^Render look paint at ' 30
+expect-ever '^Render look pick_up at ' 30
+expect-ever '^Render groups: Live [|] Pick [|] Look$' 30
+expect-ever '^Render panels: Appearances [|] Look$' 30
+expect-ever '^Render card Look fields cut: none$' 30
+expect-ever '^Render list Appearances fields cut: none$' 30
+expect-ever '^Render appearance steel_satin at ' 30
+expect-never '^Ribbon RENDER/'
+expect-never '^Ribbon tab RENDER at '
+
+# 2. Look: Body2 picked in the view (the cylinder's middle), its name and
+# its appearance in the card, then Steel - Satin from the library.
+mark
+click-view-point 20,70,25
+wait-log '^Render look for Body2: default$'
+wait-idle
+capture-undo-depth look
+click-logged '^Render appearance steel_satin at '
+wait-log '^Render look steel_satin on 1 body[(]ies[)], 0 face[(]s[)]$'
+expect-undo-depth ${look} 1
+expect-no-log '^Render stage [A-Za-z]+$'
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_PICTURES}/render-look.png'
+
+# 3. Light: its list and the Environment's settings, a light added, the
+# rows chosen in turn (Light staying shown), the light turned off.
+mark
+click-logged '^Render stage Light at '
+wait-log '^Render stage Light$'
+wait-log '^Render panels: Lights [|] Environment$' 30
+wait-log '^Render settings field environment.strength at ' 30
+wait-log '^Render groups: Live [|] Light$' 30
+wait-log '^Render light reset at ' 30
+wait-log '^Render light row Environment at ' 30
+wait-log '^Render light add at ' 30
+mark
+click-logged '^Render light add at '
+popup Point
+wait-log '^Render light light1 added [(]point[)]$'
+wait-log '^Render panels: Lights [|] Light1$' 30
+wait-log '^Render light field power at ' 30
+wait-log '^Render light row Light1 eye at ' 30
+mark
+click-logged '^Render light row Environment at '
+wait-log '^Render light row environment$'
+wait-log '^Render panels: Lights [|] Environment$' 30
+wait-log '^Render settings field environment.strength at ' 30
+mark
+click-logged '^Render light row Light1 at '
+wait-log '^Render light row light1$'
+wait-log '^Render panels: Lights [|] Light1$' 30
+wait-log '^Render light field power at ' 30
+# The light's card in a 1024 px window: Position's and Direction's X, Y
+# and Z and Aim at Face and At Camera show their whole values and texts.
+wait-log '^Render card Light1 fields cut: none$' 30
+wait-log '^Render list Lights fields cut: none$' 30
+expect-no-log '^Render stage [A-Za-z]+$'
+mark
+click-logged '^Render light row Light1 eye at '
+wait-log '^Render light light1 enabled = false$'
+wait-log '^Render light row Light1 eye at ' 30
+expect-no-log '^Render stage [A-Za-z]+$'
+expect-no-log '^Render panels: Lights [|] Environment$'
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_PICTURES}/render-light.png'
+
+# 4. Frame: two shots, the second renamed, the first looked through from
+# Frame's list.
+mark
+click-logged '^Render stage Frame at '
+wait-log '^Render stage Frame$'
+wait-log '^Render panels: Shots [|] Shot$' 30
+wait-log '^Render groups: Live [|] Frame$' 30
+wait-log '^Render frame update at ' 30
+wait-log '^Render frame look through at ' 30
+wait-log '^Render shot save at ' 30
+capture-undo-depth shots
+click-logged '^Render shot save at '
+wait-log '^Render shot saved shot1 [(]Shot1[)]$'
+expect-undo-depth ${shots} 1
+mark
+click-logged '^Render shot save at '
+wait-log '^Render shot saved shot2 [(]Shot2[)]$'
+expect-undo-depth ${shots} 2
+wait-log '^Render shot Shot2 at ' 30
+mark
+click-logged '^Render shot rename at '
+focus-dialog '^Rename Shot$'
+key Ctrl+a
+type Hero
+key Return
+focus-main
+wait-log '^Render shot shot2 renamed to Hero$'
+expect-undo-depth ${shots} 3
+wait-log '^Render shot Shot1 at ' 30
+wait-log '^Render frame shot Shot1 at ' 30
+mark
+click-logged '^Render frame shot Shot1 at '
+wait-log '^Render shot shot1 looked through$'
+wait-log '^Render panels: Shots [|] Shot1$' 30
+wait-log '^Render card Shot1 fields cut: none$' 30
+wait-log '^Render list Shots fields cut: none$' 30
+expect-no-log '^Render stage [A-Za-z]+$'
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_PICTURES}/render-frame.png'
+
+# 5. Output: the Output group's Check Now (Ready to render's findings),
+# then its Render All Shots.
+mark
+click-logged '^Render stage Output at '
+wait-log '^Render stage Output$'
+wait-log '^Render panels: Shots to Render [|] Output$' 30
+wait-log '^Render card Output fields cut: none$' 30
+wait-log '^Render list Shots to Render fields cut: none$' 30
+wait-log '^Render groups: Live [|] Output$' 30
+wait-log '^Render output shot The View at ' 30
+wait-log '^Render output shot Shot1 at ' 30
+wait-log '^Render output shot Hero at ' 30
+wait-log '^Render check now at ' 30
+click-logged '^Render check now at '
+wait-log '^Render check: .*hidden body'
+wait-log '^Render output render all at ' 30
+mark
+click-logged '^Render output render all at '
+wait-log '^Render check: '
+wait-log '^Render all shots: 2 shot[(]s[)] into '
+wait-log '^Render all shots: 1 running, 1 waiting, 0 done$'
+wait-log '^Render all shots: shot1 saved as ' 300
+wait-log '^Render all shots: shot2 saved as ' 300
+wait-log '^Render all shots done: 2 of 2$' 60
+expect-files "${MITCAD_TEST_WORK}" 'render-workspace-*.png' 2 30
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_PICTURES}/render-output.png'
+
+# 6. Design closes the workspace.
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [|] Render [(]current[)] [|] Drawing$'
+key Up
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Render workspace closed$'
+wait-log '^Workspace RENDER left: the rendered view off$'
+expect-never 'TestDriver: FAIL'

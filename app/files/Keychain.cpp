@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "Keychain.hpp"
+#include "framework/AppSettings.hpp"
 
 #include <utility>
 
@@ -13,7 +14,7 @@
 namespace mitcad::keychain {
 namespace {
 
-const QString kService = QStringLiteral("Mitcad live updates");
+const QString kService = storedApplicationName() + QStringLiteral(" live updates");
 
 // The entry's text: the user name and the password together.
 QString encode(const BrokerCredentials& credentials) {

@@ -6,8 +6,12 @@
 // colour in its middle and along its sides, and at its corners, outside the
 // rounding, the view's background, not the backdrop's colour; outside the
 // backdrop the view's gradient, on a light and a dark palette, at 1x and 2x.
+// Its corners are every card's (kCardRadius) and the content's rectangle,
+// kContentPadding inside it, keeps its square corners within the rounding
+// (mitcad#1990: no square page inside the rounded backdrop).
 #include "UnitTests.hpp"
 #include "files/StartBackdrop.hpp"
+#include "framework/UiSizes.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -38,10 +42,10 @@ void check(bool condition, const char* expression, int line) {
 
 using namespace mitcad;
 
-// As the page: FloatingLayout's kMargin and kGap, GlassCard's kRadius.
+// As the page: FloatingLayout's kMargin and kGap, the backdrop's radius.
 constexpr int kInset = 12;
 constexpr int kGap = 8;
-constexpr qreal kRadius = 14;
+constexpr qreal kRadius = start::kBackdropRadius;
 
 int channelGap(const QColor& a, const QColor& b) {
   return std::max({std::abs(a.red() - b.red()), std::abs(a.green() - b.green()), std::abs(a.blue() - b.blue())});
@@ -92,6 +96,18 @@ void rectTests() {
   CHECK(start::backdropRect(QSize(300, 60), kInset, 40, 0, kGap).isEmpty());
 }
 
+void radiusTests() {
+  // The backdrop is a card: every card's radius (docs/ui-conventions.md
+  // "Corners").
+  CHECK(start::kBackdropRadius == kCardRadius);
+  // The content's square corners stay within the rounding.
+  CHECK(start::contentInsideRounding(start::kBackdropRadius, start::kContentPadding));
+  CHECK(start::contentInsideRounding(10, 10));
+  CHECK(start::contentInsideRounding(10, 3));
+  CHECK(!start::contentInsideRounding(10, 2));
+  CHECK(!start::contentInsideRounding(10, 0));
+}
+
 void paintTests() {
   const QSize size(400, 300);
   for (const bool dark : {false, true}) {
@@ -105,6 +121,15 @@ void paintTests() {
       CHECK(channelGap(pixel(image, QPointF(rect.center().x(), rect.top() + 3)), b.fill) <= 1);
       CHECK(channelGap(pixel(image, QPointF(rect.right() - 3, rect.center().y())), b.fill) <= 1);
       CHECK(channelGap(pixel(image, QPointF(rect.center().x(), rect.bottom() - 3)), b.fill) <= 1);
+      // The content's corners, kContentPadding inside it: the backdrop's
+      // colour, within the rounding.
+      const qreal pad = start::kContentPadding;
+      for (const QPointF& corner : {QPointF(rect.left() + pad, rect.top() + pad),
+                                    QPointF(rect.right() - pad - 0.5, rect.top() + pad),
+                                    QPointF(rect.left() + pad, rect.bottom() - pad - 0.5),
+                                    QPointF(rect.right() - pad - 0.5, rect.bottom() - pad - 0.5)}) {
+        CHECK(channelGap(pixel(image, corner), b.fill) <= 1);
+      }
       // Its four corners, inside its rectangle but outside the rounding: not
       // the backdrop's colour, nor anything the view drew under the page.
       for (const QPointF& corner : {QPointF(rect.left() + 1.5, rect.top() + 1.5),
@@ -144,6 +169,7 @@ void emptyTests() {
 
 int startBackdropTests() {
   rectTests();
+  radiusTests();
   paintTests();
   emptyTests();
   return failures;

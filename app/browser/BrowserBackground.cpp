@@ -84,9 +84,10 @@ void apply(const Follower& follower, BrowserBackground background) {
 } // namespace
 
 BrowserBackground defaultBrowserBackground() {
-  // Rows where the Floating layout's top floats over the view as well
-  // (Windows and Linux, mitcad#429); the card on macOS.
-  return floatingTopCards() ? BrowserBackground::Rows : BrowserBackground::Card;
+  // The card everywhere: under the Floating layout's toolbar panel on
+  // Windows and Linux (mitcad#1990) the Browser is one card, its header and
+  // rows inside, as on macOS. Rows stays a choice (mitcad#429).
+  return BrowserBackground::Card;
 }
 
 BrowserBackground savedBrowserBackground() {

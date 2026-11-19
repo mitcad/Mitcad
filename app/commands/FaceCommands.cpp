@@ -55,8 +55,6 @@ CommandDef shellCommand(const CommandContext& context) {
   def.name = QObject::tr("Shell");
   def.icon = QStringLiteral("shell");
   def.tooltip = QObject::tr("Hollows a body: the faces picked are removed, the rest become walls");
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("hollow"), QStringLiteral("thickness")};
   def.featureType = QStringLiteral("shell");
   const auto inside = [](const CommandState& s) { return s.choice(QStringLiteral("direction")) != QStringLiteral("outside"); };
@@ -152,7 +150,6 @@ CommandDef draftCommand(const CommandContext& context) {
   def.name = QObject::tr("Draft");
   def.icon = QStringLiteral("draft");
   def.tooltip = QObject::tr("Tilts faces about where they meet a fixed plane");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("taper"), QStringLiteral("mould"), QStringLiteral("mold")};
   def.featureType = QStringLiteral("draft");
   def.inputs = {
@@ -239,7 +236,6 @@ CommandDef offsetFaceCommand(const CommandContext& context) {
   def.name = QObject::tr("Offset Face");
   def.icon = QStringLiteral("face-edit");
   def.tooltip = QObject::tr("Moves faces along their normals; the faces around follow");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("press pull"), QStringLiteral("move face"), QStringLiteral("push")};
   def.featureType = QStringLiteral("offset_face");
   def.inputs = {
@@ -294,7 +290,6 @@ CommandDef replaceFaceCommand(const CommandContext& context) {
   def.name = QObject::tr("Replace Face");
   def.icon = QStringLiteral("replace-face");
   def.tooltip = QObject::tr("Replaces faces with a plane, a face of another body or a surface body");
-  def.group = QStringLiteral("MODIFY");
   def.featureType = QStringLiteral("replace_face");
   def.inputs = {
       selectionInput(QStringLiteral("faces"), QObject::tr("Source Faces"), SelectKind::Face, 1, 0)
@@ -358,7 +353,6 @@ CommandDef splitFaceCommand(const CommandContext& context) {
   def.name = QObject::tr("Split Face");
   def.icon = QStringLiteral("split-face");
   def.tooltip = QObject::tr("Splits faces along a plane, a face, a body or sketch curves");
-  def.group = QStringLiteral("MODIFY");
   def.featureType = QStringLiteral("split_face");
   def.extendedToolPreview = true; // the splitting tool as it is extended (mitcad#712)
   def.inputs = {
@@ -402,7 +396,6 @@ CommandDef splitBodyCommand(const CommandContext& context) {
   def.name = QObject::tr("Split Body");
   def.icon = QStringLiteral("split");
   def.tooltip = QObject::tr("Cuts bodies in pieces with a plane, a face, a body or sketch curves");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("cut"), QStringLiteral("divide")};
   def.featureType = QStringLiteral("split_body");
   def.extendedToolPreview = true; // the splitting tool as it is extended (mitcad#712)
@@ -444,7 +437,6 @@ CommandDef deleteFaceCommand(const CommandContext& context) {
   def.name = QObject::tr("Delete Face");
   def.icon = QStringLiteral("delete");
   def.tooltip = QObject::tr("Removes faces and heals the body: the faces around extend to close it");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("delete"), QStringLiteral("remove"), QStringLiteral("heal"), QStringLiteral("defeature")};
   def.featureType = QStringLiteral("delete_face");
   def.inputs = {

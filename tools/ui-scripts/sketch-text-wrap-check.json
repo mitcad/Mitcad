@@ -1,0 +1,7 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The UI saved Sketch1 after a text was drawn in a frame, its height, frame and Wrap in Frame changed and its text typed in two lines in Edit Text (mitcad#2029): one text, wrapped at the top of its frame, in two lines."},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"texts":[
+    {"text":"Two\nlines","wrap":true,"valign":"top","lines":2}
+  ]}}}
+]

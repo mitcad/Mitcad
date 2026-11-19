@@ -105,6 +105,7 @@ fn record(feature: u64, c: &CylinderEmbedding, sign: f64) -> BendDomain {
         },
         rules: FeatureUid(1),
         rules_version: String::new(),
+        lattice: None,
     }
 }
 

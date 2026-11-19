@@ -495,6 +495,22 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_body_folder", Model),
     // Convert to Features (mitcad#1815).
     ("convert_derived_part", Model),
+    // Shots of the Render workspace (mitcad#2013).
+    ("add_render_shot", Model),
+    ("edit_render_shot", Model),
+    ("delete_render_shot", Model),
+    // Sheet parts by material and process (mitcad#1939): a cut sheet's
+    // parts nested, a standard box and a die line.
+    ("nest_cut_sheet", Model),
+    ("add_flat_pack", Model),
+    ("add_standard_box", Model),
+    ("export_die_line", FileIo),
+    ("edit_standard_box", Model),
+    ("add_glue_flap", Model),
+    // Auto Constrain of a sketch (mitcad#2019).
+    ("sketch.auto_constrain", Model),
+    // Mesh sections into sketches (mitcad#1871).
+    ("mesh_section", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -773,6 +789,10 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("assembly_path", Model),
     // The Sheet Metal list (mitcad#1980).
     ("sheet_metal_list", Model),
+    // A component's sheet process profile (mitcad#1939).
+    ("sheet_process", Model),
+    // A mesh body's counts (mitcad#1871).
+    ("mesh_stats", Model),
     // What a print job sends to a slicer (mitcad#2008).
     ("print_job", Model),
 ];

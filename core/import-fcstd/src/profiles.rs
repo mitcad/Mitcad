@@ -132,27 +132,6 @@ fn face_value(f: &FaceProfile) -> Value {
     json!({"body": f.body.to_string(), "face": f.face})
 }
 
-/// Whether an extrusion's extent (an `extrude` definition's) is one a body
-/// face's extrusion takes: distances (one, symmetric or two sides), with
-/// their tapers (mitcad#541).
-pub(super) fn face_extrusion_extent(extent: &Value) -> Result<(), String> {
-    let distance = |v: &Value| v["type"] == "distance";
-    let fits = match extent["type"].as_str() {
-        Some("distance" | "symmetric") => true,
-        Some("two_sides") => distance(&extent["side1"]) && distance(&extent["side2"]),
-        _ => false,
-    };
-    if fits {
-        Ok(())
-    } else {
-        Err(format!(
-            "a face profile extruded {} is not translated: Mitcad extrudes a body face by \
-             distances",
-            extent["type"].as_str().unwrap_or("so")
-        ))
-    }
-}
-
 /// Whether a point lies in a region (inside its outline, not in its
 /// holes).
 fn in_region(r: &Region, p: [f64; 2]) -> bool {
@@ -544,31 +523,6 @@ mod tests {
         assert_eq!(pick(&beside, even), vec![side]);
         // Open edges bound nothing.
         assert!(pick(&outer[..3], even).is_empty());
-    }
-
-    #[test]
-    fn face_extrusions_go_by_distances() {
-        let ok = [
-            json!({"type": "distance", "distance": 5.0}),
-            json!({"type": "symmetric", "distance": 5.0, "full_length": true}),
-            json!({"type": "two_sides", "side1": {"type": "distance", "distance": 5.0},
-                   "side2": {"type": "distance", "distance": 2.0}}),
-            // Tapered too (mitcad#541).
-            json!({"type": "distance", "distance": 5.0, "taper": 0.05}),
-        ];
-        for extent in &ok {
-            assert!(face_extrusion_extent(extent).is_ok(), "{extent}");
-        }
-        let refused = [
-            json!({"type": "through_all", "both_sides": false}),
-            json!({"type": "two_sides", "side1": {"type": "distance", "distance": 5.0},
-                   "side2": {"type": "through_all"}}),
-            json!({"type": "to_object", "object": {"type": "body", "body": "F1.b0"}}),
-        ];
-        for extent in &refused {
-            let e = face_extrusion_extent(extent).unwrap_err();
-            assert!(e.contains("by distances"), "{e}");
-        }
     }
 
     #[test]

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
+
+#include <QHash>
 #include <QList>
 #include <QMetaObject>
 #include <QObject>
@@ -49,6 +52,10 @@ QStringList menuBarEntries(const QMenuBar& bar);
 // The entries of a menu as the UI tests' logs give them: the shown
 // actions that are not separators, without the mnemonic's "&".
 QStringList menuEntries(const QMenu& menu);
+// The menu's first entry the keys can reach (shown, no separator, enabled)
+// made its active one, as a menu bar's menu opened by its keys has it: the
+// arrow keys and Enter go on from there.
+void activateFirstEntry(QMenu& menu);
 
 // The ☰ button of the title row (Floating) and the Docked toolbar, shown
 // while the menu bar is hidden (MainWindow shows it, wanted()): its menu
@@ -65,6 +72,10 @@ public:
 
   // Whether the button is to show: the setting offered and cleared.
   static bool wanted();
+  // Opens its menu under it, as a click does, with the first menu active
+  // (the keys go on from there); with `submenu` (one of the bar's menus)
+  // that one active and open beside it, as the keys open it.
+  void openMenu(QMenu* submenu = nullptr);
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -82,6 +93,9 @@ private:
   QTimer* m_placeTimer = nullptr;
   QString m_lastPlace;
   QList<QMetaObject::Connection> m_submenuLogs;
+  // The submenu openMenu opened by the keys, until the menu's window has
+  // the focus (eventFilter).
+  QPointer<QMenu> m_keysSubmenu;
 };
 
 // Keeps the watched menu bars hidden while the setting says so, and shows
@@ -103,16 +117,40 @@ private:
 // leaves the bar), not the window's Cancel. Logs "Menu bar shown (Alt)",
 // "Menu bar shown (Alt+<key>)", "Menu bar File opened" and "Menu bar
 // hidden again".
+//
+// A bar watched with an opener never shows (the Floating layout of Windows
+// and Linux, mitcad#1990: the top bar's File, ? and ☰ hold the menus): it is
+// hidden outright whatever the setting (a zero maximum height alone left
+// the bar laid out at its full height on Windows, a row above the top bar),
+// hidden again should anything show it, and its menus' commands with a
+// shortcut are the window's actions too (keepShortcuts), so that their keys
+// work although Qt takes them from a hidden bar's menus. Alt does not take
+// it to the keyboard, and its keys go to the opener instead: Alt+<a menu's
+// mnemonic> gives that menu (the key goes no further), Alt alone gives
+// none. Logged by the opener.
 class MenuBarReveal : public QObject {
   Q_OBJECT
 
 public:
   static MenuBarReveal& instance();
 
-  // Hidden while the setting says so, from now on.
-  void watch(QMenuBar* bar);
+  // `menu`: the bar's menu of the mnemonic pressed, null for Alt alone;
+  // `how`: "Alt+F" or "Alt".
+  using Opener = std::function<void(QMenu* menu, const QString& how)>;
+
+  // Hidden while the setting says so, from now on; with an opener always
+  // (a bar watched already gets it).
+  void watch(QMenuBar* bar, Opener opener = {});
   // Hidden now (no higher than nothing).
   static bool isCollapsed(const QMenuBar& bar);
+  // Watched with an opener: hidden for good, whoever shows the windows'
+  // bars (the document frame's tabs).
+  bool keepsHidden(const QMenuBar* bar) const;
+  // The commands with a shortcut in the bar's menus and their submenus
+  // added to the bar's window (its parent widget) where it has not got
+  // them: their keys work while the bar is hidden. Again after the menus
+  // were filled again (the command layout changed).
+  static void keepShortcuts(QMenuBar* bar);
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -121,13 +159,21 @@ private:
   MenuBarReveal();
   void applySetting();
   void apply(QMenuBar* bar);
-  // The shown (not hidden) watched bar of the active window.
+  // The application's event filter while a bar is hidden or has an opener.
+  void updateFilter();
+  // The shown (not hidden) watched bar of the active window, or the one an
+  // opener keeps hidden of its shown document.
   QMenuBar* activeBar() const;
+  // An opener's bar shown after all: hidden again once the show is done.
+  void hideAgain(QMenuBar* bar);
   void reveal(QMenuBar* bar, const QString& how);
   void scheduleConceal();
   void concealIfDone();
 
   QList<QPointer<QMenuBar>> m_bars;
+  QHash<const QMenuBar*, Opener> m_openers; // watch's, by bar
+  bool m_filtering = false;                 // updateFilter
+  int m_swallowKey = 0;                     // a mnemonic's key given to an opener
   QPointer<QMenuBar> m_revealed;
   QList<QMetaObject::Connection> m_menuConnections;
   QTimer* m_concealTimer = nullptr;

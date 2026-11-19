@@ -4,6 +4,11 @@
 //! parent's solve (`crate::joints`, `flex_into_parents`), for this
 //! occurrence alone, with its own values of them (`Occurrence::flexible`);
 //! the component's design and its other occurrences stay as they are.
+//! Since mitcad#2016 any occurrence of a component with components in it
+//! can be flexible: the parts its component's joints, rigid groups and
+//! grounding do not place are free in the parent, placed there by the
+//! parent's joints alone (`crate::joints::flex_unit`), where drags leave
+//! them kept per occurrence (`Flex::placements`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,8 +54,11 @@ impl<K: Kernel> Document<K> {
     /// Makes an occurrence flexible in its parent, or rigid there again
     /// (mitcad#1793): one undo step (`Make Hinge:1 Flexible`, `Make
     /// Hinge:1 Rigid`), none when nothing changes. Rigid again, it drops
-    /// its own joint values. Refused for an occurrence whose component has
-    /// no joints of its own.
+    /// its own joint values and kept placements. Any occurrence of a
+    /// component with components in it can be flexible, joints of its own
+    /// or not (mitcad#2016): its free parts are free in the parent
+    /// ([`Flex::free_parts`]). Refused for one whose component has
+    /// neither components nor joints of its own.
     pub fn set_occurrence_flexible(
         &mut self,
         uid: OccurrenceUid,
@@ -61,15 +69,20 @@ impl<K: Kernel> Document<K> {
             return Ok(());
         }
         let name = self.state.assembly.occurrence_name(uid);
-        if flexible && self.own_joints(uid).is_empty() {
+        let has_parts = self
+            .state
+            .assembly
+            .children(occurrence.component)
+            .next()
+            .is_some();
+        if flexible && !has_parts && self.own_joints(uid).is_empty() {
             return Err(invalid(format!(
-                "{name} cannot be flexible: {} has no joints of its own to move",
+                "{name} cannot be flexible: {} has no components in it to move",
                 self.state.assembly.name(occurrence.component)
             )));
         }
         self.apply(|state| {
-            state.assembly.occurrence_mut(uid).expect("exists").flexible =
-                flexible.then(Flex::default);
+            state.assembly.occurrence_mut(uid).expect("exists").flexible = flexible.then(Flex::new);
             let how = if flexible { "Flexible" } else { "Rigid" };
             Ok((format!("Make {name} {how}"), ()))
         })
@@ -303,5 +316,137 @@ impl<K: Kernel> Document<K> {
             .filter(|j| j.under.first() == Some(&occurrence))
             .min_by_key(|j| j.under.len())
             .map(|j| j.under.clone())
+    }
+
+    /// Where the free parts of flexible occurrences that `paths` (joints'
+    /// paths from their own components) reach stay when those joints go
+    /// (mitcad#2017), as [`Document::held_placements`] keeps a placed
+    /// occurrence: per free part a path reaches (with what a rigid group of
+    /// its component ties to it), where it is now at the marker, to keep as
+    /// the outermost flexible occurrence's own placement of it
+    /// ([`crate::assembly::Flex::placements`]). A part the component's
+    /// joints move keeps their values instead and is left out, as is one
+    /// that would be there anyway (its kept placement, else where its
+    /// component places it).
+    pub fn held_free_parts<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a [OccurrenceUid]>,
+    ) -> Vec<HeldFreePart> {
+        let assembly = &self.state.assembly;
+        let joints = &self.result.joints;
+        let mut held: Vec<HeldFreePart> = Vec::new();
+        for path in paths {
+            // The deepest unit the path moves, as the solve takes it
+            // (`crate::joints::unit_of`).
+            let Some((within, unit)) = (1..path.len()).rev().find_map(|k| {
+                crate::joints::flex_unit(assembly, joints, &path[..k], path[k])
+                    .map(|unit| (&path[..k], unit))
+            }) else {
+                continue;
+            };
+            let Some(last) = within.last().and_then(|o| assembly.occurrence(*o)) else {
+                continue;
+            };
+            if !last.flexible.as_ref().is_some_and(|f| f.free_parts)
+                || crate::joints::joined_in(joints, last.component, &unit.members)
+            {
+                continue;
+            }
+            let outer = within[0];
+            let flex = assembly.occurrence(outer).and_then(|o| o.flexible.as_ref());
+            for part in &unit.members {
+                let mut kept = within[1..].to_vec();
+                kept.push(*part);
+                if !assembly.flex_path_holds(outer, &kept)
+                    || held.iter().any(|h| h.flexible == outer && h.path == kept)
+                {
+                    continue;
+                }
+                let Some(now) = self.placement_after(within, *part) else {
+                    continue;
+                };
+                let anyway = flex
+                    .and_then(|f| f.placement(&kept))
+                    .map(|base| self.free_part_after_moves(*part, &base))
+                    .or_else(|| self.placement(*part));
+                if anyway.is_some_and(|t| super::same_placement(&t, &now)) {
+                    continue;
+                }
+                held.push(HeldFreePart {
+                    flexible: outer,
+                    path: kept,
+                    transform: self.free_part_base(*part, &now),
+                });
+            }
+        }
+        held
+    }
+
+    /// Where a free part kept at `base` by a flexible occurrence is at the
+    /// marker: moved from there by the Move features before the marker
+    /// that move `part` (mitcad#2025, `crate::joints::move_free_parts`).
+    pub(crate) fn free_part_after_moves(
+        &self,
+        part: OccurrenceUid,
+        base: &crate::transform::Transform,
+    ) -> crate::transform::Transform {
+        match self.result.joints.free_moves.get(&part) {
+            Some(moved) => moved.after(base),
+            None => *base,
+        }
+    }
+
+    /// What a flexible occurrence keeps of a free part that is at `now` at
+    /// the marker (mitcad#2025): where it is before the Move features
+    /// before the marker that move `part`, so that they move it from there
+    /// to `now`, and it follows them when they are edited and goes back
+    /// there when they are suppressed or deleted; a rigid placement to
+    /// rounding (mitcad#1664).
+    pub(crate) fn free_part_base(
+        &self,
+        part: OccurrenceUid,
+        now: &crate::transform::Transform,
+    ) -> crate::transform::Transform {
+        let base = match self.result.joints.free_moves.get(&part) {
+            Some(moved) => crate::assembly::inverse(moved).after(now),
+            None => *now,
+        };
+        crate::assembly::solved_placement(&base).unwrap_or(base)
+    }
+}
+
+/// Where a free part of a flexible occurrence stays when the joints that
+/// placed it go (mitcad#2017, [`Document::held_free_parts`]): `path` from
+/// the flexible occurrence `flexible` (through the flexible occurrences
+/// nested in it) to the part, and its placement there, as
+/// [`crate::assembly::FlexPlacement`] keeps it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeldFreePart {
+    pub flexible: OccurrenceUid,
+    pub path: Vec<OccurrenceUid>,
+    pub transform: crate::transform::Transform,
+}
+
+impl DocState {
+    /// Keeps the free parts `held` names where it has them, as their
+    /// flexible occurrences' own placements (mitcad#2017): the joints that
+    /// placed them went. Those whose part or flexible occurrence went too
+    /// are left out. Returns how many it kept.
+    pub fn hold_free_parts(&mut self, held: &[HeldFreePart]) -> usize {
+        let mut kept = 0;
+        for h in held {
+            if !self.assembly.flex_path_holds(h.flexible, &h.path) {
+                continue;
+            }
+            if let Some(flex) = self
+                .assembly
+                .occurrence_mut(h.flexible)
+                .and_then(|o| o.flexible.as_mut())
+            {
+                flex.keep_placement(h.path.clone(), h.transform);
+                kept += 1;
+            }
+        }
+        kept
     }
 }

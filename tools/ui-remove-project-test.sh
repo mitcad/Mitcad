@@ -57,7 +57,7 @@ echo "ok   the folder is made"
 
 # The panel shown at the start, as for a user who turned it on (mitcad#1020).
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[projects]\npanel=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[projects]\npanel=true\npanelTopBar=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 export MITCAD_TEST_WORKSHOP=$workshop MITCAD_TEST_STEP_MS=100
 export MITCAD_TEST_INPUT=$here/ui-scripts/remove-project.mitcad-ui

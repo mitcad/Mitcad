@@ -3,7 +3,7 @@
 # check-all sources: app/view/NavigationBar.cpp app/view/NavigationBar.hpp app/MainWindowNavigationBar.cpp
 # check-all sources: app/framework/NavigationBarPins.cpp app/framework/NavigationBarPins.hpp
 # check-all sources: app/framework/Ribbon.cpp app/framework/Ribbon.hpp app/framework/ShortcutDialog.cpp
-# check-all sources: app/commands/InspectCommands.cpp app/MainWindow.cpp
+# check-all sources: app/commands/InspectCommands.cpp app/MainWindow.cpp app/resources/layout/default.json
 # Any command pinned to the navigation bar (mitcad#1589, GitHub
 # mitcad/Mitcad#224) through the real UI, in the Floating and then the
 # Docked layout, each with settings of its own:
@@ -22,9 +22,10 @@
 #      Change Keyboard Shortcut…, which opens Keyboard Shortcuts at
 #      Measure; then Unpin from Navigation Bar: the bar without it, its row
 #      in the INSPECT menu offering Pin to Navigation Bar again.
-#   7. Edit Parameters unpinned from its row in the SOLID > MODIFY menu:
-#      the bar without pins (and its separator), saved as an empty value;
-#      pinned again from the same row.
+#   7. Edit Parameters unpinned from its row in the MANAGE > PARAMETERS
+#      menu (mitcad#1975: its home on the Manage tab): the bar without
+#      pins (and its separator), saved as an empty value; pinned again from
+#      the same row.
 # The Windows counterpart is tools/ui-windows-nav-bar-pins-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -87,7 +88,7 @@ round() {
 
   # 2. Measure pinned from its row in SOLID > INSPECT.
   ui_mark
-  ui_step "the SOLID tab"                  ui_click_logged "Ribbon tab SOLID"
+  ui_step "the SOLID tab"                  ui_click_tab "SOLID"
   ui_sync
   ui_mark
   ui_step "open the SOLID INSPECT menu"    ui_click_logged "Ribbon SOLID/INSPECT"
@@ -106,7 +107,7 @@ round() {
 
   # 3. Measure from the bar in the BUILD workspace.
   ui_mark
-  ui_step "the BUILD tab"                  ui_click_logged "Ribbon tab BUILD"
+  ui_step "the BUILD tab"                  ui_click_tab "BUILD"
   ui_expect_new "Ribbon tab shown: BUILD" "$layout: the BUILD workspace"
   ui_sync
   ui_mark
@@ -163,7 +164,7 @@ round() {
     ui_fail "$layout: Measure still on the bar"
   echo "ok   $layout: Measure gone from the bar"
   ui_mark
-  ui_step "the SOLID tab"                  ui_click_logged "Ribbon tab SOLID"
+  ui_step "the SOLID tab"                  ui_click_tab "SOLID"
   ui_sync
   ui_mark
   ui_step "open the SOLID INSPECT menu"    ui_click_logged "Ribbon SOLID/INSPECT"
@@ -176,10 +177,14 @@ round() {
   ui_step "close the menus (Esc)"          ui_key Escape
   ui_sync
 
-  # 7. Edit Parameters unpinned and pinned again from its MODIFY row.
+  # 7. Edit Parameters unpinned and pinned again from its PARAMETERS row.
   ui_mark
-  ui_step "open the SOLID MODIFY menu"     ui_click_logged "Ribbon SOLID/MODIFY"
-  row_menu "SOLID/MODIFY" solid.parameters "Unpin from Navigation Bar" \
+  ui_step "the MANAGE tab"                 ui_click_tab "MANAGE"
+  ui_expect_new "Ribbon tab shown: MANAGE" "$layout: the MANAGE tab"
+  ui_sync
+  ui_mark
+  ui_step "open the PARAMETERS menu"       ui_click_logged "Ribbon MANAGE/PARAMETERS"
+  row_menu "MANAGE/PARAMETERS" solid.parameters "Unpin from Navigation Bar" \
     "Pin to Toolbar | Unpin from Navigation Bar | Change Keyboard Shortcut…"
   ui_expect_new "Unpinned from navigation bar: Edit Parameters" "$layout: Edit Parameters unpinned"
   ui_expect_new "Navigation bar pinned: none" "$layout: no pins left"
@@ -189,8 +194,8 @@ round() {
     ui_fail "$layout: Edit Parameters still on the bar"
   echo "ok   $layout: Edit Parameters gone from the bar"
   ui_mark
-  ui_step "open the SOLID MODIFY menu"     ui_click_logged "Ribbon SOLID/MODIFY"
-  row_menu "SOLID/MODIFY" solid.parameters "Pin to Navigation Bar" \
+  ui_step "open the PARAMETERS menu"       ui_click_logged "Ribbon MANAGE/PARAMETERS"
+  row_menu "MANAGE/PARAMETERS" solid.parameters "Pin to Navigation Bar" \
     "Pin to Toolbar | Pin to Navigation Bar | Change Keyboard Shortcut…"
   ui_expect_new "Pinned to navigation bar: Edit Parameters" "$layout: Edit Parameters pinned again"
   ui_expect_new "Navigation bar pinned: solid.parameters" "$layout: Edit Parameters back on the bar"

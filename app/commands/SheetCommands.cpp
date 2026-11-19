@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The SHEET METAL group of the SOLID tab (mitcad#210; the model's side in
 // commands.md, "Sheet rules and base Face" to "Sheet Unfold, Refold and Flat
-// Pattern"): Sheet Rules, Face, Flange, Bend, Fold, Corner Round, Corner
-// Chamfer, Unfold, Refold, Sheet Cut and Flat Pattern. Picks on a sheet body
+// Pattern"): Sheet Rules, Face, Flange, Convert to Sheet Metal, Bend, Fold,
+// Corner Round, Corner Chamfer, Unfold, Refold, Sheet Cut and Flat Pattern. Picks on a sheet body
 // are faces and edges; the model's `sheet_reference` and `sheet_seam`
 // queries turn them into the semantic references (panels, bends,
 // boundaries, corners) the definitions keep, and `load` turns those back
@@ -22,11 +22,11 @@
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
+#include "SheetProcess.hpp"
 
 namespace mitcad::cmd {
 namespace {
 
-const QString kGroup = QStringLiteral("SHEET METAL");
 
 QString key(const char* text) { return QString::fromLatin1(text); }
 
@@ -423,6 +423,12 @@ void addOverrides(QJsonObject& def, const CommandState& state) {
                                                      {QStringLiteral("width"), state.expression(QStringLiteral("relief_width"))},
                                                      {QStringLiteral("depth"), state.expression(QStringLiteral("relief_depth"))}});
   }
+  // A fold's own allowance (mitcad#1939), which the panel does not show,
+  // is kept as it was loaded.
+  const QJsonObject own = state.object(QStringLiteral("own_allowance"));
+  if (!own.isEmpty()) {
+    def.insert(QStringLiteral("allowance"), own);
+  }
 }
 
 void loadOverrides(const QJsonObject& def, CommandState& state, const CommandContext& context) {
@@ -437,6 +443,7 @@ void loadOverrides(const QJsonObject& def, CommandState& state, const CommandCon
     loadValue(state, QStringLiteral("relief_width"), relief.value(QStringLiteral("width")), def, context);
     loadValue(state, QStringLiteral("relief_depth"), relief.value(QStringLiteral("depth")), def, context);
   }
+  state.setObject(QStringLiteral("own_allowance"), def.value(QStringLiteral("allowance")).toObject());
 }
 
 void loadAngle(const QJsonObject& def, CommandState& state, const CommandContext& context) {
@@ -444,17 +451,101 @@ void loadAngle(const QJsonObject& def, CommandState& state, const CommandContext
   state.setChecked(QStringLiteral("flip"), false);
 }
 
+// The process profiles and allowance methods of sheet rules (mitcad#1939;
+// commands.md "Sheet process profiles").
+const Choices kProcesses = {{QStringLiteral("metal"), QStringLiteral("Metal")},
+                            {QStringLiteral("board"), QStringLiteral("Board")},
+                            {QStringLiteral("laser_sheet"), QStringLiteral("Laser Sheet")}};
+const Choices kAllowances = {{QStringLiteral("k_factor"), QStringLiteral("K-Factor")},
+                             {QStringLiteral("bend_allowance"), QStringLiteral("Bend Allowance")},
+                             {QStringLiteral("bend_deduction"), QStringLiteral("Bend Deduction")},
+                             {QStringLiteral("crease_table"), QStringLiteral("Crease Table")},
+                             {QStringLiteral("kerf_bend"), QStringLiteral("Kerf Bend")}};
+const Choices kFlutes = {{QStringLiteral("none"), QStringLiteral("None")}, {QStringLiteral("F"), QStringLiteral("F")},
+                         {QStringLiteral("E"), QStringLiteral("E")},       {QStringLiteral("B"), QStringLiteral("B")},
+                         {QStringLiteral("C"), QStringLiteral("C")},       {QStringLiteral("A"), QStringLiteral("A")},
+                         {QStringLiteral("EB"), QStringLiteral("EB")},     {QStringLiteral("BC"), QStringLiteral("BC")}};
+// A crease row's flute: any flute, or one.
+const Choices kRowFlutes = {{QStringLiteral("any"), QStringLiteral("Any")}, {QStringLiteral("F"), QStringLiteral("F")},
+                            {QStringLiteral("E"), QStringLiteral("E")},     {QStringLiteral("B"), QStringLiteral("B")},
+                            {QStringLiteral("C"), QStringLiteral("C")},     {QStringLiteral("A"), QStringLiteral("A")},
+                            {QStringLiteral("EB"), QStringLiteral("EB")},   {QStringLiteral("BC"), QStringLiteral("BC")}};
+
 // The rule fields of Sheet Rules and of a Face with rules of its own.
 QVector<InputDef> ruleInputs(std::function<bool(const CommandState&)> shown, bool reliefs) {
+  const auto visible = [shown](const char* allowance) {
+    return [shown, allowance](const CommandState& s) {
+      return (!shown || shown(s)) && s.choice(QStringLiteral("allowance_type")) == QLatin1String(allowance);
+    };
+  };
+  const auto any = [shown](const CommandState& s) { return !shown || shown(s); };
   QVector<InputDef> inputs{
+      choiceInput(QStringLiteral("process"), QObject::tr("Process"), kProcesses, QStringLiteral("metal"))
+          .withTooltip(QObject::tr("Metal folds with bend allowances, board at creases; laser sheet is joined"))
+          .withVisible(any),
       valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, QStringLiteral("1 mm"))
           .withVisible(shown),
       valueInput(QStringLiteral("bend_radius"), QObject::tr("Bend Radius"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The default inside radius of bends"))
           .withVisible(shown),
+      choiceInput(QStringLiteral("allowance_type"), QObject::tr("Allowance"), kAllowances, QStringLiteral("k_factor"))
+          .withTooltip(QObject::tr("How a fold's flat length is worked out"))
+          .withVisible(any),
       valueInput(QStringLiteral("k_factor"), QObject::tr("K-Factor"), ValueKind::Unitless, QStringLiteral("0.44"))
           .withTooltip(QObject::tr("Where the neutral surface lies in the thickness, from the inside (0 to 1)"))
-          .withVisible(shown),
+          .withVisible(visible("k_factor")),
+      valueInput(QStringLiteral("bend_allowance"), QObject::tr("Allowance per 90°"), ValueKind::Length,
+                 QStringLiteral("2 mm"))
+          .withTooltip(QObject::tr("The measured flat length of a 90° fold; other angles in proportion"))
+          .withVisible(visible("bend_allowance")),
+      valueInput(QStringLiteral("bend_deduction"), QObject::tr("Deduction per 90°"), ValueKind::Length,
+                 QStringLiteral("1 mm"))
+          .withTooltip(QObject::tr("The measured bend deduction of a 90° fold (may be close to 0 for a sharp crease)"))
+          .withVisible(visible("bend_deduction")),
+      choiceInput(QStringLiteral("flute"), QObject::tr("Flute"), kFlutes, QStringLiteral("none"))
+          .withTooltip(QObject::tr("The board's flute, which the crease table's rows match"))
+          .withVisible(visible("crease_table")),
+      // The crease table's rows (mitcad#1939): the row a fold takes is the
+      // one of the nearest thickness whose flute, direction and side match.
+      listInput(QStringLiteral("crease_rows"), QObject::tr("Crease Table"),
+                {valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length,
+                            QStringLiteral("4 mm"))
+                     .withStepMinimum(0.0, true),
+                 choiceInput(QStringLiteral("flute"), QObject::tr("Flute"), kRowFlutes, QStringLiteral("any")),
+                 choiceInput(QStringLiteral("direction"), QObject::tr("Direction"),
+                             {{QStringLiteral("any"), QStringLiteral("Any")},
+                              {QStringLiteral("along"), QStringLiteral("Along the Flutes")},
+                              {QStringLiteral("across"), QStringLiteral("Across the Flutes")}},
+                             QStringLiteral("any")),
+                 choiceInput(QStringLiteral("side"), QObject::tr("Front"),
+                             {{QStringLiteral("any"), QStringLiteral("Either Side")},
+                              {QStringLiteral("inner"), QStringLiteral("Inside the Fold")},
+                              {QStringLiteral("outer"), QStringLiteral("Outside the Fold")}},
+                             QStringLiteral("any")),
+                 choiceInput(QStringLiteral("kind"), QObject::tr("Measured"),
+                             {{QStringLiteral("deduction"), QStringLiteral("Deduction")},
+                              {QStringLiteral("allowance"), QStringLiteral("Allowance")}},
+                             QStringLiteral("deduction")),
+                 valueInput(QStringLiteral("value"), QObject::tr("Value per 90°"), ValueKind::Length,
+                            QStringLiteral("4 mm"))
+                     .withTooltip(QObject::tr("The measured deduction or flat length of a 90° crease"))},
+                QObject::tr("Add Row"), QObject::tr("Row %1"))
+          .withVisible(visible("crease_table")),
+      valueInput(QStringLiteral("slit_length"), QObject::tr("Slit Length"), ValueKind::Length, QStringLiteral("20 mm"))
+          .withStepMinimum(0.0, true)
+          .withVisible(visible("kerf_bend")),
+      valueInput(QStringLiteral("slit_gap"), QObject::tr("Slit Gap"), ValueKind::Length, QStringLiteral("3 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The material left between two slits of a row"))
+          .withVisible(visible("kerf_bend")),
+      valueInput(QStringLiteral("slit_pitch"), QObject::tr("Row Pitch"), ValueKind::Length, QStringLiteral("1.5 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("How far apart the rows of slits are across the bend"))
+          .withVisible(visible("kerf_bend")),
+      valueInput(QStringLiteral("kerf"), QObject::tr("Kerf"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("The width the cutting beam takes away: kerf compensation and a kerf bend's slit width"))
+          .withVisible(any),
       choiceInput(QStringLiteral("reference_side"), QObject::tr("Sketch Side"), kSides, QStringLiteral("front"))
           .withTooltip(QObject::tr("Front: the material lies above the sketch; Back: below it"))
           .withVisible(shown),
@@ -476,6 +567,44 @@ QVector<InputDef> ruleInputs(std::function<bool(const CommandState&)> shown, boo
   return inputs;
 }
 
+// The allowance of the rule inputs (mitcad#1939).
+QJsonObject allowanceOf(const CommandState& state) {
+  const QString type = state.choice(QStringLiteral("allowance_type"));
+  const auto expr = [&state](const char* id) { return QJsonValue(state.expression(QString::fromLatin1(id))); };
+  if (type == QStringLiteral("bend_allowance")) {
+    return {{QStringLiteral("type"), type}, {QStringLiteral("allowance"), expr("bend_allowance")}};
+  }
+  if (type == QStringLiteral("bend_deduction")) {
+    return {{QStringLiteral("type"), type}, {QStringLiteral("deduction"), expr("bend_deduction")}};
+  }
+  if (type == QStringLiteral("crease_table")) {
+    QJsonArray rows;
+    const QString list = QStringLiteral("crease_rows");
+    for (int i = 0; i < state.rows(list); ++i) {
+      const auto key = [&list, i](const char* id) { return CommandState::rowKey(list, i, QString::fromLatin1(id)); };
+      QJsonObject row{{QStringLiteral("thickness"), state.expression(key("thickness"))}};
+      for (const char* id : {"flute", "direction", "side"}) {
+        const QString choice = state.choice(key(id));
+        if (!choice.isEmpty() && choice != QStringLiteral("any")) {
+          row.insert(QString::fromLatin1(id), choice);
+        }
+      }
+      row.insert(state.choice(key("kind")) == QStringLiteral("allowance") ? QStringLiteral("allowance")
+                                                                         : QStringLiteral("deduction"),
+                 state.expression(key("value")));
+      rows.append(row);
+    }
+    return {{QStringLiteral("type"), type}, {QStringLiteral("rows"), rows}};
+  }
+  if (type == QStringLiteral("kerf_bend")) {
+    return {{QStringLiteral("type"), type},
+            {QStringLiteral("slit_length"), expr("slit_length")},
+            {QStringLiteral("gap"), expr("slit_gap")},
+            {QStringLiteral("pitch"), expr("slit_pitch")}};
+  }
+  return {{QStringLiteral("type"), QStringLiteral("k_factor")}, {QStringLiteral("k"), expr("k_factor")}};
+}
+
 // A sheet_rules definition from the rule inputs; reliefs at their defaults
 // when the panel has none.
 QJsonObject rulesOf(const CommandState& state, bool reliefs) {
@@ -489,14 +618,74 @@ QJsonObject rulesOf(const CommandState& state, bool reliefs) {
                        {QStringLiteral("width"), state.expression(prefix + QStringLiteral("_width"))},
                        {QStringLiteral("depth"), state.expression(prefix + QStringLiteral("_depth"))}};
   };
-  return {{QStringLiteral("type"), QStringLiteral("sheet_rules")},
-          {QStringLiteral("thickness"), state.expression(QStringLiteral("thickness"))},
-          {QStringLiteral("bend_radius"), state.expression(QStringLiteral("bend_radius"))},
-          {QStringLiteral("allowance"), QJsonObject{{QStringLiteral("type"), QStringLiteral("k_factor")},
-                                                    {QStringLiteral("k"), state.expression(QStringLiteral("k_factor"))}}},
-          {QStringLiteral("reference_side"), state.choice(QStringLiteral("reference_side"))},
-          {QStringLiteral("bend_relief"), relief(QStringLiteral("bend_relief"))},
-          {QStringLiteral("corner_relief"), relief(QStringLiteral("corner_relief"))}};
+  QJsonObject rules{{QStringLiteral("type"), QStringLiteral("sheet_rules")},
+                    {QStringLiteral("thickness"), state.expression(QStringLiteral("thickness"))},
+                    {QStringLiteral("bend_radius"), state.expression(QStringLiteral("bend_radius"))},
+                    {QStringLiteral("allowance"), allowanceOf(state)},
+                    {QStringLiteral("reference_side"), state.choice(QStringLiteral("reference_side"))},
+                    {QStringLiteral("bend_relief"), relief(QStringLiteral("bend_relief"))},
+                    {QStringLiteral("corner_relief"), relief(QStringLiteral("corner_relief"))}};
+  // Metal, no kerf and no flute are left out, so that metal rules are
+  // written as before.
+  const QString process = state.choice(QStringLiteral("process"));
+  if (!process.isEmpty() && process != QStringLiteral("metal")) {
+    rules.insert(QStringLiteral("process"), process);
+  }
+  if (nonZero(state, QStringLiteral("kerf"))) {
+    rules.insert(QStringLiteral("kerf"), state.expression(QStringLiteral("kerf")));
+  }
+  const QString flute = state.choice(QStringLiteral("flute"));
+  if (state.choice(QStringLiteral("allowance_type")) == QStringLiteral("crease_table") && !flute.isEmpty() &&
+      flute != QStringLiteral("none")) {
+    rules.insert(QStringLiteral("flute"), flute);
+  }
+  return rules;
+}
+
+// The rule inputs of a rules definition (mitcad#1939: the profile, the
+// allowance method and its values, the kerf and the flute).
+void loadRules(const QJsonObject& rules, CommandState& state, const CommandContext& context) {
+  loadValue(state, QStringLiteral("thickness"), rules.value(QStringLiteral("thickness")), rules, context);
+  loadValue(state, QStringLiteral("bend_radius"), rules.value(QStringLiteral("bend_radius")), rules, context);
+  state.setChoice(QStringLiteral("process"), rules.value(QStringLiteral("process")).toString(QStringLiteral("metal")));
+  const QJsonObject allowance = rules.value(QStringLiteral("allowance")).toObject();
+  const QString type = str(allowance, "type");
+  state.setChoice(QStringLiteral("allowance_type"), type.isEmpty() ? QStringLiteral("k_factor") : type);
+  const auto value = [&](const char* input, const char* field) {
+    loadValue(state, QString::fromLatin1(input), allowance.value(QLatin1String(field)), rules, context);
+  };
+  if (type == QStringLiteral("bend_allowance")) {
+    value("bend_allowance", "allowance");
+  } else if (type == QStringLiteral("bend_deduction")) {
+    value("bend_deduction", "deduction");
+  } else if (type == QStringLiteral("crease_table")) {
+    const QString list = QStringLiteral("crease_rows");
+    const QJsonArray rows = allowance.value(QStringLiteral("rows")).toArray();
+    state.setRows(list, static_cast<int>(rows.size()));
+    for (int i = 0; i < rows.size(); ++i) {
+      const QJsonObject row = rows[i].toObject();
+      const auto key = [&list, i](const char* id) { return CommandState::rowKey(list, i, QString::fromLatin1(id)); };
+      loadValue(state, key("thickness"), row.value(QStringLiteral("thickness")), rules, context);
+      for (const char* id : {"flute", "direction", "side"}) {
+        state.setChoice(key(id), row.value(QLatin1String(id)).toString(QStringLiteral("any")));
+      }
+      const bool measured = row.contains(QStringLiteral("allowance"));
+      state.setChoice(key("kind"), measured ? QStringLiteral("allowance") : QStringLiteral("deduction"));
+      loadValue(state, key("value"), row.value(measured ? QStringLiteral("allowance") : QStringLiteral("deduction")),
+                rules, context);
+    }
+  } else if (type == QStringLiteral("kerf_bend")) {
+    value("slit_length", "slit_length");
+    value("slit_gap", "gap");
+    value("slit_pitch", "pitch");
+  } else {
+    value("k_factor", "k");
+  }
+  if (rules.contains(QStringLiteral("kerf"))) {
+    loadValue(state, QStringLiteral("kerf"), rules.value(QStringLiteral("kerf")), rules, context);
+  }
+  state.setChoice(QStringLiteral("flute"), rules.value(QStringLiteral("flute")).toString(QStringLiteral("none")));
+  state.setChoice(QStringLiteral("reference_side"), str(rules, "reference_side"));
 }
 
 // The rules features at the marker, newest last: (uid, name).
@@ -560,19 +749,16 @@ CommandDef sheetRulesCommand(const CommandContext&) {
   def.id = QStringLiteral("sheet.rules");
   def.name = QObject::tr("Sheet Rules");
   def.icon = QStringLiteral("sheet-rules");
-  def.tooltip = QObject::tr("Thickness, bend radius, K-factor and reliefs that sheet-metal faces use");
-  def.group = kGroup;
+  def.tooltip = QObject::tr("Process, thickness, bend radius, allowance and reliefs that sheet faces use");
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("thickness"), QStringLiteral("k-factor"),
                   QStringLiteral("bend allowance")};
   def.featureType = QStringLiteral("sheet_rules");
   def.inputs = ruleInputs({}, true);
+  // A standard box's rules are Standard Box's to edit (mitcad#1939).
+  def.canEdit = [](const QJsonObject& rules) { return !rules.contains(QStringLiteral("standard_box")); };
   def.build = [](const CommandState& state, const CommandContext&) { return Built::of(rulesOf(state, true)); };
   def.load = [](const QJsonObject& rules, CommandState& state, const CommandContext& context) {
-    loadValue(state, QStringLiteral("thickness"), rules.value(QStringLiteral("thickness")), rules, context);
-    loadValue(state, QStringLiteral("bend_radius"), rules.value(QStringLiteral("bend_radius")), rules, context);
-    loadValue(state, QStringLiteral("k_factor"),
-              rules.value(QStringLiteral("allowance")).toObject().value(QStringLiteral("k")), rules, context);
-    state.setChoice(QStringLiteral("reference_side"), str(rules, "reference_side"));
+    loadRules(rules, state, context);
     for (const QString &prefix : {QStringLiteral("bend_relief"), QStringLiteral("corner_relief")}) {
       const QJsonObject relief = rules.value(prefix).toObject();
       state.setChoice(prefix, str(relief, "type"));
@@ -581,8 +767,13 @@ CommandDef sheetRulesCommand(const CommandContext&) {
     }
   };
   def.describe = [](const CommandState& state, const CommandContext&) {
-    return QStringLiteral("Sheet rules: thickness %1, bend radius %2, K %3")
-        .arg(text(state, "thickness"), text(state, "bend_radius"), text(state, "k_factor"));
+    const QString allowance = state.choice(QStringLiteral("allowance_type"));
+    if (allowance.isEmpty() || allowance == QStringLiteral("k_factor")) {
+      return QStringLiteral("Sheet rules: thickness %1, bend radius %2, K %3")
+          .arg(text(state, "thickness"), text(state, "bend_radius"), text(state, "k_factor"));
+    }
+    return QStringLiteral("Sheet rules: thickness %1, bend radius %2, %3, %4")
+        .arg(text(state, "thickness"), text(state, "bend_radius"), state.choice(QStringLiteral("process")), allowance);
   };
   return def;
 }
@@ -596,8 +787,6 @@ CommandDef sheetFaceCommand(const CommandContext& context) {
   def.name = QObject::tr("Face");
   def.icon = QStringLiteral("sheet-face");
   def.tooltip = QObject::tr("A sheet-metal body of the thickness of its rules from closed sketch profiles");
-  def.group = kGroup;
-  def.pinned = true;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("base"), QStringLiteral("plate")};
   def.featureType = QStringLiteral("sheet_face");
   const auto own = [](const CommandState& s) { return s.choice(QStringLiteral("rules")) == QStringLiteral("new"); };
@@ -664,8 +853,6 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
   def.name = QObject::tr("Flange");
   def.icon = QStringLiteral("sheet-flange");
   def.tooltip = QObject::tr("A wall bent up along a straight edge of the sheet");
-  def.group = kGroup;
-  def.pinned = true;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("wall"), QStringLiteral("bend"), QStringLiteral("hem")};
   def.featureType = QStringLiteral("sheet_flange");
   // A profile sketch draws the wall (mitcad#1648): its length, width, hem
@@ -1025,6 +1212,154 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
 }
 
 // ---------------------------------------------------------------------------
+// Convert to Sheet Metal (mitcad#1949; the model's `sheet_convert`,
+// mitcad#461): a solid's faces become a sheet, bent at the picked edges and
+// ripped at its other corners.
+
+namespace {
+
+// How the faces meet at a rip (the model's `miter`): on the plane between
+// them, or the earlier or the later face (in the order the bends reach
+// them) running past the other.
+const Choices kConvertMiters = {{QStringLiteral("bisect"), QStringLiteral("Bisect")},
+                                {QStringLiteral("earlier_runs_past"), QStringLiteral("Earlier Face Runs Past")},
+                                {QStringLiteral("later_runs_past"), QStringLiteral("Later Face Runs Past")}};
+
+// The picked edges' names, all on `body`; false (with `built` failed on
+// `input`) for an edge of another body.
+bool edgeNames(const Selection& picked, const QString& body, const QString& input, QJsonArray& names,
+               Built& built) {
+  for (const SelectionItem& item : picked) {
+    if (item.owner != body) {
+      built = Built::failure(QObject::tr("Select edges of the body the face is on."), input);
+      return false;
+    }
+    names.append(item.name);
+  }
+  return true;
+}
+
+Selection edgeItems(const QString& body, const QJsonArray& names) {
+  Selection items;
+  for (const QJsonValue& name : names) {
+    items.append(SelectionItem{SelectKind::Edge, body, name.toString(), QStringLiteral("line")});
+  }
+  return items;
+}
+
+} // namespace
+
+CommandDef sheetConvertCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("sheet.convert");
+  def.name = QObject::tr("Convert to Sheet Metal");
+  def.icon = QStringLiteral("sheet-convert");
+  def.tooltip = QObject::tr("Makes a solid a sheet, bent at the picked edges, ripped elsewhere");
+
+  def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("convert"), QStringLiteral("rip"),
+                  QStringLiteral("tray")};
+  def.featureType = QStringLiteral("sheet_convert");
+  const auto own = [](const CommandState& s) { return s.choice(QStringLiteral("rules")) == QStringLiteral("new"); };
+  const auto ownGap = [](const CommandState& s) { return s.checked(QStringLiteral("custom_gap")); };
+  def.inputs = {
+      selectionInput(QStringLiteral("face"), QObject::tr("Face"), SelectKind::Face, 1, 1)
+          .withoutMeshes()
+          .withTooltip(QObject::tr("The flat face that stays where it is; the material lies behind it")),
+      selectionInput(QStringLiteral("bends"), QObject::tr("Bend Edges"), SelectKind::Edge, 0, 0)
+          .withoutMeshes()
+          .withTooltip(QObject::tr("Straight edges between flat faces where the sheet bends; none: a plate")),
+      selectionInput(QStringLiteral("rips"), QObject::tr("Rip Edges"), SelectKind::Edge, 0, 0)
+          .withoutMeshes()
+          .withTooltip(QObject::tr("Edges between converted faces to cut open; every other such edge is a rip "
+                                   "anyway")),
+      choiceInput(QStringLiteral("miter"), QObject::tr("Miter"), kConvertMiters, QStringLiteral("bisect"))
+          .withTooltip(QObject::tr("Where two faces meet at a rip: cut on the plane between them, or one runs past")),
+      checkInput(QStringLiteral("custom_gap"), QObject::tr("Own Corner Gap"), false)
+          .withTooltip(QObject::tr("Off: the gap between the faces at a rip is the sheet's thickness")),
+      valueInput(QStringLiteral("corner_gap"), QObject::tr("Corner Gap"), ValueKind::Length, QStringLiteral("1 mm"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("The gap between two faces at a rip"))
+          .withVisible(ownGap),
+      choiceInput(QStringLiteral("rules"), QObject::tr("Rules"), {{QStringLiteral("new"), QStringLiteral("New Rules")}},
+                  QStringLiteral("new"))
+          .withTooltip(QObject::tr("New Rules: rules of its own, made with the sheet; or rules the design has"))
+          .withChoices([&context](const CommandState& state) {
+            Choices choices = rulesFeatures(context);
+            if (!state.checked(QStringLiteral("editing"))) {
+              choices.prepend({QStringLiteral("new"), QObject::tr("New Rules")});
+            }
+            return choices;
+          }),
+      editingInput(),
+  };
+  def.inputs += ruleInputs(own, false);
+  def.inputs += overrideInputs(false);
+  def.enabled = [&context] { return hasBodies(context); };
+  // The newest rules when the design has some.
+  def.init = [](CommandState& state, const CommandContext& model) {
+    const Choices rules = rulesFeatures(model);
+    if (!rules.isEmpty()) {
+      state.setChoice(QStringLiteral("rules"), rules.last().first);
+    }
+  };
+  def.build = [](const CommandState& state, const CommandContext&) {
+    Built result;
+    const Selection& faces = state.items(QStringLiteral("face"));
+    if (faces.isEmpty()) {
+      return Built::failure(QObject::tr("Select the flat face that stays where it is."), QStringLiteral("face"));
+    }
+    const SelectionItem fixed = faces.first();
+    QJsonArray bends;
+    QJsonArray rips;
+    if (!edgeNames(state.items(QStringLiteral("bends")), fixed.owner, QStringLiteral("bends"), bends, result) ||
+        !edgeNames(state.items(QStringLiteral("rips")), fixed.owner, QStringLiteral("rips"), rips, result)) {
+      return result;
+    }
+    const QString rules = state.choice(QStringLiteral("rules"));
+    QJsonObject rulesDef = rulesOf(state, false);
+    rulesDef.remove(QStringLiteral("type"));
+    result.def = {{QStringLiteral("type"), QStringLiteral("sheet_convert")},
+                  {QStringLiteral("rules"), rules == QStringLiteral("new") ? QJsonValue(rulesDef) : QJsonValue(rules)},
+                  {QStringLiteral("body"), fixed.owner},
+                  {QStringLiteral("face"), fixed.name}};
+    if (!bends.isEmpty()) {
+      result.def.insert(QStringLiteral("bends"), bends);
+    }
+    if (!rips.isEmpty()) {
+      result.def.insert(QStringLiteral("rips"), rips);
+    }
+    if (state.choice(QStringLiteral("miter")) != QStringLiteral("bisect")) {
+      result.def.insert(QStringLiteral("miter"), state.choice(QStringLiteral("miter")));
+    }
+    if (state.checked(QStringLiteral("custom_gap"))) {
+      result.def.insert(QStringLiteral("corner_gap"), state.expression(QStringLiteral("corner_gap")));
+    }
+    addOverrides(result.def, state);
+    return result;
+  };
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
+    const QString body = str(feature, "body");
+    state.setItems(QStringLiteral("face"), {face(body, str(feature, "face"))});
+    state.setItems(QStringLiteral("bends"), edgeItems(body, feature.value(QStringLiteral("bends")).toArray()));
+    state.setItems(QStringLiteral("rips"), edgeItems(body, feature.value(QStringLiteral("rips")).toArray()));
+    state.setChoice(QStringLiteral("rules"), str(feature, "rules"));
+    state.setChecked(QStringLiteral("editing"), true);
+    state.setChoice(QStringLiteral("miter"), feature.value(QStringLiteral("miter")).toString(QStringLiteral("bisect")));
+    if (feature.contains(QStringLiteral("corner_gap"))) {
+      state.setChecked(QStringLiteral("custom_gap"), true);
+      loadValue(state, QStringLiteral("corner_gap"), feature.value(QStringLiteral("corner_gap")), feature, model);
+    }
+    loadOverrides(feature, state, model);
+  };
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    return QStringLiteral("Converted to sheet metal: %1 bend edge(s), %2 rip edge(s) picked")
+        .arg(state.items(QStringLiteral("bends")).size())
+        .arg(state.items(QStringLiteral("rips")).size());
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
 // Bend
 
 CommandDef sheetBendCommand(const CommandContext& context) {
@@ -1033,8 +1368,6 @@ CommandDef sheetBendCommand(const CommandContext& context) {
   def.name = QObject::tr("Bend");
   def.icon = QStringLiteral("sheet-bend");
   def.tooltip = QObject::tr("Bends between two flat faces: at their common seam, or joining two placed sheets");
-  def.group = kGroup;
-  def.pinned = true; // mitcad#1778
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("join")};
   def.featureType = QStringLiteral("sheet_bend");
   const auto sheetPart = [](const SelectionItem& item) { return isWall(item) || isPanelFace(item); };
@@ -1163,7 +1496,6 @@ CommandDef sheetFoldCommand(const CommandContext& context) {
   def.name = QObject::tr("Fold");
   def.icon = QStringLiteral("sheet-fold");
   def.tooltip = QObject::tr("Bends a flat face along a sketch line on it");
-  def.group = kGroup;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("bend line")};
   def.featureType = QStringLiteral("sheet_fold");
   def.inputs = {
@@ -1211,6 +1543,11 @@ CommandDef sheetFoldCommand(const CommandContext& context) {
     loadAngle(feature, state, model);
     loadOverrides(feature, state, model);
   };
+  // A kerf bend is Kerf Bend's to edit (mitcad#1939, SheetProcessCommands.cpp).
+  def.canEdit = [](const QJsonObject& feature) {
+    return feature.value(QStringLiteral("allowance")).toObject().value(QStringLiteral("type")).toString() !=
+           QStringLiteral("kerf_bend");
+  };
   def.describe = [](const CommandState& state, const CommandContext&) {
     return QStringLiteral("Added fold, angle %1, %2 side fixed")
         .arg(text(state, "angle"), state.choice(QStringLiteral("stationary_side")));
@@ -1233,7 +1570,6 @@ CommandDef cornerCommand(const CommandContext& context, bool round) {
   def.icon = round ? QStringLiteral("sheet-corner-round") : QStringLiteral("sheet-corner-chamfer");
   def.tooltip = round ? QObject::tr("Rounds corners of the sheet through its thickness")
                       : QObject::tr("Bevels corners of the sheet through its thickness");
-  def.group = kGroup;
   def.keywords = {QStringLiteral("sheet metal"), round ? QStringLiteral("fillet") : QStringLiteral("chamfer")};
   def.featureType = round ? QStringLiteral("sheet_corner_round") : QStringLiteral("sheet_corner_chamfer");
   def.inputs = {
@@ -1335,7 +1671,6 @@ CommandDef sheetCornerReliefCommand(const CommandContext& context) {
   def.name = QObject::tr("Corner Relief");
   def.icon = QStringLiteral("sheet-corner-relief");
   def.tooltip = QObject::tr("Cuts a relief where two bends that leave one flat face meet");
-  def.group = kGroup;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("junction"), QStringLiteral("notch")};
   def.featureType = QStringLiteral("sheet_corner_relief");
   const auto own = [](const CommandState& s) { return s.checked(QStringLiteral("custom_relief")); };
@@ -1357,7 +1692,11 @@ CommandDef sheetCornerReliefCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("A round relief's diameter, a rectangular one's side"))
           .withVisible(sized),
   };
-  def.enabled = [&context] { return hasSheets(context); };
+  // Reliefs are metal's (mitcad#1939): dimmed for board and laser sheet.
+  def.enabled = [&context] {
+    return hasSheets(context) && processAllows(context, QStringLiteral("sheet.corner_relief"));
+  };
+  def.disabledReason = [&context] { return processReason(context, QStringLiteral("sheet.corner_relief")); };
   def.build = [&context](const CommandState& state, const CommandContext&) {
     Built result;
     const Selection& faces = state.items(QStringLiteral("bends"));
@@ -1433,8 +1772,6 @@ CommandDef sheetUnfoldCommand(const CommandContext& context) {
   def.name = QObject::tr("Unfold");
   def.icon = QStringLiteral("sheet-unfold");
   def.tooltip = QObject::tr("Opens chosen bends flat while a face stays where it is");
-  def.group = kGroup;
-  def.pinned = true; // mitcad#1778
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("flatten"), QStringLiteral("develop")};
   def.featureType = QStringLiteral("sheet_unfold");
   def.inputs = {
@@ -1490,7 +1827,6 @@ CommandDef sheetRefoldCommand(const CommandContext& context) {
   def.name = QObject::tr("Refold");
   def.icon = QStringLiteral("sheet-refold");
   def.tooltip = QObject::tr("Folds bends an Unfold opened back, with what was changed while they were open");
-  def.group = kGroup;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("fold back")};
   def.featureType = QStringLiteral("sheet_refold");
   def.inputs = {
@@ -1569,7 +1905,6 @@ CommandDef sheetCutCommand(const CommandContext& context) {
   def.name = QObject::tr("Sheet Cut");
   def.icon = QStringLiteral("sheet-cut");
   def.tooltip = QObject::tr("Cuts sketch profiles through a sheet's thickness, also across bends");
-  def.group = kGroup;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("hole"), QStringLiteral("cutout")};
   def.featureType = QStringLiteral("sheet_cut");
   def.inputs = {
@@ -1633,8 +1968,6 @@ CommandDef sheetFlatPatternCommand(const CommandContext& context) {
   def.name = QObject::tr("Flat Pattern");
   def.icon = QStringLiteral("flat-pattern");
   def.tooltip = QObject::tr("The whole sheet developed flat, for its drawing: a browser item under the body");
-  def.group = kGroup;
-  def.pinned = true;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("unfold"), QStringLiteral("blank"),
                   QStringLiteral("dxf")};
   def.modelCommand = true;
@@ -1709,27 +2042,24 @@ namespace mitcad {
 void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext& context,
                                 const CommandDef& editRules, const CommandDef& showFlat) {
   using namespace cmd;
-  // Registration order is the menu's order: each section's commands
-  // together, the sections in their order (CommandDef::section,
-  // mitcad#1778).
-  const auto add = [&registry](CommandDef def, const char* section) {
-    def.section = QString::fromLatin1(section);
-    registry.add(def);
-  };
-  add(sheetRulesCommand(context), "rules");
-  add(editRules, "rules");
-  add(sheetFaceCommand(context), "create");
-  add(sheetFlangeCommand(context), "create");
-  add(sheetBendCommand(context), "bends");
-  add(sheetFoldCommand(context), "bends");
-  add(sheetCornerReliefCommand(context), "bends");
-  add(sheetCornerRoundCommand(context), "edges");
-  add(sheetCornerChamferCommand(context), "edges");
-  add(sheetCutCommand(context), "edges");
-  add(sheetUnfoldCommand(context), "flat");
-  add(sheetRefoldCommand(context), "flat");
-  add(sheetFlatPatternCommand(context), "flat");
-  add(showFlat, "flat");
+  // Their places on the toolbar are the layout's (mitcad#1951).
+  registry.add(sheetRulesCommand(context));
+  registry.add(editRules);
+  registry.add(sheetFaceCommand(context));
+  registry.add(sheetFlangeCommand(context));
+  registry.add(sheetConvertCommand(context));
+  registry.add(sheetBendCommand(context));
+  registry.add(sheetFoldCommand(context));
+  registry.add(sheetCornerReliefCommand(context));
+  registry.add(sheetCornerRoundCommand(context));
+  registry.add(sheetCornerChamferCommand(context));
+  registry.add(sheetCutCommand(context));
+  registry.add(sheetUnfoldCommand(context));
+  registry.add(sheetRefoldCommand(context));
+  registry.add(sheetFlatPatternCommand(context));
+  registry.add(showFlat);
+  // Sheet parts by material and process (mitcad#1939).
+  registerSheetProcessCommands(registry, context);
 }
 
 } // namespace mitcad

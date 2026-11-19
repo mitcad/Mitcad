@@ -4,30 +4,41 @@
 # check-all sources: app/framework/Restart.hpp app/framework/FloatingLayout.cpp app/framework/FloatingLayout.hpp
 # check-all sources: app/framework/GlassCard.cpp app/framework/TitleBar.cpp app/framework/Ribbon.cpp
 # check-all sources: app/main.cpp app/view/ViewController.cpp app/MainWindow.cpp app/OcctViewer.cpp tools/cli
-# check-all sources: app/browser/BrowserBackground.cpp
+# check-all sources: app/browser/BrowserBackground.cpp app/DocumentFrame.cpp app/framework/RibbonLabels.cpp
+# check-all sources: app/MainWindowOrigin.cpp app/MainWindowSketch3d.cpp
 # The window's layout chosen in Preferences (mitcad#419) and the defaults
 # (mitcad#429) through the real UI:
-#   1. Without a choice (a plate open) Floating with the Browser's Rows: only
-#      the menu bar is above the view (mitcad#425); the title row (no card:
-#      its controls and the title's box, each whole within it) and the group
-#      cards float over its top, every other card starts below them; with
-#      the plate zoomed in to fill the view, a click between two group cards
-#      selects its face and a click on the title's box selects nothing.
+#   1. Without a choice (a plate open) Floating with the Browser's Rows:
+#      nothing above the view, no menu bar under the system's title bar
+#      (mitcad#1990: its menus are the title row's); the title row (one flat
+#      bar across the view's top, mitcad#1990: its controls, each whole
+#      within it: Home, File and Save, Undo and Redo, the document tabs,
+#      Preferences and Help; no title box, and no quick-access group: it
+#      has no commands by default, mitcad#1990) and the
+#      toolbar panel (the workspace selector, the workspace's tabs, the
+#      search field and at least two groups within it, mitcad#1990) are over
+#      its top, every other card starts below them; no place between two
+#      cards is logged, and with the plate zoomed in to fill the view, a
+#      click on the bar's free stretch stays the bar's (nothing selected).
 #      Preferences > Display > Layout Docked asks Restart MitCad, Later
 #      keeps it in the settings for the next start.
 #   2. Floating again is the window's layout: saved, no question.
-#   3. Docked, Restart Now with unsaved changes: the window asks about them
-#      as quitting does; Cancel keeps Mitcad open and nothing restarts.
+#   3. A sketch on XY clicked in the view as a user would: Create Sketch's
+#      command card and the Browser's card leave XY's place clear
+#      (mitcad#1990: the view moves the origin's planes out from under
+#      them); the next sketch on XY picked from the Browser. Docked,
+#      Restart Now with unsaved changes: the window asks about them as
+#      quitting does; Cancel keeps Mitcad open and nothing restarts.
 #   4. Saved, Docked, Restart Now: Mitcad quits and would start again
 #      (MITCAD_TEST_NO_RESTART=1 logs the command) with the run's settings
 #      options and the design, without --chrome.
 #   5. The next start is Docked by the preference: no cards; Preferences
 #      shows the Browser background there too (mitcad#429); Floating and
-#      the Card background chosen together, Later.
-#   6. The next start is Floating by the preference, with the Card
+#      the Rows background chosen together, Later.
+#   6. The next start is Floating by the preference, with the Rows
 #      background: the cards at the default size, in a narrow and a wide
-#      window; a click on the title row beside its controls reaches the
-#      view.
+#      window; a click on the title bar beside its controls stays the
+#      bar's.
 #   7. --chrome=docked overrides the preference.
 # The Windows counterpart is tools/ui-windows-chrome-layout-test.ps1.
 #
@@ -40,7 +51,7 @@ WORK=$(mktemp -d /tmp/mitcad-ui-chrome-layout.XXXXXX)
 trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 FILE=$WORK/part.mitcad
 # A 200 x 200 x 10 mm plate centred on the origin: Body1 (F2.b0), for the
-# click between the group cards.
+# clicks on the title row beside its controls.
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 PLATE=$WORK/plate.mitcad
 cat > "$WORK/plate.json" << 'JSON'
@@ -95,12 +106,17 @@ expect_exit() {
 }
 
 # cards_below_bar description min max: the last "Floating cards:" line, of
-# a window min to max wide (waited for): only the menu bar is above the view
-# (the view's top is the bar's bottom, mitcad#425); the title row with its
-# controls and the title's box, each whole within it (mitcad#429), and at
-# least two group cards float over the view below the bar; the Browser's
-# card and every other card start below the floating rows' bottom. CARDS
-# holds the line's entries by name: "x y width height".
+# a window min to max wide (waited for): nothing above the view, the menu
+# bar no higher than nothing (its bottom the view's top, 0; mitcad#1990:
+# no menu bar row under the system's title bar); the title row, a bar from
+# the view's left edge to its right at the window's top (mitcad#1990), with its controls, each whole within it: Home, File and
+# Save, Undo and Redo, the document tabs, Preferences and Help, without a
+# title box and without the quick-access group (no commands by default,
+# mitcad#1990); below it the toolbar panel (mitcad#1990) with the
+# workspace selector at its left, the workspace's tabs, the search field
+# and at least two groups within it, all below the bar; the Browser's card
+# and every other card start below the floating rows' bottom. CARDS holds
+# the line's entries by name: "x y width height".
 declare -A CARDS
 cards_below_bar() {
   local line="" width="" bar view rows rest name xy size y count=0 groups=0 part
@@ -114,8 +130,8 @@ cards_below_bar() {
   [ -n "$width" ] && [ "$width" -ge "$2" ] && [ "$width" -le "$3" ] ||
     ui_fail "$1: no Floating cards line of a window $2 to $3 wide (last: '$line')"
   read -r bar view rows <<< "$(sed -n 's/^Floating cards: window [0-9]*x[0-9]*, top bar bottom \([0-9]*\), view top \([0-9]*\), floating rows bottom \([0-9]*\);.*/\1 \2 \3/p' <<< "$line")"
-  [ -n "$bar" ] && [ "$bar" -gt 0 ] || ui_fail "$1: no top bar in '$line'"
-  [ "$view" = "$bar" ] || ui_fail "$1: the view's top $view is not the menu bar's bottom $bar ($line)"
+  [ -n "$bar" ] && [ "$bar" -eq 0 ] || ui_fail "$1: a menu bar row above the view in '$line'"
+  [ "$view" = "$bar" ] || ui_fail "$1: the view's top $view is not the window's top $bar ($line)"
   [ "$rows" -gt "$bar" ] || ui_fail "$1: no floating rows below the bar ($line)"
   rest=${line#*; }
   CARDS=()
@@ -125,8 +141,8 @@ cards_below_bar() {
     CARDS[$name]="${xy%,*} $y ${size%x*} ${size#*x}"
     [ "$y" -ge "$bar" ] || ui_fail "$1: $name's top $y is above the top bar's bottom $bar ($line)"
     case $name in
-      ribbon | noticeCard | title*) ;;
       ribbonGroup_*) groups=$((groups + 1)) ;;
+      ribbon* | noticeCard | title*) ;;
       *) [ "$y" -ge "$rows" ] || ui_fail "$1: $name's top $y is above the floating rows' bottom $rows ($line)" ;;
     esac
     count=$((count + 1))
@@ -134,10 +150,35 @@ cards_below_bar() {
   [ -n "${CARDS[titleRow]:-}" ] || ui_fail "$1: no title row in '$line'"
   [ -z "${CARDS[titleCard]:-}" ] || ui_fail "$1: a title card in '$line'"
   [ -z "${CARDS[titleFinishSketch]:-}" ] || ui_fail "$1: duplicate Finish Sketch in the title row: '$line'"
-  for part in titleHistory titleTabs titleSearch; do
+  [ -z "${CARDS[titleSearch]:-}" ] || ui_fail "$1: the search field in the title row, not the panel: '$line'"
+  for part in titleFile titleHistory titleTabs titleSettings ribbon ribbonWorkspace ribbonTabs ribbonSearch; do
     [ -n "${CARDS[$part]:-}" ] || ui_fail "$1: no $part in '$line'"
   done
-  # Every control of the row and the title's box whole within the row.
+  # The title row is a bar across the view at the window's top.
+  read -r px py pw ph <<< "${CARDS[titleRow]}"
+  [ "$px" -le 1 ] && [ "$py" = "$bar" ] && [ "$pw" -ge $((width - 2)) ] ||
+    ui_fail "$1: the title row ($px,$py ${pw}x$ph) is not a bar across the window at $bar: '$line'"
+  # The workspace selector at the panel's left, the tabs right of it.
+  read -r rx _ <<< "${CARDS[ribbon]}"
+  read -r px _ pw _ <<< "${CARDS[ribbonWorkspace]}"
+  read -r tx _ <<< "${CARDS[ribbonTabs]}"
+  [ "$px" = "$rx" ] && [ "$tx" -gt $((px + pw)) ] ||
+    ui_fail "$1: the workspace selector ($px, $pw wide) is not at the panel's left ($rx) before the tabs ($tx): '$line'"
+  # The panel's parts within its card, which starts below the title row.
+  read -r rx ry rw rh <<< "${CARDS[ribbon]}"
+  read -r px py pw ph <<< "${CARDS[titleRow]}"
+  [ "$ry" -ge $((py + ph)) ] || ui_fail "$1: the toolbar panel ($ry) is not below the title row: '$line'"
+  for part in "${!CARDS[@]}"; do
+    case $part in
+      ribbonWorkspace | ribbonTabs | ribbonSearch | ribbonGroup_*)
+        read -r px py pw ph <<< "${CARDS[$part]}"
+        [ "$px" -ge "$rx" ] && [ "$py" -ge "$ry" ] && [ $((px + pw)) -le $((rx + rw)) ] &&
+          [ $((py + ph)) -le $((ry + rh)) ] ||
+          ui_fail "$1: $part ($px,$py ${pw}x$ph) is not within the toolbar panel ($rx,$ry ${rw}x$rh): '$line'"
+        ;;
+    esac
+  done
+  # Every control of the row whole within the row.
   read -r rx ry rw rh <<< "${CARDS[titleRow]}"
   for part in "${!CARDS[@]}"; do
     case $part in
@@ -150,16 +191,14 @@ cards_below_bar() {
         ;;
     esac
   done
-  [ "$groups" -ge 2 ] || ui_fail "$1: $groups group cards in '$line'"
+  [ "$groups" -ge 2 ] || ui_fail "$1: $groups groups in the toolbar panel in '$line'"
+  ui_quick_access_place "$1" "$line" none
   case $rest in
     *browserDock*) ;;
     *) ui_fail "$1: no Browser card in '$line'" ;;
   esac
-  echo "ok   $1: the view below the menu bar ($bar), $count cards and parts, $groups group cards, the title row's parts within it, the others below the rows' bottom $rows (window ${width} wide)"
+  echo "ok   $1: the view below the menu bar ($bar), $count cards and parts, $groups groups in the toolbar panel, the title row's and the panel's parts within them, the others below the rows' bottom $rows (window ${width} wide)"
 }
-
-# count_new "text": how many lines logged since the mark contain the text.
-count_new() { tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -cF -- "$1"; }
 
 # zoom_plate: the plate seen from the top, zoomed in until it fills the view
 # (also behind the floating rows).
@@ -171,31 +210,80 @@ zoom_plate() {
   ui_wait_idle
 }
 
-# click_between_cards: with the plate filling the view, a click between two
-# group cards selects its face, a click on the middle of the title's box
-# (CARDS, from cards_below_bar) selects nothing.
-click_between_cards() {
-  local bx by bw bh cx cy
-  zoom_plate
-  ui_expect_log "Floating view between the cards at" "a place between two group cards is logged"
+# sketch_on_xy_in_view: Create Sketch on XY clicked in the view, as a user
+# would. In the Floating layout the view of a new design is framed beside
+# the Browser's card (mitcad#1990), and Create Sketch's own card (its 2D
+# and 3D row, mitcad#1524) came over the only part of XY's square left to
+# click; the view now moves the origin's planes out from under the cards as
+# the pick starts ("View for the origin planes: moved ..."). XY's logged
+# place is inside neither the command card nor the Browser's card of the
+# last "Floating cards:" line. As Sketch-OnXyInView in the Windows twin.
+sketch_on_xy_in_view() {
+  local before line at ax ay name rect cx cy cw ch moved
+  before=$(grep -c "Sketch started on xy" "$UI_LOG")
   ui_mark
-  ui_step "click between two group cards"  ui_click_logged "Floating view between the cards"
-  ui_expect_new "Selected: 1 face [face F2:" "the click between the cards reached the view: the plate's face"
-  [ -n "${CARDS[titleBox]:-}" ] || ui_fail "no title box in the Floating cards line"
-  read -r bx by bw bh <<< "${CARDS[titleBox]}"
-  cx=$((bx + bw / 2))
-  cy=$((by + bh / 2))
-  ui_mark
-  ui_step "click the title box's middle"   xdotool mousemove $((X + cx * UI_SCALE)) $((Y + cy * UI_SCALE)) click 1
+  ui_command "Create Sketch"
+  ui_expect_log "Create Sketch: select a plane" "Create Sketch asks for a plane" > /dev/null
   ui_sync
-  sleep 0.5
-  [ "$(count_new "Selected: ")" = 0 ] || ui_fail "a click on the title box reached the view"
-  echo "ok   the title box takes its click"
+  # After a move, XY's place where the view came to rest.
+  moved=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -n "^View for the origin planes: moved" | tail -1 | cut -d: -f1 || true)
+  if [ -n "$moved" ]; then
+    for _ in $(seq 1 25); do
+      [ "$(tail -n +$((UI_MARK + moved + 1)) "$UI_LOG" | grep -c "^Datum xy at ")" -gt 0 ] && break
+      sleep 0.2
+    done
+    echo "ok   $(tail -n +$((UI_MARK + moved)) "$UI_LOG" | head -1)"
+  fi
+  line=$(grep '^Floating cards: ' "$UI_LOG" | tail -1)
+  at=$(sed -n 's/^Datum xy at \([0-9-]*,[0-9-]*\)$/\1/p' "$UI_LOG" | tail -1)
+  [ -n "$at" ] || ui_fail "no place of XY logged for Create Sketch"
+  ax=${at%,*}
+  ay=${at#*,}
+  for name in commandDock browserDock; do
+    rect=$(tr ';' '\n' <<< "${line#*; }" | sed 's/^ *//' |
+      sed -n "s/^$name \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p")
+    [ -n "$rect" ] || ui_fail "no $name card while Create Sketch waits for a plane: '$line'"
+    read -r cx cy cw ch <<< "$rect"
+    if [ "$ax" -ge "$cx" ] && [ "$ax" -lt $((cx + cw)) ] && [ "$ay" -ge "$cy" ] && [ "$ay" -lt $((cy + ch)) ]; then
+      ui_fail "XY's place $at is inside the $name card ($cx,$cy ${cw}x$ch): no place of XY to click in the view"
+    fi
+  done
+  echo "ok   XY's place $at clear of the command card and the Browser's card"
+  ui_click_logged "Datum xy"
+  for _ in $(seq 1 25); do
+    [ "$(grep -c "Sketch started on xy" "$UI_LOG")" -gt "$before" ] && return 0
+    sleep 0.2
+  done
+  ui_fail "no sketch started on xy from the click in the view"
+}
+
+# sketch_on_xy: Create Sketch on XY picked from the Browser's Origin folder,
+# the other way to the same plane.
+sketch_on_xy() {
+  local before
+  before=$(grep -c "Sketch started on xy" "$UI_LOG")
+  ui_command "Create Sketch"
+  ui_expect_log "Create Sketch: select a plane" "Create Sketch asks for a plane" > /dev/null
+  ui_sync
+  ui_pick_origin_row XY
+  for _ in $(seq 1 25); do
+    [ "$(grep -c "Sketch started on xy" "$UI_LOG")" -gt "$before" ] && return 0
+    sleep 0.2
+  done
+  ui_fail "no sketch started on xy"
+}
+
+# no_gaps: the floating rows take the mouse on their whole width (the title
+# row a bar, the toolbar panel's parts one card, mitcad#1990): no place
+# between two cards is logged.
+no_gaps() {
+  grep -q "Floating view between the cards at" "$UI_LOG" && ui_fail "a place between two cards of the floating rows"
+  echo "ok   no gap between the floating rows' cards"
 }
 
 # click_title_row: with the plate filling the view and nothing selected, a
-# click on the title row between the tabs and the next part (no card there,
-# mitcad#429) selects the plate's face.
+# click on the title bar between the document tabs and the next part stays
+# the bar's (mitcad#1990: one flat bar): the plate's face is not selected.
 click_title_row() {
   local ry rh tx tw px next="" part cx cy
   zoom_plate
@@ -210,24 +298,29 @@ click_title_row() {
         ;;
     esac
   done
-  [ -n "$next" ] || ui_fail "nothing right of the title row's tabs"
+  [ -n "$next" ] || ui_fail "nothing right of the title row's document tabs"
   cx=$(((tx + tw + next) / 2))
   cy=$((ry + rh / 2))
   ui_mark
-  ui_step "click the title row beside its controls ($cx,$cy)" \
+  ui_step "click the title bar beside its controls ($cx,$cy)" \
     xdotool mousemove $((X + cx * UI_SCALE)) $((Y + cy * UI_SCALE)) click 1
-  ui_expect_new "Selected: 1 face [face F2:" "the click on the title row reached the view: the plate's face"
+  ui_sync
+  sleep 0.5
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Selected: 1 face [face F2:" &&
+    ui_fail "the click on the title bar reached the view: the plate's face selected"
+  echo "ok   the click on the title bar stayed the bar's"
 }
 
 ui_start_display
 
-echo "--- 1. Without a choice Floating with Rows; the cards; Docked chosen, Later"
+echo "--- 1. Without a choice Floating with the Card; the cards; Docked chosen, Later"
 ui_start_app --no-native-dialogs --open "$PLATE"
 ui_expect_log "Chrome: floating (the platform's default)" "Floating without a choice"
-ui_expect_log "Browser background: rows" "the Browser's Rows without a choice"
+ui_expect_log "Browser background: card" "the Browser's card without a choice (mitcad#1990)"
 ui_expect_log "Floating cards: window " "the cards placed"
 cards_below_bar "at the default size" 1280 1280
-click_between_cards
+no_gaps
+click_title_row
 ui_stop_app
 # Without the plate for the rest (a sketch on XY).
 ui_start_app --no-native-dialogs
@@ -249,7 +342,7 @@ grep -q '^layout=floating$' "$CONF" || ui_fail "Floating is not saved"
 echo "ok   saved"
 
 echo "--- 3. Docked, Restart Now with unsaved changes: Cancel keeps Mitcad open"
-ui_step "create a sketch"                 ui_create_sketch xy
+ui_step "create a sketch, XY in the view" sketch_on_xy_in_view
 ui_step "rectangle tool (R)"              ui_key r
 ui_step "first corner at the origin"      ui_sketch_click 0 0
 ui_step "opposite corner"                 ui_sketch_click 40 20
@@ -258,7 +351,7 @@ cards_below_bar "while sketching" 1 100000
 ui_mark
 ui_step "finish it from the ribbon"      ui_click_logged "Ribbon button sketch.finish"
 ui_expect_log "Sketch finished" "a change to save"
-ui_step "create another sketch"          ui_create_sketch xy
+ui_step "another sketch, XY in Browser"  sketch_on_xy
 ui_expect_new "Palette Finish Sketch at" "palette Finish Sketch is laid out"
 cards_below_bar "in the next sketch" 1 100000
 ui_mark
@@ -303,7 +396,7 @@ done
 echo "ok   the run's settings options and the design, no --chrome: $COMMAND"
 expect_exit "Mitcad quit to restart"
 
-echo "--- 5. The next start: Docked by the preference; Floating and the Card background chosen there"
+echo "--- 5. The next start: Docked by the preference; Floating and the Rows background chosen there"
 ui_start_app --no-native-dialogs --open "$FILE"
 ui_expect_log "Chrome: docked (the preference)" "Docked by the preference"
 grep -q '^Floating cards: ' "$UI_LOG" && ui_fail "Floating cards in the Docked layout"
@@ -316,22 +409,22 @@ ui_step "create another Docked sketch"    ui_create_sketch xy
 ui_mark
 ui_step "finish Docked sketch from ribbon" ui_click_logged "Ribbon button sketch.finish"
 ui_expect_new "Sketch finished" "Docked ribbon still finishes a sketch"
-choose_layout End Home
-ui_expect_new "Preferences: browser background card" "the Card background chosen while Docked"
+choose_layout End End
+ui_expect_new "Preferences: browser background rows" "the Rows background chosen while Docked"
 ui_expect_new "Layout preference: floating (restart asked)" "Floating chosen, a restart asked"
 ui_focus_dialog '^Restart MitCad$'
 ui_step "later (Escape)"                  ui_key Escape
 ui_focus_main
 ui_expect_new "Layout restart: later (floating at the next start)" "kept for the next start"
 grep -q '^layout=floating$' "$CONF" || ui_fail "the layout is not saved"
-grep -q '^browserBackground=card$' "$CONF" || ui_fail "the Browser background is not saved"
+grep -q '^browserBackground=rows$' "$CONF" || ui_fail "the Browser background is not saved"
 echo "ok   both saved for the next start"
 ui_stop_app
 
-echo "--- 6. The next start: Floating with the Card by the preferences; the cards"
+echo "--- 6. The next start: Floating with Rows by the preferences; the cards"
 ui_start_app --no-native-dialogs --open "$PLATE"
 ui_expect_log "Chrome: floating (the preference)" "Floating by the preference"
-ui_expect_log "Browser background: card" "the Browser's card by the preference"
+ui_expect_log "Browser background: rows" "the Browser's Rows by the preference"
 ui_expect_log "Floating cards: window " "the cards placed"
 cards_below_bar "at the default size" 1280 1280
 click_title_row

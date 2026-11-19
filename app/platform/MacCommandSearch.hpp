@@ -32,7 +32,8 @@ namespace mitcad::mac {
 namespace command_search {
 
 // Leave the search field and selection to the native Qt style. Only row
-// spacing and the quieter, trailing shortcut column differ from a plain tree.
+// spacing and the quieter place (mitcad#1983) and trailing shortcut columns
+// differ from a plain tree.
 class RowDelegate final : public QStyledItemDelegate {
 public:
   using QStyledItemDelegate::QStyledItemDelegate;
@@ -40,7 +41,7 @@ public:
   QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     QSize size = QStyledItemDelegate::sizeHint(option, index);
     size.setHeight(std::max(32, size.height()));
-    if (index.column() == 1) {
+    if (index.column() == 2) {
       size.rwidth() += 16;
     }
     return size;
@@ -57,8 +58,10 @@ protected:
       option->state |= QStyle::State_Active | QStyle::State_HasFocus;
       option->palette.setCurrentColorGroup(QPalette::Active);
     }
-    if (index.column() == 1) {
-      option->displayAlignment = Qt::AlignRight | Qt::AlignVCenter;
+    if (index.column() >= 1) {
+      if (index.column() == 2) {
+        option->displayAlignment = Qt::AlignRight | Qt::AlignVCenter;
+      }
       if (option->state.testFlag(QStyle::State_Enabled) && !option->state.testFlag(QStyle::State_Selected)) {
         option->palette.setBrush(QPalette::Text, option->palette.brush(QPalette::PlaceholderText));
       }
@@ -115,7 +118,7 @@ inline void styleCommandSearch(QFrame* popup, QLineEdit* edit, QTreeWidget* list
   // A search popover has one continuous surface around its results.
   list->setBackgroundRole(QPalette::Window);
   list->viewport()->setBackgroundRole(QPalette::Window);
-  popup->resize(440, 360);
+  popup->resize(560, 360);
 }
 
 inline bool paintCommandSearch(QFrame* popup) {

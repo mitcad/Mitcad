@@ -85,7 +85,7 @@ function Openings-Wheel([string]$Name, [int]$Steps) {
   [UiInput]::Wheel($window, $place[0], $place[1], $Steps)
 }
 Ui-StartApp 'timber-openings'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'
@@ -178,7 +178,7 @@ Set-Content -Encoding ascii $solidJson @'
 '@
 Run-Cli 'run solid-wall' @('run', $solidJson, '--save', $solidFile)
 Ui-StartApp 'timber-solid-wall' @('--open', $solidFile)
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'
@@ -277,7 +277,7 @@ Set-Content -Encoding ascii $roomJson @'
 '@
 Run-Cli 'run long-room' @('run', $roomJson, '--save', $roomFile)
 Ui-StartApp 'timber-long-room' @('--open', $roomFile)
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'

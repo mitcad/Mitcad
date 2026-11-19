@@ -2,7 +2,9 @@
 //! The `face_run` query (mitcad#1850, see `commands.md`, "Press Pull
 //! continued"): how a planar face's walls continue past it, for Press
 //! Pull's handle along the run and its choices, and whether the face is
-//! the moving end of a feature whose own edit Press Pull may open instead.
+//! the moving end of a feature whose own edit Press Pull may open instead:
+//! also a cut-to-length BUILD part's free end, whose length Derived
+//! Component edits (mitcad#2030).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -10,8 +12,8 @@ use serde_json::{Value, json};
 use super::ApiError;
 use super::prelude::*;
 use mitcad_model::Document;
-use mitcad_model::features::{Extent, FeatureDef, PathExtent, RevolveExtent};
-use mitcad_model::ids::BodyUid;
+use mitcad_model::features::{Extent, FeatureDef, GeomRef, PathExtent, RevolveExtent};
+use mitcad_model::ids::{BodyUid, FeatureUid};
 use mitcad_model::kernel::{FaceAlong, Kernel};
 use mitcad_model::notice::FeatureError;
 use mitcad_model::topo::FaceName;
@@ -65,6 +67,52 @@ pub(crate) fn moving_end_input(def: &FeatureDef, role: &str) -> Option<&'static 
     }
 }
 
+/// The `feature_end` of a cut-to-length BUILD part's end face (mitcad#2030):
+/// its derived part `part`'s face `role` (`end_a`, `end_b`) where that is
+/// the end its length moves: not the end the part is placed from (its
+/// joint's own frame, else end A), and none while its length is bound (to
+/// a face, or an edge's frame). Named after the component (a BUILD part's
+/// feature has no name of its own); its input is Derived Component's
+/// Length.
+pub(crate) fn build_part_end<K: Kernel>(
+    doc: &Document<K>,
+    part: FeatureUid,
+    role: &str,
+) -> Option<Value> {
+    if role != "end_a" && role != "end_b" {
+        return None;
+    }
+    let entry = doc.feature(part)?;
+    let FeatureDef::DerivedPart(_) = &entry.def else {
+        return None;
+    };
+    let info = doc.part_info(entry.component)?;
+    if info.part != Some(part) || !info.is_cut_to_length() || info.length.is_none() {
+        return None;
+    }
+    if info.record.bound.iter().any(|b| doc.feature(*b).is_some()) {
+        return None;
+    }
+    let placed_from = info
+        .record
+        .joint
+        .and_then(|joint| match &doc.feature(joint)?.def {
+            FeatureDef::Joint(j) => match &j.a.geometry {
+                GeomRef::Mount { feature, name } if *feature == part => Some(name.clone()),
+                _ => None,
+            },
+            _ => None,
+        });
+    let placed_from = if placed_from.as_deref() == Some("end_b") {
+        "end_b"
+    } else {
+        "end_a"
+    };
+    (role != placed_from).then(|| {
+        json!({"uid": part, "name": info.name, "type": entry.def.type_name(), "input": "length"})
+    })
+}
+
 impl<K: Kernel> PressPullOps<K> for Document<K> {
     fn face_run_json(&self, query: &FaceRunQuery) -> Result<Value, ApiError> {
         let shape = self.require_body(query.body)?;
@@ -85,7 +133,8 @@ impl<K: Kernel> PressPullOps<K> for Document<K> {
                 radius,
             } => json!({"kind": "turn", "origin": origin, "axis": axis, "radius": radius}),
         };
-        // The face's own feature, where the face is one of its moving ends.
+        // The face's own feature, where the face is one of its moving ends;
+        // a BUILD part's free end, its length (mitcad#2030).
         let feature_end = self
             .feature(query.face.feature)
             .and_then(|entry| {
@@ -94,6 +143,7 @@ impl<K: Kernel> PressPullOps<K> for Document<K> {
                            "input": input})
                 })
             })
+            .or_else(|| build_part_end(self, query.face.feature, &query.face.role))
             .unwrap_or(Value::Null);
         Ok(json!({
             "center": run.centre,

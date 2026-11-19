@@ -2,15 +2,19 @@
 
 This is the one document for the conventions of everything the user sees
 in MitCad: the words (terms), the text style, the notices and their
-severity levels, and the colors. The same thing is always said, shown and
+severity levels, the colors, and how the chrome is laid out and drawn
+(spacing, corners, type, icons, the top bar, the toolbar panel, cards,
+the bottom bar, buttons and states). The same thing is always said, shown and
 colored the same way, in the Qt UI (on macOS too; the paused AppKit
 frontend follows the same rules when it returns), in every layout,
 in the user guide and in the README. A reviewer checks a new string, a
 notice or a color against this page.
 
-A new term, a new meaning for an existing one, or a new convention (modes,
-toolbar groups, advanced options) is added here in the same change that
-introduces it. The decisions behind this page were made by the
+UI and UX work (a new or changed toolbar, panel, card, dialog, text or
+color) follows this page; a reference picture or another program never
+overrides it. A new term, a new meaning for an existing one, or a new
+convention (modes, toolbar groups, advanced options, a part of the
+chrome) is added here in the same change that introduces it. The decisions behind this page were made by the
 maintainers on 31.10.2026 (mitcad#852).
 
 Contents:
@@ -27,6 +31,20 @@ Contents:
 5. [The checks](#5-the-checks): the tests that keep the rules.
 6. [Lists and trees](#6-lists-and-trees): the one compact indentation of
    every list and tree.
+7. [Principles](#7-principles) of the chrome.
+8. [Spacing](#8-spacing): the 4 px unit and the spaces.
+9. [Corners](#9-corners): the card radius and the control radius.
+10. [Typography](#10-typography): the type sizes and section headings.
+11. [Icons](#11-icons): their style and sizes.
+12. [The top bar](#12-the-top-bar).
+13. [The toolbar panel](#13-the-toolbar-panel): the workspace block, the
+    tabs, the groups, a tab's own groups, one height.
+14. [Cards](#14-cards).
+15. [The bottom bar](#15-the-bottom-bar).
+16. [Buttons, pills, chips and toggles](#16-buttons-pills-chips-and-toggles).
+17. [States](#17-states).
+18. [Alignment](#18-alignment).
+19. [What not to do](#19-what-not-to-do).
 
 ## 1. Terms
 
@@ -145,7 +163,7 @@ not a level of its own, and MitCad has no separate assembly file.
 | **Tolerance** | A dimension's permitted deviation: symmetric (±), deviations, limits (written as the largest and smallest size) or an ISO 286 **fit code** (`H7`, `g6`). | `Tolerance`, `iso286.rs` |
 | **Datum label** | A letter (A, B, C …; never I, O or Q) in a square on a leader ending in a filled triangle on a planar face, an edge, a round face's axis or a construction plane or axis (ISO 5459): the datum feature frames refer to. Not a construction plane, axis or point. | `MeasureKind::Datum`, `Annotation::letter` |
 | **Feature control frame** | A geometric tolerance (ISO 1101) in a row of cells: the characteristic's symbol (flatness ⏥, perpendicularity ⟂, position ⌖ …), the tolerance zone's width with Ø and Ⓜ or Ⓛ where they apply, and the datum letters in order; on a leader to a face or edge, or under a dimension. Short: **frame**. | `MeasureKind::Frame`, `GeometricTolerance`, `Characteristic` |
-| **Material note** | A note on a body whose text is the body's material, written from the design so that it follows a change of the material (mitcad#1049). UI: *Material* (the Make tab's Annotate group); *Material* in the Annotations window's Kind. | `MeasureKind::Material` |
+| **Material note** | A note on a body whose text is the body's material, written from the design so that it follows a change of the material (mitcad#1049). UI: *Material Note* (the Make tabs' Annotate group); *Material* in the Annotations window's Kind. | `MeasureKind::Material` |
 | **Process note** | A note on a body whose text is its printer and process profiles and the print values set on the body, its occurrence or its component (`Printer: Bench / Process: Standard / Walls: 5`), written from the design (mitcad#1049). UI: *Process Note*; *Process note* in the Annotations window's Kind. | `MeasureKind::ProcessNote` |
 
 ### Comments
@@ -250,7 +268,10 @@ platform requires it (a system menu item such as *Show Sidebar*).
 | **Timeline marker** | The rollback position on the timeline; the features after it are **rolled back**. Not "History marker". UI: *Roll Timeline Marker Here*. | `rollback`, `TimelineWidget` |
 | **Command panel** | The panel of a running command: its inputs, OK and Cancel. Not "Inspector". | `CommandPanel`, `NativeForms` |
 | **Toolbar**, **tab**, **group** | The strip of tabs (the Solid tab) and their groups (the Assemble group) of commands. Not "ribbon" in user-facing text; *Ribbon* stays the class name. | `Ribbon` |
-| **Make tab** | The tab of everything about making a design, always shown after the Solid and the Build tab (mitcad#1049): the common groups first (**Materials**, **Annotate**), then one group per manufacturing method (**3D Print**, **Laser**; **CNC** with CAM). A group without commands is not shown. Each command has one place on the toolbar; Render Image stays on the Solid tab, in its **Render** group (`RENDER`; named Make until mitcad#1070, so that Make names only the tab). *Send to Slicer* is the command once called *3D Print*; *3D Print* is the group's name. | `Ribbon::groups` (`MAKE`), `MainWindowMake.cpp` |
+| **Make tabs** (**3D Print tab**, **Laser tab**, **CNC tab**) | The tabs of everything about making a design, one per manufacturing method (mitcad#1049; one Make tab until the owner's split of 18.11.2026): in the Floating toolbar panel the tabs of the **Make** workspace (mitcad#1990), in the Docked layout after the Build tab. Each starts with its method's groups (3D Print: **Slice**, with *Send to Slicer*, the page's most important button, first on the tab (the owner, 18.11.2026), **Printers**, **Prepare**; Laser: **Export**; CNC: **Setup**, **2D Milling**, **3D Milling**, **Turning**, **Toolpath**), then the same **Materials**, **Annotate** and the Solid tab's **Inspect** group (mitcad#1975). A group without commands is not shown. *Send to Slicer* is the command once called *3D Print*; *3D Print* is the tab's name. | `MAKE_PRINT`, `MAKE_LASER`, `MAKE_CNC` in `app/resources/layout/default.json`, `MainWindowMake.cpp` |
+| **Surface tab**, **Sheet Metal tab** | The tabs of surface and sheet metal modeling, after the Solid tab (mitcad#1975; groups of the Solid tab before). Each starts with Create Sketch and ends with the Solid tab's **Construct** and **Select** groups. | `SURFACE`, `SHEET METAL` in `app/resources/layout/default.json` |
+| **Manage tab** | The tab of what belongs to the whole design rather than to its shapes, after the Make tabs (mitcad#1975): **Parameters**, **Configurations**, **Materials**, **Rules**, **Design**. A command that edits the design's parameters, configurations, materials, appearances, rules or settings has its home here and may also show where it is used. | `MANAGE` in `app/resources/layout/default.json` |
+| **Second place** | A command shown in more than one place on the toolbar (mitcad#1975: Create Sketch on Solid, Surface and Sheet Metal; Material on Solid › Modify and the three Make tabs). One command, one shortcut; its first place that is not marked a repeat is its home (`CommandLayout::home`). No two commands share a label on one tab. | `"repeat"` in the layout file |
 | **Layout** | The window's arrangement: the **Floating layout** (the default) or the **Docked layout**. *Chrome* is a developer word. | `chromeStyle()`, `FloatingLayout` |
 | **Command Search** | Finds a command by its name or keywords. | `CommandSearch` |
 | **Sketch Palette** | The panel of a sketch's settings and solve state while it is open. | `SketchPalette` |
@@ -281,10 +302,12 @@ interface, the Floating layout. The internal identifier of a control is
 not a name for it.
 
 - **Tabs and groups.** Their identifiers are upper case (`SOLID`,
-  `BUILD`, `MAKE`, `ASSEMBLE`, `SHEET METAL`, `3D PRINT`). Every layout and frontend shows
-  them in title case (`displayName()` in `app/framework/Ribbon.cpp`):
-  write *the Solid tab*, *the Build tab*, *the Make tab*, *the Assemble
-  group*, *the Sheet Metal group*, *the 3D Print group*. The upper-case form belongs to code and to
+  `BUILD`, `MANAGE`, `ASSEMBLE`, `SHEET METAL`, `2D MILLING`). Every layout and frontend shows
+  them in title case (`displayName()` in `app/framework/Ribbon.cpp`); a
+  tab keyed apart from its caption (`MAKE_PRINT`, `MAKE_LASER`,
+  `MAKE_CNC`) shows its caption (*3D Print*, *Laser*, *CNC*):
+  write *the Solid tab*, *the Build tab*, *the 3D Print tab*, *the Sheet Metal
+  tab*, *the Assemble group*, *the 2D Milling group*. The upper-case form belongs to code and to
   developer documents that quote the identifier in backticks. Docked has
   no exception.
 - **Commands.** The command's label as its `CommandDef` gives it, with
@@ -325,8 +348,11 @@ label.
 1. **Capitalization.** Title Case: command labels, menu items, push
    buttons, dialog and window titles, tabs, groups, command-panel input
    labels, column headers. Sentence case: checkboxes, radio buttons,
-   form-row labels, section headings inside dialogs, tooltips, messages,
-   placeholder text. One label is spelled one way everywhere it appears:
+   form-row labels, section headings (inside dialogs, cards and side
+   panels alike: *Ready to render*, *Saved views*, *Image*), tooltips,
+   messages, placeholder text. A section heading is never forced into
+   capitals, neither in its text nor by its font
+   ([Typography](#10-typography)). One label is spelled one way everywhere it appears:
    a state or place a list, filter or tooltip names is in sentence case
    in every one of them, also as a menu entry (*Rolled back*, *Import
    notes*, *This design*, *My library*); inside a Title Case label it
@@ -721,6 +747,23 @@ writes a color literal (see [The checks](#5-the-checks)).
    show at one opacity (`kStateDimOpacity`, 0.35) on both frontends.
 10. **On macOS** the chrome's selection and focus follow the system's
     accent; the 3D view keeps its fixed selection blue.
+11. **The accent** (`Action`, `accentColor`; the system's accent on
+    macOS) is what is chosen or acts now in the chrome: the shown tab's
+    filled rectangle, the primary button (one per card or dialog), the
+    focus ring, a checked toggle's outline, a selected row's band in every
+    list, tree and card. Never a line or a bar for decoration, and no
+    surface picks a blue of its own.
+12. **Selection** in the 3D view, the sketch, the drawings, the pickers
+    and the Timeline is `Select`, and what the pointer is over there is
+    `Hover`. The timeline's marker is `TimelineMarker`, not the accent.
+13. **Support**: the Boost development pill's outline and rocket only;
+    its label is `Text`, and it fills with a translucent tint only under
+    the pointer.
+14. **Card material**: `cardFillColor` and a hairline of
+    `cardBorderColor` for every card and bar, `cardShadowColor` for its
+    shadow. **Lines**: the separators between groups and under the tab
+    row are `windowColors(…).line` or `cardBorderColor`, one pixel (a
+    hairline on a high-density screen).
 
 ### The role table
 
@@ -765,6 +808,7 @@ dynamic value.
 | | `PrintOverhang`, `PrintThin`, `PrintGap` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7, #00897b / #4dd0c0 | Print Analysis' categories (violet, magenta, teal: narrow gaps, mitcad#1519), by the view's background, with the legend | |
 | | `RuleFrame` … `RuleAction`, `RuleText` | see [configurations.md](configurations.md) | the rule blocks' categories under white text | |
 | | `CamStock`, `CamLeftThin`, `CamLeftThick`, `CamGouge` | #b0aaa2 / #8c877f, #4fb3bf / #6fd0db, #5e35b1 / #9575cd, #d81b60 / #ff5c8d | Simulate's stock (mitcad#1013): the stock grey (nothing left over the part reads as the stock), the material left from teal (thin) to violet (thick), a cut into the part pink; by the view's background, with the legend in the Simulate window | |
+| Chrome | `Support` | #d81b60 / #f06292 | the top bar's Boost development pill (mitcad#1990): its outline and rocket (an indicator, at least 3:1 on the windows), its label in the window's text (`Text`); it fills only under the pointer, with a translucent tint of the pink (20%, pressed 32%) that keeps the label's contrast. A quiet, warm call to support the project that does not draw the eye, apart from the error's red and the accent's blue | |
 
 The table's order is the enum's; `allColorRoles`, `colorRoleName`,
 `colorRoleUse` and `colorRolePartner` list it for the checks.
@@ -907,3 +951,277 @@ reason (`kAllowed` in `check-tree-indentation.cpp`): today only a UI
 test's fixture in `platform/macos/NativeTestInput.mm`.
 `repo.tree-indentation-self-test` checks the scan on planted sources,
 among them a view made without the helper.
+
+## 7. Principles
+
+Chapters 7 to 19 are how the chrome around the 3D view is laid out and
+drawn: in the Floating layout of Windows and Linux and in the shared Qt UI
+on macOS (mitcad#1990); the Docked layout follows the same colors, type
+and corners with its own panels. The values come from the code named with
+each rule; a change of a value changes the code and this page together.
+Where the code and a rule differ, the code is fixed: there is no list of
+exceptions to these chapters.
+
+- **The model is the picture.** The chrome is quiet: neutral card
+  material, one accent color, no decoration. Color in the chrome means a
+  state (chosen, focused, a status), never ornament.
+- **One of each.** One top bar, one toolbar panel, one header per card,
+  one bottom bar, one corner radius for every card and bar. A control
+  is in one place; a second copy of it elsewhere is a fault.
+- **Nothing moves by itself.** Switching workspaces, tabs or stages never
+  moves the cards or the view: the panel and the bottom bar keep their
+  heights, the cards their places.
+- **Task first.** A workspace, a stage or a card shows what its task
+  needs, in the order the task runs; settings come in context, not as
+  rows of their own.
+- **This page decides.** A new or changed toolbar, panel, card, dialog,
+  text or color follows these chapters; a reference picture or another
+  program never overrides them. A case they do not cover is added here in
+  the same change.
+
+## 8. Spacing
+
+The base unit is **4 px** (logical pixels; Interface size scales them).
+Spaces are its multiples: 0, 4, 8, 12, 16, 24. A hairline (0.5 or 1 px,
+the line between two groups, a border) and a 2 px nudge that centers a
+part inside a control are not spaces.
+
+| Space | Value | Where |
+|---|---|---|
+| View margin | 12 (`FloatingLayout::kMargin`) | between the window's or view's edge and every card and bar |
+| Card gap | 8 (`FloatingLayout::kGap`) | between two cards, a card and a bar, the drawing's column and its card |
+| Panel padding | 8 (`kPanelPad`, `Ribbon.cpp`) | inside the toolbar panel's card around its rows |
+| Workspace block gap | 8 (`kPanelBlockGap`) | between the workspace block and the card beside it |
+| Group spacing | 4 + the one-pixel line + 4 (`kPanelGroupSpacing`, 9) | between two groups of the toolbar panel |
+| Card content | 8 at the sides and bottom, 4 under the header (`GlassCard::setContent`; 0 where the content starts with its own row) | between a card's edge and its content |
+| Bar margins | 16 at the sides, 4 above and below (`GlassCard::barMargins`) | around a bottom bar's one row |
+| Row spacing | 4 | between the controls of one row (tabs, chips, small buttons) |
+| Top bar spacing | 12 | between the top bar's groups |
+
+## 9. Corners
+
+Two radii, both in `app/framework/UiSizes.hpp`:
+
+- **`kCardRadius` = 10 px**: every card and bar. The top bar's pills
+  (the history pair, the menu, the indicators, Boost development), the
+  toolbar panel's card and its workspace block, the side cards
+  (Browser, Drawings, Render's cards), the bottom bars (the timeline,
+  Render's Shots bar), the navigation bar, the Docked panels
+  (`panel::kRadius`) and the Start page's backdrop. `GlassCard::kRadius`
+  and `CapsuleFrame`'s default are it. A bar lower than 20 px takes half
+  its height (it never draws more than half its height).
+- **`kControlRadius` = 6 px**: everything inside a card or bar: buttons,
+  chips, tabs (the toolbar panel's and the Docked toolbar's segmented
+  and pill tabs), a group caption's highlight, search and text fields,
+  the command panel's toggles, tiles and selection button, a result box,
+  a hover or press highlight, a small badge, a selected row's band
+  (`panel::kRowRadius`, `GlassCard::kBoxRadius`).
+
+No card, bar or control draws a radius of its own: it takes one of the
+two. A circle (a status dot, the comment pins) is not a corner.
+
+A card's content paints no square page of its own inside the card's
+rounded corners: a scroll area in a card is see-through, the card's
+material showing through its viewport and page (`GlassCard::setContent`
+makes them so; a page set into one later is made see-through after
+`QScrollArea::setWidget`, which fills it), and the Start page's content
+shows its backdrop's surface, kept within the backdrop's rounding
+(`start::kContentPadding`, `start::contentInsideRounding`).
+
+## 10. Typography
+
+The application font (the system's, or the one chosen in Preferences ›
+Display) at Text size is the base. Every other size is a factor of it,
+so Text size scales them all.
+
+| Use | Size | Weight |
+|---|---|---|
+| Body, row names, button text, field text, the toolbar panel's tabs | 1.0 | Regular (the shown tab DemiBold) |
+| Card header, the workspace block's name, the Shots label | 0.95 (card header), 1.0 | DemiBold |
+| Toolbar group caption (with ˅), the Docked toolbar's pill tabs | 0.92 | Regular (pill tabs DemiBold) |
+| Labels under icons, the workspace block's "Workspace ˅", the workspace list's lines under a name, section headings, dim secondary lines | 0.85 | Regular (headings DemiBold) |
+
+- **Dim text** is the `TextSecondary` role, never a lowered opacity of
+  `Text`; a hidden item's name is `TextHidden`.
+- **Section headings** inside a card, a side panel or a dialog are flat
+  headings with a folding arrow, no box around the section: the heading's
+  own text in sentence case ([Text style](#2-text-style), rule 1), at
+  0.85, DemiBold, in `TextSecondary`. Never forced into capitals, by the
+  text or by the font (no `toUpper`, no `QFont::AllUppercase`).
+
+## 11. Icons
+
+- Line icons from the SVG sources in `app/icons` (`themeIcon`; MitCad's
+  own drawings, MIT): 24 × 24, a dark outline of 1.3, blue solids,
+  orange for the action (a plus, a turning arrow), drawn for the
+  backdrop they stand on (`IconBackdrop`); one stroke weight across a
+  row. A command without an icon gets one drawn in this style, never
+  third-party art.
+- Sizes are `uiIconSize(n)` so that Icon size scales them: **26** on the
+  toolbar panel's buttons (`kMacIconSize`), **18** in the top bar and the
+  card headers' small buttons, **16** in rows, chips and pills, **14**
+  for marks inside a control (a ˅, a ×).
+- A button is its icon with 5 px around it (`macButtonSize`); an icon
+  never touches its button's edge.
+
+## 12. The top bar
+
+One flat bar across the window, 36 px high (`kFloatingRowHeight`),
+controls 30 px high, 12 px between its groups and at its ends. Nothing is
+painted behind it but the window; its groups are pills of the card
+radius only where they are a pair or a menu.
+
+From the left: ☰ (the menus), Home, File, Save, Undo and Redo, the open
+documents' tabs; at the right Boost development (while shown), the
+project and assistant indicators (compact icon buttons with a ˅, their
+text in the tooltip), the chat, Preferences, ? (Help) and the version.
+The quick-access group comes after Redo only while it has commands.
+
+## 13. The toolbar panel
+
+Under the top bar, across the view between the view margins, the same
+height in every workspace (logged `Ribbon panel height DESIGN: N`, equal
+for Design, Make, Render and Drawing). The workspaces: **Design** (the
+Solid, Surface, Sheet Metal, Build and Manage tabs), **Make** (a tab per
+manufacturing method: 3D Print, Laser and CNC; its entry in the list
+reads "3D Print · Laser · CNC"), **Render** (its stages) and
+**Drawing** (an open drawing's tab). A model workspace opens on the tab
+shown last in it, at first on its first tab.
+
+- **The workspace block** at its left: a block of its own (card material,
+  card radius, no accent line), about 84 px wide: the workspace's icon,
+  its name, "Workspace ˅" under it; one line where the panel is only its
+  tab row. 8 px to the card beside it.
+- **The card** beside it: its first row the workspace's tabs as plain
+  names (the shown one on a filled accent rectangle of the control
+  radius), the + of the tabs' menu, and at the row's right end the
+  command search field; a hairline under the row.
+- **The groups' row** under it: the shown tab's groups side by side,
+  divided by a one-pixel line in the groups' spacing; each group
+  its buttons with a short label under each icon (Preferences › Display ›
+  Toolbar labels: Icons only turns the labels off; the Floating layout
+  shows them by default) and its caption with ˅ under them, which opens
+  the group's menu of all its commands.
+- **A tab's own content is groups too.** A workspace whose page is its
+  own (the Render workspace's stage actions, mitcad#2013) builds it of
+  the same parts (`Ribbon::createContentGroup`, `createContentButton`,
+  `createContentSeparator`): icon buttons with their labels under them, a
+  caption with ˅ under each group, the line between two groups, the
+  groups' height. No plain text chips, no drop-down list and no free
+  text in the row: a choice is an icon button with ˅ (its choices in its
+  menu) or exclusive icon toggles (the chosen one checked), and a status
+  is a group's caption (the Live group's "Live · 1717 × 1225 · 64/64"),
+  as wide as its widest form so that nothing after it moves, its words in
+  the caption's tooltip.
+- **One height:** the tab row is as high as its tabs, the groups' row as
+  high as the tallest group of any tab (`Ribbon::panelPageHeight`); a
+  tab's own groups are that high as well.
+- **Narrow windows:** the groups at the right collapse first (the first
+  command's icon over the caption and ˅), then the last ones go into the
+  » menu at the row's end.
+- **Buttons per group:** a group shows a button for each command where
+  the tab has room and a few for the main commands where it has not, so
+  that every tab fits a 1024 px window with labels; the rest are rows of
+  the group's menu. The Make workspace's tabs are the pattern: every
+  command of 3D Print's Slice, Printers and Prepare and of Laser's Export a
+  button, CNC's groups one or two buttons each.
+- **A tab's own groups first:** a workspace whose tabs share groups (the
+  Make tabs' Materials, Annotate and Inspect) puts each tab's own groups
+  first, the shared ones after them in the same order on every tab.
+
+## 14. Cards
+
+A card (`GlassCard`) floats over the view: card material, card radius,
+a soft shadow. The left column's cards (Browser, Drawings, Render's
+stage list) start at the view margin's left and one card gap under the
+toolbar panel; the right column's (Render's settings) likewise at the
+right.
+
+- **One header per card**: its title (0.95, DemiBold) and at most a
+  folding chevron and a small badge or button at its right. No second
+  title inside it.
+- **Content** 8 px from the card's sides and bottom, 4 px under the
+  header; the card is as high as its content and never higher than the
+  room (no long empty area).
+- **Sections** are flat folding headings in sentence case; no framed
+  group boxes (`RenderWorkspace::flattenSections` turns them into
+  headings).
+- **No horizontal scroll**: a card's content is as wide as the card; long
+  names elide.
+- **The Drawings card** stands in a column of its own: the drawing's bar
+  and sheet start one card gap right of it, its top level with the
+  drawing's bar (logged `Drawing column at x,y beside card x,y WxH`).
+
+## 15. The bottom bar
+
+One bottom bar in every workspace: Design's timeline, Render's Shots bar.
+Both are one-row bars between the view margins, as high as the timeline
+(its strip, its scroll bar while the features do not fit), with the bar
+margins (16 px at the sides, 4 above and below) and the card radius. The
+label, chips and buttons sit in one row on the bar's center line. Their
+places in the log (`Floating cards: … timelineDock x,y WxH`,
+`renderBarPanel x,y WxH`) are equal in the same window.
+
+## 16. Buttons, pills, chips and toggles
+
+- **Primary** (`CapsuleButton` prominent): accent fill, `AccentText`
+  label; one per card or dialog, for the action the task ends with.
+- **Secondary** (`CapsuleButton`): a hairline outline and a faint gray
+  fill, `Text` label.
+- **Flat buttons** (toolbar, card headers, `setFlatCardButton`): nothing
+  painted until hovered.
+- **Toggles**: a checked toggle has an accent outline, not a fill.
+- **Chips** (Render's shots, choices in a row of a card or bar):
+  secondary buttons in a row 4 px apart; the chosen one is checked. Not
+  in the toolbar panel, whose choices are icon buttons (chapter 13).
+- **Pills** in the top bar: a pill groups related buttons (Undo and
+  Redo) or stands for a call (Boost development, outlined); not a frame
+  around a single flat button.
+
+## 17. States
+
+| State | Look |
+|---|---|
+| Hover | on a button, tab or chip a translucent tint of the text color (about 8 %) of the control radius; on a row or a cell `HoverFill`; in the 3D view, the sketch and the drawings `Hover` |
+| Pressed | the same tint, stronger (about 14 %) |
+| Disabled | the palette's disabled text color (further from `Text` than `TextSecondary`) and the icon's disabled form; no fill |
+| Checked / chosen | the accent: a filled rectangle (the shown tab), an outline (a toggle) |
+| Selected row | a band of the accent (`Action`, translucent) across the row's whole width, of the control radius, inset 2 px |
+| Selected object | `Select` in the 3D view, the sketch, the drawings, the pickers and the Timeline |
+| Focus | an accent ring on fields; none on flat buttons (they take no focus) |
+| Error, warning | the level's border, fill, icon and word ([Messages and severity](#3-messages-and-severity)), never the color alone |
+| Suppressed, rolled back | the object at one opacity (`kStateDimOpacity`, 0.35), not another hue |
+
+## 18. Alignment
+
+- Every row's items stand on one center line: icons, text, fields and
+  buttons of a row share its vertical center (`Qt::AlignVCenter`).
+- Cards line up on the view margins and with each other: a column's
+  cards share their left (or right) edge, the bottom bar's ends line up
+  with the side cards above it.
+- A panel or bar does not change height with its content's mode.
+
+## 19. What not to do
+
+- Two texts for one control by default (a label beside a button that
+  says the same); the toolbar's labels under icons are this layout's one
+  exception.
+- Filler sentences: a list, menu or card that explains itself (a footer
+  under the workspaces' list, a line under a list saying that a click
+  chooses a row, a hint that retells the toolbar's buttons). A short hint
+  stays only where an action cannot be seen (a double-click, a pick in
+  the view a running command waits for).
+- Accent lines, stripes or bars as decoration (the workspace block had
+  one; removed in mitcad#1990).
+- Stray bars or frames: a box around something that is already in a
+  card, a framed group box inside a card.
+- Duplicated controls: the same command in the top bar and in a card's
+  header, a second search field, a toolbar button and a card's button for
+  one action.
+- A radius, a color, a space or a font size of a widget's own.
+- A status color as decoration, or a level told by its color alone.
+- Words in capitals for styling, or ids and coordinates in a label.
+- A setting as a row of its own where a context menu or the toolbar
+  says it in place.
+- A row of text chips, a drop-down list or loose text in the toolbar
+  panel (chapter 13).

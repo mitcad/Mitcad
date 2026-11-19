@@ -2,50 +2,22 @@
 #include "ToolbarPins.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 #include <vector>
 
-#include <QMetaType>
-#include <QSettings>
-#include <QVariant>
 #include <QtLogging>
 
+#include "CommandLayout.hpp"
+
 namespace mitcad {
-namespace {
 
-const QString kGroup = QStringLiteral("toolbarPins");
-
-// The ids of a settings value: a string of ids joined by commas, or a list
-// (an INI file's unquoted "a,b", a platform store's string list).
-QStringList idsOf(const QVariant& value) {
-  const QStringList parts = value.metaType().id() == QMetaType::QStringList ? value.toStringList()
-                                                                            : QStringList{value.toString()};
-  QStringList ids;
-  for (const QString& part : parts) {
-    for (const QString& id : part.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
-      const QString trimmed = id.trimmed();
-      if (!trimmed.isEmpty()) {
-        ids.append(trimmed);
-      }
-    }
-  }
-  return ids;
-}
-
-} // namespace
-
-QString ToolbarPins::settingsKey(const QString& tab) { return kGroup + QLatin1Char('/') + tab; }
-
-ToolbarPins ToolbarPins::load(const Resolve& resolve) {
+ToolbarPins ToolbarPins::load(const Resolve& resolve, CommandLayoutStore* store) {
   ToolbarPins pins;
   pins.m_resolve = resolve;
-  QStringList tabs;
-  {
-    QSettings settings;
-    settings.beginGroup(kGroup);
-    tabs = settings.childKeys();
-  }
-  // The tabs whose settings are written again.
+  pins.m_store = store != nullptr ? store : &CommandLayoutStore::instance();
+  const QStringList tabs = pins.m_store->pinTabs();
+  // The tabs whose pins are saved again.
   QStringList changed;
   const auto change = [&changed](const QString& tab) {
     if (!changed.contains(tab)) {
@@ -55,10 +27,10 @@ ToolbarPins ToolbarPins::load(const Resolve& resolve) {
   // The commands kept under another tab than their own: (own tab, id),
   // added at the end of their own tab's pins once all are read.
   std::vector<std::pair<QString, QString>> moved;
-  for (const QString& tab : std::as_const(tabs)) {
-    const QStringList stored = idsOf(QSettings().value(settingsKey(tab)));
+  for (const QString& tab : tabs) {
+    const QStringList stored = pins.m_store->pins(tab);
     if (stored.isEmpty()) {
-      change(tab); // an empty value: the key goes
+      change(tab);
     }
     for (const QString& id : stored) {
       const Command command = resolve ? resolve(id) : Command{id, tab, QString()};
@@ -91,6 +63,10 @@ ToolbarPins ToolbarPins::load(const Resolve& resolve) {
     if (!kept.contains(id)) {
       kept.append(id);
     }
+  }
+  // A tab whose every pin was dropped has no list.
+  for (auto it = pins.m_pins.begin(); it != pins.m_pins.end();) {
+    it = it->isEmpty() ? pins.m_pins.erase(it) : std::next(it);
   }
   for (const QString& tab : std::as_const(changed)) {
     pins.save(tab);
@@ -178,12 +154,8 @@ bool ToolbarPins::moveInGroup(const QString& tab, const QString& id, int index) 
 }
 
 void ToolbarPins::save(const QString& tab) const {
-  QSettings settings;
-  const QStringList ids = m_pins.value(tab);
-  if (ids.isEmpty()) {
-    settings.remove(settingsKey(tab));
-  } else {
-    settings.setValue(settingsKey(tab), ids.join(QLatin1Char(',')));
+  if (m_store != nullptr) {
+    m_store->setPins(tab, m_pins.value(tab));
   }
 }
 

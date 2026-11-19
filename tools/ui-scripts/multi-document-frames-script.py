@@ -26,8 +26,33 @@ def scenario(work="${MITCAD_TEST_WORK}", mode="full"):
             "expect-document-frame-order first second third",
             "observe-document-frame-close-all", "document-tab-context 0", "popup 'Close All'", "stay", "",
         ])
+    if mode == "system-menu":
+        menus = "expect-system-menu-bar File Edit View Tools Window Help"
+        return "\n".join([
+            "wait-idle", "capture-document-window first", "expect-document-frame-tabs 1", menus,
+            "model-command '{\"cmd\":\"add_parameter\",\"name\":\"firstOnly\",\"unit\":\"mm\",\"expression\":\"10 mm\"}'",
+            "expect-model-parameter firstOnly 10 user",
+            "click-logged '^Quick access file[.]new_design at '", "wait-idle",
+            "capture-document-window created", "expect-document-frame-order first created",
+            "expect-model-parameter firstOnly absent", menus,
+            "document-tab-click 0", "expect-model-parameter firstOnly 10 user", menus,
+            "document-tab-click 1", "key ctrl+w", "expect-document-window-gone created",
+            "expect-document-frame-tabs 1", menus,
+            "open-file " + file("second.mitcad"), "wait-idle", "capture-document-window second",
+            "expect-model-bodies 1 120", "expect-document-frame-tabs 2", menus,
+            "key ctrl+,", "focus-dialog '^Settings$'", "key ctrl+w", "expect-dialog-gone '^Settings$'",
+            "focus-document-window second", menus,
+            "open-file " + file("third.mitcad"), "wait-idle", "capture-document-window third",
+            "document-tab-context 1", "popup 'Move to New Window'", "focus-document-window second",
+            "expect-document-frame-tabs 1", "expect-model-bodies 1 120", menus,
+            "focus-document-window first", "expect-document-frame-order first third", menus,
+            "document-tab-drop second first 1", "focus-document-window second",
+            "expect-document-frame-order first second third", "expect-model-bodies 1 120", menus,
+            "document-tab-click 2 middle", "expect-document-window-gone third",
+            "expect-document-frame-order first second", menus, "quit", "",
+        ])
     if mode != "full":
-        raise ValueError("mode must be full or close-all")
+        raise ValueError("mode must be full, close-all or system-menu")
     return "\n".join([
         "wait-idle", "window-resize 1280 800", "capture-document-window first",
         "expect-document-frame-tabs 1", "expect-model-bodies 1 6000",

@@ -95,7 +95,7 @@ void MainWindow::addConfigurationCard() {
   card->setObjectName(QStringLiteral("configurationDock"));
   card->setTitle(tr("Configuration"));
   card->setCollapsible(true);
-  card->setContent(configurationScroll(bar, true), QMargins(6, 0, 6, 8));
+  card->setContent(configurationScroll(bar, true), QMargins(8, 0, 8, 8));
   // Collapsed as the user left it.
   const bool collapsed = QSettings().value(kCollapsedKey, false).toBool();
   if (collapsed) {

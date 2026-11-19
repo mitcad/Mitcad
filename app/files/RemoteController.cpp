@@ -220,7 +220,6 @@ void RemoteController::registerCommands(CommandRegistry& registry) {
     d.tooltip = tooltip;
     d.kind = CommandDef::Kind::Action;
     d.mode = CommandDef::Mode::Any;
-    d.tab.clear(); // the File menu and the project indicator's menu
     d.run = std::move(run);
     return d;
   };

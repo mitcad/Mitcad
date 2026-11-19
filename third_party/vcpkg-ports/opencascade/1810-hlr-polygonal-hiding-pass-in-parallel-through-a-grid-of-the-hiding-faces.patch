@@ -1,0 +1,589 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Polygonal hidden-line removal: the hiding pass hides the segments in
+blocks beside each other on the threads of the default pool, and tests
+each segment only against the hiding faces whose cells of a grid over the
+view meet its own; the lines are the same, in the same order (mitcad#2021).
+
+HLRBRep_PolyHLRToShape::Update hid every segment (a piece of an edge or
+an outline, HLRAlgo_BiPoint) of every shell one after another on one
+thread, even when only the visible lines are asked for. HLRAlgo_PolyAlgo::
+Hide tested each segment's packed box against the box of every shell
+and, for each shell whose box met it, every hiding face of that shell
+(HLRAlgo_PolyData::HideByPolyData: the face's box, then each of its
+triangles). The work grows with the segments times the shells, plus the
+segments times the faces of the shells they meet; the boxes are those of
+the 1020 x 1020 x 508 quantization of the whole view, so on a 6 m frame a
+cell is about 6 mm and its long members meet many shells. A view of 884
+bodies (39 966 faces) spent 7 to 9 s in that pass, the rest of the
+projection about 4 s.
+
+- HLRAlgo_PolyAlgo::Update keeps the segments in the order of InitHide
+  and NextHide (NbSegments) and, for each hiding face, the cells of a grid
+  of 128 x 128 (8 x 8 steps of the quantization in x and y) its box
+  covers, its cells starting one step below its own in y: the packed box
+  test passes a segment whose y reaches one step below the face's where
+  the segment's depth reaches the face's (the depth's field carries into
+  y's). A box outside the quantization (a face without hiding triangles)
+  covers every cell. Each cell lists its faces in the order of the
+  faces (shell by shell, a shell's hiding faces in order).
+- HLRAlgo_PolyAlgo::HideSegment(theSegment, theWork, ...) const: Hide for
+  one segment, with the work data of the calling thread (HidingWork: the
+  triangle scratch and the candidate faces). The candidates are the faces
+  listed in the cells the segment's box covers, each taken in the first
+  cell both boxes share, sorted in the order of the faces; each is tested
+  as Hide tested it: the box of its shell, then HideByPolyData with the
+  same arguments. A face whose box test passes is always a candidate, and
+  the faces hide the segment in the order in which the walk over the
+  shells took them, so the edge status is Hide's. It writes nothing of
+  the algorithm. Hide is HideSegment of the current segment.
+- HLRBRep_PolyAlgo::NbSegments and HideSegment: the same, with the edge
+  or face of the segment.
+- HLRBRep_PolyHLRToShape::Update hides the segments in blocks of 64 on
+  the default pool's threads (OSD_ThreadPool::Launcher, one HidingWork per
+  thread), each block's visible and hidden lines in lists of its own,
+  joined in the order of the blocks: the lists, and every compound made
+  from them, are those of one segment after another.
+- No catch is added; an exception in a block reaches the caller as the
+  pool passes it on.
+
+Test: geometry.port.1810 (geometry/tests/port/p1810-polygonal-hiding-in-
+parallel.cpp): a frame of 970 bodies seen almost along its rows, every
+kind of visible and hidden line, of all the bodies and of each, equal to
+the last bit and in the same order to the walk over every shell written
+out with the algorithm's public parts (stock OCCT's Hide), and the pass
+in less than half the walk's time (0.04 s against 0.45 s; stock OCCT's
+pass takes the walk's time and fails that bound); one body, and a view of
+none.
+
+Upstream: new; changes no result, the lines of every view are the same.
+
+diff --git a/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.cxx b/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.cxx
+index f272e452..da519434 100644
+--- a/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.cxx
++++ b/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.cxx
+@@ -23,13 +23,25 @@
+ #include <HLRAlgo_PolyMask.hxx>
+ #include <Precision.hxx>
+ 
++#include <algorithm>
++
+ IMPLEMENT_STANDARD_RTTIEXT(HLRAlgo_PolyAlgo, Standard_Transient)
+ 
++namespace
++{
++//! The grid of the hiding faces divides the 1024 x 1024 integer cells of the
++//! view's quantization (x and y; the depth is not divided) into cells of
++//! 8 x 8 of them: 128 x 128 cells.
++constexpr int THE_CELL_SHIFT = 3;
++constexpr int THE_GRID_SIZE  = 1024 >> THE_CELL_SHIFT;
++} // namespace
++
+ //=================================================================================================
+ 
+ HLRAlgo_PolyAlgo::HLRAlgo_PolyAlgo()
+     : myNbrShell(0),
+       myCurShell(0),
++      myCurSegment(0),
+       myFound(false)
+ {
+   myTriangle.TolParam = 0.00000001;
+@@ -50,6 +62,25 @@ void HLRAlgo_PolyAlgo::Clear()
+   NCollection_Array1<occ::handle<HLRAlgo_PolyShellData>> anEmpty;
+   myHShell.Move(anEmpty);
+   myNbrShell = 0;
++  mySegments.Clear();
++  myFaces.Clear();
++  myCellStart.Clear();
++  myCellFaces.Clear();
++}
++
++//=================================================================================================
++
++void HLRAlgo_PolyAlgo::cells(const int theMin, const int theMax, int& theCell1, int& theCell2)
++{
++  if (theMin < 0 || theMax > 1023 || theMin > theMax)
++  {
++    // Outside the quantization (a box without points): every cell.
++    theCell1 = 0;
++    theCell2 = THE_GRID_SIZE - 1;
++    return;
++  }
++  theCell1 = theMin >> THE_CELL_SHIFT;
++  theCell2 = theMax >> THE_CELL_SHIFT;
+ }
+ 
+ //=================================================================================================
+@@ -70,6 +101,8 @@ void HLRAlgo_PolyAlgo::Update()
+   Bnd_Box          aBox;
+ 
+   myNbrShell = myHShell.Length();
++  mySegments.Clear();
++  myFaces.Clear();
+   for (int aShellIter = myHShell.Lower(); aShellIter <= myHShell.Upper(); ++aShellIter)
+   {
+     const occ::handle<HLRAlgo_PolyShellData>& aPsd = myHShell.ChangeValue(aShellIter);
+@@ -157,6 +190,11 @@ void HLRAlgo_PolyAlgo::Update()
+       theIndices.MaxSeg = nyMax + (nxMax << 11);
+       theIndices.MaxSeg <<= 10;
+       theIndices.MaxSeg += nzMax + 0x00000200;
++      Segment& aSegment = mySegments.Appended();
++      aSegment.BiPoint  = &BP;
++      aSegment.Shell    = aShellIter;
++      cells(nxMin, nxMax, aSegment.CellX1, aSegment.CellX2);
++      cells(nyMin, nyMax, aSegment.CellY1, aSegment.CellY2);
+       if (xShellMin > xSegmnMin)
+       {
+         xShellMin = xSegmnMin;
+@@ -402,6 +440,16 @@ void HLRAlgo_PolyAlgo::Update()
+         PolyTIndices.Max = nyMax + (nxMax << 11);
+         PolyTIndices.Max <<= 10;
+         PolyTIndices.Max += nzMax;
++        // The face's cells. The packed box test of HideSegment() passes a
++        // segment whose y reaches one step of the quantization below the
++        // face's where the segment's depth reaches the face's (the depth's
++        // field carries into y's), so the face takes the cells from one
++        // step below its own.
++        HidingFace& aFace = myFaces.Appended();
++        aFace.PolyData    = aPd.get();
++        aFace.Shell       = aShellIter;
++        cells(nxMin, nxMax, aFace.CellX1, aFace.CellX2);
++        cells(nyMin > 0 ? nyMin - 1 : nyMin, nyMax, aFace.CellY1, aFace.CellY2);
+         if (xShellMin > xPolyTMin)
+         {
+           xShellMin = xPolyTMin;
+@@ -460,6 +508,46 @@ void HLRAlgo_PolyAlgo::Update()
+       aShellIndices.Max = 0;
+     }
+   }
++  makeGrid();
++}
++
++//=================================================================================================
++
++void HLRAlgo_PolyAlgo::makeGrid()
++{
++  // Each cell lists the hiding faces whose cells include it, in the order
++  // of the faces (shell by shell, a shell's hiding faces in order).
++  myCellStart.Clear();
++  myCellStart.Resize(THE_GRID_SIZE * THE_GRID_SIZE + 1, 0);
++  for (const HidingFace& aFace : myFaces)
++  {
++    for (int aCellY = aFace.CellY1; aCellY <= aFace.CellY2; ++aCellY)
++    {
++      for (int aCellX = aFace.CellX1; aCellX <= aFace.CellX2; ++aCellX)
++      {
++        ++myCellStart(aCellY * THE_GRID_SIZE + aCellX + 1);
++      }
++    }
++  }
++  for (size_t aCell = 1; aCell < myCellStart.Size(); ++aCell)
++  {
++    myCellStart(aCell) += myCellStart(aCell - 1);
++  }
++  myCellFaces.Clear();
++  myCellFaces.Resize(static_cast<size_t>(myCellStart.Last()), 0);
++  NCollection_LinearVector<int> aFill(myCellStart);
++  for (size_t aFaceIter = 0; aFaceIter < myFaces.Size(); ++aFaceIter)
++  {
++    const HidingFace& aFace = myFaces(aFaceIter);
++    for (int aCellY = aFace.CellY1; aCellY <= aFace.CellY2; ++aCellY)
++    {
++      for (int aCellX = aFace.CellX1; aCellX <= aFace.CellX2; ++aCellX)
++      {
++        myCellFaces(static_cast<size_t>(aFill(aCellY * THE_GRID_SIZE + aCellX)++)) =
++          static_cast<int>(aFaceIter);
++      }
++    }
++  }
+ }
+ 
+ //=================================================================================================
+@@ -494,6 +582,10 @@ void HLRAlgo_PolyAlgo::NextHide()
+       }
+     }
+   }
++  if (myFound)
++  {
++    myCurSegment++;
++  }
+ }
+ 
+ //=================================================================================================
+@@ -505,7 +597,22 @@ HLRAlgo_BiPoint::PointsT& HLRAlgo_PolyAlgo::Hide(HLRAlgo_EdgeStatus& theStatus,
+                                                  bool&               theOutl,
+                                                  bool&               theIntl)
+ {
+-  HLRAlgo_BiPoint&           aBP       = mySegListIt.ChangeValue();
++  return HideSegment(myCurSegment, myWork, theStatus, theIndex, theReg1, theRegn, theOutl, theIntl);
++}
++
++//=================================================================================================
++
++HLRAlgo_BiPoint::PointsT& HLRAlgo_PolyAlgo::HideSegment(const int           theSegment,
++                                                        HidingWork&         theWork,
++                                                        HLRAlgo_EdgeStatus& theStatus,
++                                                        int&                theIndex,
++                                                        bool&               theReg1,
++                                                        bool&               theRegn,
++                                                        bool&               theOutl,
++                                                        bool&               theIntl) const
++{
++  const Segment&             aSegment  = mySegments(static_cast<size_t>(theSegment - 1));
++  HLRAlgo_BiPoint&           aBP       = *aSegment.BiPoint;
+   HLRAlgo_BiPoint::PointsT&  aPoints   = aBP.Points();
+   HLRAlgo_BiPoint::IndicesT& anIndices = aBP.Indices();
+   theStatus = HLRAlgo_EdgeStatus(0.0, (float)myTriangle.TolParam, 1.0, (float)myTriangle.TolParam);
+@@ -520,26 +627,55 @@ HLRAlgo_BiPoint::PointsT& HLRAlgo_PolyAlgo::Hide(HLRAlgo_EdgeStatus& theStatus,
+     return aPoints;
+   }
+ 
+-  for (int s = 1; s <= myNbrShell; s++)
++  // The hiding faces whose cells meet the segment's: every face whose box
++  // test below can pass, each once (in the first cell both boxes share),
++  // then in the order of the faces, which is the order in which the
++  // shells and their faces hide the segment one after another.
++  HLRAlgo_PolyData::Triangle& aTriangle = theWork.myTriangle;
++  aTriangle.TolParam                    = myTriangle.TolParam;
++  aTriangle.TolAng                      = myTriangle.TolAng;
++  aTriangle.Tolerance                   = myTriangle.Tolerance;
++  NCollection_LinearVector<int>& aCandidates = theWork.myCandidates;
++  aCandidates.Clear();
++  for (int aCellY = aSegment.CellY1; aCellY <= aSegment.CellY2; ++aCellY)
+   {
+-    const occ::handle<HLRAlgo_PolyShellData>& aPsd = myHShell.ChangeValue(s);
+-    if (!aPsd->Hiding())
++    for (int aCellX = aSegment.CellX1; aCellX <= aSegment.CellX2; ++aCellX)
+     {
+-      continue;
++      const int aCell = aCellY * THE_GRID_SIZE + aCellX;
++      for (int anEntry = myCellStart(aCell); anEntry < myCellStart(aCell + 1); ++anEntry)
++      {
++        const int         aFaceIndex = myCellFaces(anEntry);
++        const HidingFace& aFace      = myFaces(static_cast<size_t>(aFaceIndex));
++        if (aCellX == (std::max)(aFace.CellX1, aSegment.CellX1)
++            && aCellY == (std::max)(aFace.CellY1, aSegment.CellY1))
++        {
++          aCandidates.Append(aFaceIndex);
++        }
++      }
+     }
++  }
++  std::sort(aCandidates.begin(), aCandidates.end());
+ 
+-    HLRAlgo_PolyShellData::ShellIndices& aShellIndices = aPsd->Indices();
+-    if (((aShellIndices.Max - anIndices.MinSeg) & 0x80100200) == 0
+-        && ((anIndices.MaxSeg - aShellIndices.Min) & 0x80100000) == 0)
++  int  aShell         = 0;
++  bool isShellCrossed = false;
++  for (const int aFaceIndex : aCandidates)
++  {
++    const HidingFace& aFace = myFaces(static_cast<size_t>(aFaceIndex));
++    if (aFace.Shell != aShell)
+     {
+-      const bool                                         isHidingShell = (s == myCurShell);
+-      NCollection_Array1<occ::handle<HLRAlgo_PolyData>>& aFace         = aPsd->HidingPolyData();
+-      const int                                          nbFace        = aFace.Upper();
+-      for (int f = 1; f <= nbFace; f++)
+-      {
+-        const occ::handle<HLRAlgo_PolyData>& aPd = aFace.ChangeValue(f);
+-        aPd->HideByPolyData(aPoints, myTriangle, anIndices, isHidingShell, theStatus);
+-      }
++      aShell = aFace.Shell;
++      const HLRAlgo_PolyShellData::ShellIndices& aShellIndices =
++        myHShell.Value(aShell)->Indices();
++      isShellCrossed = ((aShellIndices.Max - anIndices.MinSeg) & 0x80100200) == 0
++                       && ((anIndices.MaxSeg - aShellIndices.Min) & 0x80100000) == 0;
++    }
++    if (isShellCrossed)
++    {
++      aFace.PolyData->HideByPolyData(aPoints,
++                                     aTriangle,
++                                     anIndices,
++                                     aShell == aSegment.Shell,
++                                     theStatus);
+     }
+   }
+   return aPoints;
+diff --git a/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.hxx b/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.hxx
+index ad8e1751..7cd449ab 100644
+--- a/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.hxx
++++ b/src/ModelingAlgorithms/TKHLR/HLRAlgo/HLRAlgo_PolyAlgo.hxx
+@@ -19,6 +19,7 @@
+ 
+ #include <HLRAlgo_PolyData.hxx>
+ #include <HLRAlgo_BiPoint.hxx>
++#include <NCollection_LinearVector.hxx>
+ #include <NCollection_List.hxx>
+ 
+ class HLRAlgo_EdgeStatus;
+@@ -29,6 +30,19 @@ class HLRAlgo_PolyAlgo : public Standard_Transient
+ {
+ 
+ public:
++  //! The work data of one thread that hides segments with HideSegment().
++  //! Each thread hiding at the same time has its own.
++  class HidingWork
++  {
++  public:
++    HidingWork() = default;
++
++  private:
++    friend class HLRAlgo_PolyAlgo;
++    HLRAlgo_PolyData::Triangle    myTriangle;   //!< scratch of the triangle tests
++    NCollection_LinearVector<int> myCandidates; //!< hiding faces whose cells meet the segment's
++  };
++
+   Standard_EXPORT HLRAlgo_PolyAlgo();
+ 
+   Standard_EXPORT void Init(const int theNbShells);
+@@ -47,7 +61,8 @@ public:
+ 
+   void InitHide()
+   {
+-    myCurShell = 0;
++    myCurShell   = 0;
++    myCurSegment = 0;
+     NextHide();
+   }
+ 
+@@ -63,6 +78,23 @@ public:
+                                                  bool&               outl,
+                                                  bool&               intl);
+ 
++  //! Returns the number of segments of all the shells, numbered from 1 in
++  //! the order in which InitHide() and NextHide() visit them. Set by Update().
++  int NbSegments() const { return static_cast<int>(mySegments.Size()); }
++
++  //! Hides the segment theSegment (1 to NbSegments()) as Hide() hides the
++  //! current segment of InitHide() and NextHide(), with the same result.
++  //! It changes nothing of the algorithm: threads may hide different
++  //! segments at the same time, each with its own work data.
++  Standard_EXPORT HLRAlgo_BiPoint::PointsT& HideSegment(const int           theSegment,
++                                                        HidingWork&         theWork,
++                                                        HLRAlgo_EdgeStatus& status,
++                                                        int&                Index,
++                                                        bool&               reg1,
++                                                        bool&               regn,
++                                                        bool&               outl,
++                                                        bool&               intl) const;
++
+   void InitShow()
+   {
+     myCurShell = 0;
+@@ -82,13 +114,43 @@ public:
+ 
+   DEFINE_STANDARD_RTTIEXT(HLRAlgo_PolyAlgo, Standard_Transient)
+ 
++private:
++  //! A segment to hide: its shell and the cells of the grid its box covers.
++  struct Segment
++  {
++    HLRAlgo_BiPoint* BiPoint;
++    int              Shell;
++    int              CellX1, CellX2, CellY1, CellY2;
++  };
++
++  //! A face that hides: its shell and the cells of the grid its box covers.
++  struct HidingFace
++  {
++    HLRAlgo_PolyData* PolyData;
++    int               Shell;
++    int               CellX1, CellX2, CellY1, CellY2;
++  };
++
++  //! Sets the grid of the hiding faces from myFaces.
++  void makeGrid();
++
++  //! The cells of the grid covered by the integer box [theMin, theMax] of
++  //! the 1020 x 1020 x 508 quantization of the view.
++  static void cells(const int theMin, const int theMax, int& theCell1, int& theCell2);
++
+ private:
+   NCollection_Array1<occ::handle<HLRAlgo_PolyShellData>> myHShell;
+   HLRAlgo_PolyData::Triangle                             myTriangle;
+   NCollection_List<HLRAlgo_BiPoint>::Iterator            mySegListIt;
+   int                                                    myNbrShell;
+   int                                                    myCurShell;
++  int                                                    myCurSegment;
+   bool                                                   myFound;
++  NCollection_LinearVector<Segment>                      mySegments;
++  NCollection_LinearVector<HidingFace>                   myFaces;
++  NCollection_LinearVector<int>                          myCellStart; //!< per cell, then the end
++  NCollection_LinearVector<int>                          myCellFaces; //!< faces of the cells
++  HidingWork                                             myWork;      //!< work data of Hide()
+ };
+ 
+ #endif // _HLRAlgo_PolyAlgo_HeaderFile
+diff --git a/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.cxx b/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.cxx
+index 225e7205..578a1b57 100644
+--- a/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.cxx
++++ b/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.cxx
+@@ -4383,6 +4383,24 @@ HLRAlgo_BiPoint::PointsT& HLRBRep_PolyAlgo::Hide(HLRAlgo_EdgeStatus& theStatus,
+ 
+ //=================================================================================================
+ 
++HLRAlgo_BiPoint::PointsT& HLRBRep_PolyAlgo::HideSegment(const int                     theSegment,
++                                                        HLRAlgo_PolyAlgo::HidingWork& theWork,
++                                                        HLRAlgo_EdgeStatus&           theStatus,
++                                                        TopoDS_Shape&                 theShape,
++                                                        bool&                         theReg1,
++                                                        bool&                         theRegn,
++                                                        bool&                         theOutl,
++                                                        bool&                         theIntl) const
++{
++  int                       anIndex = 0;
++  HLRAlgo_BiPoint::PointsT& aPoints =
++    myAlgo->HideSegment(theSegment, theWork, theStatus, anIndex, theReg1, theRegn, theOutl, theIntl);
++  theShape = theIntl ? myFMap(anIndex) : myEMap(anIndex);
++  return aPoints;
++}
++
++//=================================================================================================
++
+ HLRAlgo_BiPoint::PointsT& HLRBRep_PolyAlgo::Show(TopoDS_Shape& theShape,
+                                                  bool&         theReg1,
+                                                  bool&         theRegn,
+diff --git a/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.hxx b/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.hxx
+index 3f09507c..893db637 100644
+--- a/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.hxx
++++ b/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyAlgo.hxx
+@@ -160,6 +160,22 @@ public:
+                                                  bool&               outl,
+                                                  bool&               intl);
+ 
++  //! Returns the number of segments to hide (HLRAlgo_PolyAlgo::NbSegments()).
++  int NbSegments() const { return myAlgo->NbSegments(); }
++
++  //! Hides the segment theSegment (1 to NbSegments()) as Hide() hides the
++  //! current one, with the same result. It changes nothing of the
++  //! algorithm: threads may hide different segments at the same time, each
++  //! with its own work data.
++  Standard_EXPORT HLRAlgo_BiPoint::PointsT& HideSegment(const int                     theSegment,
++                                                        HLRAlgo_PolyAlgo::HidingWork& theWork,
++                                                        HLRAlgo_EdgeStatus&           status,
++                                                        TopoDS_Shape&                 S,
++                                                        bool&                         reg1,
++                                                        bool&                         regn,
++                                                        bool&                         outl,
++                                                        bool&                         intl) const;
++
+   void InitShow() { myAlgo->InitShow(); }
+ 
+   bool MoreShow() const { return myAlgo->MoreShow(); }
+diff --git a/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyHLRToShape.cxx b/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyHLRToShape.cxx
+index 512db1ed..509b71a7 100644
+--- a/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyHLRToShape.cxx
++++ b/src/ModelingAlgorithms/TKHLR/HLRBRep/HLRBRep_PolyHLRToShape.cxx
+@@ -27,6 +27,10 @@
+ #include <TopoDS_Shape.hxx>
+ #include <TopTools_ShapeMapHasher.hxx>
+ #include <NCollection_Map.hxx>
++#include <NCollection_Array1.hxx>
++#include <OSD_ThreadPool.hxx>
++
++#include <algorithm>
+ 
+ //=================================================================================================
+ 
+@@ -38,43 +42,71 @@ void HLRBRep_PolyHLRToShape::Update(const occ::handle<HLRBRep_PolyAlgo>& A)
+ {
+   myAlgo     = A;
+   myHideMode = true;
+-  double               sta, end;
+-  float                tolsta, tolend;
+-  HLRAlgo_EdgeIterator It;
+   myBiPntVis.Clear();
+   myBiPntHid.Clear();
+-  TopoDS_Shape       S;
+-  bool               reg1, regn, outl, intl;
+-  const gp_Trsf&     T = myAlgo->Projector().Transformation();
+-  HLRAlgo_EdgeStatus status;
++  const gp_Trsf& T = myAlgo->Projector().Transformation();
+ 
+-  for (myAlgo->InitHide(); myAlgo->MoreHide(); myAlgo->NextHide())
++  // The segments are hidden in blocks beside each other on the threads of
++  // the default pool, each block's lines in lists of its own, which are
++  // then joined in the order of the blocks: the lines are those, in the
++  // order, that hiding one segment after another gives.
++  const int aNbSegments = myAlgo->NbSegments();
++  if (aNbSegments < 1)
+   {
+-    HLRAlgo_BiPoint::PointsT& aPoints = myAlgo->Hide(status, S, reg1, regn, outl, intl);
+-    gp_XYZ                    aSta    = aPoints.Pnt1;
+-    gp_XYZ                    aEnd    = aPoints.Pnt2;
+-    T.Transforms(aSta);
+-    T.Transforms(aEnd);
+-    const gp_XY aSta2D(aSta.X(), aSta.Y());
+-    const gp_XY aEnd2D(aEnd.X(), aEnd.Y());
+-    const gp_XY aD = aEnd2D - aSta2D;
+-    if (aD.Modulus() > 1.e-10)
++    return;
++  }
++  const int                                           aNbBlocks = (aNbSegments + 63) / 64;
++  NCollection_Array1<NCollection_List<HLRBRep_BiPnt2D>> aVisible(0, aNbBlocks - 1);
++  NCollection_Array1<NCollection_List<HLRBRep_BiPnt2D>> aHidden(0, aNbBlocks - 1);
++  OSD_ThreadPool::Launcher aLauncher(*OSD_ThreadPool::DefaultPool(), aNbBlocks > 1 ? -1 : 1);
++  NCollection_Array1<HLRAlgo_PolyAlgo::HidingWork> aWork(aLauncher.LowerThreadIndex(),
++                                                         aLauncher.UpperThreadIndex());
++  const HLRBRep_PolyAlgo& anAlgo = *myAlgo;
++  aLauncher.Perform(0, aNbBlocks, [&](const int theThread, const int theBlock) {
++    HLRAlgo_PolyAlgo::HidingWork&      aThreadWork = aWork.ChangeValue(theThread);
++    NCollection_List<HLRBRep_BiPnt2D>& aVis        = aVisible.ChangeValue(theBlock);
++    NCollection_List<HLRBRep_BiPnt2D>& aHid        = aHidden.ChangeValue(theBlock);
++    double                             sta, end;
++    float                              tolsta, tolend;
++    HLRAlgo_EdgeIterator               It;
++    TopoDS_Shape                       S;
++    bool                               reg1, regn, outl, intl;
++    HLRAlgo_EdgeStatus                 status;
++    const int                          aLast = (std::min)(aNbSegments, 64 * (theBlock + 1));
++    for (int aSegment = 64 * theBlock + 1; aSegment <= aLast; ++aSegment)
+     {
+-
+-      for (It.InitVisible(status); It.MoreVisible(); It.NextVisible())
++      HLRAlgo_BiPoint::PointsT& aPoints =
++        anAlgo.HideSegment(aSegment, aThreadWork, status, S, reg1, regn, outl, intl);
++      gp_XYZ aSta = aPoints.Pnt1;
++      gp_XYZ aEnd = aPoints.Pnt2;
++      T.Transforms(aSta);
++      T.Transforms(aEnd);
++      const gp_XY aSta2D(aSta.X(), aSta.Y());
++      const gp_XY aEnd2D(aEnd.X(), aEnd.Y());
++      const gp_XY aD = aEnd2D - aSta2D;
++      if (aD.Modulus() > 1.e-10)
+       {
+-        It.Visible(sta, tolsta, end, tolend);
+-        myBiPntVis.Append(
+-          HLRBRep_BiPnt2D(aSta2D + sta * aD, aSta2D + end * aD, S, reg1, regn, outl, intl));
+-      }
+ 
+-      for (It.InitHidden(status); It.MoreHidden(); It.NextHidden())
+-      {
+-        It.Hidden(sta, tolsta, end, tolend);
+-        myBiPntHid.Append(
+-          HLRBRep_BiPnt2D(aSta2D + sta * aD, aSta2D + end * aD, S, reg1, regn, outl, intl));
++        for (It.InitVisible(status); It.MoreVisible(); It.NextVisible())
++        {
++          It.Visible(sta, tolsta, end, tolend);
++          aVis.Append(
++            HLRBRep_BiPnt2D(aSta2D + sta * aD, aSta2D + end * aD, S, reg1, regn, outl, intl));
++        }
++
++        for (It.InitHidden(status); It.MoreHidden(); It.NextHidden())
++        {
++          It.Hidden(sta, tolsta, end, tolend);
++          aHid.Append(
++            HLRBRep_BiPnt2D(aSta2D + sta * aD, aSta2D + end * aD, S, reg1, regn, outl, intl));
++        }
+       }
+     }
++  });
++  for (int aBlock = 0; aBlock < aNbBlocks; ++aBlock)
++  {
++    myBiPntVis.Append(aVisible.ChangeValue(aBlock));
++    myBiPntHid.Append(aHidden.ChangeValue(aBlock));
+   }
+ }
+ 

@@ -6,6 +6,7 @@
 # check-all sources: core/model/src/joints.rs core/model-api/src/joints.rs tools/cli
 # check-all sources: tools/ui-scripts/joint-holder.mitcad-ui tools/ui-scripts/joint-holder.json
 # check-all sources: tools/ui-scripts/joint-holder-reported.mitcad-ui
+# check-all sources: app/framework/ViewGhosts.hpp app/framework/Command.hpp app/OcctViewer.cpp
 # Joint's picks under another component than the active one (mitcad#1856,
 # GitHub mitcad/Mitcad#344) through the real UI, the shared input script
 # tools/ui-scripts/joint-holder.mitcad-ui (also run by the Windows and
@@ -18,7 +19,11 @@
 # preference (no question the next time); Preferences > Assembly sets it
 # back to Ask, and Keep Roller keeps the joint in the roller, which refuses
 # the frame's face. Last, Tube's and Frame's faces selected before Joint
-# starts get the same question before the panel opens (mitcad#1864).
+# starts get the same question before the panel opens (mitcad#1864). Then,
+# with the root active, Joint, As-Built Joint and Assembly Constraint
+# between two parts of one sub-assembly (mitcad#2027, GitHub
+# mitcad/Mitcad#457): side A's ghost covers only its own occurrence's
+# bodies, B is picked beside it and the question offers the sub-assembly.
 #
 # Then, when the private test files have it (MITCAD_MITCAD_REPORTED,
 # github-344), the reported design itself: with its roller active, a Joint
@@ -41,7 +46,7 @@ export MITCAD_TEST_INPUT=$here/ui-scripts/joint-holder.mitcad-ui
 "$cli" run "$here/ui-scripts/joint-holder.json" --save "$work/joint-holder.mitcad" || exit 1
 ui_start_display
 ui_start_app --ui=qt --no-mcp --open "$work/joint-holder.mitcad"
-for _ in $(seq 1 1500); do
+for _ in $(seq 1 2700); do
   kill -0 "$UI_RUNNER" 2> /dev/null || break
   sleep 0.2
 done
@@ -58,6 +63,11 @@ ui_expect_log 'Joint component answer: keep Roller' 'asked again, Keep Roller'
 ui_expect_log 'Panel Joint error: Select geometry inside Roller, the component the joint goes into.' \
   'kept in Roller, the frame'"'"'s face is refused'
 ui_expect_log 'Joint component of the selection made before it: 2 pick(s)' 'the selection made before Joint is asked about'
+ui_expect_log 'View ghosts: only O6/O7 (1 body)' 'side A inside the sub-assembly ghosts only its own body'
+ui_expect_log 'View ghosts: only O6 (1 body)' "the sub-assembly's own body ghosts only itself"
+ui_expect_log 'Joint component answer: make it in Carrier' 'Make it in the sub-assembly that holds both'
+ui_expect_log 'As-Built Joint component answer: make it in Carrier' 'As-Built Joint asks for the sub-assembly'
+ui_expect_log 'Assembly Constraint component answer: make it in Carrier' 'Assembly Constraint asks for the sub-assembly'
 ui_expect_log 'TestDriver: done' 'the joint goes into the component that holds its picks'
 UI_RUNNER=""
 

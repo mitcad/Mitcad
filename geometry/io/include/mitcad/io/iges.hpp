@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <Message_ProgressRange.hxx>
+
 #include "mitcad/io/body.hpp"
 
 namespace mitcad::io {
@@ -24,7 +26,9 @@ void write_iges(const std::string& path, const std::vector<Body>& bodies,
 
 // Reads an IGES file as bodies in millimetres. Loose faces are sewn and
 // closed shells become solids, so a surface-only export of a solid comes
-// back as a solid.
-std::vector<Body> read_iges(const std::string& path);
+// back as a solid. As read_step, the parsing cannot be stopped and the
+// transfer stops within `range`, throwing Cancelled (mitcad#2032).
+std::vector<Body> read_iges(const std::string& path,
+                            const Message_ProgressRange& range = Message_ProgressRange());
 
 } // namespace mitcad::io

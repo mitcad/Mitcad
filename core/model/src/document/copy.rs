@@ -270,13 +270,21 @@ impl DocState {
                     .place(components[&o.component], components[&o.parent], o.transform);
             let placed = self.assembly.occurrence_mut(target).expect("placed");
             set_flags(placed, o);
-            // A flexible one stays flexible, its own joint values those of
-            // the copied joints (mitcad#1805).
-            placed.flexible = o
-                .flexible
-                .as_ref()
-                .map(|flex| flex.remapped(&|uid| uids.get(&uid).copied()));
             occurrences.insert(o.uid, target);
+        }
+        // A flexible one stays flexible, its own joint values those of the
+        // copied joints (mitcad#1805), its kept placements those of the
+        // copied parts (mitcad#2016).
+        for (o, target) in &occurrences {
+            if let Some(flex) = a.occurrence(*o).and_then(|o| o.flexible.as_ref()) {
+                let flex = flex.remapped(&|uid| uids.get(&uid).copied(), &|o| {
+                    occurrences.get(&o).copied()
+                });
+                self.assembly
+                    .occurrence_mut(*target)
+                    .expect("placed")
+                    .flexible = Some(flex);
+            }
         }
         // Their properties, and the bodies' of the copied features
         // (mitcad#496): another design's root gives its own to `into`.

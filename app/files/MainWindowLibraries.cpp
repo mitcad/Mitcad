@@ -42,7 +42,6 @@ void MainWindow::registerLibraryCommands() {
     d.tooltip = tooltip;
     d.kind = CommandDef::Kind::Action;
     d.mode = CommandDef::Mode::Any;
-    d.tab.clear(); // menus
     d.run = std::move(run);
     return d;
   };
@@ -52,9 +51,6 @@ void MainWindow::registerLibraryCommands() {
                           tr("Places a library component, linked or as a copy"),
                           [this] { browseComponents(false); });
   insert.mode = CommandDef::Mode::Model;
-  insert.tab = QStringLiteral("SOLID");
-  insert.group = QStringLiteral("ASSEMBLE");
-  insert.section = QStringLiteral("insert"); // after Insert Component (mitcad#1778)
   insert.keywords = {QStringLiteral("library"), QStringLiteral("fastener"), QStringLiteral("screw"),
                      QStringLiteral("bolt"), QStringLiteral("nut"), QStringLiteral("washer"),
                      QStringLiteral("standard part"), QStringLiteral("iso")};
@@ -146,35 +142,30 @@ void MainWindow::updateLibrariesAtStart() {
   update.start();
 }
 
-void MainWindow::createLibraryMenu(QMenu* tools) {
-  QMenu* menu = tools->addMenu(tr("&Libraries"));
-  menu->setObjectName(QStringLiteral("librariesMenu"));
-  // Grouped (mitcad#1250): what to place, this design's components and
-  // publishing, the print libraries, then where the libraries come from.
-  // An empty id is a separator. The native macOS menu reads this one
-  // (MainWindow::refreshNativeActions), separators included. Browse
+void MainWindow::prepareLibraryMenuActions() {
+  // Tools › Libraries (the command layout's, mitcad#1951; grouped since
+  // mitcad#1250): what to place, this design's components and publishing,
+  // the print libraries, then where the libraries come from. Browse
   // Components… (mitcad#1283) is the one entry to place: Insert from
   // Library and Community Library open its views from the ribbon, the
-  // shortcuts and the command search.
+  // shortcuts and the command search. Their texts with the menu's
+  // underlined letters.
   const std::pair<const char*, QString> entries[] = {
       {"tools.browse_components", tr("&Browse Components…")},
-      {"", QString()},
       {"tools.library_parts", tr("Components in This &Design…")},
       {"tools.publish_library", tr("P&ublish to Library…")},
-      {"", QString()},
       {"tools.material_library", tr("&Material Library…")},
       {"tools.printer_library", tr("P&rinter Library…")},
       {"tools.process_library", tr("Pr&ocess Library…")},
-      {"", QString()},
       {"tools.libraries", tr("Library &Sources…")}};
   for (const auto& [id, text] : entries) {
-    if (*id == '\0') {
-      menu->addSeparator();
-    } else if (QAction* action = m_registry->action(QString::fromLatin1(id))) {
+    if (QAction* action = m_registry->action(QString::fromLatin1(id))) {
       action->setText(text);
-      menu->addAction(action);
     }
   }
+}
+
+void MainWindow::logLibraryMenu(QMenu* menu) {
   // For the UI tests: the entries as the menu opens, `-` a separator.
   connect(menu, &QMenu::aboutToShow, this, [menu] {
     QStringList shown;

@@ -8,9 +8,16 @@
 #      not rolled back (the part stays, 3 bodies).
 #   2. Length 600 mm and the row Large, OK: one build_edit, the part
 #      30 x 30 x 600 = 540000 mm3, one undo step; Undo restores it.
-#   3. A double-click on the bounding solid (no edit panel): the plain
+#   3. Press Pull on the profile's free end (mitcad#2030): picking it
+#      activates the part's component; Continue offers Edit Profile rows
+#      test L=500 Instead, which opens Derived Component at its Length;
+#      700 mm and OK: one build_edit, the part 20 x 20 x 700 = 280000 mm3,
+#      named after its new designation (Profile rows test L=700) in the
+#      same undo step; one Undo restores the length and the name, another
+#      the activation.
+#   4. A double-click on the bounding solid (no edit panel): the plain
 #      message as information with Edit Parameters, no failure, no panel.
-#   4. The panel again: Open Source Design opens the library source the
+#   5. The panel again: Open Source Design opens the library source the
 #      design keeps, read-only, in a window of its own (one body, the
 #      source's 20 x 20 x 500).
 # Run by tools/ui-derived-part-edit-test.sh (Linux),
@@ -49,7 +56,46 @@ wait-idle
 expect-model-bodies 3 202000
 expect-undo-depth ${start} 0
 
-# 3. A feature type without an edit panel: plain words, information.
+# 3. Press Pull on the profile's free end: its length, and the name follows.
+command view.top
+wait-idle
+command view.fit
+wait-idle
+capture-undo-depth pressed
+mark
+command solid.press_pull
+expect-log '^Command Press Pull started'
+wait-log '^Pick places:' 20
+click-pick 'face F[0-9]+[.]b0/F[0-9]+:end_b'
+wait-log '^Activated Profile rows test L=500(:1)? for Press Pull ' 30
+wait-idle
+mark
+qt-choice input_continue 'Edit Profile rows test L=500 Instead'
+wait-log '^Press Pull opened DerivedComponent1 for its length$' 30
+wait-log '^Editing F\d+ with Derived Component$' 30
+wait-idle
+type-in '^Panel Derived Component input length at ' '700 mm'
+wait-idle
+wait-log '^Inspect Derived Component: .*; changes: length 700 mm$'
+mark
+button '^OK$'
+wait-log '^Derived component C\d+ edited: length 700 mm$'
+expect-log '^Done Derived Component$'
+wait-idle
+expect-model-bodies 3 282000
+wait-log '^Browser Root/Profile rows test L=700:1 at ' 30
+expect-undo-depth ${pressed} 2
+mark
+command edit.undo
+wait-idle
+expect-model-bodies 3 202000
+wait-log '^Browser Root/Profile rows test L=500:1 at ' 30
+expect-undo-depth ${pressed} 1
+command edit.undo
+wait-idle
+expect-undo-depth ${pressed} 0
+
+# 4. A feature type without an edit panel: plain words, information.
 mark
 dblclick-logged '^Timeline BoundingSolid1 at '
 wait-log '^Message band: info This feature has no edit panel yet[.] Its values can be changed in Edit Parameters[.]$'
@@ -60,7 +106,7 @@ expect-no-log '^Message band: error '
 expect-never 'cannot be edited in MitCad yet'
 expect-model-bodies 3 202000
 
-# 4. Open Source Design of the library part: its source, read-only.
+# 5. Open Source Design of the library part: its source, read-only.
 focus-document-window design
 mark
 dblclick-logged '^Timeline DerivedComponent1 at '

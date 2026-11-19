@@ -456,7 +456,8 @@ pub(super) fn save_with(
                 pattern: o.pattern.clone(),
                 visible_when: state.bindings.occurrence_visible_when.get(&o.uid).cloned(),
                 transparent: o.transparent,
-                flexible: o.flexible.clone(),
+                // Without kept placements that no longer apply (mitcad#2016).
+                flexible: assembly.saved_flex(o.uid),
             })
             .collect(),
         next_occurrence: next_occurrence_out(assembly),

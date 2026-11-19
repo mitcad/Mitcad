@@ -1396,15 +1396,32 @@ parameters.
   again, with the warning of [renamed faces](#faces-edges-and-vertices-a-sketch-change-renamed)),
   so an upstream edit moves or resizes the extrusion with the face; the
   body is read in the feature's component, and the feature depends on it
-  and on the features the name refers to. It takes an extent `distance`,
-  `symmetric` or `two_sides` of distances, each side with its `taper` as
-  for profiles (mitcad#541: the outside grows away from the face and its
-  holes shrink with a positive taper), from the face (`profile_plane`) or
-  an `offset` along its outward normal, and a `direction` of its own
-  (mitcad#541, not in the face's plane; the distances along it, a taper
-  growing the face in its plane by `d tan(taper)` at distance `d`); no
-  `profiles`, `thin`, `surface`, `curves`, `wrap`, `cut_scope` or start
-  object (refused: `an extrusion of a body face …`). A face that is gone,
+  and on the features the name refers to. It takes every extent of
+  profiles (mitcad#2033): `distance`, `symmetric`, `to_object`,
+  `through_all` (one way or `both_sides`) and `two_sides` of any of
+  their sides, each side with its `taper` as for profiles (mitcad#541:
+  the outside grows away from the face and its holes shrink with a
+  positive taper; up to an object only along the face's normal). Up to
+  an object: a plane, a face (its surface continued, or `chained` with
+  the faces next to it), a body (its first face reached, or `through`
+  it), a point or a line (the plane through it parallel to the face), of
+  the face's own body or another one, moved by the side's `offset`; the
+  face's prism past it, trimmed where it reaches it (the caps there
+  named as the side's far cap). The stepped block's lower top extruded
+  `to_object` the higher top's face with `join` fills the step: one
+  level body. Through all: past every participant body (all bodies when
+  none are listed) from the face, as for profiles (`there are no bodies
+  in the extrude direction` when none lies that way). From the face
+  (`profile_plane`) or an `offset` along its outward normal, and a
+  `direction` of its own (mitcad#541, not in the face's plane; the
+  distances along it, a taper growing the face in its plane by
+  `d tan(taper)` at distance `d`); no `profiles`, `thin`, `surface`,
+  `curves`, `wrap`, `cut_scope` or start object (refused: `an extrusion
+  of a body face starts at the face or offset from it`, `… takes no
+  sketch profiles`, `… has no thin walls, surface, curves or wrap`, `…
+  works on the bodies of its own component, without cut_scope`). Two
+  sides built apart (a taper or a target) leave no face between them
+  (`mid(<face>)` only where their shapes differ). A face that is gone,
   not planar without a `direction` (`face F3:side0 is not planar: an
   extrusion takes a planar face …`; a curved face goes along a
   `direction` only, as its prism, without a taper or offset), a mesh
@@ -2567,9 +2584,26 @@ form lists edge sets:
   fails); a chamfer's analytic blend (a cone along an arc) runs on past
   the vertex, cut by the face beyond the crease, up to where its other
   contact reaches that face. Elsewhere the kernel follows its own chains,
-  so a set without `tangent_chain` whose kernel chain reaches an
-  unselected edge is unsupported, and edges the kernel chains beyond
-  MitCad's chain stay bevelled.
+  and edges the kernel chains beyond MitCad's chain stay bevelled.
+- Without `tangent_chain`, only the selected edges are rounded or
+  bevelled, also where the kernel's chain runs on into an edge no set
+  selects (a straight edge into a rounded corner; mitcad#2037): the
+  dressup is built over the kernel's whole chain and kept over the
+  selected edges. Where a selected edge meets the next edge, the rounding
+  or bevel runs out over that edge: in each section its profile (the
+  bevel's line, the rounding's arc) lies closer to the edge by a depth
+  that grows linearly with the length along it, from the full section at
+  the vertex to nothing just before the edge's far vertex (2 % of its
+  length). The edges beyond stay sharp. Where the next edge is shorter
+  than the dressup is wide, or the run-out does not build, the dressup
+  ends flat at the vertex, in the plane normal to the edge there. The run-out's face is
+  `<feature>:runout(<edge>)` (the edge it runs over), the flat end's
+  `<feature>:runout_end(<vertex>)`; the other faces keep the dressup's
+  names. Constant and chord length fillets and every chamfer do this;
+  variable, asymmetric, spline and curvature continuous (G2) fillets are
+  refused there, in words ("… need Tangent Chain on where a selected edge
+  continues smoothly into an edge not selected"), as is a set where
+  neither the run-out nor the flat end builds.
 - A rolling ball rounding of constant radius whose chain ends at a small
   notch in the rim it rounds (edges not rounded, each within the rounding's
   contact on the face the notch breaks and within the ball's diameter of
@@ -2752,15 +2786,23 @@ form lists edge sets:
   cuts it and grows out to meet it (OCCT port patch 1700).
 - Pieces left of a face the dressup takes away (mitcad#1821; chamfers
   too): a face of the result that is a new piece of one of the input's
-  faces (its name the input face's with a piece's `#k`), beside a face the
-  dressup made, smaller than the dressup's reach squared and wholly within
-  that reach of the chain's edges (a triangle of the old end face left at
-  each corner of a chain over rounded corners, between the neighbouring
-  bevels) is removed, the faces round it extended to meet; where that does
-  not give one valid solid of nearly the same volume the result keeps the
-  pieces with a warning, `the chamfer leaves 8 small pieces of a face it
-  takes away, which could not be removed: check the result`, the pieces as
-  its places.
+  faces (its name the input face's with a piece's `#k`), between two or
+  more faces the dressup made, smaller than the dressup's reach squared and
+  wholly within that reach of the chain's edges (a triangle of the old end
+  face left at each corner of a chain over rounded corners, between the
+  neighbouring bevels) is removed: where the faces round it are planes,
+  cylinders, cones, spheres or tori, they are extended to meet; elsewhere
+  (beside a rounding's faces, mitcad#1858), or where that fails, the
+  dressup's faces beside the piece are cut back a little past it and the
+  piece with their near parts is replaced by one smooth patch, tangent to
+  the dressup's faces round it and, for a fillet, to the faces it rounds
+  (a face `<feature>:corner(<vertex>)`, named after the input's vertex
+  where the dressed edges beside it meet, the nearest such; the other
+  faces keep their names). Where neither gives one
+  valid solid of nearly the same volume the result keeps the pieces with a
+  warning, `the chamfer leaves 8 small pieces of a face it takes away,
+  which could not be removed: check the result`, the pieces as its places;
+  `geometry.dressup_blend_remnants`.
 - Overlapping roundings of opposite kinds (mitcad#235): where the
   roundings of a convex and a concave edge overlap on the face between
   them (a step narrower than the two are wide) and OCCT's fillet fails
@@ -5196,7 +5238,8 @@ other caller such as the importers): `join: a mesh body (faces without
 surfaces) cannot be used; the operation works on solid and surface
 bodies`. A tool's contacts take a mesh body as apart, a mesh face's
 `face_geometry` is `mesh` (not planar), and a sketch's section of a mesh
-face is an error.
+face is an error (`mesh_section` cuts a mesh body into sketches instead:
+[Mesh tools for reverse engineering](#mesh-tools-for-reverse-engineering)).
 
 ### Body ids of a split's pieces
 
@@ -5352,7 +5395,7 @@ Tests: `core.model.sketch-refs` (`profile_selection_tests.rs`), `cli.mcp`
 | `group_features` | `features` (uids of a run of features next to each other in the timeline, in any order, none in a group yet), `name` (default the next free `Group<n>`) | `name` |
 | `ungroup` | `name` | the features stay |
 | `rename_group` | `name`, `new_name` | |
-| `recompute` | | `notices`: one information for each drawing of a design file written before mitcad#1293 whose views were pinned to the bodies shown (*Drawings in the design*), when there are any |
+| `recompute` | `all` (default false): every feature evaluated again from the start, without cached or stored results ([Recompute All](#recompute-all-mitcad1982)) | `notices`: one information for each drawing of a design file written before mitcad#1293 whose views were pinned to the bodies shown (*Drawings in the design*), when there are any; with `all`, `changed` |
 | `sketch.*` | see [Sketch commands](#sketch-commands) | |
 
 - New features go in at the timeline marker, which moves after them
@@ -5379,7 +5422,10 @@ Tests: `core.model.sketch-refs` (`profile_selection_tests.rs`), `cli.mcp`
   (mitcad#1811): its sides keep their pose, a move of them on the
   timeline taken into account (`Document::held_placements`); only the
   joints to what goes are removed, and undo brings back the features,
-  the joints and the occurrences' own placements. A joint deleted by
+  the joints and the occurrences' own placements. A free part of a
+  flexible occurrence such a joint placed stays as that occurrence's own
+  placement of it (mitcad#2017, [Flexible
+  subassemblies](#flexible-subassemblies-mitcad1793)). A joint deleted by
   itself (its own `uid`) still lets what it placed go back where it was
   placed.
 - `reorder_feature` refuses a position where a feature would come before
@@ -5399,6 +5445,21 @@ Tests: `core.model.sketch-refs` (`profile_selection_tests.rs`), `cli.mcp`
   leaves it (the only member takes the group along), an empty group goes.
   Saved as `"groups": [{"name", "features"}]`; a favourite parameter as
   `"favorite": true`.
+
+#### Recompute All (mitcad#1982)
+
+`{"cmd": "recompute", "all": true}` evaluates every feature again from the
+start of the timeline, with none of the results the memory cache or the
+result store holds (`Document::try_recompute_all`); its result's
+`recomputed` counts every feature it evaluated. The results of the run
+become the cache; a cancelled run leaves the document, its results and its
+cache as they were. What the run measures anew (a driven dimension's
+value, a Flex item's nodes) is one undo step, `Recompute All`, when it
+differs from the state, and `changed` is true; otherwise there is no step
+and `changed` is false. A failed feature is reported as in every command
+(`error`, `error_notice`, `failed_features`). The application's Manage ›
+Design › Recompute All runs it. Test: `core.model.api`
+(`recompute_all_tests.rs`).
 
 #### Feature names are not unique (mitcad#1107)
 
@@ -5501,7 +5562,11 @@ once.
 - Sketches and construction features: by default a sketch is hidden
   while a feature uses it (a profile, curves or points; suppressed
   features and those after the marker count too) and shown while none
-  does; construction geometry is shown. A light bulb set with
+  does; construction geometry is shown. A sketch or a 3D sketch that
+  projects or intersects another sketch's curves or points
+  (`sketch.project`, also with `section`, and a 3D sketch's linked
+  projections) does not use that sketch: the source stays shown while
+  more of its curves are picked (mitcad#2045). A light bulb set with
   `set_feature_visible` wins; it is kept and saved with the feature
   (`"visible": true` or `false`) only where it differs from the default,
   so showing a hidden sketch that no feature uses forgets it.
@@ -6099,6 +6164,46 @@ them; compared field by field, `render.output.format png -> exr`).
 - The model only keeps these settings; the application and `mitcad-cli`
   render with them.
 
+### Render shots
+
+The cameras of the Render workspace's Frame stage (mitcad#2013,
+`core/model-base/src/render_settings.rs`): each shot a named camera that
+an image is rendered through, as a named view keeps one. The render
+settings' `shots`, a list in the `render_settings` query (`[]` without
+any), changed by commands of their own. Lengths in mm, Z up.
+
+| Field | Values | Default | |
+|---|---|---|---|
+| `id` | letters, digits, `_`, `-` | `shot<n>` | what the commands name it by; cannot change |
+| `name` | text, unique among the shots | `Shot<n>` | |
+| `eye` | [x, y, z] mm, within 10⁷ | [0, -500, 0] | where the camera is |
+| `target` | [x, y, z] mm, within 10⁷ | [0, 0, 0] | the point it looks at; not the eye |
+| `up` | [x, y, z], not zero | [0, 0, 1] | upwards in the image; not along the line of sight |
+| `perspective` | bool | true | a perspective projection; orthographic when false |
+| `height` | more than 0, within 10⁷ mm | 200 | how much of the design the image shows: its height at the target |
+
+| Command | Fields | Result |
+|---|---|---|
+| `add_render_shot` | the shot's fields, all optional (the workspace's Save Shot sends the view's camera); `id` when not the next free `shot<n>` | `id`; undo step `Add Shot <name>` |
+| `edit_render_shot` | `id`, the fields that change (`null`: the field's default): `name` renames, the camera's fields move it (the workspace's Update to View) | `changed`; undo step `Rename Shot <old> to <new>` or `Change Shot <name>` unless nothing changes |
+| `delete_render_shot` | `id` | undo step `Delete Shot <name>` |
+
+- At most 256 shots; ids and names are unique. Values out of range,
+  unknown fields, a camera that looks nowhere and unknown ids are refused
+  with the shot's place (``shots.shot1: up must not be along the line of
+  sight``); nothing changes then. `set_render_settings` has no `shots`,
+  and `reset_render_settings` keeps them: they are cameras, not settings.
+- They change no geometry and recompute nothing. The design file keeps
+  them in `"render": {"shots": [...]}`, left out when there are none, so a
+  design without shots opens in a MitCad older than mitcad#2013; an older
+  MitCad refuses a design with shots. The comparison of versions lists a
+  shot added or removed (`render.shots.shot1 (none) -> Hero`) and its
+  changed fields (`render.shots.shot1.height 80 -> 120`). Reorient turns
+  their cameras with the design, as it turns named views.
+- The application renders a shot as it renders a named view: the Render
+  workspace's Output stage renders the current shot, and Render All Shots
+  renders each one after the other.
+
 ## Queries
 
 `{"query": "<name>", …}`; the result is JSON. Bodies are those at the
@@ -6114,7 +6219,7 @@ timeline marker.
 | `appearances` | | the library's and the document's appearances with their parameters ([Appearances](#appearances)) |
 | `appearance_image` | `id`, `map` (`base_color` default, `normal`, `roughness`, `metalness`, `occlusion`) | an embedded image of an appearance's texture set: `data` (base64), `format`, `sha256` ([Textures](#textures), [Texture map sets](#texture-map-sets)) |
 | `render_settings` | | the document's render settings, every section and field ([Render settings](#render-settings)) |
-| `bodies` | `properties`, `volumes`, `versions`, `bbox` | `uid`, `name`, `component` (when not the root's), `visible`, `material`, `appearance`, `face_appearances` ([Appearances of faces](#appearances-of-faces)) (when set), `mesh`: true for a mesh body ([Mesh bodies in surface operations](#mesh-bodies-in-surface-operations)); with `"properties": true` also `kind` (`solid`, `sheet`: faces or open shells, `mesh`, `empty`), `volume`, `area`, `center`, `bbox` {`min`, `max`} (in the component's coordinates), `faces`, `edges` (counts); with `"volumes": true` only `volume` (cheaper); with `"versions": true` also `version`, the shape's version as 32 hexadecimal digits, which changes whenever the body's shape does (mitcad#689: MCP's command results list the bodies a command changed); with `"bbox": true` also `bbox` without the other properties (mitcad#714: the boxes in MCP's `changes`) |
+| `bodies` | `properties`, `volumes`, `versions`, `bbox`, `bbox_known` | `uid`, `name`, `component` (when not the root's), `visible`, `material`, `appearance`, `face_appearances` ([Appearances of faces](#appearances-of-faces)) (when set), `mesh`: true for a mesh body ([Mesh bodies in surface operations](#mesh-bodies-in-surface-operations)); with `"properties": true` also `kind` (`solid`, `sheet`: faces or open shells, `mesh`, `empty`), `volume`, `area`, `center`, `bbox` {`min`, `max`} (in the component's coordinates), `faces`, `edges` (counts); with `"volumes": true` only `volume` (cheaper); with `"versions": true` also `version`, the shape's version as 32 hexadecimal digits, which changes whenever the body's shape does (mitcad#689: MCP's command results list the bodies a command changed); with `"bbox": true` also `bbox` without the other properties (mitcad#714: the boxes in MCP's `changes`), measured beside each other, except for the bodies `bbox_known` names ({uid: version}) at their current versions (mitcad#2021: MCP's snapshot after a command measures only the bodies it added or changed) |
 | `profiles` | `hashes`, `sketch` (optional, mitcad#1269: a sketch's uid or name, as [Feature names are not unique](#feature-names-are-not-unique-mitcad1107) reads it; only that sketch's regions; a name or uid no sketch has is refused), `measures` (optional, mitcad#1587: each region's `area` and `center`; MCP asks for them), `point` (optional, `[u, v]` in sketch coordinates, mitcad#1587: only the region that holds it) | `sketch`, `sketch_name`, `region`, `consumed` (an extrude uses it), `face_bounded`: true when an implicit supporting-face boundary participates; with `"hashes": true` also `hash` (16 hex digits of the region's geometry and sketch frame: the same while the profile's face would be the same); with `"measures": true` also `area` (mm², the outer loop less the holes, from sampled loops) and `center` (its centre of area, `[u, v]`) |
 | `faces` | `body`; `geometry`, filters `surface`, `min_area`, `max_area`, `normal`, `normal_tolerance`, and `offset`, `limit` ([Faces and edges with geometry](#faces-and-edges-with-geometry)) | per face: `names`, `surface` (`plane`, `cylinder`, …), `area`; with `"geometry": true` also its surface's geometry and `bbox`; with a filter, `offset` or `limit` an object: `total`, `offset`, `faces` (each also with `index`) |
 | `edges` | `body`; `geometry`, filters `curve`, `min_length`, `max_length`, `radius`, `between`, and `offset`, `limit` ([Faces and edges with geometry](#faces-and-edges-with-geometry)) | per edge: `name`, `curve` (`line`, `circle`, …), `length`; with `"geometry": true` also its curve's geometry and `bbox`; with a filter, `offset` or `limit` an object: `total`, `offset`, `edges` (each also with `index`) |
@@ -6624,7 +6729,7 @@ coordinates as expressions](#point-coordinates-as-expressions-mitcad1897).
 
 | Command | Fields | Notes |
 |---|---|---|
-| `sketch.create` | `plane` (default `xy`; `xz`, `yz`, a construction plane `"F5"`, `{"face": …, "body": …}` or a curved face `{"face": …, "body": …, "developed": {"angle": …}}`, see [Sketches on cylindrical and conical faces](#sketches-on-cylindrical-and-conical-faces)), `frame`, `name` (optional), `occurrence` and `context` (optional: a plane of another component, see [Geometry of other components](#geometry-of-other-components)), `upright` (default false; see [An upright sketch frame](#an-upright-sketch-frame)) | result `uid`, `name` |
+| `sketch.create` | `plane` (default `xy`; `xz`, `yz`, a construction plane `"F5"`, `{"face": …, "body": …}` or a curved face `{"face": …, "body": …, "developed": {"angle": …}}`, see [Sketches on cylindrical and conical faces](#sketches-on-cylindrical-and-conical-faces)), `frame`, `name` (optional), `occurrence` and `context` (optional: a plane of another component, see [Geometry of other components](#geometry-of-other-components)), `upright` (default false; see [An upright sketch frame](#an-upright-sketch-frame)), `project_face` (default false: on a planar face, its outline projected into the sketch, linked, in the same undo step; see [The face's outline in a sketch on a face](#the-faces-outline-in-a-sketch-on-a-face)) | result `uid`, `name`; with `project_face`, `projected` (the outline's entities) or `warnings` (why it was not projected) |
 | `sketch.add_rectangle` | `corner` [x, y] (a position only: the corner is a new fixed point; `sketch.rectangle` takes point ids), `width`, `height` (values) | a dimensioned rectangle: fixed first corner, horizontal and vertical constraints, `width` and `height` dimensions; result also `curves`, `region` |
 | `sketch.add_circle` | `center` [x, y] (a position only: the centre is a new fixed point; `sketch.circle` takes a point id), `diameter` (value) | fixed centre and a diameter dimension; result also `curves`, `region` |
 | `sketch.add_point` | `at` [x, y] (a position: the new point; its coordinates may be expressions, mitcad#1897), `fixed` | |
@@ -6671,7 +6776,7 @@ coordinates as expressions](#point-coordinates-as-expressions-mitcad1897).
 | `sketch.clean_up_projections` | `merge` (default true: also lines on or overlapping a collinear one) | as other edits, and `cleaned` (`[{"curve", "kept", "how", "link"}]`; `how`: `same`, `on` or `joined`; `link`: the source the removed curve followed when the kept one does not) and `warnings` (what it removed, links lost, regions later features use that change their names); undo step `Clean Up Projections in Sketch1`; see [Clean Up Projections](#clean-up-projections) |
 | `sketch.clean_up_stale_projections` | none | as other edits, and `stale` (`{"removed": [curves], "trimmed": [lines], "unlinked": [sources], "kept": [{"curve", "why"}], "preview": {"removed": [{"curve", "type", "geometry"}], "cut": [{"line", "start", "end"}]}}`; `why`: `region`, `user_curve`, `constrained` or `used`; `preview`: the removed curves as they were, geometry as the `sketch` query gives it, and the pieces trimmed off lines, from the old end to the new one, for a preview to draw) and `warnings` (the same in words, and regions later features use that change their names); undo step `Clean Up Stale Projections in Sketch1`; see [Clean Up Stale Projections](#clean-up-stale-projections) |
 | `sketch.project_again` | `projection` (optional: its index in the sketch's `projections`, an entity of it such as `"c4"`, or its source's name; all the sketch's linked projections that do not follow when left out), `successor` (optional, mitcad#1784: for one whose source edge is gone, one of its `candidates`, the edge on its curve that took its place, which becomes its source; the projection with that candidate when `projection` is left out) | as other edits, and `again` (one per projection: `{"source", "carried": [{"from", "to"}], "kept": [{"entity", "held_by"}], "left": [constraints and dimensions]}`: the old entities and the new ones that took their place, the old ones kept as construction references with the constraints, dimensions, patterns, offsets, texts and curves that hold them, and the constraints and dimensions that stay on them) and `warnings` (what was kept and why, curves the same as another projection's, regions later features use that change their names); undo step `Project Again in Sketch1`; refused for a projection that follows its source and for one whose source is gone (one with `candidates` asks for a `successor`); see [Project Again](#project-again) (mitcad#1303) |
-| `sketch.convert_projected` | `entities`: curves and points | the projected ones become ordinary free sketch geometry, and a curve an offset made frees all of that offset's curves from its source (mitcad#1755); as other edits, and `converted` (the entities converted, an offset's curves too), `kept` (their points that stay projected), `offsets` (the offsets freed, when any; a note says `the offset is no longer linked to its source`) and `warnings`; undo step `Convert to Sketch Geometry in Sketch1`; see [Convert to Sketch Geometry](#convert-to-sketch-geometry) |
+| `sketch.convert_projected` | `entities`: curves and points; `profiles` (optional, region keys of the sketch, mitcad#2051: the projected curves of their boundaries, and the face's edges that bound them projected first; see [The face's outline in a sketch on a face](#the-faces-outline-in-a-sketch-on-a-face)) | the projected ones become ordinary free sketch geometry, and a curve an offset made frees all of that offset's curves from its source (mitcad#1755); as other edits, and `converted` (the entities converted, an offset's curves too), `kept` (their points that stay projected), `offsets` (the offsets freed, when any; a note says `the offset is no longer linked to its source`) and `warnings`; undo step `Convert to Sketch Geometry in Sketch1`; see [Convert to Sketch Geometry](#convert-to-sketch-geometry) |
 
 The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
 
@@ -6728,7 +6833,9 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
 - `texts`, also `family` (the font used), `fallback` (the bundled font
   instead of the one asked for), `stored_outlines` (true when the
   outlines are the text's stored `glyphs`, its font missing; `family` is
-  then the text's font and `fallback` false) and `outline`: `[{"id":
+  then the text's font and `fallback` false), `lines` (the lines it was
+  laid out in: its `\n` breaks and, with `wrap`, the breaks that fit it to
+  its frame's width, mitcad#2029; not for a QR code) and `outline`: `[{"id":
   "t9.g0.c0", "curves": [geometry, …]}]`; a text's stored `glyphs` are
   left out, `has_glyphs` true in their place;
 - `patterns` and `offsets`, also `values` and `value`: `parameter`,
@@ -7079,7 +7186,10 @@ projection's `entities`:
   listed them, so with some of its entities converted it keeps its
   geometry from then on, which `warnings` says;
 - constraints and dimensions stay (the sketch may get degrees of freedom);
-  region keys do not change; a stale curve converted is no longer stale;
+  region keys do not change (a key naming a face edge a converted curve
+  lies on finds its region by that curve, see
+  [The face's outline in a sketch on a face](#the-faces-outline-in-a-sketch-on-a-face));
+  a stale curve converted is no longer stale;
 - a curve an offset made (mitcad#1755) frees that offset: all of its
   curves become plain sketch geometry, no longer tied to the source nor
   made again from it (see `offsets` in the sketch definition, "Freed from
@@ -7089,6 +7199,45 @@ projection's `entities`:
   (`warnings`); the command is refused when none of `entities` is
   projected or an offset's curve, or when nothing would convert (only
   points projected curves that stay use).
+
+### The face's outline in a sketch on a face
+
+A sketch on a planar face of a body can start with the face's outline,
+and a profile can be converted whole (mitcad#2051):
+
+- `sketch.create` with `"project_face": true` on a planar face
+  (`{"face": …, "body": …}`, also another component's with `occurrence`)
+  projects the face's outline into the new sketch as `sketch.project`
+  with the face as `source` and `"linked": true` does, in the undo step
+  that adds the sketch (`Add Sketch2`). The result lists the outline's
+  entities in `projected`; a projection that fails leaves the sketch
+  empty, with the reason in `warnings`. Origin planes, construction
+  planes and curved faces get nothing, and so does every call without
+  the field (scripts, imports). Create Sketch in the application sets it
+  from its Sketch preference. The outline is an ordinary linked
+  projection of the face: `sketch.redefine_plane` keeps it (it stays a
+  projection of the old face, which `sketch.clean_up_stale_projections`
+  handles once that face is gone).
+- The outline lies on the face's edges that bound the sketch's regions
+  ([face-bounded regions](#profile-selections), mitcad#1138). Each piece counts
+  once: a stored curve on a face edge stands for it (the regions and
+  their count are those of the sketch without the outline), and a region
+  key that names a face edge a stored curve now stands for finds the
+  region by that curve (`Layout::aliased`, `sketch/regions.rs`). So a key
+  taken before the face's edges were projected, or before their
+  projections were converted, keeps resolving.
+- `sketch.convert_projected` with `profiles` converts the projected
+  curves on the boundaries (outer and inner loops) of those regions, with
+  their projected points, as `entities` of those curves would; with
+  `entities` too, the union. A face edge that bounds such a region (a
+  face-bounded region of a sketch without the outline, `face_bounded` in
+  `profiles`) is projected first, linked, and converted in the same step.
+  One undo step `Convert to Sketch Geometry in Sketch2`, the result as
+  with `entities`. Refused for a key the sketch has no region for and for
+  a region bounded only by ordinary sketch geometry.
+- The `sketch` query's `regions` carry `"projected": true` for a region
+  whose boundary has projected curves; with `face_bounded` it tells the
+  application where Convert to Sketch Geometry applies.
 
 ### A constraint that replaces one it makes redundant
 
@@ -7864,7 +8013,7 @@ Examples: `tools/cli/tests/f6_*.json`.
 | `activate_component` | `component` (uid or name; `C0` the root), `opening` (default false: one undo step; true: as the document opens, mitcad#426, with no undo step and no new revision, so the document stays as modified as it was and nothing is recomputed; the application activates again the component a design read from a file stores as active, mitcad#1678, which checks it can still be active, and the root of an import) | `component`; with `opening` also `previous`, the component that was active |
 | `rename_component` | `component`, `name` (unique) | `renamed_body`: `uid`, `name` of the body renamed with it, or null |
 | `ground_occurrence` | `occurrence`, `grounded` (default true) | |
-| `set_occurrence_flexible` | `occurrence`, `flexible` (default true) | `flexible`; its component's joints move in its parent for it alone ([Flexible subassemblies](#flexible-subassemblies-mitcad1793)) |
+| `set_occurrence_flexible` | `occurrence`, `flexible` (default true) | `flexible`; its component's joints move in its parent for it alone, and its free parts are placed there by the parent's joints alone ([Flexible subassemblies](#flexible-subassemblies-mitcad1793)) |
 | `set_occurrence_visible` | `occurrence`, `visible`, or `expression` (a condition; [Bindings](#bindings-values-from-expressions)) | |
 | `set_occurrence_transform` | `occurrence`, `transform`, `capture` (default false) | `feature`: the capture, or null |
 | `copy_occurrence` | `occurrence`, `transform` (optional) | `occurrence`, `name` |
@@ -8272,8 +8421,8 @@ at that point:
   sub-component's own features, solved in its coordinates. A flexible
   occurrence is the exception ([Flexible
   subassemblies](#flexible-subassemblies-mitcad1793)): a path through it to
-  an occurrence its component's joints move moves that occurrence, for
-  the flexible occurrence alone.
+  an occurrence its component's joints move, or to a free part of it
+  (mitcad#2016), moves that occurrence, for the flexible occurrence alone.
 - At the marker each joint reports its frames and values where the
   occurrences are; a later feature that moved a side (a
   `move_occurrence`) leaves `values` null and `solved` false.
@@ -8385,15 +8534,19 @@ feature and moves nothing.
 
 ### Flexible subassemblies (mitcad#1793)
 
-An occurrence of a component with joints of its own (joints, as-built
-joints, constraint sets) can be made **flexible**: its component's joints
-then move in its parent too, for this occurrence alone. Other occurrences
-of the component stay rigid unless they are flexible as well, and the
-component's design does not change. Code: `joints.rs` (`flex_into_parents`,
-`Flexed`, `Unit`), `document/flexible.rs`; tests
-`core/model-tests/joints/src/flexible_tests.rs` and (mitcad#1805)
-`flexible_nested_tests.rs`, the UI test
-`tools/ui-flexible-subassembly-test.sh`.
+An occurrence of a component with components in it or joints of its own
+(joints, as-built joints, constraint sets) can be made **flexible**: its
+component's joints then move in its parent too, for this occurrence
+alone, and the parts those joints do not place are free in the parent
+(mitcad#2016, below). Other occurrences of the component stay rigid
+unless they are flexible as well, and the component's design does not
+change. Code: `joints.rs` (`flex_into_parents`, `flex_unit`,
+`kept_flexed`, `Flexed`, `Unit`), `document/flexible.rs`; tests
+`core/model-tests/joints/src/flexible_tests.rs`, (mitcad#1805)
+`flexible_nested_tests.rs` and (mitcad#2016)
+`flexible_free_parts_tests.rs`, the UI tests
+`tools/ui-flexible-subassembly-test.sh` and
+`tools/ui-flexible-free-parts-test.sh`.
 
 | Command | Fields | Result |
 |---|---|---|
@@ -8417,9 +8570,10 @@ component's design does not change. Code: `joints.rs` (`flex_into_parents`,
   motion's limits) and where its free motions start (kept by a drag).
   Without them a joint's motion is as the component has it (its
   position, rest value or start). Made rigid again, the occurrence drops
-  them. Refused for an occurrence whose component has no joints of its
-  own (`Plain:1 cannot be flexible: Plain has no joints of its own to
-  move`), and `drive_joint` with an occurrence that is not flexible
+  them. Refused for an occurrence whose component has neither components
+  in it nor joints of its own (`Plain:1 cannot be flexible: Plain has no
+  components in it to move`), and `drive_joint` with an occurrence that
+  is not flexible
   (`Hinge:1 is not flexible: make it Flexible to drive Joint1 in it
   alone`) or a joint of another component (one that does not move
   inside it).
@@ -8469,6 +8623,54 @@ component's design does not change. Code: `joints.rs` (`flex_into_parents`,
   flexible occurrence (nested, also `within`: the chain of uids, outermost
   first); the flexible occurrence's own unit does not count its
   component's joints as its own.
+- **Free parts** (mitcad#2016). In a flexible occurrence, an occurrence
+  placed in its component that the component's joints, rigid groups and
+  grounding do not place is free in the parent: a unit of its own there
+  too (with what a rigid group of the component ties to it), which the
+  parent's joints place alone. So a Gantry with a Carriage and two
+  joiners and no joints of its own, made flexible, takes one rigid joint
+  of the parent from each joiner to a rail carriage: each joiner moves
+  onto its rail carriage, the Carriage stays where the Gantry places it,
+  and a rigid group of the Carriage and a joiner moves the two together.
+  With no joint of the parent on it, a free part stays where the
+  component places it (or where a drag left it). Through the model API
+  (`drag_occurrence`, `joint_drag`) such a part drags freely, for the
+  flexible occurrence alone, as an occurrence with no joints in its parent
+  component does (mitcad#2017); the application refuses both drags with a
+  status message, as components move only through joints there
+  (mitcad#150). The
+  parent's `dof` lists the free parts (`names`, `under`, six motions each
+  while nothing holds them), so loose parts show and can be tied by a
+  rigid group or joints. A joint of the parent that works against an
+  inner rigid group fails naming the group among the joints (`… and
+  RigidGroup1 work against each other and cannot all hold`), the group's
+  parts its places; one against an inner joint names both joints.
+  The design file keeps it as the occurrence's `flexible` `free_parts`
+  (true). A flexible occurrence saved before (0.63.0 and earlier) has
+  none: a joint of the parent on a part its component's joints do not
+  place moves the whole occurrence there, as it did, so such designs open
+  with the same positions; made rigid and flexible again it has free
+  parts. A drag (`drag_occurrence`) keeps where it leaves a free part as
+  the flexible occurrence's own `placements` (`path` of uids from it
+  through nested flexible occurrences to the part, and its `transform` in
+  the component it is placed in, `linear` rows and `translation`), from which the
+  joints solve as from an occurrence's own placement; the component's
+  design and its other occurrences do not change. They follow the parts
+  by uid (a part added, a component renamed, a linked design read again);
+  one whose part is gone is left out without an error, and the design file
+  no longer has it. A `move_occurrence` of the component that moves a free
+  part moves it from there too, for the flexible occurrence as for the
+  component's own placement of it (mitcad#2025): a kept placement is where
+  the part is before those Moves, so the part follows a Move as it is
+  edited and goes back to its kept placement when the Move is suppressed
+  or deleted. When the joints of the parent that place a free part
+  go with what they are joined to (`delete_occurrence`, `delete_feature`
+  with `dependents`, `build_remove`), the part stays where they left it,
+  kept the same way (mitcad#2017, `Document::held_free_parts`), as an
+  occurrence of the parent keeps its pose then (mitcad#1811, mitcad#1820);
+  undo brings the joints back and drops it. A joint deleted by itself lets
+  the part go back, as it does for an occurrence of the parent: where a
+  drag left it, else where its component places it.
 - **Where the occurrences inside it are.** Each placement inside a
   flexible occurrence is kept for that occurrence alone, in its
   component's coordinates; the occurrence's own placement (what the other
@@ -8771,6 +8973,15 @@ constraints.
   (`… has only empty bodies (n): nothing to import`). The
   [shape API](#base-features-from-shapes) and the importers' fallbacks
   still refuse an empty body, as their bodies are counted by index.
+- Stopping an import (mitcad#2032): the file is read under the
+  document's monitor. A STEP or IGES read parses the file first, which
+  cannot be stopped, then transfers it into shapes, which the monitor
+  stops: the user's cancel fails the command as `the computation was
+  canceled`, and the memory guard of model commands (where the process
+  turned it on) with `the file could not be imported because it needs
+  more memory than the system has left: the import was stopped at … before
+  the system would end the process, and the design is as it was before
+  the import`. Either way nothing of the file is in the design.
 - STEP names in a code page (mitcad#1002): a name written with STEP's
   escapes (`\X2\…\X0\`) or as raw UTF-8 bytes is read as it is. A name
   whose raw bytes are not valid UTF-8 (written in the writer's own code
@@ -9907,7 +10118,9 @@ What the document gets:
   sketch (mitcad#539): a planar face of a body (`Profile` = (object,
   `Face<n>`); FreeCAD takes the first element unless `AllowMultiFace`) →
   the `extrude` or `revolve` of that face (`profile_face`), along its
-  outward normal by distances (Length, TwoLengths, Midplane; TaperAngle(2)
+  outward normal with the extents of a sketch's (mitcad#2033: Length,
+  TwoLengths, Midplane, ThroughAll, UpToFirst, UpToLast, UpToFace,
+  UpToShape and their Offset; TaperAngle(2)
   → `taper`, mitcad#541; a custom direction off the normal, mitcad#547,
   → the face's `extrude` with that `direction`, the lengths along it as
   for a sketch's) or by angles; chosen edges of a sketch
@@ -12534,7 +12747,7 @@ with `error` (`class`, `message`, `detail`, as the remote commands') and
 | `library_add` | `dir`, `text` (a single-file design), `id`, `name`, `category` (an id, or a list of them, the first its home; `categories` adds more), `category_name` and `category_parent` (a new home category's name, which may be a path, `Wood/Boards`, and its parent's id; the other new categories are named by their ids), `standard`, `description`, `keywords`, `license`, `designation`, `preview` (a PNG, base64), `path` (default `<category>/<id>.mitcad`), `supplier`, `part_number`, `supplier_url`, `build` (left out: those of the component it replaces), `mounts` (left out: the design's mount frames for a part without `build`, [Mount frames](#mount-frames)) | `component`, `written`, `errors`, `warnings` (a check of the folder); a component of the same id is replaced |
 | `index_entry` | `dir`, `url` (where the library is published), `rev` (default HEAD) | `path` (`libraries/<id>.json`), `rev`, `labels`, `entry`, `text` |
 | `licenses` | | `licenses`: the SPDX ids a community index accepts with a `note` for users |
-| `library_build_candidates` | `junction` (one of the `build_junctions` query's: `kind`, `systems` of its profiles, `space`), or `role` with `system` (for Profile, Panel and Linear Component pickers; a part made for no system fits any) with a linear part's `kind` and `size` (a carriage for a rail's size; a part without a size fits any), `text`, `libraries`, `licenses`, `unlicensed` | `components` (as `library_search`'s, with `build`, `supplier`, `part_number`, `supplier_url`, and its `configurations` as `library_show` gives them, each row with `preview: true` when it has a picture of its own: every row a part of the pickers, mitcad#484) that fit, best first: a connector's `junctions`, `systems` and `space` against the junction's ([BUILD](#build-profile-assemblies)); `refused` (those that nearly fit, one thing wrong, for the picker's greyed rows: each `{"id", "name", "library", "reason"}`), `hidden`. A connector fits more closely when it names the profiles' series and goes on one junction kind only; a connector with an `envelope` needs that room in the junction's inner corner |
+| `library_build_candidates` | `junction` (one of the `build_junctions` query's: `kind`, `systems` of its profiles, `space`), or `role` with `system` (for Profile, Panel and Linear Component pickers; a part made for no system fits any) with a linear part's `kind` and `size` (a carriage for a rail's size; a part without a size fits any), `text`, `libraries`, `licenses`, `unlicensed` | `components` (as `library_search`'s, with `build`, `supplier`, `part_number`, `supplier_url`, and its `configurations` as `library_show` gives them, each row with `preview: true` when it has a picture of its own: every row a part of the pickers, mitcad#484) that fit, best first: a connector's `junctions`, `systems` and `space` against the junction's ([BUILD](#build-profile-assemblies)); `refused` (those that nearly fit, one thing wrong, for the picker's dimmed rows: each `{"id", "name", "library", "reason"}`), `hidden`. A connector fits more closely when it names the profiles' series and goes on one junction kind only; a connector with an `envelope` needs that room in the junction's inner corner |
 
 `mitcad-cli library fetch|list|show|search|candidates|diff|init|add|check|index-entry`
 and `mitcad-cli parts <file>` (the parts list); inserting and updating
@@ -13964,7 +14177,7 @@ of all evaluated sketches when pruning stale application selection.
   the primitives have it). `Evaluate::placed_tool(ctx, feature,
   placement)` optionally rebuilds the tool with the feature's own
   placement moved by a rigid transform, faces named after `feature`, for
-  `adjust` (the primitives and the extrusions whose end depends on bodies); without it the stored tool is moved. Reading
+  `adjust` (the primitives and the extrusions whose end depends on bodies, a body face's too: its face, on its body before the extrusion, moved with the copy, mitcad#2033); without it the stored tool is moved. Reading
   another feature's tool goes through `EvalContext::feature_tool`, which
   the recompute cache tracks by the version of that feature's result.
 - A kernel operation: a `Kernel` method with a default
@@ -15949,6 +16162,9 @@ The component records what BUILD made, in the design file too:
   joint's slide is bound to: `a`, `b` or `middle` (*Side placements*).
 - `tilt` (a part on a side tilted along its target, mitcad#444) is its
   tilt in radians, positive towards the target's end B (*Tilt*).
+- `named_after` (mitcad#2030) is the designation the component's name
+  came from, while that name is automatic (*BUILD: a part's automatic
+  name*).
 - BUILD reads these records. Other commands treat the component as any
   other, and a component without `build` is not a BUILD part.
 
@@ -16040,8 +16256,8 @@ points*).
 
 | Command | Fields | Result |
 |---|---|---|
-| `build_place` | `part` (`{"library", "url", "rev", "component", "config"}`, or `{"source": "S1", "config"}` to reuse a source), `at` (below), `rotate` (an angle: 0, 90, 180 or 270 deg; a number is radians), `flip` (true: the other end first), `length` (a value, or `{"bind": {"occurrence", "geometry"}, "mode": "face"/"centre"/"through", "add"}`, or to a picked face `{"mode": "to_face", "face": {"occurrence", "geometry"}, "offset"}`, *Length to a face*; left out: the source's default), `mitre` (`{"angle", "cut": "new"/"existing"/"shared"/"none"}`; left out: none, also on a square corner; `shared` on a corner at another angle at offset 0, mitcad#427; every cut keeps the lengths as long points and a shared one makes the outer corners meet, mitcad#443), `tilt` (on a side, mitcad#444: an angle from -80 to 80 deg, positive towards the target's end B; *Tilt*), `parameters` (other source parameters), `name` | `component`, `occurrence`, `name`, `features` (everything it added), `joint`, `bound`, `adds`, `warnings`, `place` (`side`, `end`, `frame`, `geometry` or `grounded`); undo step `Place <designation>` |
-| `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`, on a side `gap`, mitcad#1401; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset), `rotate`, `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away), `shared_mitre` (`a` or `b`, on its own: the shared miter with the end this end meets, mitcad#1940, *Ends that meet*) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`; a shared miter: `ends`, `length`, `moved`); undo step `Edit <name>`, a shared miter's `Shared miter of <name> and <name>` |
+| `build_place` | `part` (`{"library", "url", "rev", "component", "config"}`, or `{"source": "S1", "config"}` to reuse a source), `at` (below), `rotate` (an angle: 0, 90, 180 or 270 deg on a part's side or end, any angle on a plane or a face, mitcad#2046; a number is radians), `flip` (true: the other end first), `length` (a value, or `{"bind": {"occurrence", "geometry"}, "mode": "face"/"centre"/"through", "add"}`, or to a picked face `{"mode": "to_face", "face": {"occurrence", "geometry"}, "offset"}`, *Length to a face*; left out: the source's default), `mitre` (`{"angle", "cut": "new"/"existing"/"shared"/"none"}`; left out: none, also on a square corner; `shared` on a corner at another angle at offset 0, mitcad#427; every cut keeps the lengths as long points and a shared one makes the outer corners meet, mitcad#443), `tilt` (on a side, mitcad#444: an angle from -80 to 80 deg, positive towards the target's end B; *Tilt*), `parameters` (other source parameters), `name` | `component`, `occurrence`, `name`, `features` (everything it added), `joint`, `bound`, `adds`, `warnings`, `place` (`side`, `end`, `frame`, `geometry` or `grounded`); undo step `Place <designation>` |
+| `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`, on a side `gap`, mitcad#1401; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset; on a plane or a face, mitcad#2046: `at.offset` is off it along its normal as `build_place` takes it, a bound length's ray moving with it, and a `from` is refused), `rotate` (quarter turns on a side or an end, any angle on a plane or a face), `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away), `shared_mitre` (`a` or `b`, on its own: the shared miter with the end this end meets, mitcad#1940, *Ends that meet*) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`; a shared miter: `ends`, `length`, `moved`); undo step `Edit <name>`, a shared miter's `Shared miter of <name> and <name>`; a part's automatic name follows its new designation in the same step (mitcad#2030, *BUILD: a part's automatic name*) |
 | `build_connect` | `junction` (an id from `build_junctions`), `part` (as `build_place`'s), `fasteners` (default true), `machining` (default true), `name` | `component`, `occurrence`, `adds`, `warnings` (a fastener that cannot be read is left out with a warning); undo step `Connect <designation>` |
 | `build_panel` | `at` (`{"occurrence", "geometry", "point"}`: a face or a slot frame of one of the frame's profiles), `part`, `thickness` (for a part whose thickness is a parameter), `parameters`, `name` | `component`, `occurrence`, `bound`, `fits` (false, with `reason`, when a fixed-width sheet is too narrow or too wide), `adds` (the clamps of a surface panel); undo step `Place <designation>` |
 | `build_remove` | `component` | `removed`: `components` (it and what it `adds`), `features` (its bound lengths, its holes in other parts, and what depends on them), `detached` (the bound lengths of other parts that end on it or start from it, detached first, so those parts keep their lengths) and `freed` (mitcad#1811: the parts placed on it, not grounded, that stay where they are, freed of it: their joint to it goes, they keep their pose as a part placed without a joint, their bound lengths to it become typed lengths as `detached` says); the joints of what goes, also those of a part joined to it from outside (a shaft through its hole), go, and what they placed stays where it is, a move of it on the timeline taken into account; `notices`: one information per freed part in words ("<part> stays where it was, no longer placed on <removed>.", its occurrence its place) and the cut-scope exclusions it dropped (mitcad#1236); undo step `Remove <name>`, which brings all back |
@@ -16078,7 +16294,14 @@ points*).
     towards end B (0: centred).
 
   On a turned end (a corner) it is the new part's end from the target's
-  outer side (*End placements*); on a straight end it is not used.
+  outer side (*End placements*); on a straight end it is not used. On a
+  plane or a face (mitcad#2046) it moves the first part off it along its
+  normal, positive to the normal's side (out of a face), negative into
+  it, whatever the direction: a standing part starts that far from it, a
+  lying part is lifted off it. It is kept as the shift of the joint's
+  origin b frame override, in that frame's axes, so it follows the face;
+  the face's centre snap and its edge alignment stay. Grounded at a
+  point it is not used.
 - `direction`: on an end, the new part's axis in the host's coordinates
   (along the target: straight; or one of the four square to it, or any
   other); left out, a click on the end face decides (*End placements*).
@@ -16358,7 +16581,11 @@ point:
   (`frame_override.shift`, along that frame's axes) and its length, so
   that its other end stays: a part on a side runs through to the other
   part's outer side;
-- a grounded part's end A moves its occurrence and its length.
+- a grounded part's end A moves its occurrence and its length;
+- a member along an edge or a sketch line (*Members along an edge*,
+  *Along sketch lines*, mitcad#1965) moves its end by its edge frame's
+  `start` (end A) or `end` (end B) offset, so that it still follows the
+  edge or the line (`changed` lists `along`).
 
 It is refused, in words, for a part tilted on a side, a part whose length
 is bound or that is placed by two points or by a frame of its own, when
@@ -16392,7 +16619,7 @@ radians, as joints have them.
 | Query | Fields | Result |
 |---|---|---|
 | `build_preview` | `build_place`'s, `build_panel`'s or `build_connect`'s fields | what the command would do, without changing anything. A placing: `frame` (the new part's own axes at its end A, z running from A to B), `place` (`side`, `end`, `frame`, `geometry` or `grounded`, as `auto` decided), `length` (`value`: the length given, else what the part's ray gives in `mode`, else the source's default; `default`; `target`: what the ray meets first, `{occurrence, geometry}` with a frame of another BUILD part facing it, or the `bind` given, null when nothing; and `mode`), `ends` (`a`, `b`: `{angle, tilt}` or null; `target`: the target's end cut), `tilt` (radians, mitcad#444), `snaps` (on a side, mitcad#394: `{kind, offset, point}` for each place a click snaps to: `kind` `end_a`, `end_b`, `middle`, `gap` (mitcad#1401), `grid`, `inline` or `flush_face` (mitcad#1886, with `with`: `{component, occurrence, name}`, the profile it lines up with), `offset` the new part's near face from end A, `point` where its middle then stands on the slot, in the design), `side` (on a side: `{kind, from, offset, point, width, gap, with, across}`: the snap the click took (`end_a`, `end_b`, `middle`, `gap`, `grid`, `inline`, `flush_face`; `with` the profile of a line-up, else null), null between snaps, or `clamped` when the placement was kept within the target; the reference and the offset from it the click resolved to, or the typed ones, as `at.from` and `at.offset` take them (mitcad#417); where the part stands; its width along the slot; `across`, how it stands across a side with several slots (`middle`, `slot`; null on a side with one slot, mitcad#2002); `foot`, where the part's frame meets the slot, a tilted part's foot long point, in the design; null elsewhere), `end` (on an end, mitcad#417: `{zone, direction, turns, offset, mitre}`: `zone` `straight` or `edge` (what the click chose) or `given` (`at.direction`); `direction` the new part's axis in the host's coordinates; `turns` the four unit vectors square to the target in the host's coordinates, +x, +y, -x, -y of its end frame; `offset` a corner's offset, null when straight; `mitre` `{cut, angle}` the placement will use, the default resolved (`cut` `none`, `new`, `existing` or `shared`, `angle` in radians or null); null elsewhere), `host` (as `build_host` answers), `designation`, `warnings`. A panel: `frame`, `fits`, `reason`, `width`, `height`, `bound`. A connector: `frame`, `junction`, `fasteners` (`{frame, at}`), `fastener_parts`, `machining` (`{component, at, point, diameter, depth, thread}`). All: `body` (`"see analysis_shape"`) and `problems` (the refusal the command would give, then nothing else) |
-| `build_parts` | | `parts`: for each BUILD component, `component`, `name`, `role`, `source`, `part`, `joint`, `designation`, `supplier`, `part_number`, `config`, `length`, `ends`, `bound` (`{feature, parameter, to: {occurrence, geometry}, mode, add}`, `add` the value in mm, a length to a face's offset, mitcad#1630; or null), `flip`, `rotate`, `tilt` (radians, 0 square, mitcad#444), `machining` (its own, as `build_edit` takes it), `added_by`, `adds`, `junction`, `from` (a part on a side or a rail: `a`, `b`, `middle` or `gap`, else null), `gap` (from `gap`, mitcad#1401: the two profiles it is centred between, `[a, b]`, null for an end; else null), `offset` (a part on a side or a rail: its offset from `from` in mm, as `build_edit`'s `at.offset` takes it, mitcad#1885; else null) |
+| `build_parts` | | `parts`: for each BUILD component, `component`, `name`, `role`, `source`, `part`, `joint`, `designation`, `supplier`, `part_number`, `config`, `length`, `ends`, `bound` (`{feature, parameter, to: {occurrence, geometry}, mode, add}`, `add` the value in mm, a length to a face's offset, mitcad#1630; or null), `flip`, `rotate`, `tilt` (radians, 0 square, mitcad#444), `machining` (its own, as `build_edit` takes it), `added_by`, `adds`, `junction`, `from` (a part on a side or a rail: `a`, `b`, `middle` or `gap`, else null), `gap` (from `gap`, mitcad#1401: the two profiles it is centred between, `[a, b]`, null for an end; else null), `offset` (a part on a side or a rail: its offset from `from` in mm, as `build_edit`'s `at.offset` takes it, mitcad#1885; a part on a plane or a face: its offset along the normal, mitcad#2046; else null), `ground` (true for a part on a plane or a face, mitcad#2046) |
 | `build_junctions` | `components` (optional: only the junctions of these) | `junctions`: `id` (`<a's component>:<a's at>\|<b's component>:<b's at>`, stable while the two parts and their meeting stay), `kind` (`L`, `T`, `cross`, `inline`), `a` and `b` (`component`, `occurrence`, `at` (`end_a`, `end_b`, the slot frame, or `side` on a closed side), `frame` (the part's own axes at its end A), `at_frame` (the `at` frame)), `angle` (between the axes), `systems` (`B8/30`), `space` (the free room in the inner corner: `{"x", "y", "z"}`: along a, along b to its farther end, across), `connectors` (components already there) |
 | `build_end_meets` | `component` (optional: the ends it meets of this part only), `meets` (false: where the ends are only, none met; default true) | `ends`: each end of a profile cut to length: `component`, `occurrence`, `end` (`a`, `b`), `point` (where its axis ends), `out` (its axis out of the part), `leans` (`x`, `-x`, `y`, `-y`: where each tilt leans the cut's outward normal), `meets` (null, or the end it meets in a corner: `component`, `occurrence`, `end`, `angle` (each end's cut, half the corner), `lengthen` and `other_lengthen` (how far each end moves out for the outer corners to meet, negative in), `tilt` and `other_tilt` (the shared miter's, each leaning towards the other part), `away`, `across` (this end's other tilts: away from the other part, across the corner one way and the other), `problem` (why `shared_mitre` would be refused, in words, else null)), `why` (why it meets none, in words); `near` (the gap still taken, mm). *Ends that meet* (mitcad#1940) |
 | `build_cut_list` | `kerf` (optional, default 3 mm) | `rows`, one per group of identical results (source, row, length, ends, machining and own features the same): `source`, `designation`, `supplier`, `part_number`, `config`, `length` (the part's length, its long point: the body's length on the long side of its angled ends, mitcad#443), `ends` (`a`, `b`: `{angle, tilt}` or null), `machining` (`{at, diameter, depth, thread, connector}`: holes from connectors, and the part's own, `connector` null), `features` (how many own features the part has: holes, cuts), `quantity`, `mass` (each, kg; a section of a typed size, mitcad#1328: the value of its build block's `area_parameter`, the source's parameter of its area in the part's combination, times the density and the length), `components`, and for a section of a typed size `size` (its options' values but the length, `B 76.2, T 4.8`: its rows and stock apart from its source's other sizes). `stock`: per source and row (and typed size, whose `designation` is the source's name with its `size` in parentheses), cut from its longest stock length, `{"source", "designation", "stock_length", "pieces": [lengths in cutting order], "bars" (where each stock piece's cuts end in `pieces`), "needed", "offcut", "too_long"}`, longest pieces first into the first stock piece they fit (a kerf after each). `kerf`. `other`: the parts list's rows for everything else |
@@ -16542,6 +16769,67 @@ heights, each ending level with the first one's top.
 - `build_edit` takes the same `length` (an offset left out is 0); the
   `build_parts` query names the mode `to_face` with the offset as `add`,
   and `build_preview`'s `length.target` is the face given.
+
+### Along sketch lines
+
+A frame from a sketch (mitcad#1965): draw the lines, pick a profile, get
+one member per straight line, the corners mitered and butted.
+
+```json
+{"cmd": "build_place", "part": {"source": "S1"},
+ "lines": {"occurrence": "",
+           "curves": [{"sketch": "F1", "curve": "c5"}, {"sketch": "F1", "curve": "c6"}],
+           "chain": false, "align": "center", "corners": true},
+ "rotate": "90 deg", "flip": false}
+```
+
+- `curves` are sketch lines (`{"sketch", "curve"}`), curves of one sketch
+  (`{"sketch", "curves"}`) or whole sketches (`{"sketch"}`: its lines that
+  are no construction, no reference geometry and no axis), of a planar
+  sketch or a 3D sketch; `occurrence` the path from the BUILD host to the
+  component they are in (empty: the host's own). `chain` adds the
+  straight lines of the same sketches joined end to end to the picked
+  ones, over and over. Each line is taken once.
+- Each straight line gets one member of the part, cut to the line's
+  length, placed **along the line** as a member along an edge whose edge is
+  the line (*Members along an edge*, below; `along` with a sketch line
+  and no `face` places one member so): an `edge_frame` on the line holds
+  it, so moving or resizing the line moves and resizes its member on
+  recompute.
+- `align` is how each section sits on its line: `center` (the default),
+  `above` or `below` (centred across the line, resting on the sketch's
+  plane or hanging under it), or a corner: `left_above`, `right_above`,
+  `left_below`, `right_below` (left and right looking along the line with
+  the sketch's normal up; a 3D sketch's line has the host's Z square to it
+  as up, its Y for a line along Z). `rotate` turns each member about its
+  line in quarter turns; `flip` runs each one from its line's end to its
+  start (the edge frame's `reversed`).
+- **Corners** (`corners`, default true), in the same undo step: where two
+  ends meet alone at a point, not in line (an L), both get the shared
+  miter (*Ends that meet*: cut on the bisector, moved out to the outer
+  corner by their edge frames' offsets); where an end lies on another
+  member's line between its ends (a T), it is butted: moved back by its
+  edge frame's offset until it meets that member's side. Three or more
+  ends at one point are left square. Each corner changes afterwards with
+  `build_edit`'s `ends` and `shared_mitre`; an end to a face is Length's
+  `to_face` (*Length to a face*). A corner that cannot be treated is left
+  as it is, said in `warnings`.
+- Refused, in words and before anything is placed: an arc, a circle, an
+  ellipse, a spline or a point among the curves (`members go along
+  straight lines only`), a pick that is no sketch, a line with no length,
+  and `at`, `to`, `length`, `spacing`, `mitre`, `tilt`, `along` and `lie`
+  with `lines`.
+- The answer is the first member's, with `members` (every member's
+  component, in the lines' order) and `count`; `place` is `lines`. One
+  undo step, `Place <part> along sketch lines: <n>`.
+- `build_preview` with `lines` answers the first member's preview with
+  `lines`: `{"count", "frames", "lengths"}` (each member's end A frame and
+  length, the corners square); its shape (`analysis_shape`) is every
+  member's.
+- `build_parts` gives a member along a sketch line `along.line`:
+  `{"align", "rotate", "flip"}`. `build_edit` takes `along.align`,
+  `rotate` and `flip` for it (with `along`'s offsets and `config`), the
+  joint's turn and shift worked out again; `lie` is refused for it.
 
 ## BUILD: timber construction
 
@@ -16756,6 +17044,11 @@ on a face beside it (a batten along a plate's edge, flush with it):
   "lie"}`, its edge frame (whose definition has the edge, the face and the
   offsets), its joint and how it lies (`flat` or `edge`); null for other
   parts.
+- **Along a sketch line** (mitcad#1965, *Along sketch lines*): `edge` may
+  be a sketch line (`{"sketch", "curve"}`) with no `face`; the member
+  follows the line, sits on it as `align` says (`center` by default) and
+  is turned by `rotate` (quarter turns) and run the other way by `flip`;
+  `lie` is refused with it, and `align` along a body's edge.
 - **Editing** (`build_edit`): `along` (`{"occurrence", "edge", "face",
   "inset", "start", "end", "lift"}`, each left out kept) changes the edge
   frame; `lie` turns the member; `config` changes its row. With any of
@@ -16798,6 +17091,14 @@ timeline, as a bound length's are.
   edge not parallel to the face, offsets that leave no length, and a lost
   edge or face. Its frames are not stored with the results (evaluated
   again when a design opens), as a derived part's are not.
+- Along a sketch line (mitcad#1965): `edge` is one line of a planar or a
+  3D sketch and `face` is left out. Both frames have z along the line
+  from its start to its end (`"reversed": true`: from its end to its
+  start), y the sketch's normal square to the line (a 3D sketch's line:
+  the component's Z square to it, its Y for a line along Z) and x `y × z`;
+  `inset` and `lift` move them along x and y. An arc, a circle, an
+  ellipse or a spline fails it in words: members go along straight lines
+  only.
 
 ### Spacing sets
 
@@ -17200,7 +17501,9 @@ Four more rules (code `build/place.rs`, `build/spacing.rs`; tests
   the lift is in the joint's `frame_override.origin` (and a bound
   length's ray starts from the lifted axis); `build_edit`'s `rotate` and
   `flip` lift it anew, so it keeps resting. A part standing along the
-  normal (or without `at.direction`) stands on its end as before.
+  normal (or without `at.direction`) stands on its end as before. An
+  `at.offset` (mitcad#2046) lifts it further, as the override's `shift`
+  apart from the rest.
 - **A member on a member's side lies as that member does.** A timber
   member placed standing on a timber member's side (`place` `side`, not
   tilted) is turned a quarter about its axis when only that puts its
@@ -17814,10 +18117,37 @@ from the face must have the body's volume and centre of mass. With `bends`
 are panels with the rules' thickness behind them, each bend edge the
 virtual sharp of a bend of `radius` (default: the rules'). Panel `k` is the
 k-th face reached (slot 0 the picked face), bend `k` the bend that reached
-panel `k+1`. Refused: a face that is not planar, a bend edge that is not
-straight, does not join the picked face through the others or closes a loop,
-two panels meeting at an edge that is no bend, a face that does not run the
-whole bend edge after its setback.
+panel `k+1`.
+
+Every other edge between two panels is a rip (mitcad#1949; a tray from a
+solid: the base picked, its four edges the bends, the four corners ripped).
+`rips` may name such edges too; each must lie between two panels and not
+be a bend. At a rip the panels are cut apart as the walls of a flange on
+several edges are at a corner ([A flange on several
+edges](#a-flange-on-several-edges-mitcad1872)): `miter` (`bisect`, the default,
+`earlier_runs_past` or `later_runs_past`, earlier and later in the order
+the faces are reached) and `corner_gap` (default: the rules' thickness)
+say how. A panel is cut normal to its surfaces where the cutting plane
+meets the surface that reaches further. The bends at a rip's ends end
+square where all their material clears that plane, the panel before them
+cut back to the tangent line beside them (a corner relief). A bend runs
+only as far as both its faces reach its tangent lines: a wall whose ends
+are not square to its bend (a vertical side wall on an inclined base)
+converts, running past the bend at one end and ending short of the edge's
+end at the other.
+
+```json
+{"type":"sheet_convert","rules":"F1","body":"F2.b0","face":"F2:bottom",
+ "bends":["E{F2:bottom|F2:side0}","E{F2:bottom|F2:side1}",
+          "E{F2:bottom|F2:side2}","E{F2:bottom|F2:side3}"],
+ "corner_gap":1,"miter":"bisect"}
+```
+
+Refused: a face that is not planar, a bend edge that is not straight, does
+not join the picked face through the others or closes a loop (leave it out
+of the bends to rip it open), a picked rip that is no edge between two
+panels or is a bend, a rip whose cut takes a face away whole, faces at a
+bend that leave no room for it along the edge.
 
 ### Perforate
 
@@ -17839,7 +18169,7 @@ developed form), more than 100000 holes.
 Tests: `core/model-tests/sheet/src/sheet_more_tests.rs`,
 `core/model/src/sheet/folded/perforate.rs` (the grid), the CLI fixtures
 `sheet_contour`, `sheet_convert`, `sheet_perforate` with their reopen passes,
-and the `.solidcraft` test designs `sheet-contour-perforate` and
+`sheet_convert_tray` (mitcad#1949), and the `.solidcraft` test designs `sheet-contour-perforate` and
 `sheet-convert` (`cli.import_solidcraft`).
 
 ## Motion links
@@ -22783,8 +23113,14 @@ and triangulations are made body beside body on the kernel's threads,
 each as it would be alone, so the lines are those made one body after
 another. The automatic centre marks find the visible lines near each
 circle through a grid of the lines' boxes instead of measuring every
-line for each point. What stays is the kernel's hidden-line removal of
-the triangulation, one thread, which grows with the triangles.
+line for each point. The bodies an occurrence moves are placed beside
+each other too (`Kernel::transform_shapes`, mitcad#2021: each the copy
+`transform_shape` makes alone), and the hiding pass of the polygonal
+hidden-line removal runs on the kernel's threads, each segment tested
+only against the faces near it (OCCT port patch 1810), its lines the
+same: a view of 884 bodies placed them in 0.2 s instead of 2.7 s and hid
+its lines in 0.5 s instead of 7 to 8 s. What stays on one thread is the
+removal's setup (`HLRBRep_PolyAlgo::Update`, about 1.3 s there).
 
 **The triangulation follows the view's scale** (mitcad#2014). The quick
 path's triangulation keeps its lines within 0.02 mm of the edges on the
@@ -31085,7 +31421,7 @@ command in `core/model-api/src/dispatch.rs` (`sketch::step_kind`,
 
 | Command | Fields | Result |
 |---|---|---|
-| `set_folder_visible` | `component` (an id such as `C1` or a component's name; left out: the root, `C0`), `folder` (`bodies`, `sketches` or `construction`), `visible` | undo step `Hide Sketches` / `Show Bodies` / `Hide Construction` unless nothing changes; nothing recomputed; a component that is not there is refused |
+| `set_folder_visible` | `component` (an id such as `C1` or a component's name; left out: the root, `C0`), `folder` (`bodies`, `sketches`, `construction`, or the root's `annotations`, mitcad#2041), `visible` | undo step `Hide Sketches` / `Show Bodies` / `Hide Construction` / `Hide Annotations` unless nothing changes; nothing recomputed; a component that is not there is refused, and `annotations` of another component than the root (`only the root has an Annotations folder`) |
 
 - The eye of each component's Bodies, Sketches and Construction folder in
   the Browser (GitHub mitcad/Mitcad#292): display state as View › Show's
@@ -31105,15 +31441,31 @@ command in `core/model-api/src/dispatch.rs` (`sketch::step_kind`,
   `set_body_visible`) and no body's Show When condition changes, and
   they can still be changed while the folder is hidden: showing the
   folder again shows what they show.
+- `annotations` (mitcad#2041): the root's Annotations folder in the
+  Browser, which holds all the design's annotations (the `annotations`
+  query's). Hidden, the application draws none of them in the view and
+  none can be picked there; each one's own light bulb
+  (`set_measurement_visible`, `edit_annotation`'s `visible`) stays as it
+  is and can still be changed, and the `annotations` query lists them
+  with their own `visible` as before. A drawing brings in the annotations
+  by their own light bulbs (`drawing_model_items`), as a hidden Bodies
+  folder leaves a drawing's bodies as they are. Kept in the file as
+  `"display": {"folders": {"C0": {"annotations": true}}}`.
 - The `document` query's `display` has `"folders": {"C0": {"bodies":
-  bool, "sketches": bool, "construction": bool}}` (true: shown) for each
-  component with a hidden folder (left out while every folder is shown).
+  bool, "sketches": bool, "construction": bool, "annotations": bool}}`
+  (true: shown; `annotations` only in the root's) for each component with
+  a hidden folder (left out while every folder is shown).
 
 Tests: `core.model.api` (`folder_eye_tests.rs`: two of five sketches and
 two of five bodies hidden by their own light bulbs stay so after their
 folder is hidden, shown, saved and opened; the undo steps and their
 labels; a light bulb changed under a hidden folder; Show When under it;
-each component's own folders), the UI test `tools/ui-folder-eyes-test.sh`.
+each component's own folders; the Annotations folder: one of three
+annotations hidden by its own light bulb stays so after the folder is
+hidden, shown, saved and opened, the undo steps `Hide Annotations` /
+`Show Annotations`, another component's refused), the UI tests
+`tools/ui-folder-eyes-test.sh` and `tools/ui-annotations-folder-eye-test.sh`
+(also on Windows and macOS).
 
 ## Show Dimensions of a sketch (mitcad#1772)
 
@@ -31813,7 +32165,7 @@ new feature (`Kernel::face_run`):
 
 | Fields | Result |
 |---|---|
-| `body`, `face` | `center` (its area center) and `normal` (out of the material) of the face, `reach` (mm, how far its outline reaches from the center at its farthest point: Scale's angle there is `atan(reach (end_scale - 1) / distance)`), `along`: `{"kind": "straight", "direction"}`, `{"kind": "turn", "origin", "axis", "radius"}` (the right hand turn about `axis` goes out of the material; `radius` the centre's distance from it) or `{"kind": "none", "refusal"}` (the error a person reads, with its places); `feature_end`: `{"uid", "name", "type", "input"}` where the face is the moving end of an `extrude` (Distance's end, both ends of Symmetric, Two Sides' start for `distance` and end for `distance2`, the end up to an object), a `revolve` (`angle`, `angle2` alike) or a `sweep` (`fraction`, `fraction2`), the input its panel moves it by (empty: none of its own); else null |
+| `body`, `face` | `center` (its area center) and `normal` (out of the material) of the face, `reach` (mm, how far its outline reaches from the center at its farthest point: Scale's angle there is `atan(reach (end_scale - 1) / distance)`), `along`: `{"kind": "straight", "direction"}`, `{"kind": "turn", "origin", "axis", "radius"}` (the right hand turn about `axis` goes out of the material; `radius` the centre's distance from it) or `{"kind": "none", "refusal"}` (the error a person reads, with its places); `feature_end`: `{"uid", "name", "type", "input"}` where the face is the moving end of an `extrude` (Distance's end, both ends of Symmetric, Two Sides' start for `distance` and end for `distance2`, the end up to an object), a `revolve` (`angle`, `angle2` alike) or a `sweep` (`fraction`, `fraction2`), the input its panel moves it by (empty: none of its own); or the free end of a cut-to-length BUILD part (`derived_part`, input `length`, `name` the component's name, mitcad#2030: not the end it is placed from, none while its length is bound); else null |
 
 A face that is not one face of the body, or not planar, is an error.
 
@@ -32611,3 +32963,924 @@ commands it applies to, run from `run_checked_action`). Tests:
 `tools/ui-scripts/hidden-parent-insert.mitcad-ui`, also
 `app.ui-windows-hidden-parent-insert` and
 `app.ui-macos-hidden-parent-insert`).
+
+## Sheet process profiles (mitcad#1939)
+
+A sheet part's **process profile** says what it is made of and how: its
+sheet rules hold it with the rules that go with it (the allowance method,
+the kerf, the flute). Process-specific logic lives in the profile
+(`core/model/src/sheet/process.rs`): the commands it offers, its output
+layers and its joint defaults.
+
+- `metal` (the default): folds with a bend allowance; hems and reliefs.
+- `board` (cardboard, corrugated board, folding carton, corrugated
+  polypropylene): folds at creases, with a crease table or a measured
+  allowance or deduction per fold; glue flaps, standard boxes, die lines.
+- `laser_sheet` (plywood, MDF, acrylic): plates are ordinary solids of the
+  sheet's thickness joined by finger joints, T-nut slots or mortises and
+  tenons; the one bend it has is a kerf bend (a living hinge).
+
+```json
+{"cmd":"add_feature","def":{"type":"sheet_rules","process":"board","flute":"C",
+ "thickness":4,"bend_radius":0.5,
+ "allowance":{"type":"crease_table","rows":[
+   {"thickness":4,"flute":"C","direction":"across","deduction":3.2},
+   {"thickness":4,"flute":"C","direction":"along","side":"inner","allowance":5.1}]},
+ "kerf":0.1,"reference_side":"front",
+ "bend_relief":{"type":"round","width":1,"depth":2},
+ "corner_relief":{"type":"round","width":1,"depth":2}}}
+```
+
+`process` is `metal`, `board` or `laser_sheet`; left out, the rules'
+component's material gives it: the material's own `sheet_process`
+(`create_material` and `edit_material` take it, null takes it away), else
+its class's (metal for Metal, laser sheet for Wood and General Plastic),
+else metal. Board is never guessed from a class: a board material says so
+by its `sheet_process`.
+`kerf` (mm, at least 0, default 0) is the width the cutting beam takes
+away: Cut sheets compensate for it, and a kerf bend's slits take it as
+their width. `flute` names the board's flute for the crease table.
+
+### Allowance methods
+
+Every method gives a fold an effective K-factor, the neutral surface's
+place in the thickness, so the fold engine, Unfold and the Flat Pattern
+develop each the same way. A measured value is of a 90 degree fold; other
+angles use the same neutral radius (`allowance / (pi / 2)`), so the K-factor
+is `(allowance / (pi / 2) - r) / t`.
+
+- `{"type":"k_factor","k":0.44}`: K in `[0,1]`.
+- `{"type":"bend_allowance","allowance":3.5}`: the measured flat length of
+  a 90 degree fold.
+- `{"type":"bend_deduction","deduction":0.2}`: the measured deduction of a
+  90 degree fold; the allowance is `2 (r + t) - deduction`. A nearly sharp
+  crease (a deduction close to 0) needs more than K = 1 gives: the neutral
+  surface then lies outside the material, which the fold engine takes (the
+  kernel maps the bend's chart by any positive neutral radius). A
+  deduction for which the fold develops to 0 mm or less is refused in
+  words ("the measured fold gives no bend allowance: …").
+- `{"type":"crease_table","flute":"C","direction":"across","rows":[…]}`:
+  each row is `thickness`, optional `flute`, `direction` (`along` or
+  `across` the flutes, `any` when left out), `side` (`inner` when the
+  sheet's front ends up inside the fold, `outer`, `any`) and exactly one of
+  `allowance` and `deduction` (of a 90 degree fold). A fold takes, among the
+  rows whose flute (the table's, else the rules' `flute`), direction and
+  side match (a row's missing flute and `any` match everything), the one
+  of the nearest thickness, a more specific one first. A fold closing
+  towards the front (a negative angle) is `inner`. A table needs rows; a
+  row with both values or neither fails the rules. No row for a fold is
+  refused in words ("the crease table has no row for a fold of 4 mm board
+  of flute C across the flutes with the front outside the fold").
+- `{"type":"kerf_bend","slit_length":20,"gap":3,"pitch":1.5}` (optional
+  `slit_width`, else the rules' `kerf`): a living hinge, below.
+
+Rule slots are `allowance.k`, `allowance.allowance`, `allowance.deduction`,
+`allowance.rows[i].thickness|allowance|deduction`,
+`allowance.slit_length|gap|pitch|slit_width` and `kerf`: ordinary
+parameters (K is unitless, the rest lengths).
+
+### A fold's own allowance
+
+`sheet_flange`, `sheet_bend` and `sheet_fold` take `allowance`, any of the
+methods above, in place of the rules' for that fold (a per-bend override,
+its slots under `allowance.`). A `crease_table` without rows picks the
+rules' rows in its own `direction` (and `flute`, when it names one):
+
+```json
+{"type":"sheet_fold","body":"F3.b0","panel":{"feature":"F3","slot":0},
+ "line":{"sketch":"F4","curve":"c1"},"stationary_side":"left",
+ "angle":1.5707963267948966,"allowance":{"type":"crease_table","direction":"along"}}
+```
+
+### Commands by profile
+
+`{"query":"sheet_process"}` (optional `component`, the active one when
+left out; MCP read-only) gives the profile of the component's newest sheet
+rules at the marker, else of its material, and the commands the profiles
+filter:
+
+```json
+{"component":"C0","rules":"F1","process":"board","label":"Board","source":"rules",
+ "commands":[{"command":"sheet.corner_relief","available":false,
+   "reason":"Corner reliefs are for metal sheet; this part's sheet rules are for board."},
+  {"command":"sheet.glue_flap","available":true}, …]}
+```
+
+`source` is `rules`, `material` or `default`. Without sheet rules every
+command is available. The reason is in words, as the disabled command's
+tooltip shows it. Filtered: Corner Relief (metal); Glue Flap, Standard Box
+and Export Die Line (board); Finger Joint, T-Nut Slot, Kerf Bend and Flat
+Pack (laser sheet). The other sheet commands are offered
+for every profile.
+
+`sheet_bodies` adds `allowance` (the method's type), `process` and `kerf`
+to each body; `k_factor` is null for another method than a K-factor.
+
+### Output layers
+
+A profile writes each meaning on its preset's layer
+(`OutputPreset::of`): metal `CUT_OUTER`, `CUT_INNER`, `BEND_UP`,
+`BEND_DOWN`; board's die line `CUT` (outer and inner), `CREASE` and
+`CREASE_REVERSE` (a fold whose inside is on the other side: a reverse
+crease); laser sheet `CUT_OUTER`, `CUT_INNER`, `SCORE`, `ENGRAVE`.
+
+### Finger Joint
+
+```json
+{"cmd":"add_feature","def":{"type":"finger_joint","bodies":["F1.b0","F2.b0"],
+ "finger_width":12,"clearance":0.1}}
+```
+
+Laser-sheet plates that meet at an edge get alternating fingers along it
+(`core/model/src/features/finger_joint.rs`). Plates whose faces lie along
+the component's axes are planned exactly from their boxes, as below; plates
+at any other angle from their slabs (each plate's largest planar face, its
+axes and its thickness behind it): where two plates' solids overlap, the
+overlap is divided along the line their planes meet on (the cross product
+of their normals), each segment's slab, wider by the clearance as below,
+kept to the overlap and cut from the plate that does not own it, a third
+plate's overlap at a joint's end kept by the first of the three. Plates at
+an angle that only touch, one's end on the other's face, are joined where
+the end meets the face: the end plate's slab carried on past its end runs
+into the other plate there, and the end plate grows its fingers into it as
+for touching plates below. Plates that neither overlap nor touch are
+refused in words ("the plates do not meet: …"). Two plates meet where their boxes
+overlap (a corner prism: each plate drawn to the outside of the joint) or
+touch (one plate's end against the other's face). The joint's region is
+the overlap, or for touching plates the end's footprint taken through the
+other plate's thickness, and runs along its longest side. Its length is
+divided into fingers of `finger_width` (default 2.5 times the joint's
+thickness): the odd count nearest to the length over the width (the larger
+on a tie), or `count` when given. The first plate in `bodies` (the second
+with `flip`) takes the fingers at both ends of an odd count; `end_margin`
+(default 0) keeps that much at each end whole for it. Each plate's fingers
+keep their size and the other plate's slots are wider by `clearance`
+(default 0.1 mm) on each side along the joint, so every finger has the
+clearance on both sides. Touching plates: the end's plate grows its
+fingers into the other plate, which loses them with the clearance. With
+more than two bodies every pair that meets is joined; where three plates
+meet (a box's corner) the part of the joint inside the third stays with
+the plate listed first of the three. Both bodies keep their ids. Refused
+in words: fewer than two plates, "the two plates do not meet: …", a count
+that is not a whole number from 1 to 1000, "the fingers (… mm) are too
+narrow for the clearance of … mm on each side", a plate its slots cut
+apart. Slots are `finger_width`, `count`, `clearance` and `end_margin`
+(the count unitless). Volumes with OCCT: `cli.sheet_laser_joints`.
+
+### T-Nut Slot
+
+```json
+{"cmd":"add_feature","def":{"type":"t_nut_slot","body":"F7.b0","face":"F7:side1",
+ "mating_body":"F8.b0","screw_diameter":3,"slot_length":12,"nut_width":5.5,
+ "nut_thickness":2.4,"nut_distance":6}}
+```
+
+The screw-and-nut joint of laser sheet, beside Mortise and Tenon's tab and
+slot (`features/t_nut_slot.rs`): a slot `screw_diameter` plus the
+`clearance` (default 0.1 mm) on each side wide and `slot_length` deep from
+the planar end face, a pocket `nut_width` plus the clearance on each side
+across it and `nut_thickness` plus the clearance on each side deep, its
+near side `nut_distance` from the face, both through the plate's thickness;
+in `mating_body` (optional) the screw's hole, a cylinder of the slot's
+width along the face's normal through that plate. The face's axes are
+Mortise and Tenon's (x along its longest straight edge). `count` slots
+(default 1) lie in the middles of equal shares of the face's length.
+Refused in words: a face that is not planar, "the nut must be wider than
+the screw", "the nut's pocket reaches past the slot's end: make the slot
+longer", slots that do not fit along the face.
+
+### Cut sheets: kerf compensation and nesting
+
+`add_cut_sheet` and `edit_cut_sheet` take `kerf` (mm, 0 to 10; 0 or left
+out: none); the `drawing` query of a cut sheet gives it. `export_cut_sheet`
+moves each loop's path half the kerf away from the material, outer loops
+out and holes in (`cut_sheet::kerf_compensated`: each loop flattened, its
+edges moved along their normals, corners mitred, a mitre longer than four
+times the offset bevelled), so the beam leaves each part at its size.
+
+```json
+{"cmd":"nest_cut_sheet","drawing":"CutSheet1","gap":5}
+```
+
+`nest_cut_sheet` (and `add_cut_sheet` with `"nest": true`) places every
+part by simple automatic nesting (`cut_sheet::nest`): each turned so that
+its longer side lies along the sheet's width when it fits so, then in rows
+from the sheet's lower left corner, the tallest first, `gap` (default 5 mm)
+apart and from the edges. Parts that do not fit on the sheet are warned
+about as before. One undo step, "Nest the parts of CutSheet1".
+
+### Kerf bends (living hinges)
+
+```json
+{"type":"sheet_fold","body":"F3.b0","panel":{"feature":"F3","slot":0},
+ "line":{"sketch":"F4","curve":"c3"},"stationary_side":"left",
+ "angle":1.5707963267948966,"position":"bend_line",
+ "allowance":{"type":"kerf_bend","slit_length":20,"gap":3,"pitch":1.5}}
+```
+
+A kerf bend is laser sheet's one bend: a Fold (or Flange or Bend) whose
+allowance, its own or the rules', is `kerf_bend`. Its neutral surface lies
+in the middle of the thickness (K 0.5), so the strip unfolds to its
+mid-thickness length. Its radius is at least the lattice's least,
+`t p / (2 w) - t / 2` (`SlitLattice::min_radius`: a row's slit, `w` wide,
+closes at most by its width, so the inside surface may shorten by at most
+`w / p`); a fold without a radius of its own takes the larger of the
+rules' radius and that least, and a smaller radius of its own is refused
+in words ("the kerf bend's radius (5 mm) is smaller than its slit lattice
+bends to (6.5 mm): space the slits closer or widen them"). `w` is the
+lattice's `slit_width`, else the rules' `kerf`; without either the bend is
+refused. The bend's record carries the lattice (`lattice` of the
+`sheet_state`'s bend), and its Flat Pattern bend (`flat_pattern`'s
+`bends[].slits`) has the slits in place of reliefs and its centre line:
+rows `pitch` apart across the developed strip (as many as fit, centred),
+each row's slits `slit_length` long with `gap` between them and from the
+strip's material ends (its chords: openings of the strip are kept), every
+other row shifted by half a period, pieces shorter than the gap left out.
+The Flat Pattern DXF writes the slits on the inner cut layer. OCCT:
+`cli.sheet_kerf_bend`.
+
+### Flat Pack
+
+```json
+{"cmd":"add_flat_pack","body":"F1.b0","thickness":6,"finger_width":15,"width":1000,"height":600}
+```
+
+`add_flat_pack` turns a box solid into the six plates of a laser-cut
+box: the `flat_pack` feature (`features/flat_pack.rs`) and a cut sheet with its
+plates nested (`add_cut_sheet` with `nest`), one undo step "Flat Pack".
+The answer has the feature's `uid`, its `bodies`, the cut sheet's
+`drawing` and its `warnings`. `width`, `height` and `kerf` are the cut
+sheet's.
+
+```json
+{"type":"flat_pack","body":"F1.b0","thickness":6,"finger_width":15,"clearance":0.1}
+```
+
+The body must be a rectangular block along the component's axes (its
+volume that of its box; else refused: "Flat Pack takes a box: …"). Its box
+is the outside of the flat pack, or with `inside` the room inside it. The
+plates are the bottom, the top, the front (smallest y), the back, the left
+(smallest x) and the right, the bodies `F<feature>.b0` to `.b5` in that
+order, each drawn to the outside of its edges, with Finger Joint's plan at
+every edge (a corner of three plates kept by the first in that order); the
+block is removed. `finger_width` defaults to 2.5 times the thickness,
+`clearance` to 0.1 mm. A side not longer than twice the thickness is
+refused. OCCT: `cli.sheet_flat_pack`.
+
+### Standard boxes
+
+```json
+{"cmd":"add_standard_box","style":"fefco_0201","length":300,"width":200,"height":150,
+ "board":"c_flute"}
+```
+
+A board box of a standard style from its options (`sheet_process.rs`):
+board rules (`process` `board`, a measured `bend_deduction`), the blank's
+outline as a sketch, its creases as another, a Face of the blank and a
+Fold at every crease, and the Flat Pattern item; one undo step "Standard
+Box". The answer names the `rules`, `outline`, `creases`, `face`, `body`
+and `folds`. `length`, `width` and `height` are inside sizes, mm. The board
+is `board`, one of `sheet_process`'s `boards` (folding carton 0.5 mm, E, B,
+C flute and BC double wall corrugated board, corrugated polypropylene 3, 4
+and 5 mm), whose thickness, flute and crease deduction are taken unless
+`thickness`, `flute` or `deduction` are given (the deductions are starting
+values: calibrate them from a folded sample); without a board, `thickness`
+is needed and the deduction defaults to the thickness. `radius` (the
+creases' inside radius) defaults to an eighth of the thickness,
+`glue_flap` to 30 mm, `tuck` to a third of the height, at most 20 mm.
+`"folded": false` leaves the blank flat with its creases.
+
+Styles: `fefco_0201`, the regular slotted box (four flaps at each end,
+each half the width deep less the thickness); `ecma_a20`, the reverse tuck
+end carton (a closing panel with its tuck at the top of one long side and
+at the bottom of the other, dust flaps on the short sides: its tuck and
+lock flaps). The blank (`blank`): the four side panels along x (short,
+long, short, long) and the glue flap after the last; creases fold at their
+middle, so two creases are a wall's straight plus one allowance apart; the
+long panels' end creases lie a thickness further out than the short
+panels', so their flaps fold over the short panels'; the glue flap folds
+under the first panel's free edge and touches it inside; slots between
+the flaps are a thickness wider than the creases' strips. The folds run:
+the short panels' flaps, then the long panels' (a stack outermost first,
+tucks before their closing panels), the glue flap, then the walls from the
+far end, so that each crease lies on the flat remainder of the blank's
+panel when it folds and no earlier bend's seam lies past a crease outside
+its ends (a fold refuses that). The slots reach half a crease strip into
+the band, and the walls' creases run past the blank at both ends, through
+the slots, so the whole side past a wall's crease folds with it. Sheets
+that lie against each other in the folded box keep a seam gap (a tenth of
+the thickness, at least 0.05 mm), since a sheet body holds no two walls
+touching over a face: the long panels' flaps over the short panels', the
+glue flap inside the first panel, a tuck inside its wall. The first
+panel's flaps keep half a slot off its free edge, the glue flap and its
+crease a thickness clear of the flaps' creases, and a tuck end's dust flaps
+clear of the tucks. Flaps that touch each other or a panel
+(the glue flap, a tuck inside the opposite wall) build: `cli.sheet_board_box`
+and `cli.sheet_board_polypropylene` fold and unfold both styles. Its options
+are kept in its rules (`standard_box`: style, sizes, board and the rest but
+`folded` and `component`), so the box is a part with options:
+
+```json
+{"cmd":"edit_standard_box","rules":"F1","height":200}
+```
+
+`edit_standard_box` makes the box's rules, blank outline and creases again
+from its options with those given changed (null takes an option away),
+one undo step "Edit Standard Box"; its Face and Folds name the same curves
+and follow. Options that change the blank's shape (another style) are
+refused: "these options change the shape of the box's blank: make the box
+again". With `"component": true`, `add_standard_box` makes the box in a new
+component of its own, activated (`FEFCO 0201 Box`, `ECMA A20 Carton`): a
+part to save into a library; the answer names it as `component`.
+
+A **Glue Flap** is a Flange whose wall is tapered, as glue flaps are:
+
+```json
+{"cmd":"add_glue_flap","taper":15,"inset":2,"def":{"type":"sheet_flange","body":"F3.b0",
+ "boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c6[c5,c7]"}},
+ "angle":1.5707963267948966,"length":{"mode":"tangent","value":30},"position":"inside"}}
+```
+
+`add_glue_flap` makes the flange's profile sketch on its wall
+(`sheet_flange_profile`), turns its rectangle into a trapezoid (its root
+along the edge `inset`, default 0, in from each end, its sides slanting in
+by `taper` degrees, default 15, 0 to 60) and adds the flange with that
+`profile`, one undo step "Glue Flap"; the answer has the flange's `uid` and
+its `profile`. A taper and inset that leave no flap are refused in words.
+OCCT: `cli.sheet_glue_flap`; a **reverse crease** is a fold whose inside is on the
+sheet's back: its crease row is matched as `inner`/`outer` by its side, and
+the die line writes it on `CREASE_REVERSE`.
+
+### Die lines
+
+```json
+{"cmd":"export_die_line","body":"F4.b0","path":"box.pdf"}
+```
+
+Writes a sheet's Flat Pattern as a die line: `dxf` with the layers of its
+profile's output preset (board: `CUT`, `CREASE`, `CREASE_REVERSE`; for
+cutting tables), or `pdf` (a page at 1:1 with a 10 mm margin: cuts solid,
+creases dashed, reverse creases chain-dotted). The format is `format` or
+the path's extension. The answer has `path`, `format`, `body`, `process`
+and the DXF `layers` with their entity counts. A sheet without a valid
+Flat Pattern is refused with its reasons. CF2 is not written yet.
+
+### Marks, profile layers and Flat Pack editing (mitcad#1939)
+
+A cut sheet's part takes `marks` (`add_cut_sheet_parts` with the parts,
+`edit_cut_sheet_part` in place of the part's): `[{"sketch":"F9","kind":"engrave"}]`,
+`kind` `engrave` or `score`. Each sketch's curves and text outlines
+(construction curves left out) are laid on the part along the face it is
+seen along (on a Flat Pattern part, in its fixed panel's plane, mirrored
+for a back view) and placed with it; `export_cut_sheet` writes them on the
+part's profile's engrave and score layers (`ENGRAVE`, `SCORE` for laser
+sheet and metal; `PRINT`, `SCORE` for board) and as SVG layers. A Flat
+Pattern part's bend lines take its profile's bend layers (`BEND_UP` and
+`BEND_DOWN` for metal, `CREASE` and `CREASE_REVERSE` for board, `SCORE` for
+laser sheet), and a kerf bend's slits are cut on `CUT_INNER` in place of its
+line. A part's profile is its body's sheet rules', else its component's
+material's, else metal. The Materials window's **Sheet Process** (By Class,
+naming the class's, or Metal, Board, Laser Sheet) sets a material's
+`sheet_process` (`edit_material`). `export_die_line` takes `marks` too, laid on the
+Flat Pattern's fixed panel.
+
+A Flat Pack is edited as any feature (`edit_feature`), its plates made
+again; its cut sheet keeps its parts.
+
+## Panelize
+
+A feature that splits planar faces of a body off as panels of one
+thickness (mitcad#2005, GitHub mitcad/Mitcad#423), for cabinetry, with
+`add_feature` and `edit_feature`, ordinary parameters, preview, Undo and
+persistence. The definition is `core/model/src/features/panelize.rs`, what
+the document adds (materials, components, names)
+`core/model/src/document/panelize.rs`. It has no kernel family of its own:
+each slab is the geometry kernel's extrusion of a body face
+(`Kernel::extrude_face`) and booleans.
+
+```json
+{"type": "panelize", "body": "F1.b0", "faces": ["F1:side3", "F1:side1"], "thickness": "18 mm"}
+{"type": "panelize", "body": "F1.b0", "faces": ["F1:top", "F1:bottom"], "thickness": "t",
+ "result": "components", "remove_remainder": true}
+```
+
+- `body`, `faces`: planar faces of the body (a face that is not planar
+  fails: `a face to panelize is not planar: panels are made of planar
+  faces`, the face in its places), each listed once, at least one.
+- `thickness` (a slot, mm, > 0; `the panel thickness must be greater than
+  zero` otherwise): each face's slab is the face extruded this far into
+  the body, intersected with it. Each slab is a body of its own,
+  `<feature>.b<i>` for the i-th face; several solids of one slab are one
+  body.
+- What is left of the body (the slabs cut off) stays the body, with its
+  id, so the next Panelize works on it: panels made in an earlier step run
+  through the corners, and the order of the steps decides the joints.
+  Nothing left removes the body.
+- `remove_remainder` (default false): the body left after this step is
+  removed (the block inside a cabinet, on the last step).
+- The slabs of one step must not overlap: faces that meet at an edge go in
+  separate steps. Otherwise the feature fails: `the panels of two faces
+  overlap: faces that meet at an edge are panelized in separate steps, the
+  first one running through the corner`, both faces in its places, its
+  detail naming them (`Kernel::overlap_volumes` of the slabs, 1e-6 mm³).
+- `result`: `bodies` (default) or `components`. With `components` the
+  document adds a `component_from_bodies` feature right after the
+  Panelize for each panel, in the same undo step: each panel moves into a
+  component of its own, placed where it is. An edit keeps those in step
+  (new faces get one, faces gone and a change to `bodies` remove them; a
+  component that has features, occurrences or drawings of its own
+  refuses that: `Left has features, occurrences or drawings of its own;
+  delete them first, or keep Result Components`). They use the panels, so
+  the Panelize is deleted with its dependents.
+- Names: after the recompute, a panel without a name is named by its
+  face's outward normal in the component's axes, `Left` (−X), `Right`
+  (+X), `Front` (−Y), `Back` (+Y), `Bottom` (−Z), `Top` (+Z), else `Panel
+  <n>` (the face's place in `faces`), unique among the bodies of its
+  component (`Left (2)`); the component made for it takes the same name.
+- Materials: when the Panelize is added or edited, each panel without
+  looks of its own takes the body's material and appearance (with
+  `components` also the default material of the body's component, which
+  its own component would not give it).
+
+A cabinet of a box is three steps: the sides, the back, then the top and
+bottom with `remove_remainder`. A 600 × 400 × 300 box with 18 mm panels
+gives sides of 2 160 000 mm³, a back of 3 045 600 mm³ and a top and bottom
+of 3 878 064 mm³ each, and no remainder.
+
+Tests: `core/model-tests/features-solid/src/panelize_tests.rs` (the mock
+kernel's box booleans: that cabinet, two faces at an edge refused, Result
+Components and back to Bodies, a thickness parameter changed),
+`tools/ui-panelize-test.sh`, `app.ui-windows-panelize` and
+`app.ui-macos-panelize` (the shared `tools/ui-scripts/panelize.mitcad-ui`
+on `tools/ui-scripts/panelize.json`: the cabinet's three steps on OCCT,
+each panel's volume).
+
+## Auto Constrain of a sketch (mitcad#2019)
+
+`sketch.auto_constrain` makes a sketch that exists (an imported DXF, a
+sketch drawn without inference, one whose constraints were deleted) fully
+constrained in one edit: first the relations its geometry already has,
+then driving dimensions for the degrees of freedom still free. One undo
+step, `Auto Constrain <sketch>`.
+
+| Command | Fields | Notes |
+|---|---|---|
+| `sketch.auto_constrain` | `sketch`; `entities` (optional: the curves and points to constrain, `c3`, `p4`; the whole sketch when left out); `relations` (default true), `dimensions` (default true; not both false); `length_tolerance` (mm, default 0.01), `angle_tolerance` (degrees, greater than 0 and less than 45, default 0.5) | the editing commands' fields, and `added` (how many of each constraint and dimension type, `{"coincident": 4, "horizontal": 2, "length": 2}`), `relations` (constraints added plus ends joined), `joined` (curve ends that became one point), `dof` (the sketch's degrees of freedom afterwards) and `summary` (`"8 constraints, 4 dimensions; the sketch is fully constrained"`, or `"…; 4 degrees of freedom left"`) |
+
+```json
+{"cmd": "sketch.auto_constrain", "sketch": "F1"}
+{"cmd": "sketch.auto_constrain", "sketch": "F1", "entities": ["c3", "c4", "c5"], "dimensions": false, "length_tolerance": 0.05}
+```
+
+**Phase 1, relations** (`relations`), in this order, the stronger first:
+
+1. Curve ends (and lone points, a centre with an end) within the length
+   tolerance of each other: two curve ends become one point, as
+   `sketch.add_constraint` joins them (mitcad#260); the others get a
+   point-to-point `coincident`.
+2. `midpoint`: a point at a line's middle.
+3. `coincident` of a point on a curve (a line within its ends, a circle,
+   an arc, an ellipse), away from the curve's ends.
+4. `tangent` (with `at`) where a line and an arc, or two arcs, join with
+   directions within the angle tolerance.
+5. `equal` radii of circles and arcs (before the lines' directions: a
+   slot's lines held level would imply them).
+6. `horizontal` and `vertical` lines.
+7. `collinear` lines; where both directions are held already, an end of
+   one on the other.
+8. `perpendicular` lines at a corner they share; `parallel` lines.
+9. `equal` lengths of lines (not construction lines).
+10. `concentric` circles and arcs.
+11. `symmetric` pairs of points about a construction line, a centre line
+    or a sketch axis.
+12. A point at the origin (`coincident` with the origin point), on the x
+    or y axis (`coincident` with the axis line).
+
+Every candidate is tried on a copy of the sketch first and kept only when
+it takes a degree of freedom away, the redundant, conflicting and
+collapsed counts do not rise (nothing the others imply, not even in part),
+and the solve leaves every point and radius within the length tolerance of
+where it was when the command started. A refused candidate is skipped
+without a word. An angle relation found within the angle tolerance is thus
+kept only when it moves no point more than the length tolerance. Only
+what is not fully constrained is tried; with `entities`, a candidate may
+refer only to them (and their points), the origin and the axes.
+
+**Phase 2, dimensions** (`dimensions`): driving dimensions with the values
+the geometry has (it does not move), each kept only when it takes a degree
+of freedom away:
+
+1. Sizes: `length` of lines (profile lines first), `radius` of arcs,
+   `diameter` of circles, `major_radius` and `minor_radius` of ellipses.
+2. `angle` at a corner of two lines that are neither perpendicular nor
+   parallel within the angle tolerance (its sides the corner's rays).
+3. Positions, per connected part, the part nearest to the origin first:
+   `horizontal_distance` and `vertical_distance` from the origin of the
+   part's point nearest to the origin (`signed` where it is on the axis),
+   the `angle` of its longest line that is neither level nor upright to
+   the x axis, then the distances of any point of it still free.
+
+Each value is placed beside its curve (a length on the outer side of its
+line, a radius beyond its arc, the positions in rows below and left of the
+geometry), moved on where it would lie on one placed before. The origin
+point and the axes are made when a relation or a dimension needs them, and
+taken away again when nothing came to use them.
+
+Code: `core/sketch/src/auto_constrain.rs` (`SketchEdit::auto_constrain`),
+`core/model-api/src/sketch_auto_constrain.rs`. Tests:
+`core/model-tests/sketch/src/sketch_auto_constrain_2019_tests.rs`; the
+application's Auto Constrain command (`app/commands/AutoConstrainCommands.cpp`,
+app/COMMANDS.md) with `tools/ui-sketch-auto-constrain-test.sh`.
+
+## Mesh tools for reverse engineering
+
+Tools that turn a scanned or exported mesh (a mesh body: an STL, OBJ or
+3MF file's triangles, [Mesh bodies in surface
+operations](#mesh-bodies-in-surface-operations)) into geometry to build
+on (mitcad#1871; the algorithms in `core/model/src/mesh_tools/`, pure Rust
+on the mesh's triangles; the features in
+`core/model/src/features/mesh_tools.rs`). Every tool first joins the
+corners its triangles share (an STL file stores each triangle's own three
+corners): vertices within a billionth of the mesh's size (at least 1e-9
+mm) of each other are one, and triangles left without three corners are
+left out (`mesh_tools::joined`); Repair counts its own welding instead.
+
+The mesh edits are features in the timeline, as [Convert
+Mesh](#convert-mesh)'s Faceted solid is: each makes **new bodies** of the
+mesh body and leaves it as it was, and `add_feature` (also at a timeline
+position) hides the mesh body in the same undo step and refuses a feature
+that fails with its reason, so that nothing changes
+(`document/mesh_convert.rs`; a Show When condition on the mesh body stays
+and is not followed while the edit is in the timeline, as for Convert
+Mesh). A body that is no mesh body is refused in words ("Decimate works on
+mesh bodies (triangles from an STL, OBJ or 3MF file); the body picked is
+not one"; the body's uid only in the error's detail for agents). What a
+feature did is its information (the `infos` of the feature query), in
+words. A new mesh body's one face is `<feature>:import(<n>)`.
+
+### Decimate
+
+```json
+{"type": "mesh_decimate", "body": "F2.b0", "triangles": 5000, "tolerance": 0.05, "sharp_angle": "30 deg"}
+```
+
+Fewer triangles, to `triangles` (a whole number, at least 4) or within
+`tolerance` (mm, more than 0 and at most 100), whichever comes first; one
+of them is needed. Edges are collapsed one at a time, the cheapest first:
+a vertex moves onto a neighbour (every vertex left is one of the mesh's),
+the triangles on the edge go. The cost is the squared distance of the new
+place from the planes of the triangles the vertex has carried (the
+quadric error), so a collapse within the tolerance leaves every merged
+triangle's plane within it.
+
+- **Outline and sharp edges kept:** edges of one triangle (the outline,
+  the rims of holes), of more than two, and edges whose triangles meet at
+  more than `sharp_angle` (radians; 30 degrees when left out, at most 180)
+  are feature edges. A vertex on none moves freely, one on two only along
+  them (an edge keeps its line with fewer points), one on one or on three
+  or more (a corner) stays.
+- No collapse joins two sheets (the two vertices share a neighbour that is
+  not across the edge), turns a triangle over or leaves one without area.
+- Information: `Decimated from 1200 triangles to 600 triangles; the
+  surface moved up to 0.012 mm`. Default name `Decimate<n>`.
+
+### Repair
+
+```json
+{"type": "mesh_repair", "body": "F2.b0", "tolerance": 0.01, "max_hole": 10}
+```
+
+A new mesh body repaired, in this order:
+
+1. **Weld:** vertices within `tolerance` (mm, 0 to 1; 0 welds none) of a
+   vertex kept before them are that vertex (the nearest).
+2. Triangles left with two corners the same go (without area), and of
+   triangles on the same three vertices all but the first (lying on
+   another).
+3. **Manifold:** at an edge of more than two triangles the two largest
+   stay; a vertex where separate fans of triangles touch becomes one
+   vertex per fan.
+4. **Orient:** the triangles are turned to agree with their neighbours
+   across every edge, a closed shell outwards, an open surface the way
+   most of its area already faced; a piece that cannot be oriented (a
+   one-sided surface) is left as it was, with a warning.
+5. **Holes** up to `max_hole` across (mm; the diagonal of the box of the
+   hole's rim) are filled: ears clipped in the rim's plane, or a fan to
+   its centre where no ear is free (at most 4096 edges round). Without
+   `max_hole` no hole is filled.
+
+Information, in words: `Welded 478 vertices, removed 1 triangle lying on
+another, turned 1 triangle to face the same way as their neighbors,
+filled 1 hole; 1 hole larger than the size to fill left open`, or `the
+mesh needed no repair`. Default name `Repair<n>`.
+
+### Remove Region
+
+```json
+{"type": "mesh_remove", "body": "F2.b0",
+ "lassos": [{"normal": [0, 0, 1], "points": [[0, 0, 20], [30, 0, 20], [30, 30, 20]]}],
+ "brush": [[5, 5, 12]], "radius": "2 mm", "triangles": [17, 18], "through": false, "fill": true}
+```
+
+The triangles picked are removed; at least one of these picks them:
+
+- `lassos`: polygons of at least 3 points drawn on a plane square to the
+  view (in the component's coordinates), `normal` towards the viewer: the
+  triangles whose centre, seen along the normal, lies inside (even-odd
+  rule), of those facing the viewer (their normals within 85 degrees of
+  `normal`), or all of them with `through`.
+- `brush` with `radius` (mm): the triangles whose centre lies within the
+  radius of a point.
+- `triangles`: numbers in the mesh after its corners are joined (the
+  stored order, triangles without three corners left out).
+
+With `fill` the holes the removed triangles leave are filled (any size; a
+hole the mesh had before stays). Refused: nothing picked (`the region
+picks no triangle of the mesh`), everything picked (`… nothing would be
+left`), a brush without radius, a lasso of fewer than 3 points.
+Information: `Removed 48 triangles; filled 1 hole`. Default name
+`RemoveRegion<n>`.
+
+### Segment
+
+```json
+{"type": "mesh_segment", "body": "F2.b0", "angle": "20 deg", "tolerance": 0.05}
+```
+
+The mesh split into regions by curvature, **one new mesh body per region**
+(`<feature>.b0`, `.b1`, …, largest first; faces `<feature>:import(<k>)`):
+
+1. Smooth patches: triangles joined across edges where their normals
+   differ by at most `angle` (radians, more than 0 and at most 90
+   degrees); edges of one or of more than two triangles end a patch.
+2. A patch within `tolerance` (mm) of the plane fitted to it is a plane,
+   else within it of the cylinder fitted to it a cylinder.
+3. A patch that is neither is searched for planes inside it (grown from
+   its largest triangles while each new triangle's corners lie within the
+   tolerance of the region's plane, kept with at least a twentieth of the
+   patch's area); what is left, piece by connected piece, is fitted again,
+   and free-form where nothing fits.
+
+At most 500000 triangles and 1000 regions. Information: `Found 3 regions:
+1 plane, 1 cylinder and 0 free-form regions`. Default name `Segment<n>`.
+
+### Fit Surface
+
+```json
+{"type": "mesh_fit_surface", "body": "F7.b0", "surface": "cylinder", "tolerance": 0.05}
+```
+
+A surface fitted to a mesh body (a region, typically one Segment made) as
+a **new surface body** built by `Kernel::boundary_body` and named
+`<feature>:import(<n>)`. `surface`: `auto` (the default, written only
+otherwise), `plane`, `cylinder`, `cone`, `sphere` or `bspline`.
+
+- Plane: through the points' mean, square to the direction they spread
+  least along; the rectangle of their extent.
+- Cylinder: the axis first where the triangles' normals are square to it,
+  then the axis, its place and the radius refined by least squares on the
+  vertices' distances (Levenberg-Marquardt); a cone likewise with its half
+  angle (its tip may not lie inside the region); a sphere by the algebraic
+  fit, refined. Each is bounded by the vertices' extent along its axis and
+  around it; a gap round the axis of less than 45 degrees closes it all the
+  way round. Faces of revolution are split into pieces of at most half a
+  turn that share their edges; a sphere's face reaches at most 89.4
+  degrees above and below its equator, which runs through the middle of
+  the region.
+- B-spline: a bicubic surface (4 to 12 control points each way) over the
+  vertices' mean plane, fitted by least squares to their heights over it
+  with a little smoothing, untrimmed; the region must face one side of
+  that plane (`the region folds over …`).
+- The deviation is the largest distance of a vertex from the surface.
+  `auto` takes the first of plane, cylinder, sphere, cone and B-spline
+  within `tolerance` and is refused when none is (`no surface lies within
+  the tolerance 0.05 mm of the region; the closest, cylinder, lies up to
+  0.3 mm from it`); a chosen kind is built anyway and warns when it lies
+  farther than the tolerance.
+- Information: `Fitted a cylinder of radius 10.002 mm; the mesh lies
+  within 0.012 mm of it`. Default name `FitSurface<n>`.
+
+### Mesh sections into sketches
+
+`mesh_section` (`core/model/src/document/mesh_sections.rs`) cuts a mesh
+body by a sketch's plane and puts the section into the sketch as its own
+lines, arcs and circles; with `count` it makes a series of parallel
+sections, a sketch each:
+
+```json
+{"cmd": "mesh_section", "body": "F2.b0", "plane": "F4", "tolerance": 0.05, "count": 3, "spacing": 2}
+{"cmd": "mesh_section", "body": "F2.b0", "sketch": "F5"}
+```
+
+- `sketch`: the first section goes into it (its plane, in its frame); or
+  `plane` (as `sketch.create` names one: `xy`, a construction plane
+  `"F4"`, `{"face": …, "body": …}`): a new sketch on it in the active
+  component. One of the two.
+- `tolerance` (mm, more than 0 and at most 10; 0.05 by default): how far a
+  curve may lie from the section's points. `count` (1 to 200; 1 by
+  default) sections in all; `spacing` (mm, not 0) between neighbours along
+  the first sketch's normal. The further sketches lie on XY of the first
+  one's component in a frame of their own moved along the normal (they do
+  not follow the first one's plane); a plane of the series that misses the
+  mesh makes no sketch (`missed`).
+- The cut: each triangle the plane crosses gives a segment between the two
+  edges it crosses; segments that share an edge join into polylines,
+  closed ones counter-clockwise. A vertex lying in the plane counts as
+  just above it.
+- The fit: a closed polyline of 8 or more points within the tolerance of
+  one circle is that circle. Otherwise it is cut into runs from its
+  sharpest corner on, each as long as a straight line between its ends or
+  an arc through its ends (its centre on their bisector, fitted to the
+  points between) stays within the tolerance of every point; an arc is
+  taken where it runs half as far again as the line and bulges at least
+  half the tolerance from its chord. A closed polyline's last and first
+  curves are one where they are the same line or arc.
+- The curves are the sketch's own (not linked to the mesh; they stay when
+  it changes, as an inserted drawing's do), neighbouring curves sharing
+  their end points. One undo step for all (`Mesh Section`, `Mesh
+  Sections`); a failure takes back what was made. Refused: a body that is
+  no mesh body (`Mesh Section cuts mesh bodies …`; a sketch's Intersect
+  cuts solids and surfaces), a mesh body after the sketch or in another
+  component, a first plane that does not cut the mesh.
+- Result: `sketches` (uids, the first first), `names`, `curves`, `lines`,
+  `arcs`, `circles`, `missed`.
+
+### The mesh_stats query
+
+```json
+{"query": "mesh_stats", "body": "F2.b0"}
+```
+
+A mesh body's counts after its corners are joined: `vertices`,
+`triangles`, `open_edges` (edges of one triangle), `non_manifold_edges`
+(of more than two), `holes` (loops of open edges), `area` (mm²) and
+`closed` (no open and no non-manifold edge). Refused for a body that is no
+mesh body.
+
+Tests: `core/model/src/mesh_tools/tests.rs` (`core.model`: a noisy
+cylinder and a noisy box written by the test, as a scanner gives them:
+sections a circle, four lines and a slot's two lines and two arcs;
+decimation to a count keeping the rims and within a tolerance flattening a
+box; repair welding, orienting, filling and leaving a large hole open;
+lasso and brush removal; six planes of a box, a cylinder and two planes of
+a cylinder; cylinder, plane, sphere, cone and B-spline fits and their
+boundaries), `core/model/src/features/mesh_tools_tests.rs` (`core.model`:
+each feature on the mock kernel, the mesh body hidden in its undo step,
+the refusals, a series of sections), `core/model-api/src/mesh_tools.rs`
+(the command and the query), `cli.mesh_tools`
+(`tools/cli/tests/mesh_tools.json`: STL meshes through the OCCT kernel)
+and the UI test of every panel, `tools/ui-mesh-tools-test.sh` (the shared
+`tools/ui-scripts/mesh-tools.mitcad-ui`, also `app.ui-windows-mesh-tools`
+and `app.ui-macos-mesh-tools`).
+
+## CAM: turning on a lathe (mitcad#1869)
+
+`core/cam/src/turning/`, `core/model/src/document/cam/turning.rs`; the
+design is [docs/cam.md](../../../docs/cam.md), "Turning". A setup whose
+machine is a **lathe** turns its bodies about the spindle axis; the same
+commands and queries as milling ([CAM: setups, operations and
+machines](#cam-setups-operations-and-machines)) carry it.
+
+- **A lathe** (`cam_machine_put`): a machine with `"lathe":
+  {"turret_stations", "chuck_diameter", "chuck_length", "axes"}` and a
+  turning dialect as its `controller` (`fanuc_turning`). Its `travel`
+  and `zones` are in the lathe's axes: X the controlled point's distance
+  from the spindle axis (a radius; Y unused), Z along the spindle. `axes`
+  (`c`, `live_tools`, `y`, `b`) are kept for later work and unused.
+  `cam_dialects` lists the turning dialects with `"lathe": true`.
+- **Lathe tools** (`cam_tool_put`, on a lathe only; milling tools on a
+  mill only): `shape` `{"kind": "turning", "nose_radius"}`, `{"kind":
+  "boring", "nose_radius"}`, `{"kind": "grooving", "width",
+  "nose_radius", "inside"}`, `{"kind": "parting", "width"}`, `{"kind":
+  "threading", "angle" (60), "inside"}`. The `number` is the turret
+  station (1 to 99, written `T0101` with the same offset), `diameter` the
+  holder's size (a boring bar's diameter: it must fit the stock's bore),
+  `flute_length` the deepest the insert cuts (4 mm, a grooving insert's
+  5, a parting blade's 25 when left out), `length` the overhang.
+- **A lathe setup:** the work Z is the spindle axis, `wcs.z` an axis or
+  a cylindrical face (the design's Z through the middle of the bodies
+  when left out), pointing away from the chuck; the work zero on the axis
+  at the part's face (or at the Z of `wcs.origin`'s point); `stock`
+  `around_bodies` is a bar: `side` on the radius, `top` in front of the
+  face, `bottom` behind the back; or a stock `body`. `lathe`
+  `{"stock_bore" (a diameter: a tube or a drilled hole), "change_diameter",
+  "change_z" (the tool change position; 50 mm clear of the stock when
+  left out), "program_number" (O1000), "chuck_gap" (how far the jaws are
+  behind the stock's back, for the lathe check)}`, cleared by null.
+  `cam_setups` gives such a setup `"turning": true` and its `work` with
+  `turning` `{part, stock_back, change}`: the turned profile (outside and
+  bore as chains `{x, z, bulge}`, x a radius) and the stock.
+- **Turning operations** (on a lathe setup only; milling kinds refused
+  there, turning kinds on a mill), each with the usual `tool`, `heights`
+  (`clearance` from the stock, 2 mm; `retract`, 0.5 mm), `stock_to_leave`
+  (radius), `spindle` (direction), `coolant` (flood only on Fanuc) and
+  `turning` `{surface_speed (m/min), max_rpm (the machine's when left
+  out), constant_rpm (use `cutting.spindle_rpm`), feed_per_rev,
+  depth_of_cut, peck, stock_to_leave_z}`:
+
+| Kind (`kind`) | Fields | What it does |
+|---|---|---|
+| `{"type": "turn_face"}` | `depth_of_cut` (Z per pass), feed 0.2 mm/rev | The front from the stock's face to the part's, from outside the stock to the centre (or into the stock's bore) |
+| `{"type": "turn_rough", "side": "outside" \| "inside"}` | `depth_of_cut` (2 mm or the insert's), `stock_to_leave` 0.2 (`stock_to_leave_z` half of it), feed 0.25 | Passes along Z, backing off at 45 degrees, then once along the contour; grooves are bridged (left to grooving), a wall leaning back taken as a shoulder; the cycle G71 |
+| `{"type": "turn_finish", "side"}` | feed 0.1 | Once along the contour; G70 over the blocks of an earlier roughing of the same contour |
+| `{"type": "turn_groove", "side", "z_from", "z_to"}` | the groove's Z, or the groove's bottom face as the input; `peck`, feed 0.05 | Plunges as wide as the insert between the Z, down to the profile there |
+| `{"type": "turn_part_off", "z"}` | `z` the part's back when left out; `peck`, feed 0.05 | The blade's side towards the face cuts at the back, down to the axis |
+| `{"type": "turn_thread", "side", "pitch", "diameter", "z_start", "z_end", "depth"}` | the diameter (major outside, minor inside) and the Z, or the threaded face as the input; `depth` 0.6134 of the pitch outside, 0.5413 inside; `depth_of_cut` the first pass (a third of the depth) | Passes at a constant spindle speed, each the square root of its number deeper, then a finishing pass; the cycle G76 |
+
+- **Spindle:** a constant surface speed (G96) under the limit `max_rpm`
+  (G50), 200 m/min (150 in a bore, 100 grooving and threading, 80
+  parting) when left out; threading, and any operation with
+  `constant_rpm`, at a constant speed (G97): `cutting.spindle_rpm`, or
+  the surface speed at the thread's diameter.
+- **`cam_generate`, `cam_toolpaths`:** as for milling, `"turning": true`;
+  a toolpath's `toolpath.moves` lie in the section's plane in work
+  coordinates (`[x, 0, z]`, x a radius, arcs as short lines, feeds per
+  revolution) for the view, `turn_path` the moves as computed (`[x, z]`,
+  arcs about `center` with `cw`, threading moves with their `lead`, and
+  the `cycle` a post may write). The lathe check (`findings`, when the
+  setup has its `placement`: its Z is the work zero's machine Z) finds
+  the station not on the turret, a spindle speed or limit beyond the
+  spindle, a feed (per revolution times the speed) beyond `max_feed`, the
+  travel, the zones and the chuck.
+- **`cam_post`:** the program in the lathe's dialect (Fanuc: `%`, the
+  program number, X as a diameter, G99 feeds per revolution, G50/G96/G97,
+  G71/G70 and the two-block G76 when `post.canned_cycles`, else G1, G2,
+  G3 and G32), read back by the program check before it is given, with
+  its `cycles` (`[["G71", line], ...]`). A program the check refuses is
+  refused in words ("The written program does not read back as meant:
+  ...").
+- **`cam_simulate`:** `{"turning": true, work, stock {z, inner, outer},
+  left, left_at, gouges, rapid_cuts}`: the stock's section cut by the
+  program (radii per Z, `resolution` apart, 0.05 mm), the most material
+  left over the part, where tools cut into it and rapids that cut.
+
+Refused in words: "The setup's machine is a lathe: give it turning
+operations.", "Turning operations need a lathe as the setup's machine.",
+"The lathe Lathe takes lathe tools only.", "The stock has no hole for the
+boring bar: drill it first or give the stock a bore.", "The part has no
+groove there.", "Threading needs a threading tool." and the like.
+
+Code: `core/cam/src/turning/` (`lathe`, `tool`, `profile`, `ops`,
+`post`, `check`, `stock`), `core/model/src/document/cam/turning.rs`.
+Tests: `core/cam/src/turning/` (the exact Fanuc program of a pin; a
+shaft with a groove, a thread and a bore through every operation, both
+posts, the program and lathe checks and the simulation),
+`core/model-tests/cam/src/turning_tests.rs`.
+
+## BUILD: a part's automatic name (mitcad#2030)
+
+A placed BUILD part is named after its designation (`Profile 30x30 B8
+L=1000`, the library's pattern with the part's values; a second part of
+the same designation `… L=1000 (1)`, as a free component name). The name
+follows the designation while it is automatic:
+
+- **Automatic** is a name equal to the designation it came from, or that
+  with the ` (k)` suffix a free name adds. The record keeps that
+  designation (`named_after`, set at placement and at each automatic
+  rename); in a design saved without it, a name equal to the part's
+  designation before the change (or with the suffix) counts as automatic.
+  A name given at placement (`build_place`'s `name`), or set later
+  (`rename_component`), is the user's and never changes.
+- **When:** every command whose step changes what a part's designation is
+  made of: a typed length (`build_edit`'s `length`, Derived Component's
+  Length, Press Pull's Edit Instead on its free end), a bound length that
+  follows its face (the face's part edited), an along-edge member's edge or
+  offsets (or the face it lies on moving), a length formula's parameters
+  (`set_parameter`), a row or the options (`build_edit`'s `config`,
+  `parameters`). The part takes the new designation, made unique among the
+  components (when two parts trade designations in one step, each takes
+  the plain name the other leaves).
+- **Where:** inside the command's own step, after its recompute (a bound
+  length's measured value counts) and before its undo step is kept: one
+  Undo restores the length and the name, and the step keeps its label. A
+  recompute without a command (opening a design) renames nothing; a part
+  the step made, or renamed itself (Swap Fastener, which keeps its own
+  rule), keeps the name the step gave it.
+- Only parts whose source, row or values changed in the step are checked,
+  so an edit of a large frame configures no other source.
+- Renaming does not change the length: a value would detach a bound
+  length, and a name that is not the library's pattern says nothing.
+  Length and Derived Component change it.
+- A library part (not BUILD) keeps its own rule (its options, row or
+  version changed, `set_component_parameters`, `update_links`), with the
+  same comparison: its old designation, or that with ` (k)`.
+
+**Press Pull on a part's end.** The `face_run` query (*Press Pull
+continued*) gives a cut-to-length BUILD part's free end a `feature_end`:
+`{"uid": <its derived_part>, "name": <the component's name>, "type":
+"derived_part", "input": "length"}`. The free end is the one its length
+moves: not the end it is placed from (its joint's own frame, `end_b` for a
+flipped part, else `end_a`), and neither end while its length is bound (to
+a face, or along an edge). Press Pull then offers **Edit <part> Instead**,
+which opens Derived Component at its Length; OK sends `build_edit` with
+`length`, so the cut length, the cut list and the name follow.
+
+Code: `core/model/src/build/auto_name.rs`
+(`DocState::follow_build_designations`, called from `Document::apply`;
+`is_automatic_name`), `core/model-api/src/press_pull.rs`
+(`build_part_end`). Tests: `core/model-tests/build-frames/src/auto_name_tests.rs`
+(a typed length and its undo, a suffixed name, a user's name, a bound
+length, a formula, a row, a design saved before, the `face_run` ends),
+`core/model-tests/build-timber/src/edge_tests.rs` (an along-edge member's
+offsets), and the UI test `tools/ui-scripts/derived-part-edit.mitcad-ui`
+(Press Pull on a profile's free end, Linux, Windows and macOS).

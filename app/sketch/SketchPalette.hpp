@@ -98,6 +98,10 @@ private:
   // is, logged once it shows.
   void selectConflicts();
   void logConflictLink();
+  // The Construction (X) box (mitcad#2040): the selected curves' state
+  // while X would convert them, else the mode for new geometry; logged
+  // when it changes.
+  void refreshConstruction();
   // A section's command button: the action's icon, tooltip, shortcut and
   // checked state.
   QToolButton* commandButton(const QString& id, const QString& name) const;
@@ -127,6 +131,7 @@ private:
   QString m_loggedRedundant;
   QLabel* m_tool = nullptr;
   QCheckBox* m_construction = nullptr;
+  QString m_loggedConstruction; // its state last logged (UI tests)
   QCheckBox* m_signed = nullptr; // Signed distances for Sketch Dimension (mitcad#409)
   QCheckBox* m_grid = nullptr;
   QCheckBox* m_dimensions = nullptr;

@@ -189,6 +189,10 @@ public:
   // root's property set Summary) and statistics; OK sets the summary's
   // edited fields as one undo step (`set_design_summary`).
   void openDesignProperties();
+  // The design's length unit (the browser rows' Change Active Units and
+  // Manage › Design › Units…, mitcad#1982): a choice of units; a new one is
+  // one undo step (`set_units`).
+  void changeUnits();
   // Find in Browser for an item picked in the view (a face finds its body).
   void findInBrowser(const SelectionItem& item);
   // The view's context menu Hide submenu (mitcad#347): the bodies (uids) and
@@ -241,6 +245,14 @@ public:
   // summary reveals it, without saying its error again. False when the
   // design has no such feature (any more).
   bool selectFeature(const QString& uid) { return reveal(uid, false); }
+  // The Drawing workspace's Drawings card (mitcad#1990,
+  // drawings/DrawingsPanel): a drawing's row's right-click menu as the
+  // Browser's Drawing row has it (Open, Rename, Delete), then Create
+  // Drawing… in its component; Rename runs `startRename` (the card edits
+  // the name in its own list), and renameDrawing takes the new name.
+  void drawingMenu(const QString& drawing, const QString& component, const QString& name, const QPoint& at,
+                   const std::function<void()>& startRename);
+  void renameDrawing(const QString& drawing, const QString& name);
 
 protected:
   // Logs where the magnifier button is, for UI tests.
@@ -361,8 +373,9 @@ private:
   // a Bodies folder's bodies.
   Selection isolationWith(const BrowserNode& node) const;
   // The eye of a component's Bodies, Sketches or Construction folder
-  // (mitcad#1771): the model's set_folder_visible, display state that
-  // changes no light bulb in the folder.
+  // (mitcad#1771), or of the root's Annotations folder (mitcad#2041): the
+  // model's set_folder_visible, display state that changes no light bulb in
+  // the folder.
   static QJsonObject folderCommand(const BrowserNode& node, bool visible);
   // A folder's Show All / Hide All: every light bulb in it set (the bodies
   // without a Show When condition, mitcad#863), Show All showing the folder
@@ -430,7 +443,6 @@ private:
   void moveOccurrence(const BrowserNode& node);
   void moveHistory(const QString& uid);
   void paste(bool asNew);
-  void changeUnits();
   // `say`: its error or warning on the status line too.
   bool reveal(const QString& uid, bool say = true);
   void updateFailures();

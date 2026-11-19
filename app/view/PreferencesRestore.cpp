@@ -36,6 +36,7 @@
 #include "../framework/InterfaceSize.hpp"
 #include "../framework/Language.hpp"
 #include "../framework/MenuBarReveal.hpp"
+#include "../framework/BoostButton.hpp"
 #include "../framework/QuickAccess.hpp"
 #include "../framework/ResultCache.hpp"
 #include "../framework/UiSizes.hpp"
@@ -187,6 +188,7 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     saveFontFamily(QString());
     clearLayoutPreference();
     QuickAccessSettings::saveVisible(true);
+    BoostSettings::saveVisible(true);
     if (MenuBarSettings::offered()) {
       MenuBarSettings::saveShown(true);
     }
@@ -265,6 +267,7 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     sketch::saveClickAddsToSelection(false);
     sketch::saveEscLeavesUnchangedSketch(false);
     sketch::saveShowProfilesOnOpen(true);
+    sketch::resetProjectFaceOnCreate();
   }
 
   if (resets("suppliers")) {

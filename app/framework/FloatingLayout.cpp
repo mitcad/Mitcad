@@ -12,6 +12,7 @@
 #include <QMainWindow>
 #include <QMargins>
 #include <QMouseEvent>
+#include <QRegion>
 #include <QSettings>
 #include <QTimer>
 #include <QSize>
@@ -196,7 +197,7 @@ void FloatingLayout::watchContent(QWidget* content) { content->installEventFilte
 void FloatingLayout::addTopRow(QWidget* row, RowCards cards, const QList<QWidget*>& parts) {
   row->setParent(this);
   row->installEventFilter(this);
-  Row entry{row, std::move(cards), {}};
+  Row entry{row, std::move(cards), {}, row == m_flushRow.data()};
   for (QWidget* part : parts) {
     entry.parts.emplace_back(part);
     part->installEventFilter(this); // shown and hidden: the row follows
@@ -205,6 +206,14 @@ void FloatingLayout::addTopRow(QWidget* row, RowCards cards, const QList<QWidget
     row->show();
   }
   m_rows.push_back(std::move(entry));
+  requestLayout();
+}
+
+void FloatingLayout::setFlushRow(QWidget* row) {
+  m_flushRow = row;
+  for (Row& entry : m_rows) {
+    entry.flush = entry.widget == row;
+  }
   requestLayout();
 }
 
@@ -628,7 +637,9 @@ void FloatingLayout::layoutCards() {
     auto* card = qobject_cast<GlassCard*>(widget);
     const int height = card != nullptr && card->content() != nullptr ? card->heightForContent(hinted(card->content()))
                                                                      : hinted(widget);
-    const QRect slot(view.left() + kMargin, rowTop, std::max(0, view.width() - 2 * kMargin), height);
+    // A bar (setFlushRow) from the view's top edge to edge.
+    const QRect slot = row.flush ? QRect(view.left(), rowTop - kMargin, view.width(), height)
+                                 : QRect(view.left() + kMargin, rowTop, std::max(0, view.width() - 2 * kMargin), height);
     if (card != nullptr) {
       card->setSlot(slot);
     } else {
@@ -639,6 +650,11 @@ void FloatingLayout::layoutCards() {
     }
     rowTop = slot.bottom() + 1 + kGap;
     rowsBottom = slot.bottom() + 1;
+    if (row.cards && widget->mask().isEmpty()) {
+      // A row of parts that is one card (the toolbar panel, mitcad#1990):
+      // the view is covered between its parts too.
+      rowCards.push_back(slot.translated(-view.topLeft()));
+    }
     for (const auto& named : cardsOf(row)) {
       rowCards.push_back(named.second.translated(slot.topLeft() - view.topLeft()));
     }
@@ -921,9 +937,13 @@ void FloatingLayout::logCards() {
       cards << entryText(name, at, rect.size());
       rowsBottom = std::max(rowsBottom, at.y() + rect.height());
     }
-    if (named.size() >= 2 && named[1].second.left() - named[0].second.right() > 2) {
+    // Only a row that takes the mouse on its cards alone (a mask): the
+    // toolbar panel takes it on its whole card (mitcad#1990).
+    if (named.size() >= 2 && !row.widget->mask().isEmpty() &&
+        named[1].second.left() - named[0].second.right() > 2) {
       // A click here reaches the view, between two cards: of the lowest row
-      // that has a gap (the group cards, below the title row).
+      // that has a gap (none in the toolbar panel's layout, mitcad#1990: the
+      // title row is a bar, the panel one card).
       const QRect& first = named[0].second;
       const QPoint at = GlassCard::mapToHost(
           row.widget.data(), QPoint((first.right() + 1 + named[1].second.left()) / 2, first.center().y()));

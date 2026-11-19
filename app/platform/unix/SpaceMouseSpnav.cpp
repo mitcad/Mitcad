@@ -5,10 +5,14 @@
 // other, so that no library is needed (SpaceMouseDevice.hpp parses the
 // events). Without the daemon nothing fails: the backend tries again every
 // 5 s, and finds a daemon started or restarted later. The daemon sends its
-// events to every client: they count only while Mitcad is the active
-// application.
+// events to every client: they count only while MitCad is the active
+// application. On Linux, Magellan is the fallback for an X11 driver.
 
 #include "../SpaceMouseDevice.hpp"
+
+#ifdef Q_OS_LINUX
+#include "SpaceMouseMagellan.hpp"
+#endif
 
 #include <array>
 #include <cerrno>
@@ -42,8 +46,9 @@ public:
   SpnavBackend() {
     m_retry.setInterval(5000);
     QObject::connect(&m_retry, &QTimer::timeout, &m_retry, [this] {
-      if (connectDaemon() && connection) {
-        connection(true, m_path);
+      QString device;
+      if (connectSource(device) && connection) {
+        connection(true, device);
       }
     });
   }
@@ -54,11 +59,17 @@ public:
     }
   }
 
-  QString name() const override { return QStringLiteral("spacenavd"); }
+  QString name() const override {
+#ifdef Q_OS_LINUX
+    if (m_magellanConnected) {
+      return m_magellan->name();
+    }
+#endif
+    return QStringLiteral("spacenavd");
+  }
 
   bool start(QString& device) override {
-    if (connectDaemon()) {
-      device = m_path;
+    if (connectSource(device)) {
       return true;
     }
     m_retry.start();
@@ -66,6 +77,43 @@ public:
   }
 
 private:
+  bool connectSource(QString& device) {
+    if (connectDaemon()) {
+#ifdef Q_OS_LINUX
+      m_magellan.reset();
+      m_magellanConnected = false;
+#endif
+      device = m_path;
+      return true;
+    }
+#ifdef Q_OS_LINUX
+    if (!m_magellan && qEnvironmentVariableIsEmpty("SPNAV_SOCKET")) {
+      m_magellan = createMagellanSpaceMouseBackend();
+      m_magellan->nativeWindow = nativeWindow;
+      m_magellan->acceptsInput = acceptsInput;
+      m_magellan->motion = motion;
+      m_magellan->button = button;
+      m_magellan->connection = [this](bool present, const QString& label) {
+        if (!present && connection) {
+          connection(false, label);
+        }
+        m_magellanConnected = present;
+        if (present) {
+          m_retry.stop();
+          if (connection) {
+            connection(true, label);
+          }
+        } else {
+          m_retry.start();
+        }
+      };
+      m_magellanConnected = m_magellan->start(device);
+      return m_magellanConnected;
+    }
+#endif
+    return false;
+  }
+
   bool connectDaemon() {
     const QByteArray path = QFile::encodeName(socketPath());
     sockaddr_un address{};
@@ -173,6 +221,10 @@ private:
   std::unique_ptr<QSocketNotifier> m_notifier;
   QTimer m_retry;
   bool m_moving = false;
+#ifdef Q_OS_LINUX
+  std::unique_ptr<SpaceMouseBackend> m_magellan;
+  bool m_magellanConnected = false;
+#endif
 };
 
 } // namespace

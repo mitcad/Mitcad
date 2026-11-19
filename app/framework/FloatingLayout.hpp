@@ -27,8 +27,8 @@ class OcctViewer;
 // starts above the header's bottom (mitcad#419), which is followed as it
 // grows, shrinks or moves. On Windows and Linux there is no header
 // (mitcad#425): the view starts below the menu bar, and the title row and the
-// toolbar's groups float over its top as rows of cards (addTopRow), which
-// the other cards start below. A card has the size of its content up to a
+// toolbar panel (mitcad#1990) float over its top as rows of cards
+// (addTopRow), which the other cards start below. A card has the size of its content up to a
 // share of the view and the card below it, and scrolls inside when it is
 // longer (the content's own scroll area).
 //
@@ -110,17 +110,21 @@ public:
   // coordinates.
   using RowCards = std::function<std::vector<std::pair<QString, QRect>>()>;
   // A row floating at the top of the view (mitcad#425, floatingTopCards():
-  // the title row, the toolbar's group cards, the notices): below the
+  // the title row, the toolbar panel, the notices): below the
   // header (if any) and the rows added before it, as wide as the view less
   // the margins, as high as its size hint within its minimum and maximum
   // height; the anchored cards start below the last row shown, and the
   // orientation cube under it. `cards`: the cards of a row that takes the
   // mouse only on them (a mask of its own: the title row's controls and the
-  // box of its title, mitcad#429; the ribbon's group cards); null: the row is
-  // one card, named by its object name. `parts`: the row is shown while any
+  // box of its title, mitcad#429; the toolbar panel's parts, mitcad#1990);
+  // null: the row is one card, named by its object name. `parts`: the row is shown while any
   // of them is (the notices' bars, which come and go); none: while the row
   // is. Not for windowed cards.
   void addTopRow(QWidget* row, RowCards cards = {}, const QList<QWidget*>& parts = {});
+  // A top row as a bar (the title row of Windows and Linux, mitcad#1990):
+  // flush with the view's top and sides, without the margins; the next row
+  // starts kGap below it. Call it before the row's addTopRow.
+  void setFlushRow(QWidget* row);
 
   // The height that the content of the card holding `content` may take at
   // the card's place before it scrolls: to the card below it (the timeline)
@@ -188,6 +192,7 @@ private:
     QPointer<QWidget> widget;
     RowCards cards;
     std::vector<QPointer<QWidget>> parts;
+    bool flush = false; // setFlushRow
   };
 
   // A top row's cards in its coordinates (the row itself without `cards`).
@@ -195,15 +200,17 @@ private:
 
   void layoutCards();
   // "Floating cards: window 1280x800, top bar bottom 21, view top 21, floating
-  // rows bottom 160; titleRow 12,33 1256x40; titleHistory 12,36 64x34; ...;
-  // ribbon 12,81 1256x67; ribbonGroup_SOLID/CREATE 12,81 200x67; ...;
+  // rows bottom 160; titleRow 0,21 1280x36; titleHistory 120,22 64x34; ...;
+  // ribbon 12,65 1256x118; ribbonWorkspace 12,65 84x118; ribbonTabs
+  // 110,69 270x26; ribbonSearch ...; ribbonGroup_SOLID/CREATE 108,99 200x83; ...;
   // browserDock 12,168 260x300; ..." in the window's coordinates, the rows
   // first (a row of cards of its own by its name, then its cards), when it
   // changed (UI tests check that
   // no card is under the top bar, mitcad#419, and no other card under the
   // rows, mitcad#425); and "Floating view between the cards at x,y", the
   // middle of the gap between the first two cards of the lowest row that
-  // has one (the group cards).
+  // takes the mouse on its cards alone (a mask; none in the toolbar panel's
+  // layout, mitcad#1990, whose title row is a bar and panel one card).
   void logCards();
   // The left column's boundaries (mitcad#1020): a drag from the boundary
   // `index` (between m_splitPairs[index]) at the global y, moved, ended;
@@ -222,6 +229,7 @@ private:
   QWidget* m_header;
   std::vector<Entry> m_entries;
   std::vector<Row> m_rows; // addTopRow
+  QPointer<QWidget> m_flushRow; // setFlushRow
   bool m_layoutQueued = false;
   bool m_inLayout = false;
   bool m_windowed; // the cards are windows (native glass)

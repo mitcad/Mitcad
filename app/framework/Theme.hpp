@@ -144,6 +144,10 @@ enum class ColorRole {
   CamLeftThin,
   CamLeftThick,
   CamGouge,
+  // A call to support the project (mitcad#1990): the top bar's Boost
+  // development pill's outline and rocket (its label in the window's text);
+  // a warm pink apart from the error's red and the accent's blue.
+  Support,
 };
 
 // How a role is used, for the contrast test: text (at least 4.5:1 on a

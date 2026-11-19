@@ -8,7 +8,7 @@
 # (MITCAD_PRINT_LIBRARY_DIR) with a process Bench, the project's library a
 # process Draft, the design its own process Mine, and another design of
 # the project uses Draft.
-#   1. Make › 3D Print › Printers… and Processes… open two windows of
+#   1. 3D Print › Printers › Printers… and Processes… open two windows of
 #      their own, both open at once. The Processes manager lists This
 #      design, This project, My library and Built-in, each with its count
 #      (Mine, Draft, Bench); its search finds across the groups.

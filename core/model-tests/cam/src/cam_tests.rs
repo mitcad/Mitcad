@@ -476,7 +476,7 @@ fn refusals_say_what_is_wrong_in_words() {
         ),
         (
             json!({"cmd": "cam_operation_add", "setup": 1, "operation": {"tool": 1}}),
-            "An operation needs its kind: Facing, Contour, Pocket, Adaptive Clearing, Rest Machining, Drill, 3D Roughing, Raster Finishing or Waterline Finishing.",
+            "An operation needs its kind: Facing, Contour, Pocket, Adaptive Clearing, Rest Machining, Drill, 3D Roughing, Raster Finishing, Waterline Finishing, or on a lathe Turn Facing, Turn Roughing, Turn Finishing, Grooving, Parting Off or Threading.",
         ),
         (
             json!({"cmd": "cam_setup_add", "setup": {"machine": "mill"}}),

@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-40,20],"end":[40,20]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-40,-20],"end":[40,-20]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-50,-45]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[50,45]}
+]

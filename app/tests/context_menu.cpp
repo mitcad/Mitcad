@@ -35,7 +35,6 @@ int contextMenuTests() {
 
   // One selection input and values: the faces complete it.
   CommandDef offset;
-  offset.group = QStringLiteral("MODIFY");
   offset.inputs = {selectionInput(QStringLiteral("faces"), QStringLiteral("Faces"), SelectKind::Face, 1, 0),
                    valueInput(QStringLiteral("distance"), QStringLiteral("Distance"), ValueKind::Length,
                               QStringLiteral("2 mm"))};
@@ -78,7 +77,6 @@ int contextMenuTests() {
   // A list's first row: its other required inputs are further picks
   // (Fillet's edges alone complete it, a constraint's two geometries not).
   CommandDef fillet;
-  fillet.group = QStringLiteral("MODIFY");
   fillet.inputs = {listInput(QStringLiteral("sets"), QStringLiteral("Sets"),
                              {selectionInput(QStringLiteral("edges"), QStringLiteral("Edges"),
                                              SelectKind::Edge | SelectKind::Face, 1, 0),
@@ -89,21 +87,19 @@ int contextMenuTests() {
   pair.inputs[0].children[1].min = 1;
   CHECK(!pair.completedBy({edge}));
 
-  // A creation command given a face only stands on it; a profile is what
-  // it makes, and `completes` decides in place of the rule.
+  // A creation command (one of a CREATE group: `true`) given a face only
+  // stands on it; a profile is what it makes, and `completes` decides in
+  // place of the rule.
   CommandDef box;
-  box.group = QStringLiteral("CREATE");
   box.inputs = {selectionInput(QStringLiteral("plane"), QStringLiteral("Plane"), SelectKind::Plane | SelectKind::Face, 1, 1)};
-  CHECK(!box.completedBy({face}));
+  CHECK(!box.completedBy({face}, true));
   CommandDef extrude;
-  extrude.group = QStringLiteral("CREATE");
   extrude.inputs = {selectionInput(QStringLiteral("profiles"), QStringLiteral("Profiles"), SelectKind::Profile, 1, 0)};
-  CHECK(extrude.completedBy({profile}));
+  CHECK(extrude.completedBy({profile}, true));
   CommandDef thread = offset;
-  thread.group = QStringLiteral("CREATE");
-  CHECK(!thread.completedBy({face}));
+  CHECK(!thread.completedBy({face}, true));
   thread.completes = [](const Selection&) { return true; };
-  CHECK(thread.completedBy({face}));
+  CHECK(thread.completedBy({face}, true));
   CommandDef narrowed = offset;
   narrowed.completes = [](const Selection& items) { return items.size() == 1; };
   CHECK(narrowed.completedBy({face}) && !narrowed.completedBy({face, side}));
@@ -114,18 +110,16 @@ int contextMenuTests() {
   const SelectionItem rim{SelectKind::Edge, QStringLiteral("F2.b0"), QStringLiteral("E{c|d}"), QStringLiteral("circle")};
   const SelectionItem axis{SelectKind::Axis, QStringLiteral("z"), QString(), QStringLiteral("axis")};
   CommandDef pulley;
-  pulley.group = QStringLiteral("CREATE");
   pulley.inputs = {selectionInput(QStringLiteral("at"), QStringLiteral("Place On"),
                                   SelectKind::Face | SelectKind::Edge | SelectKind::Axis | SelectKind::Point, 1, 1)
                        .withPlaces()};
-  CHECK(!pulley.completedBy({rim}));
-  CHECK(!pulley.completedBy({axis}));
-  CHECK(!pulley.completedBy({face}));
+  CHECK(!pulley.completedBy({rim}, true));
+  CHECK(!pulley.completedBy({axis}, true));
+  CHECK(!pulley.completedBy({face}, true));
   CommandDef unplaced = pulley;
   unplaced.inputs[0].places = false;
-  CHECK(unplaced.completedBy({rim}));
+  CHECK(unplaced.completedBy({rim}, true));
   CommandDef placedElsewhere = pulley;
-  placedElsewhere.group = QStringLiteral("MODIFY");
   CHECK(placedElsewhere.completedBy({rim}));
 
   // At the top (mitcad#735): Move/Copy's objects, bodies or placed

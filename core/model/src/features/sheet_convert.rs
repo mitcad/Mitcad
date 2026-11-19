@@ -4,13 +4,16 @@
 //! is its front; with bends, the planar faces reached from the picked face
 //! across the bend edges become panels on the sheet's front, with the
 //! rules' thickness behind them and a bend at every bend edge, its virtual
-//! sharp on that edge.
+//! sharp on that edge. Every other edge between two of those faces is a
+//! rip (mitcad#1949): the faces are cut apart there, a corner gap between
+//! them, as the walls of a flange on several edges meet at a corner.
 
 use super::face_refs::add_faces;
 use super::mapping::map_params;
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput, References,
 };
+use crate::features::sheet_folded::SheetMiter;
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::parameters::ParamId;
@@ -31,6 +34,17 @@ pub struct SheetConvertDef<P = ParamId> {
     /// The bends' inside radius in place of the rules'.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<P>,
+    /// Edges between two converted faces picked as rips (mitcad#1949).
+    /// Every edge between two converted faces that is no bend is a rip
+    /// anyway; a picked one must be such an edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rips: Vec<EdgeName>,
+    /// The gap between the faces at a rip; none: the sheet's thickness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_gap: Option<P>,
+    /// How the faces meet at the rips; none: `bisect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miter: Option<SheetMiter>,
 }
 
 impl<P> SheetConvertDef<P> {
@@ -43,6 +57,9 @@ impl<P> SheetConvertDef<P> {
             face: clone,
             bends: clone,
             radius: option,
+            rips: clone,
+            corner_gap: option,
+            miter: copy,
         }
     }
 }
@@ -53,7 +70,7 @@ impl FeatureInfo for SheetConvertDef {
         r.body(self.body);
         r.features.insert(self.rules);
         add_faces(&mut r, [&self.face]);
-        for edge in &self.bends {
+        for edge in self.bends.iter().chain(&self.rips) {
             r.features.extend(edge.features());
         }
         r
@@ -72,6 +89,17 @@ impl FeatureInfo for SheetConvertDef {
                 ));
             }
         }
+        for (i, edge) in self.rips.iter().enumerate() {
+            if self.rips[..i].contains(edge) || self.bends.contains(edge) {
+                return Err(crate::notice::placed(
+                    "an edge is picked as a rip more than once, or as a bend and a rip",
+                    crate::notice::NoticePlace::edge(edge.to_string()),
+                    format!(
+                        "edge {edge} is picked as a rip more than once, or as a bend and a rip"
+                    ),
+                ));
+            }
+        }
         for f in self.references().features {
             ctx.feature(f)?;
         }
@@ -82,6 +110,11 @@ impl FeatureInfo for SheetConvertDef {
             && !(r.is_finite() && r > crate::sheet::TOLERANCE)
         {
             return Err(format!("the bend radius must be positive, got {r}"));
+        }
+        if let Some(g) = self.corner_gap.map(value)
+            && !(g.is_finite() && g >= 0.0)
+        {
+            return Err(format!("the corner gap must not be negative, got {g}"));
         }
         Ok(())
     }

@@ -220,7 +220,7 @@ leader_skew() {
 
 echo "--- A datum's square dragged near 45 degrees: its leader snaps"
 ui_mark
-ui_step "Datum Label"                      ui_click_logged "Drawing tool Datum Label"
+ui_step "Datum Label"                      ui_drawing_tool "Datum Label" DRAWING/SYMBOLS
 ui_expect_new "Drawing tool: Datum Label" "the datum tool is on"
 ui_step "the front view's top edge"        sheet_click 150 139.5
 ui_expect_new "Drawing picked line (1)" "the edge picked"
@@ -378,7 +378,7 @@ echo "ok   the tip past the edge's end, on its extension line"
 
 echo "--- A datum on the front face: a dot, its Terminator switched (mitcad#1296)"
 ui_mark
-ui_step "Datum Label"                      ui_click_logged "Drawing tool Datum Label"
+ui_step "Datum Label"                      ui_drawing_tool "Datum Label" DRAWING/SYMBOLS
 ui_expect_new "Drawing tool: Datum Label" "the datum tool is on"
 ui_step "inside the front face"            sheet_click 100 120
 ui_expect_new "Drawing picked face (1)" "the face picked, face on"

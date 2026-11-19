@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "ApiAgent.hpp"
+#include "framework/AppSettings.hpp"
 
 #include <cstddef>
 #include <exception>
@@ -32,7 +33,7 @@
 namespace mitcad::agent {
 namespace {
 
-const QString kKeychainService = QStringLiteral("MitCad AI chat");
+const QString kKeychainService = programName() + QStringLiteral(" AI chat");
 // The longest line read from MitCad's listener (a picture of the view is a
 // few megabytes) and from a service's answer.
 constexpr qsizetype kMaxLine = 32 * 1024 * 1024;

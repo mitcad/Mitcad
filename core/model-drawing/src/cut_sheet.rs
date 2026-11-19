@@ -42,6 +42,8 @@ use mitcad_model::sheet::flat_dxf::{
 use super::bspline::{self, Spline2};
 use super::sheet::{Anchor, Group, Item, Pen, Sheet, text_width};
 use super::{P2, ViewCurve, ViewEdge, trim_number};
+use mitcad_model::drawing::cut_sheet_def::MarkKind;
+use mitcad_model::sheet::process::{OutputPreset, SheetProcess};
 
 /// The layer of the parts' names.
 pub const LABEL: &str = "LABEL";
@@ -546,6 +548,59 @@ pub struct PartView {
     pub outline: Outline,
     /// A Flat Pattern's bend lines, in the outline's coordinates.
     pub bends: Vec<BendLine>,
+    /// Where the outline's coordinates lie in the body's component
+    /// (mitcad#1939), for the marks sketches lay on the part; None when not
+    /// known.
+    pub frame: Option<MarkFrame>,
+    /// Marks of the part itself in the outline's coordinates: a kerf
+    /// bend's slits on a Flat Pattern part (mitcad#1939).
+    pub own_marks: Vec<Mark>,
+}
+
+/// The outline's coordinates of a part in its component (mitcad#1939): a
+/// point `q` of the component (moved by `transform` first, where the part's
+/// occurrence places it) lies at `(dot(q - origin, x), dot(q - origin, y))`,
+/// the first negated when `mirror`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkFrame {
+    pub transform: Option<mitcad_model::Transform>,
+    pub origin: [f64; 3],
+    pub x: [f64; 3],
+    pub y: [f64; 3],
+    pub mirror: bool,
+}
+
+impl MarkFrame {
+    pub fn point(&self, q: [f64; 3]) -> P2 {
+        let q = match &self.transform {
+            Some(t) => t.apply_point(q),
+            None => q,
+        };
+        let d = [
+            q[0] - self.origin[0],
+            q[1] - self.origin[1],
+            q[2] - self.origin[2],
+        ];
+        let dot = |a: [f64; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+        let x = dot(self.x);
+        [if self.mirror { -x } else { x }, dot(self.y)]
+    }
+
+    /// Polylines of the component laid on the part as marks of `kind`.
+    pub fn marks(&self, kind: MarkKind, polylines: &[Vec<[f64; 3]>]) -> Vec<Mark> {
+        polylines
+            .iter()
+            .filter(|l| l.len() > 1)
+            .map(|l| Mark {
+                kind,
+                piece: if l.len() == 2 {
+                    Piece::Line(self.point(l[0]), self.point(l[1]))
+                } else {
+                    Piece::Polyline(l.iter().map(|q| self.point(*q)).collect())
+                },
+            })
+            .collect()
+    }
 }
 
 /// A bend line of a Flat Pattern part (mitcad#1980): written on
@@ -610,6 +665,8 @@ pub fn flat_part_view(loops: &[FlatLoop], bends: Vec<BendLine>) -> PartView {
         faces: Vec::new(),
         outline: Outline { loops: out },
         bends,
+        frame: None,
+        own_marks: Vec::new(),
     }
 }
 
@@ -1441,6 +1498,30 @@ pub fn placed_bends(view: &PartView, place: P2, degrees: f64) -> Vec<BendLine> {
         .collect()
 }
 
+/// A part's marks on the sheet (mitcad#1939), moved and turned with its
+/// outline as [`placed`] places it.
+pub fn placed_marks(view: &PartView, marks: &[Mark], place: P2, degrees: f64) -> Vec<Mark> {
+    let mid = middle(&view.outline);
+    let angle = degrees.to_radians();
+    let (s, c) = angle.sin_cos();
+    let by = sub(place, [c * mid[0] - s * mid[1], s * mid[0] + c * mid[1]]);
+    marks
+        .iter()
+        .map(|m| Mark {
+            kind: m.kind,
+            piece: m.piece.moved(angle, by),
+        })
+        .collect()
+}
+
+/// A mark on a part (mitcad#1939): a piece of a sketch's curve laid on
+/// the part, engraved or scored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mark {
+    pub kind: MarkKind,
+    pub piece: Piece,
+}
+
 /// A part laid out on the sheet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedPart {
@@ -1451,6 +1532,12 @@ pub struct PlacedPart {
     pub loops: Vec<OutlineLoop>,
     /// A Flat Pattern part's bend lines (mitcad#1980), sheet millimetres.
     pub bends: Vec<BendLine>,
+    /// Its engraved and scored marks (mitcad#1939), sheet millimetres.
+    pub marks: Vec<Mark>,
+    /// Its sheet's process profile, whose output preset names the layers
+    /// of its bend lines and marks (mitcad#1939); metal for a part that is
+    /// no sheet.
+    pub process: SheetProcess,
 }
 
 /// Whether loops reach out of a sheet of this size.
@@ -1642,15 +1729,35 @@ pub fn sheet(width: f64, height: f64, title: &str, parts: &[PlacedPart]) -> Shee
 pub fn dxf(parts: &[PlacedPart], labels: bool) -> mitcad_dxf::Drawing {
     use mitcad_dxf::{Drawing, Geometry, Layer, Point2, Spline, Text, Units};
     let mut out = Drawing::new(Units::Millimeters);
-    let mut layers = vec![(CUT_OUTER, 7), (CUT_INNER, 6)];
-    // A Flat Pattern's bend lines on its layers (mitcad#1980).
-    let bends = parts.iter().any(|p| !p.bends.is_empty());
-    if bends {
-        layers.push((BEND_UP, 3));
-        layers.push((BEND_DOWN, 1));
+    let mut layers: Vec<(String, i16)> = vec![(CUT_OUTER.into(), 7), (CUT_INNER.into(), 6)];
+    let mut layer = |name: &str, color: i16| {
+        if !layers.iter().any(|(n, _)| n == name) {
+            layers.push((name.to_owned(), color));
+        }
+    };
+    // A Flat Pattern's bend lines on its layers (mitcad#1980), the part's
+    // marks on its engrave and score layers, by its process profile
+    // (mitcad#1939).
+    for part in parts {
+        let preset = OutputPreset::of(part.process);
+        for bend in &part.bends {
+            let name = if bend.up {
+                &preset.bend_up
+            } else {
+                &preset.bend_down
+            };
+            layer(name, preset.colour(name));
+        }
+        for mark in &part.marks {
+            match mark.kind {
+                MarkKind::Engrave => layer(&preset.engrave, preset.colour(&preset.engrave)),
+                MarkKind::Score => layer(&preset.score, preset.colour(&preset.score)),
+                MarkKind::Cut => {}
+            }
+        }
     }
     if labels {
-        layers.push((LABEL, 3));
+        layer(LABEL, 3);
     }
     out.layers = layers
         .into_iter()
@@ -1660,78 +1767,95 @@ pub fn dxf(parts: &[PlacedPart], labels: bool) -> mitcad_dxf::Drawing {
         })
         .collect();
     let p = |q: P2| Point2::new(q[0], q[1]);
+    let geometry_of = |piece: &Piece| -> Geometry {
+        match piece {
+            Piece::Line(a, b) => Geometry::Line {
+                start: p(*a),
+                end: p(*b),
+            },
+            Piece::Arc {
+                center,
+                radius,
+                start,
+                sweep,
+            } => {
+                if sweep.abs() >= TAU - 1e-9 {
+                    Geometry::Circle {
+                        center: p(*center),
+                        radius: *radius,
+                    }
+                } else if *sweep >= 0.0 {
+                    Geometry::arc(p(*center), *radius, *start, start + sweep)
+                } else {
+                    Geometry::arc(p(*center), *radius, start + sweep, *start)
+                }
+            }
+            // The B-spline as it is: its degree, knots, poles and
+            // weights (mitcad#853).
+            Piece::Spline { .. } => {
+                let exact = piece.exact().expect("a B-spline");
+                Geometry::Spline(Spline {
+                    degree: exact.degree as u32,
+                    control_points: exact.poles.iter().map(|q| p(*q)).collect(),
+                    weights: if exact.is_rational() {
+                        exact.weights.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    knots: exact.knots,
+                    fit_points: Vec::new(),
+                    closed: false,
+                    periodic: false,
+                })
+            }
+            Piece::Polyline(points) => {
+                // Clamped, degree 1: the polyline itself.
+                let n = points.len();
+                let mut knots = vec![0.0];
+                knots.extend((0..n).map(|i| i as f64));
+                knots.push((n - 1) as f64);
+                Geometry::Spline(Spline {
+                    degree: 1,
+                    control_points: points.iter().map(|q| p(*q)).collect(),
+                    knots,
+                    weights: Vec::new(),
+                    fit_points: Vec::new(),
+                    closed: false,
+                    periodic: false,
+                })
+            }
+        }
+    };
     for part in parts {
         for l in &part.loops {
             let layer = if l.outer { CUT_OUTER } else { CUT_INNER };
             for piece in &l.pieces {
-                let geometry = match piece {
-                    Piece::Line(a, b) => Geometry::Line {
-                        start: p(*a),
-                        end: p(*b),
-                    },
-                    Piece::Arc {
-                        center,
-                        radius,
-                        start,
-                        sweep,
-                    } => {
-                        if sweep.abs() >= TAU - 1e-9 {
-                            Geometry::Circle {
-                                center: p(*center),
-                                radius: *radius,
-                            }
-                        } else if *sweep >= 0.0 {
-                            Geometry::arc(p(*center), *radius, *start, start + sweep)
-                        } else {
-                            Geometry::arc(p(*center), *radius, start + sweep, *start)
-                        }
-                    }
-                    // The B-spline as it is: its degree, knots, poles and
-                    // weights (mitcad#853).
-                    Piece::Spline { .. } => {
-                        let exact = piece.exact().expect("a B-spline");
-                        Geometry::Spline(Spline {
-                            degree: exact.degree as u32,
-                            control_points: exact.poles.iter().map(|q| p(*q)).collect(),
-                            weights: if exact.is_rational() {
-                                exact.weights.clone()
-                            } else {
-                                Vec::new()
-                            },
-                            knots: exact.knots,
-                            fit_points: Vec::new(),
-                            closed: false,
-                            periodic: false,
-                        })
-                    }
-                    Piece::Polyline(points) => {
-                        // Clamped, degree 1: the polyline itself.
-                        let n = points.len();
-                        let mut knots = vec![0.0];
-                        knots.extend((0..n).map(|i| i as f64));
-                        knots.push((n - 1) as f64);
-                        Geometry::Spline(Spline {
-                            degree: 1,
-                            control_points: points.iter().map(|q| p(*q)).collect(),
-                            knots,
-                            weights: Vec::new(),
-                            fit_points: Vec::new(),
-                            closed: false,
-                            periodic: false,
-                        })
-                    }
-                };
-                out.push(layer, geometry);
+                out.push(layer, geometry_of(piece));
             }
         }
+        // A Flat Pattern's bend lines and the part's marks on the layers
+        // of its process profile's output preset (mitcad#1939).
+        let preset = OutputPreset::of(part.process);
         for bend in &part.bends {
             out.push(
-                if bend.up { BEND_UP } else { BEND_DOWN },
+                if bend.up {
+                    preset.bend_up.as_str()
+                } else {
+                    preset.bend_down.as_str()
+                },
                 Geometry::Line {
                     start: p(bend.start),
                     end: p(bend.end),
                 },
             );
+        }
+        for mark in &part.marks {
+            let layer = match mark.kind {
+                MarkKind::Engrave => preset.engrave.as_str(),
+                MarkKind::Score => preset.score.as_str(),
+                MarkKind::Cut => CUT_INNER,
+            };
+            out.push(layer, geometry_of(&mark.piece));
         }
         if labels {
             let height = label_height(&part.loops);
@@ -1892,6 +2016,41 @@ pub fn svg(parts: &[PlacedPart], width: f64, height: f64, labels: bool) -> Strin
             let _ = writeln!(s, "</g>");
         }
     }
+    // The parts' marks (mitcad#1939): a layer per kind, each mark an open
+    // path; a kerf bend's slits with the cuts' colour.
+    for (kind, name, colour) in [
+        (MarkKind::Cut, "SLITS", "#ff00ff"),
+        (MarkKind::Score, "SCORE", "#0000ff"),
+        (MarkKind::Engrave, "ENGRAVE", "#ffa000"),
+    ] {
+        if !parts.iter().any(|p| p.marks.iter().any(|m| m.kind == kind)) {
+            continue;
+        }
+        let _ = writeln!(
+            s,
+            r#"<g id="{name}" inkscape:groupmode="layer" inkscape:label="{name}" fill="none" stroke="{colour}" stroke-width="0.1">"#
+        );
+        for part in parts {
+            for mark in part.marks.iter().filter(|m| m.kind == kind) {
+                let mut points = vec![mark.piece.start()];
+                mark.piece.flatten_into(&mut points);
+                let d: Vec<String> = points
+                    .iter()
+                    .enumerate()
+                    .map(|(i, q)| {
+                        format!(
+                            "{} {} {}",
+                            if i == 0 { "M" } else { "L" },
+                            n(q[0]),
+                            n(height - q[1])
+                        )
+                    })
+                    .collect();
+                let _ = writeln!(s, r#"<path data-part="{}" d="{}"/>"#, part.id, d.join(" "));
+            }
+        }
+        let _ = writeln!(s, "</g>");
+    }
     if labels {
         let _ = writeln!(
             s,
@@ -1919,3 +2078,231 @@ pub fn svg(parts: &[PlacedPart], width: f64, height: f64, labels: bool) -> Strin
 #[cfg(test)]
 #[path = "cut_sheet_tests.rs"]
 mod tests;
+
+// --- Kerf compensation and nesting (mitcad#1939) ------------------------------
+
+/// The loops with the cutting beam's path moved half of `kerf` away from
+/// the material (mitcad#1939): an outer boundary out, a hole in, so that
+/// the cut leaves the part at its size. Each loop is flattened (arcs and
+/// splines as lines within their deflection) and every edge moved along
+/// its normal away from the material (the right of its direction, the
+/// material being on the left), the corners mitred, a mitre longer than
+/// four times the offset bevelled. A kerf of 0 leaves the loops as they
+/// are.
+pub fn kerf_compensated(loops: &[OutlineLoop], kerf: f64) -> Vec<OutlineLoop> {
+    if kerf.is_nan() || kerf <= 0.0 {
+        return loops.to_vec();
+    }
+    let d = kerf / 2.0;
+    loops
+        .iter()
+        .map(|l| {
+            let points = offset_polygon(&l.polygon(), d);
+            let n = points.len();
+            OutlineLoop {
+                outer: l.outer,
+                pieces: (0..n)
+                    .map(|i| Piece::Line(points[i], points[(i + 1) % n]))
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// A closed polygon's edges moved `d` to their right, corners mitred.
+fn offset_polygon(points: &[P2], d: f64) -> Vec<P2> {
+    let n = points.len();
+    if n < 3 {
+        return points.to_vec();
+    }
+    let right = |a: P2, b: P2| {
+        let e = sub(b, a);
+        let len = (e[0] * e[0] + e[1] * e[1]).sqrt();
+        if len <= 1e-12 {
+            None
+        } else {
+            Some([e[1] / len, -e[0] / len])
+        }
+    };
+    // The edges that have a length, each with its normal.
+    let edges: Vec<(usize, P2)> = (0..n)
+        .filter_map(|i| right(points[i], points[(i + 1) % n]).map(|r| (i, r)))
+        .collect();
+    let m = edges.len();
+    let mut out = Vec::with_capacity(m + 4);
+    for k in 0..m {
+        let (i, n1) = edges[k];
+        let n0 = edges[(k + m - 1) % m].1;
+        let p = points[i];
+        let cos = n0[0] * n1[0] + n0[1] * n1[1];
+        let s = 1.0 + cos;
+        let miter = [(n0[0] + n1[0]) / s, (n0[1] + n1[1]) / s];
+        let length = (miter[0] * miter[0] + miter[1] * miter[1]).sqrt();
+        if s > 1e-9 && length <= 4.0 {
+            out.push([p[0] + d * miter[0], p[1] + d * miter[1]]);
+        } else {
+            out.push([p[0] + d * n0[0], p[1] + d * n0[1]]);
+            out.push([p[0] + d * n1[0], p[1] + d * n1[1]]);
+        }
+    }
+    out
+}
+
+/// Where parts of these sizes (their boxes' widths and heights at no
+/// turn, mm) go on a sheet `width` wide (mitcad#1939, simple automatic
+/// nesting): each turned so that its longer side lies along the sheet's
+/// width when it fits so, then placed in rows from the sheet's lower left
+/// corner, the tallest first, `gap` apart and from the edges. A part wider
+/// than the sheet starts a row of its own. Each part's place (its box's
+/// middle) and turn (0 or 90 degrees), in the order given.
+pub fn nest(sizes: &[(f64, f64)], width: f64, gap: f64) -> Vec<(P2, f64)> {
+    let turned: Vec<(f64, f64, f64)> = sizes
+        .iter()
+        .map(|&(w, h)| {
+            if h > w && h + 2.0 * gap <= width {
+                (h, w, 90.0)
+            } else {
+                (w, h, 0.0)
+            }
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by(|a, b| turned[*b].1.total_cmp(&turned[*a].1).then(a.cmp(b)));
+    let mut out = vec![([0.0, 0.0], 0.0); sizes.len()];
+    let (mut x, mut y, mut row) = (gap, gap, 0.0f64);
+    for i in order {
+        let (w, h, degrees) = turned[i];
+        if x > gap && x + w + gap > width {
+            x = gap;
+            y += row + gap;
+            row = 0.0;
+        }
+        out[i] = ([x + w / 2.0, y + h / 2.0], degrees);
+        x += w + gap;
+        row = row.max(h);
+    }
+    out
+}
+
+#[cfg(test)]
+mod kerf_tests {
+    use super::*;
+
+    fn square(outer: bool, size: f64) -> OutlineLoop {
+        let p = [[0.0, 0.0], [size, 0.0], [size, size], [0.0, size]];
+        let points: Vec<P2> = if outer {
+            p.to_vec()
+        } else {
+            p.iter().rev().copied().collect()
+        };
+        OutlineLoop {
+            outer,
+            pieces: (0..4)
+                .map(|i| Piece::Line(points[i], points[(i + 1) % 4]))
+                .collect(),
+        }
+    }
+
+    /// A 10 mm square with a kerf of 0.2: its outer path 10.2 square, a
+    /// hole's 9.8 square.
+    #[test]
+    fn outer_loops_move_out_and_holes_in() {
+        let out = kerf_compensated(&[square(true, 10.0), square(false, 10.0)], 0.2);
+        assert!((out[0].signed_area() - 10.2 * 10.2).abs() < 1e-9);
+        assert!((out[1].signed_area() + 9.8 * 9.8).abs() < 1e-9);
+        assert_eq!(
+            kerf_compensated(&[square(true, 10.0)], 0.0)[0],
+            square(true, 10.0)
+        );
+    }
+
+    /// Marks laid on a part (mitcad#1939): a sketch's polyline taken into
+    /// the outline's coordinates (mirrored for a back view), moved with the
+    /// part, and written on its profile's engrave and score layers; a
+    /// Flat Pattern part's bend lines on the profile's crease layers.
+    #[test]
+    fn marks_and_bends_take_the_profiles_layers() {
+        let frame = MarkFrame {
+            transform: None,
+            origin: [0.0, 0.0, 5.0],
+            x: [1.0, 0.0, 0.0],
+            y: [0.0, 1.0, 0.0],
+            mirror: false,
+        };
+        assert_eq!(frame.point([3.0, 4.0, 5.0]), [3.0, 4.0]);
+        let back = MarkFrame {
+            mirror: true,
+            ..frame.clone()
+        };
+        assert_eq!(back.point([3.0, 4.0, 5.0]), [-3.0, 4.0]);
+        let marks = frame.marks(
+            MarkKind::Engrave,
+            &[
+                vec![[1.0, 1.0, 5.0], [2.0, 1.0, 5.0]],
+                vec![[0.0, 0.0, 5.0]],
+            ],
+        );
+        assert_eq!(marks.len(), 1, "a single point is no mark");
+        let view = PartView {
+            outline: Outline {
+                loops: vec![square(true, 10.0)],
+            },
+            ..PartView::default()
+        };
+        // The middle (5, 5) placed at (100, 100), not turned.
+        let placed = placed_marks(&view, &marks, [100.0, 100.0], 0.0);
+        assert_eq!(placed[0].piece, Piece::Line([96.0, 96.0], [97.0, 96.0]));
+        let part = PlacedPart {
+            id: 1,
+            name: "Plate".into(),
+            loops: vec![square(true, 10.0)],
+            bends: vec![BendLine {
+                start: [0.0, 5.0],
+                end: [10.0, 5.0],
+                up: false,
+            }],
+            marks: vec![
+                placed[0].clone(),
+                Mark {
+                    kind: MarkKind::Score,
+                    piece: Piece::Line([1.0, 2.0], [8.0, 2.0]),
+                },
+            ],
+            process: SheetProcess::LaserSheet,
+        };
+        let drawing = dxf(std::slice::from_ref(&part), false);
+        let on = |layer: &str| drawing.entities.iter().filter(|e| e.layer == layer).count();
+        assert_eq!(on("ENGRAVE"), 1);
+        assert_eq!(on("SCORE"), 2, "the bend line and the scored mark");
+        let board = PlacedPart {
+            process: SheetProcess::Board,
+            marks: Vec::new(),
+            ..part
+        };
+        let drawing = dxf(&[board], false);
+        assert_eq!(
+            drawing
+                .entities
+                .iter()
+                .filter(|e| e.layer == "CREASE_REVERSE")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn parts_are_nested_in_rows_the_tallest_first() {
+        // A 1000 wide sheet: 300 x 200, a tall 100 x 400 turned, 500 x 50.
+        let places = nest(
+            &[(300.0, 200.0), (100.0, 400.0), (500.0, 50.0)],
+            1000.0,
+            5.0,
+        );
+        assert_eq!(places[1].1, 90.0);
+        // The tallest first: 300 x 200 at the corner, the turned 400 x 100
+        // beside it, the 500 x 50 on a row of its own above.
+        assert_eq!(places[0], ([155.0, 105.0], 0.0));
+        assert_eq!(places[1], ([510.0, 55.0], 90.0));
+        assert_eq!(places[2], ([255.0, 235.0], 0.0));
+    }
+}

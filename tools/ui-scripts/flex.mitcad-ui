@@ -151,10 +151,13 @@ wait-log '^Preview Flex: ok' 60
 wait-idle
 # The double click while the item's preview computes (held): OK waits for
 # it and then makes the item; the events after the second click are not
-# taken, nor do they cancel the preview OK waits for.
+# taken, nor do they cancel the preview OK waits for. (Above the
+# navigation bar: in the Floating layout of a 1024 x 768 screen the Flex
+# panel reaches down into the navigation bar's row, which then stands
+# left of the middle, from about 24 % to 46 % of the view's width.)
 mark
 hold-model-preview true
-dblclick 30 80 alt
+dblclick 30 77 alt
 wait-log '^Flex: node 3 free'
 wait-log '^Flex: a click on the last node ends the item at node 3'
 expect-model-busy true
@@ -177,11 +180,16 @@ click-pick 'face F3[.]b0/F3:top'
 wait-log '^Flex: node 1 on face F3:top'
 wait-log '^Panel Flex input twist at '
 wait-idle
-# (Node 2 free in the air below the model, node 3 on Flex2 where 2
-# clicked its second node: not at Flex2's end, whose end port would end
-# this item.)
+# (Node 2 free in the air below the model, node 3 on Flex2 at its face's
+# pick place: not at Flex2's end, whose end port would end this item. Node
+# 2 right of the Browser's card, which reaches x 272 at the left of a
+# 1024 px window and down past this row with the toolbar panel above it,
+# mitcad#1990: at 22 % the click selected a sketch's row. Node 2's twist
+# ring, about 58 px around the node, then reached Flex2's second node at
+# 36 %, 75 %, and a click there was the ring's: the face's pick place keeps
+# clear of the command's handles.)
 mark
-click 22 74 alt
+click 30 74 alt
 wait-log '^Flex: node 2 free'
 wait-log '^Preview Flex: ok' 60
 wait-idle
@@ -190,11 +198,11 @@ wait-idle
 # item under it and the view's own pick are one click, one node; not a
 # second one at the same place, which would end the item.
 mark
-view-pointer move 36 75 none
+pointer-logged move '^Pick face F7[.]b0/F7:side0 at ' none
 wait-log '^Flex route under the pointer: 3 node[(]s[)]' 30
 wait-idle
 mark
-click 36 75
+click-pick 'face F7[.]b0/F7:side0'
 wait-log '^Flex: node 3 on (face|edge) [^ ]*F7' 30
 wait-log '^Preview Flex: ok' 60
 wait-idle

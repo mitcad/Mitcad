@@ -2,7 +2,8 @@
 // Extrude and Revolve with all of the model's options (U4; commands.md,
 // "extrude" and "revolve"), laid out in panel sections: Type, Profiles,
 // Start, Direction, Extent, Taper, Thin walls, Operation and Objects.
-// Extrude's Profiles also take one planar face of a body (mitcad#535).
+// Extrude's Profiles also take one planar face of a body (mitcad#535), with
+// the extents of sketch profiles (mitcad#2033).
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
@@ -36,6 +37,11 @@ const Choices kDirections = {{QStringLiteral("one_side"), QStringLiteral("One Si
 const Choices kExtents = {{QStringLiteral("distance"), QStringLiteral("Distance")},
                           {QStringLiteral("to_object"), QStringLiteral("To Object")},
                           {QStringLiteral("through_all"), QStringLiteral("All")}};
+// Where the extrusion starts; a body face starts at the face or an offset
+// from it, not at an object (mitcad#2033: the panel offers only these).
+const Choices kStarts = {{QStringLiteral("profile_plane"), QStringLiteral("Profile Plane")},
+                         {QStringLiteral("offset"), QStringLiteral("Offset")},
+                         {QStringLiteral("object"), QStringLiteral("Object")}};
 const Choices kWalls = {{QStringLiteral("side1"), QStringLiteral("Side 1")},
                         {QStringLiteral("center"), QStringLiteral("Center")},
                         {QStringLiteral("side2"), QStringLiteral("Side 2")}};
@@ -59,6 +65,21 @@ const SelectionItem* profileFace(const Selection& items) {
 
 bool hasProfileFace(const CommandState& state) {
   return profileFace(state.items(QStringLiteral("profiles"))) != nullptr;
+}
+
+// The starts the profiles take: a body face's extrusion starts at the face
+// or an offset from it (mitcad#2033).
+Choices startChoices(const CommandState& state) {
+  if (!hasProfileFace(state)) {
+    return kStarts;
+  }
+  Choices offered;
+  for (const auto& start : kStarts) {
+    if (start.first != QStringLiteral("object")) {
+      offered.append(start);
+    }
+  }
+  return offered;
 }
 
 void initializeCutScope(CommandState& state, const CommandContext& model) {
@@ -229,9 +250,6 @@ CommandDef extrudeCommand(const CommandContext& context) {
   def.icon = QStringLiteral("extrude");
   def.tooltip = QObject::tr("Pushes sketch profiles or a planar face into a solid");
   def.shortcut = QKeySequence(Qt::Key_E);
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("profiles");
-  def.pinned = true;
   def.keywords = {QStringLiteral("pad"), QStringLiteral("boss"), QStringLiteral("pocket"),
                   QStringLiteral("thin")};
   def.featureType = QStringLiteral("extrude");
@@ -282,11 +300,8 @@ CommandDef extrudeCommand(const CommandContext& context) {
             return profilesRefused(item, state.items(QStringLiteral("profiles")), isPlanar(item),
                                    ProfilesCommand::Extrude, state.choice(QStringLiteral("start")));
           }),
-      choiceInput(QStringLiteral("start"), QObject::tr("Start"),
-                  {{QStringLiteral("profile_plane"), QStringLiteral("Profile Plane")},
-                   {QStringLiteral("offset"), QStringLiteral("Offset")},
-                   {QStringLiteral("object"), QStringLiteral("Object")}},
-                  QStringLiteral("profile_plane"))
+      choiceInput(QStringLiteral("start"), QObject::tr("Start"), kStarts, QStringLiteral("profile_plane"))
+          .withChoices(startChoices)
           .withTooltip(QObject::tr(
               "Start away from the sketch plane, for example a solid on one side that does not touch the sketch")),
       valueInput(QStringLiteral("start_offset"), QObject::tr("Offset"), ValueKind::Length,
@@ -601,16 +616,10 @@ CommandDef extrudeCommand(const CommandContext& context) {
     }
     const QString start = state.choice(QStringLiteral("start"));
     if (face != nullptr) {
-      // Distances along the face's normal, from it or an offset from it,
-      // each side with its taper (the model takes them since mitcad#541).
-      const auto plain = [](const QJsonObject& side) { return str(side, "type") == kDistance; };
-      const QString type = str(extent, "type");
-      const bool distances = type == kTwoSides ? plain(extent.value(QStringLiteral("side1")).toObject()) &&
-                                                     plain(extent.value(QStringLiteral("side2")).toObject())
-                                               : type == kDistance || type == kSymmetric;
-      if (!distances) {
-        return Built::failure(QObject::tr("An extrusion of a face goes a distance."), QStringLiteral("extent"));
-      }
+      // Every extent of sketch profiles along the face's normal, each side
+      // with its taper (mitcad#541): distances, up to an object, of the
+      // face's own body or another, and through all (mitcad#2033); from
+      // the face or an offset from it, which the Start offers alone.
       if (start == QStringLiteral("object")) {
         return Built::failure(QObject::tr("An extrusion of a face starts at the face or an offset from it."),
                               QStringLiteral("start"));
@@ -970,9 +979,6 @@ CommandDef revolveCommand(const CommandContext& context) {
   def.name = QObject::tr("Revolve");
   def.icon = QStringLiteral("revolve");
   def.tooltip = QObject::tr("Turns sketch profiles about an axis into a solid");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("profiles");
-  def.pinned = true;
   def.keywords = {QStringLiteral("rotate"), QStringLiteral("turn"), QStringLiteral("lathe")};
   def.featureType = QStringLiteral("revolve");
   const auto partial = choiceIs(QStringLiteral("type"), QStringLiteral("angle"));

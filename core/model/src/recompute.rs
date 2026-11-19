@@ -1078,6 +1078,15 @@ impl<S: Clone> Recomputed<S> {
             sketches: self.sketches.clone(),
             datums: self.datums.clone(),
             placements: self.placements.clone(),
+            // A timeline with joints does not go on (`not_resumable`): the
+            // free parts of flexible occurrences, where they are kept and
+            // moved by the Move features (mitcad#2016, mitcad#2025), are
+            // all that the joints' results hold.
+            joints: crate::joints::JointsState {
+                flexed: self.joints.flexed.clone(),
+                free_moves: self.joints.free_moves.clone(),
+                ..crate::joints::JointsState::default()
+            },
             split_pieces: self.split_pieces.clone(),
             changed_pieces: self.changed_pieces.clone(),
             gone_pieces: self.gone_pieces.clone(),
@@ -1197,6 +1206,18 @@ impl<S> Cache<S> {
             return;
         };
         while self.bytes > budget && self.drop_oldest() {}
+    }
+
+    /// An empty cache with this one's budget, workers and counts, without
+    /// its results or result store: a recompute with it evaluates every
+    /// feature again (Recompute All, mitcad#1982).
+    pub(crate) fn emptied(&self) -> Self {
+        Self {
+            budget: self.budget,
+            stats: self.stats,
+            workers: self.workers,
+            ..Self::default()
+        }
     }
 
     /// Drops every result no result of the document holds; returns their
@@ -1428,9 +1449,16 @@ pub(crate) fn recompute_after<K: Kernel>(
                 .filter(|o| o.pattern.is_none())
                 .map(|o| (o.uid, o.transform))
                 .collect();
+            // The free parts of flexible occurrences where drags left
+            // them (mitcad#2016).
+            let joints = crate::joints::JointsState {
+                flexed: crate::joints::kept_flexed(&state.assembly),
+                ..crate::joints::JointsState::default()
+            };
             Walk {
                 done: Recomputed {
                     placements,
+                    joints,
                     ..Recomputed::default()
                 },
                 components: BTreeMap::new(),
@@ -2025,6 +2053,11 @@ impl<'s, S: Clone + Send + Sync> Walk<'s, S> {
             && let Err(message) = place(state, entry, &placements, &mut done.placements)
         {
             status = FeatureStatus::failed(message);
+        }
+        // A Move moves the free parts of flexible occurrences from where
+        // those keep them too (mitcad#2025).
+        if status.is_ok() && matches!(entry.def, FeatureDef::MoveOccurrence(_)) {
+            crate::joints::move_free_parts(assembly, &mut done.joints, &placements);
         }
         // Joints and rigid groups (mitcad#55) read the placements and the
         // other components' bodies at this point: applied here too.

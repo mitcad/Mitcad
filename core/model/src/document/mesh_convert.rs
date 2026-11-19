@@ -19,11 +19,14 @@ use crate::ids::{BodyUid, ComponentUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::recompute::FeatureStatus;
 
-/// The mesh body a new feature hides: a faceted Convert Mesh's.
+/// The mesh body a new feature hides: a faceted Convert Mesh's, or a mesh
+/// edit's (mitcad#1871: Decimate, Repair, Remove Region, Segment, Fit
+/// Surface).
 pub(super) fn hidden_mesh(def: &FeatureDef<ValueInput>) -> Option<BodyUid> {
     match def {
         FeatureDef::MeshConvert(convert) => convert.replaced_mesh(),
-        _ => None,
+        // The mesh edits of reverse engineering (mitcad#1871).
+        other => crate::features::mesh_tools::edited_mesh(other),
     }
 }
 
@@ -34,7 +37,7 @@ impl DocState {
     pub(super) fn mesh_replaced_by(&self, uid: BodyUid) -> Option<&FeatureEntry> {
         self.features.iter().map(|f| &**f).find(|f| match &f.def {
             FeatureDef::MeshConvert(convert) => convert.replaced_mesh() == Some(uid),
-            _ => false,
+            other => crate::features::mesh_tools::edited_mesh(other) == Some(uid),
         })
     }
 }

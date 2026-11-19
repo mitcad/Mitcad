@@ -6,6 +6,7 @@
 # check-all sources: core/model/src/build core/model-build core/vcs/src/library tools/cli
 # check-all sources: tools/ui-scripts/derived-part-edit.mitcad-ui tools/ui-scripts/derived-part-edit.json
 # check-all sources: tools/ui-scripts/derived-part-edit-profile.json tools/ui-scripts/derived-part-edit-library.json
+# check-all sources: app/commands/FilletCommands.cpp core/model-api/src/press_pull.rs
 # The edit panel of a derived part (mitcad#1812) through the real UI, the
 # shared input script tools/ui-scripts/derived-part-edit.mitcad-ui (also
 # run by tools/ui-windows-derived-part-edit-test.ps1 and
@@ -14,8 +15,11 @@
 # rows Small and Large; no supplier's files), fetched from a local git
 # repository, and a design that places it: a double-click on the profile's
 # timeline cell opens Derived Component, its length and row are changed in
-# one undo step and Undo restores them; a double-click on a feature type
-# without an edit panel shows the plain message, not a failure.
+# one undo step and Undo restores them; Press Pull on the profile's free
+# end offers Edit <part> Instead, which opens Derived Component at its
+# Length, and OK renames the part after its new length in the same undo
+# step (mitcad#2030); a double-click on a feature type without an edit
+# panel shows the plain message, not a failure.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-derived-part-edit-test.sh
@@ -58,6 +62,8 @@ done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'derived part edit driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 ui_expect_log 'Derived component C' 'the panel changed the profile'"'"'s length and row with one command'
+ui_expect_log 'Press Pull opened DerivedComponent1 for its length' 'Press Pull on the free end opened Derived Component at its Length'
+ui_expect_log 'Browser Root/Profile rows test L=700:1 at ' 'the part was named after its new length'
 ui_expect_log 'Message band: info This feature has no edit panel yet.' 'a feature without a panel says so in plain words'
 ui_expect_log 'Open Read-Only: ' 'Open Source Design opened the library source read-only'
 ui_expect_log 'TestDriver: done' 'the panel opened in place, its edit was one undo step and Undo restored it'

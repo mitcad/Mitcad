@@ -60,7 +60,7 @@ Timber-Init
 # A new design (mitcad#394): Component1 active.
 Ui-StartApp 'timber-new'
 Ui-Mark
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-ExpectNew 'Ribbon BUILD/PROFILE at' 'its PROFILE group'
 Ui-ExpectLog 'Ribbon button build.timber at' 'the Timber button on the BUILD tab'
 

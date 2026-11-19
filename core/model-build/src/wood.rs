@@ -1160,6 +1160,7 @@ impl<K: Kernel> WoodCrateOps<K> for Document<K> {
                     place: "junction",
                     fits: None,
                     set: Vec::new(),
+                    members: Vec::new(),
                 },
             ))
         })

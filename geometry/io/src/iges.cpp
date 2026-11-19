@@ -3,6 +3,7 @@
 
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRep_Tool.hxx>
+#include <IFSelect_ReturnStatus.hxx>
 #include <IGESCAFControl_Reader.hxx>
 #include <IGESCAFControl_Writer.hxx>
 #include <IGESControl_Controller.hxx>
@@ -152,7 +153,7 @@ void write_iges(const std::string& path, const std::vector<Body>& bodies,
   }
 }
 
-std::vector<Body> read_iges(const std::string& path) {
+std::vector<Body> read_iges(const std::string& path, const Message_ProgressRange& range) {
   const auto lock = detail::exchange_lock();
   const occ::handle<TDocStd_Document> document = detail::new_document();
   IGESControl_Controller::Init();
@@ -163,7 +164,11 @@ std::vector<Body> read_iges(const std::string& path) {
   reader.SetColorMode(true);
   reader.SetNameMode(true);
   reader.SetLayerMode(false);
-  if (!reader.Perform(path.c_str(), document)) {
+  // Parsed, which cannot be stopped, then transferred within `range`
+  // (mitcad#2032), as a STEP file.
+  if (reader.ReadFile(path.c_str()) != IFSelect_RetDone ||
+      !detail::stoppable_transfer(
+          range, [&](const Message_ProgressRange& transfer) { return reader.Transfer(document, transfer); })) {
     throw Error("cannot read IGES file " + path);
   }
   std::vector<Body> bodies;

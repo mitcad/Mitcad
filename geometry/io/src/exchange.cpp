@@ -51,12 +51,12 @@ Format require_format(const std::string& path) {
 
 } // namespace
 
-std::vector<Body> read_file(const std::string& path) {
+std::vector<Body> read_file(const std::string& path, const Message_ProgressRange& range) {
   switch (require_format(path)) {
   case Format::Step:
-    return read_step(path);
+    return read_step(path, range);
   case Format::Iges:
-    return read_iges(path);
+    return read_iges(path, range);
   case Format::Stl:
     return {read_stl(path)};
   case Format::Obj:

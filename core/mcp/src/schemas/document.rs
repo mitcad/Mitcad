@@ -53,7 +53,38 @@ pub(super) const COMMANDS: &[&str] = &[
     "set_print_bed_face",
     "sheet_flange_profile",
     "set_body_folder",
+    "add_flat_pack",
+    "add_standard_box",
+    "edit_standard_box",
+    "add_glue_flap",
 ];
+
+/// The standard box styles (mitcad#1939).
+const BOX_STYLES: &[&str] = &["fefco_0201", "ecma_a20"];
+
+/// A length in mm, or null to take it away.
+fn number_or_null(description: &str) -> Value {
+    json!({"type": ["number", "null"], "description": description})
+}
+
+/// The options of add_standard_box (mitcad#1939).
+fn standard_box_fields() -> Value {
+    json!({
+        "style": choice(BOX_STYLES, "fefco_0201 (a slotted box) or ecma_a20 (a reverse tuck end carton)"),
+        "length": {"type": "number", "description": "Inside length, mm"},
+        "width": {"type": "number", "description": "Inside width, mm"},
+        "height": {"type": "number", "description": "Inside height, mm"},
+        "board": text("A board of the board profile (the sheet_process query's boards): its thickness, flute and crease deduction"),
+        "thickness": {"type": "number", "description": "The board's thickness, mm (needed without a board)"},
+        "deduction": {"type": "number", "description": "The measured deduction of a 90 degree crease, mm"},
+        "radius": {"type": "number", "description": "The creases' inside radius, mm; an eighth of the thickness when left out"},
+        "glue_flap": {"type": "number", "description": "The glue flap's width, mm; 30 when left out"},
+        "tuck": {"type": "number", "description": "A tuck end's tuck depth, mm"},
+        "flute": text("The board's flute"),
+        "folded": flag(true, "Folded; false: the flat blank with its creases"),
+        "component": flag(false, "In a new component of its own, activated: a part to save into a library")
+    })
+}
 
 /// A body by its uid.
 fn body(description: &str) -> Value {
@@ -203,10 +234,12 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "delete_parameter", "name": "w"}]
         }),
         "recompute" => json!({
-            "description": "Recomputes the design. Result: notices (when an older design's drawings were pinned to what they show).",
-            "properties": {},
+            "description": "Recomputes the design. Result: notices (when an older design's drawings were pinned to what they show); with all, changed (whether it made the undo step Recompute All).",
+            "properties": {
+                "all": {"type": "boolean", "description": "Every feature evaluated again from the start, without cached or stored results"}
+            },
             "required": [],
-            "examples": [{"cmd": "recompute"}]
+            "examples": [{"cmd": "recompute"}, {"cmd": "recompute", "all": true}]
         }),
         "set_body_visible" => json!({
             "description": "Shows or hides a body, or makes its visibility follow a condition; one of visible and expression.",
@@ -338,10 +371,10 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "set_view_show", "sketches": false}]
         }),
         "set_folder_visible" => json!({
-            "description": "The eye of a component's Bodies, Sketches or Construction folder: a hidden folder hides all it holds.",
+            "description": "The eye of a component's Bodies, Sketches or Construction folder, or of the root's Annotations folder: a hidden folder hides all it holds.",
             "properties": {
-                "component": id("The component by uid or name; the root's when left out"),
-                "folder": choice(&["bodies", "sketches", "construction"], "The folder"),
+                "component": id("The component by uid or name; the root's when left out (the only one with annotations)"),
+                "folder": choice(&["bodies", "sketches", "construction", "annotations"], "The folder"),
                 "visible": {"type": "boolean", "description": "Shown or hidden"}
             },
             "required": ["folder", "visible"],
@@ -474,6 +507,62 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                         "boundary": {"panel": {"feature": "F3", "slot": 0},
                                      "curve": {"type": "sketch", "sketch": "F2", "segment": "c2[c1,c3]"}},
                         "angle": 1.5, "length": {"mode": "tangent", "value": 15},
+                        "position": "inside"}}],
+            "restrictions": ["def is a sheet_flange definition (model_reference {\"feature\": \"sheet_flange\"})."]
+        }),
+        "add_flat_pack" => json!({
+            "description": "Turns a box body into the six finger-jointed plates of a laser-cut box (a flat_pack feature) and lays them out on a new cut sheet, nested, in one undo step (mitcad#1939). Result: uid, bodies, drawing, warnings.",
+            "properties": {
+                "body": body("The box: a rectangular block along the component's axes"),
+                "thickness": {"type": ["number", "string"], "description": "The sheet's thickness, mm (or an expression)"},
+                "inside": flag(false, "The box is the room inside the plates"),
+                "finger_width": {"type": ["number", "string"], "description": "The fingers' width, mm; 2.5 times the thickness when left out"},
+                "clearance": {"type": ["number", "string"], "description": "Each finger's clearance in its slot on each side, mm; 0.1 when left out"},
+                "width": {"type": "number", "description": "The cut sheet's width, mm"},
+                "height": {"type": "number", "description": "The cut sheet's height, mm"},
+                "kerf": {"type": "number", "description": "The cut sheet's kerf, mm (0 to 10)"}
+            },
+            "required": ["body", "thickness"],
+            "examples": [{"cmd": "add_flat_pack", "body": "F1.b0", "thickness": 6, "finger_width": 15, "width": 1000, "height": 600}]
+        }),
+        "add_standard_box" => json!({
+            "description": "Makes a board box of a standard style from its options: board rules, its blank and creases as sketches, a Face and a Fold at every crease, and its Flat Pattern, in one undo step (mitcad#1939). Result: rules, outline, creases, face, body, folds, component.",
+            "properties": standard_box_fields(),
+            "required": ["style", "length", "width", "height"],
+            "examples": [{"cmd": "add_standard_box", "style": "fefco_0201", "length": 300, "width": 200, "height": 150, "board": "c_flute"}]
+        }),
+        "edit_standard_box" => json!({
+            "description": "Changes a standard box's options: its rules, blank and creases are made again and its Face and Folds follow, in one undo step; null takes an option away (mitcad#1939). Result: rules, outline, creases, face.",
+            "properties": {
+                "rules": feature_uid("The box's sheet rules"),
+                "style": choice(BOX_STYLES, "Its style; another style is refused"),
+                "length": number_or_null("Inside length, mm"),
+                "width": number_or_null("Inside width, mm"),
+                "height": number_or_null("Inside height, mm"),
+                "board": {"type": ["string", "null"], "description": "A board of the board profile (the sheet_process query's boards)"},
+                "thickness": number_or_null("The board's thickness, mm"),
+                "deduction": number_or_null("The measured deduction of a 90 degree crease, mm"),
+                "radius": number_or_null("The creases' inside radius, mm"),
+                "glue_flap": number_or_null("The glue flap's width, mm"),
+                "tuck": number_or_null("A tuck end's tuck depth, mm"),
+                "flute": {"type": ["string", "null"], "description": "The board's flute"}
+            },
+            "required": ["rules"],
+            "examples": [{"cmd": "edit_standard_box", "rules": "F1", "height": 200}]
+        }),
+        "add_glue_flap" => json!({
+            "description": "Adds a glue flap: a flange whose wall is a trapezoid, its ends slanting in by the taper, made from the flange's profile sketch, in one undo step (mitcad#1939). Result: uid, profile.",
+            "properties": {
+                "def": {},
+                "taper": {"type": "number", "minimum": 0, "maximum": 60, "description": "How far each end slants in, degrees; 15 when left out"},
+                "inset": {"type": "number", "minimum": 0, "description": "How far the flap keeps in from each end of the edge, mm; 0 when left out"}
+            },
+            "required": ["def"],
+            "examples": [{"cmd": "add_glue_flap", "taper": 15,
+                "def": {"type": "sheet_flange", "body": "F3.b0",
+                        "boundary": {"panel": {"feature": "F3", "slot": 0},
+                                     "curve": {"type": "sketch", "sketch": "F2", "segment": "c6[c5,c7]"}},
+                        "angle": 1.5, "length": {"mode": "tangent", "value": 30},
                         "position": "inside"}}],
             "restrictions": ["def is a sheet_flange definition (model_reference {\"feature\": \"sheet_flange\"})."]
         }),

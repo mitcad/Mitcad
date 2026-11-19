@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# mitcad#2016: Flexible on a subassembly without joints of its own, on
+# flexible-free-parts.json: a grounded Rail and a Gantry (placed twice)
+# whose Carriage and Joiner have no joints between them; the root's Joint1
+# slides Gantry:1's Joiner along the Rail. Gantry:1 is made Flexible from
+# its row's menu (the menu then shows it checked), and its Joiner dragged
+# in the view: it slides along Joint1 alone (the drag logs Joint1's new
+# value), while Gantry:1's Carriage and Gantry:2's Joiner stay where they
+# are. All geometry is synthetic.
+# Run by tools/ui-flexible-free-parts-test.sh (Linux),
+# tools/ui-windows-flexible-free-parts-test.ps1 (Windows) and
+# tools/ui-macos-flexible-free-parts-test.sh (macOS).
+wait-idle
+window-resize 1400 990
+mark
+command view.fit
+wait-idle
+# Where the bodies are shown before.
+capture carriage '^Body F4[.]b0 in O2/O3 at ([0-9]+,[0-9]+)$' 20
+capture joiner '^Body F6[.]b0 in O2/O4 at ([0-9]+,[0-9]+)$' 20
+capture other '^Body F6[.]b0 in O5/O4 at ([0-9]+,[0-9]+)$' 20
+# Gantry:1 made Flexible from its row's menu, though the Gantry has no
+# joints of its own.
+mark
+context-menu-logged '^Browser Root/Gantry:1 at ' 'Flexible'
+expect-log '^Context menu: .*Flexible'
+wait-log '^Flexible Gantry:1$' 30
+wait-idle 30
+mark
+context-menu-logged '^Browser Root/Gantry:1 at ' cancel
+expect-log '^Context menu checked: (.* [|] )?Flexible'
+# Its Joiner dragged: it slides along the root's Joint1, alone.
+mark
+drag-from '^Body F6[.]b0 in O2/O4 at ' 80 20
+wait-log '^Drag of Joiner:1 started' 10
+wait-log '^Dragged Joiner:1 to [(].*[)]: Joint1 tx -?[0-9.]+ mm$' 30
+wait-idle 30
+wait-log '^Body F4[.]b0 in O2/O3 at ${carriage:re}$' 30
+wait-log '^Body F6[.]b0 in O5/O4 at ${other:re}$' 30
+expect-no-log '^Body F6[.]b0 in O2/O4 at ${joiner:re}$'
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

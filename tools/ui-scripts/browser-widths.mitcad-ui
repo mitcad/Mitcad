@@ -86,6 +86,14 @@ model-command '{"cmd":"rename_component","component":"Bracket-for-the-left-side-
 wait-log '^Browser rows width 260 [(]widest row [0-9]+, at most 60% of [0-9]+: [0-9]+[)]$'
 wait-log '^Floating cards: .*browserDock -?[0-9]+,-?[0-9]+ 260x'
 wait-idle
+# The plate fitted and zoomed in again: where the screen keeps the window
+# smaller (Windows' 1024 x 768), the window took its size back after the
+# first zoom, which left the plate's middle at the view's right and no face
+# beside the rows (round 3 of mitcad#1990).
+command view.fit
+wait-idle
+wheel 50 50 15
+wait-idle
 sleep 500
 mark
 click-logged '^Browser view beside the rows at '

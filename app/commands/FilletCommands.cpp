@@ -348,8 +348,6 @@ CommandDef filletCommand(const CommandContext& context) {
   def.icon = QStringLiteral("fillet");
   def.tooltip = QObject::tr("Rounds edges, each set of edges with its own radius");
   def.shortcut = QKeySequence(Qt::Key_F);
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("round"), QStringLiteral("blend")};
   def.featureType = QStringLiteral("fillet");
   def.describeBefore = true; // the edges are gone after it
@@ -704,8 +702,6 @@ CommandDef chamferCommand(const CommandContext& context) {
   def.name = QObject::tr("Chamfer");
   def.icon = QStringLiteral("chamfer");
   def.tooltip = QObject::tr("Bevels edges, each set of edges with its own size");
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("bevel")};
   def.featureType = QStringLiteral("chamfer");
   def.describeBefore = true;
@@ -985,8 +981,6 @@ CommandDef pressPullCommand(const CommandContext& context) {
   def.icon = QStringLiteral("press-pull");
   def.tooltip = QObject::tr("Offsets faces, rounds edges or extrudes profiles");
   def.shortcut = QKeySequence(Qt::Key_Q);
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("push"), QStringLiteral("pull"), QStringLiteral("offset face")};
   // A face continued Straight or Along the walls is a press_pull of its
   // own, edited here (mitcad#1850).

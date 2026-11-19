@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: MIT
+# CAM turning in the CNC group (mitcad#1869, app/COMMANDS.md "Turning in
+# the CNC group"), the shared input script of tools/ui-cam-turning-test.sh
+# (Linux), tools/ui-windows-cam-turning-test.ps1 and
+# tools/ui-macos-cam-turning-test.sh, on tools/ui-scripts/cam-turning.json
+# (a 40 x 30 block 10 high turned about the design's Z, a lathe on the
+# Fanuc turning dialect with a turning tool, a parting blade and a
+# threading insert):
+#
+#   1. New Setup on the lathe, the bar 2 mm over the part's radius, 1 mm
+#      to face and 5 mm behind it; canned cycles on;
+#   2. Turn Facing, Turn Roughing, Turn Finishing, Threading (a 40 mm
+#      thread from Z 0 to -8) and Parting Off from their panels, each with
+#      the tool its kind needs by default;
+#   3. Generate: every operation up to date, its toolpath drawn;
+#   4. Simulate: the playback, the turned stock drawn as its section
+#      revolved about the spindle axis and its summary, cleared on closing;
+#   5. Post Process… to the Fanuc turning dialect (the wrappers read the
+#      file).
+wait-idle
+command view.fit
+wait-idle
+
+mark
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+
+# 1. New Setup on the design's only machine, the lathe.
+mark
+command make.cam_setup
+wait-log '^Command New Setup started'
+wait-log '^CAM setup panel: machine lathe$'
+type-in '^Panel New Setup input side at ' '2 mm'
+type-in '^Panel New Setup input top at ' '1 mm'
+type-in '^Panel New Setup input bottom at ' '5 mm'
+key Return
+wait-log '^CAM setup added: Setup 1$'
+mark
+model-command '{"cmd":"cam_setup_edit","setup":1,"changes":{"post":{"canned_cycles":true}}}'
+wait-idle
+
+# 2. The turning operations, each with the tool its kind needs.
+mark
+command make.cam_turn_face
+wait-log '^Command Turn Facing started'
+wait-log '^CAM turning panel turn_face: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Turn Facing 1 to Setup 1$'
+
+mark
+command make.cam_turn_rough
+wait-log '^Command Turn Roughing started'
+wait-log '^CAM turning panel turn_rough: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Turn Roughing 1 to Setup 1$'
+
+mark
+command make.cam_turn_finish
+wait-log '^Command Turn Finishing started'
+wait-log '^CAM turning panel turn_finish: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Turn Finishing 1 to Setup 1$'
+
+mark
+command make.cam_turn_thread
+wait-log '^Command Threading started'
+wait-log '^CAM turning panel turn_thread: setup Setup 1, tool 3$'
+type-in '^Panel Threading input diameter at ' '40 mm'
+type-in '^Panel Threading input z_start at ' '0 mm'
+type-in '^Panel Threading input z_end at ' '-8 mm'
+key Return
+wait-log '^CAM operation added: Threading 1 to Setup 1$'
+
+mark
+command make.cam_turn_part_off
+wait-log '^Command Parting Off started'
+wait-log '^CAM turning panel turn_part_off: setup Setup 1, tool 2$'
+key Return
+wait-log '^CAM operation added: Parting Off 1 to Setup 1$'
+wait-log '^CAM states: Setup 1: Turn Facing 1 not_generated, Turn Roughing 1 not_generated, Turn Finishing 1 not_generated, Threading 1 not_generated, Parting Off 1 not_generated$'
+
+# 3. Generate: up to date, the toolpaths drawn in the section's plane.
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: Turn Facing 1 up_to_date, [1-9][0-9]* moves, .*; Parting Off 1 up_to_date, [1-9][0-9]* moves, ' 60
+wait-log '^CAM states: Setup 1: Turn Facing 1 up_to_date, Turn Roughing 1 up_to_date, Turn Finishing 1 up_to_date, Threading 1 up_to_date, Parting Off 1 up_to_date$' 30
+wait-log '^CAM toolpaths drawn: 5 operation\(s\), [1-9][0-9]* moves$' 30
+expect-never 'CAM generate .* failed'
+
+# 4. Simulate: the turned section, nothing cut into the part.
+mark
+command make.cam_simulate
+wait-log '^CAM simulate: Setup 1, 5 operations, [1-9][0-9]* points$' 30
+wait-log '^CAM turned stock: Setup 1: left [0-9.]+, 0 gouge\(s\), 0 rapid cut\(s\)$' 30
+wait-log '^CAM turned stock overlay: [1-9][0-9]* vertices, [1-9][0-9]* triangles$'
+focus-dialog '^Simulate$'
+key Escape
+wait-log '^CAM simulate closed$'
+wait-log '^CAM stock overlay: none$'
+
+# 5. Post Process… to the lathe's Fanuc dialect.
+mark
+command make.cam_post
+focus-dialog '^Post Process$'
+wait-log '^CAM post dialog: setup Setup 1, fanuc_turning, millimetres$'
+button '^Post'
+focus-dialog '^Save G-code$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/setup1.nc"
+key Return
+wait-log '^CAM post written: .*setup1[.]nc: fanuc_turning, millimetres, [1-9][0-9]* lines$' 30
+expect-file "${MITCAD_TEST_WORK}/setup1.nc"
+expect-never 'TestDriver: FAIL|CAM operation refused|CAM setup refused|CAM post refused'

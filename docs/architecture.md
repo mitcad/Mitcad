@@ -66,7 +66,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
 | `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images); its line art as SVG (mitcad#1736, `format: "svg"`) is a drawing view's projection along the camera (`core/model/src/preview/lines.rs`). |
-| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC). No model, no OCCT; offsets by cavalier_contours. |
+| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76, the program check, the turned section's simulation). No model, no OCCT; offsets by cavalier_contours. |
 | `core/subdiv` (`mitcad-subdiv`) | Rust | Forms (mitcad#1757): control cages, their edits, Catmull-Clark subdivision with creases and boundaries and the limit surface as bicubic patches, below the model (re-exported as `mitcad_model::subdiv`); no OCCT ([Forms](#forms-subdivision-surfaces)). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
@@ -676,7 +676,7 @@ design in a project.
   `add_annotation` with `"preview": true` returns the annotation as the
   `annotations` query will list it once added, laid out after the others
   by the same code (`Document::annotation_to_add`, `laid_out` with the
-  annotation to add), and stores nothing; the Make tab's Annotate panels
+  annotation to add), and stores nothing; the Make tabs' Annotate panels
   draw it dimmed before Add (`CommandDef::acceptPreview`,
   `OcctViewer::setMeasurementPreview`).
 - **Drawings in the design** (mitcad#707, `core/model/src/drawing/def.rs`,
@@ -825,7 +825,14 @@ design in a project.
   brought on into the parents of that parent's flexible occurrences, under
   the chain of them (`ActiveJoint::under` and the `flexed` keys are
   chains), and linked geometry reads those placements as recorded reads
-  (`Read::Flexed`). Commands and queries:
+  (`Read::Flexed`). Any occurrence of a component with components in it
+  can be flexible (mitcad#2016): with `Flex::free_parts` (set for every
+  occurrence made flexible since; older files have none and keep their
+  positions) the parts its component's joints, rigid groups and grounding
+  do not place are units of their own in the parent too (`flex_unit`),
+  and where drags leave them is kept per occurrence (`Flex::placements`,
+  seeded into `flexed` at the start of a recompute, `kept_flexed`).
+  Commands and queries:
   [commands.md](../core/model-api/src/commands.md) ("Joints"). In the
   application (phase 3) the ASSEMBLE group's panels add and edit them, a
   preview reports the placements it changes so that panels show the
@@ -1019,7 +1026,11 @@ design in a project.
   every recompute and `Kernel::extrude_face` sweeps a copy of it, holes
   kept, along its outward normal (`geometry/src/face_extrude.cpp`); the
   side faces are named after the face's edges, the caps after the face
-  ([commands.md](../core/model-api/src/commands.md), "extrude"). A
+  ([commands.md](../core/model-api/src/commands.md), "extrude"). Its
+  extents are a sketch profile's (mitcad#2033): a side up to a target
+  goes to the kernel as a `SideEnd::Target` (the face's prism past it,
+  trimmed there, `detail::target_side` shared with sketch profiles), and
+  through all as a distance the model measures from the face's plane. A
   revolution takes one the same way (mitcad#539, `features/revolve.rs`,
   `Kernel::revolve_face`, `geometry/src/face_revolve.cpp`; the FreeCAD
   import's face profiles), by angles only.
@@ -1650,7 +1661,15 @@ the `Shape` type.
   an axis, searched from a grid of points inside the face; a face ruled
   along a parameter (a plane, cylinder, cone, extrusion, a spline of one
   straight span) has none and gets its edges' box without the search,
-  which took seconds on a gear's planar face of 120 edges. OCCT's
+  which took seconds on a gear's planar face of 120 edges. Nor is an
+  axis searched where the surface provably has no extreme along it
+  inside the face's parameter rectangle (a torus or sphere whose extremes
+  along the axis lie outside it, a surface of revolution of a planar
+  meridian clear of its axis turning outside the face's angles,
+  mitcad#2023). The search classifies its points by a polygon of the
+  face's parameter curves built once per face (OCCT's classifier only
+  near the polygon, a bounded number of times), and its climbs are
+  bounded per face; a search cut short keeps OCCT's box on its sides. OCCT's
   `BRepBndLib::AddOptimal` boxes the surface over the parameter rectangle
   the boundary spans (the whole surface on a face flagged as its natural
   restriction), so a fillet's corner plate trimmed from a larger surface
@@ -2706,13 +2725,18 @@ not recompute.
   drag's steps in `OcctViewer::UpdateZoom`, mitcad#1867); trackpad
   scrolling has its own multiplier. Settings and the visual guide use the same binding table.
 - **3D mice** (mitcad#951): `app/platform/SpaceMouseDevice.hpp` is the
-  small backend interface (six axes in the view's frame, button events,
-  hot plug) with the pure parsing of the devices' reports; one backend per
-  platform, none with a vendor SDK: Raw Input on Windows
-  (`platform/windows/SpaceMouseWindows.cpp`), spacenavd's own socket on
-  Linux and the BSDs (`platform/unix/SpaceMouseSpnav.cpp`), IOKit's HID
-  Manager on macOS (`platform/macos/SpaceMouseMac.cpp`). A missing device
-  or daemon is no error. `view/SpaceMouseController` maps the axes to the
+  small backend interface for six axes in the view's frame, buttons and
+  connection changes. Windows uses the installed SiApp runtime when it
+  can open a 3DxWare device, with Raw Input as fallback. Linux prefers
+  spacenavd's socket and accepts Magellan client messages on X11 when
+  the socket is unavailable; the Magellan driver is looked for on the
+  screens' root windows, and MitCad's window is asked for (never created)
+  only once the driver is there (mitcad#2059: a design window made native
+  before it sat in its frame painted the Floating cards' margins black).
+  The BSDs use the socket. On macOS the IOKit
+  backend tries the installed 3DxWare client framework if HID access is
+  exclusive. The driver libraries are loaded at runtime and installed
+  independently of MitCad. `view/SpaceMouseController` maps the axes to the
   camera's rates (`view/SpaceMouseNavigation.hpp`: speed, dead zone,
   reversed axes, locks, the dominant axis held until the cap is at rest,
   the cross-talk filter and the device's reach of mitcad#1720, kept in
@@ -2774,16 +2798,25 @@ not recompute.
   bridge). The memory guard of model commands (mitcad#1480,
   `core/ffi/src/command_memory.rs` over
   `mitcad_model::monitor::memory_guard`) measures the process every 0.02 s
-  while a model command (not an import, undo or redo) computes and, at 85 % of its
+  while a model command (not one of the bridge's imports, undo or redo) computes and, at 85 % of its
   tightest memory limit, when the memory grows so fast that it would
   get there within 0.1 s (a boolean's threads can add gigabytes a second,
   mitcad#1493), or after a failed allocation in the kernel,
   cancels the same monitor with its reason (`cancel_because`): the
   command fails with "the operation ran out of memory …" and changes
   nothing, and the job counts as failed, not cancelled
-  (`JobControl::cancel_reason`). The application, the headless MCP server
+  (`JobControl::cancel_reason`). `import_file` (STEP, IGES, BRep, STL,
+  OBJ, glTF) is a model command under this guard (mitcad#2032): the model
+  reads the file under the command's monitor (`Kernel::interruptible`),
+  the STEP and IGES reads give OCCT's transfer a progress range whose user
+  break asks the monitor (`geometry::CancelRange`; the parsing before it
+  takes none and cannot be stopped), and the guard's reason says that the
+  file could not be imported because it needs more memory than the system
+  has left (`GuardedWork::Import`), not to join bodies. The application,
+  the headless MCP server
   (`--memory-limit` for a lower limit) and `mitcad-cli info`/`run` turn it
-  on (`guard_command_memory`); the imports keep their own guard
+  on (`guard_command_memory`); the bridge's imports (`import_f3d`,
+  `import_ipt`, ...) keep their own guard
   (mitcad#80, `mitcad_import_base::memory_guard`), which measures as often
   and looks ahead with the same code (`MemoryGrowth`, `low_ahead`;
   mitcad#1505), only from 50 % of the limit and at growth kept up over two
@@ -3637,6 +3670,22 @@ without a saved frame starts centred with the default content size. System
 controls, semantic colours, fonts and sidebar material follow the running
 macOS version and accessibility settings. The toolbar changes in sketch
 mode; command definitions and saved shortcuts remain shared.
+
+Where each command sits on the toolbar and in the menus is data, not part
+of its definition (mitcad#1951): one JSON file,
+`app/resources/layout/default.json`, lists the tabs, their groups with
+their menus' commands, separators, submenus and buttons, the menu bar's
+menus, and the commands on no toolbar, by command id and with keys only
+(captions are translated in code). A command may show in several places
+(mitcad#1975: the Surface, Sheet Metal and Manage tabs repeat Create
+Sketch, Construct, Select, Material and the sheet rules); a place marked
+`repeat` is never its home, the place its pins and its kind follow.
+`CommandLayoutStore` reads it with the
+user's layer (a difference from the default kept in the settings) at the
+start and again only when the layout changes; the ribbon, both chromes'
+menu bars and the macOS frontend build from the layout held in memory.
+`app.layout_coverage` checks it against the registered commands (app/
+COMMANDS.md, *The layout file*).
 
 The shared command registry validates shortcut proposals against commands
 which can be available together, fixed application/menu keys and effective

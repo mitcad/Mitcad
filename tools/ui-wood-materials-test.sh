@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/print/MaterialProperties.cpp app/print/MaterialsDialog.cpp app/print/PrintLibrary.cpp app/framework/TestDriver.cpp app/framework/Appearances.cpp tools/cli
 # check-all sources: core/model/src/material.rs core/model/src/material_dataset.rs core/model/data/wood_materials.json core/model/src/document/materials.rs core/model/src/document/material_import.rs
+# check-all sources: core/model/src/sheet/process.rs
 # check-all sources: core/model-base/src/material_class.rs core/model-base/src/appearance.rs core/model-api/src/materials.rs
 # The woods and panels in the class Wood (mitcad#1552, mitcad#1706), on a
 # private Xvfb display: the test driver's script

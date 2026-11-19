@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/DerivedPartCommands.cpp app/MainWindow.cpp app/framework/CommandSession.cpp
 # check-all sources: app/framework/TestDriver.cpp core/model/src/document/component_options.rs tools/cli
+# check-all sources: app/commands/FilletCommands.cpp core/model-api/src/press_pull.rs core/model/src/build
 # The edit panel of a derived part (mitcad#1812) on macOS, through the test
 # driver (tools/ui-scripts/derived-part-edit.mitcad-ui, the same script as
 # the Linux and Windows tests'), with a library of one synthetic BUILD
 # profile (two rows) made here and fetched from a local git repository:
 # the profile's timeline cell opens Derived Component, its length and row
-# change in one undo step and Undo restores them; a feature type without an
-# edit panel shows the plain message.
+# change in one undo step and Undo restores them; Press Pull on the
+# profile's free end opens Derived Component at its Length and OK renames
+# the part after its new length in the same undo step (mitcad#2030); a
+# feature type without an edit panel shows the plain message.
 # Usage: tools/ui-macos-derived-part-edit-test.sh <app> <mitcad-cli> [output directory]
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -41,6 +44,8 @@ setup "$1" "$2" > "$UI_OUT/setup.log" 2>&1 || {
 }
 MITCAD_TEST_STEP_MS=70 MITCAD_TEST_INPUT=$here/ui-scripts/derived-part-edit.mitcad-ui \
   ui_run_app derived-part-edit --ui=qt --no-recovery --no-mcp --open "$files/derived-part-edit.mitcad"
+ui_expect_log 'Press Pull opened DerivedComponent1 for its length' 'Press Pull on the free end opened Derived Component at its Length'
+ui_expect_log 'Browser Root/Profile rows test L=700:1 at ' 'the part was named after its new length'
 ui_expect_log 'TestDriver: done' 'the panel opened in place, its edit was one undo step, and a feature without a panel says so'
 ui_expect_no_log '^TestDriver: FAIL' 'no failed driver assertion'
 [ "$UI_FAILURES" = 0 ] || exit 1

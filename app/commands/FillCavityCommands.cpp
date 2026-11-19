@@ -15,7 +15,6 @@ CommandDef fillCavityCommand(const CommandContext& context) {
   def.name = QObject::tr("Fill Cavity");
   def.icon = QStringLiteral("fill-cavity");
   def.tooltip = QObject::tr("Fills a closed pocket or slit of a body with material up to a plane");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("fill"), QStringLiteral("pocket"), QStringLiteral("slit"), QStringLiteral("cavity"),
                   QStringLiteral("close"), QStringLiteral("plug")};
   def.featureType = QStringLiteral("fill_cavity");

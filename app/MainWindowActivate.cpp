@@ -30,6 +30,7 @@
 
 #include "browser/ActivateOnPick.hpp"
 #include "browser/ActivateQuestion.hpp"
+#include "framework/CommandLayout.hpp"
 
 namespace mitcad {
 
@@ -137,7 +138,7 @@ void MainWindow::pickComing(const CommandDef& def, const InputDef& input, const 
   }
   // Construction planes, axes and points ask (mitcad#960); other features
   // on another component's geometry go on as before.
-  if (def.group != QStringLiteral("CONSTRUCT")) {
+  if (defaultHome(def.id).group != QStringLiteral("CONSTRUCT")) {
     return;
   }
   askToActivatePicked(item, QString(), madeBy(def.featureType));

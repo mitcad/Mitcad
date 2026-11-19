@@ -129,7 +129,6 @@ void MainWindow::registerWebViewerCommands() {
     d.tooltip = tooltip;
     d.kind = CommandDef::Kind::Action;
     d.mode = CommandDef::Mode::Any;
-    d.tab.clear(); // the File menu
     d.run = std::move(run);
     // Only in a project that keeps versions: the folder goes into them.
     d.enabled = [this] { return m_project.hasHistory(); };

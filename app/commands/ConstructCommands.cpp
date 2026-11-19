@@ -54,7 +54,6 @@ struct Spec {
   const char* featureType;
   const char* type;
   std::vector<FieldSpec> fields;
-  bool pinned = false;
 };
 
 const std::vector<Spec>& specs() {
@@ -64,15 +63,13 @@ const std::vector<Spec>& specs() {
        QT_TRANSLATE_NOOP("QObject", "A construction plane parallel to a plane or planar face"),
        "construction_plane", "offset",
        {{"plane", QT_TRANSLATE_NOOP("QObject", "Plane"), Field::Plane},
-        {"distance", QT_TRANSLATE_NOOP("QObject", "Distance"), Field::Distance}},
-       true},
+        {"distance", QT_TRANSLATE_NOOP("QObject", "Distance"), Field::Distance}}},
       {"construct.plane_angle", QT_TRANSLATE_NOOP("QObject", "Plane at Angle"), "plane-angle",
        QT_TRANSLATE_NOOP("QObject", "A plane through a line, turned from a reference plane"),
        "construction_plane", "angle",
        {{"line", QT_TRANSLATE_NOOP("QObject", "Line"), Field::Line},
         {"angle", QT_TRANSLATE_NOOP("QObject", "Angle"), Field::Angle},
-        {"plane", QT_TRANSLATE_NOOP("QObject", "Reference Plane"), Field::Plane}},
-       true},
+        {"plane", QT_TRANSLATE_NOOP("QObject", "Reference Plane"), Field::Plane}}},
       {"construct.tangent_plane", QT_TRANSLATE_NOOP("QObject", "Tangent Plane"), "plane-tangent",
        QT_TRANSLATE_NOOP("QObject", "A plane touching a cylinder or cone, turned from a reference plane"),
        "construction_plane", "tangent",
@@ -84,8 +81,7 @@ const std::vector<Spec>& specs() {
        QT_TRANSLATE_NOOP("QObject", "A plane halfway between two planes"),
        "construction_plane", "midplane",
        {{"plane1", QT_TRANSLATE_NOOP("QObject", "Plane 1"), Field::Plane},
-        {"plane2", QT_TRANSLATE_NOOP("QObject", "Plane 2"), Field::Plane}},
-       true},
+        {"plane2", QT_TRANSLATE_NOOP("QObject", "Plane 2"), Field::Plane}}},
       {"construct.plane_two_edges", QT_TRANSLATE_NOOP("QObject", "Plane Through Two Edges"), "plane-edges",
        QT_TRANSLATE_NOOP("QObject", "A plane through two lines that lie in one plane"),
        "construction_plane", "two_edges",
@@ -520,22 +516,11 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
   def.name = QObject::tr(spec.name);
   def.icon = QString::fromLatin1(spec.icon);
   def.tooltip = QObject::tr(spec.tooltip);
-  def.group = QStringLiteral("CONSTRUCT");
-  def.pinned = spec.pinned;
   def.keywords = {QStringLiteral("construction"), QStringLiteral("datum"),
                   QStringLiteral("work plane"), QStringLiteral("reference")};
   def.featureType = QString::fromLatin1(spec.featureType);
   const QString type = QString::fromLatin1(spec.type);
   const bool plane = def.featureType == QStringLiteral("construction_plane");
-  // The menu's sections (mitcad#1778): the planes, the axes, the points,
-  // as the table lists them.
-  if (plane) {
-    def.section = QStringLiteral("planes");
-  } else if (def.featureType == QStringLiteral("construction_axis")) {
-    def.section = QStringLiteral("axes");
-  } else {
-    def.section = QStringLiteral("points");
-  }
   const QString base = firstSelection(spec);
   for (const FieldSpec& field : spec.fields) {
     InputDef input = fieldInput(field, context);
@@ -912,7 +897,6 @@ CommandDef coordinateSystem(const CommandContext& context) {
   def.name = QObject::tr("Coordinate System");
   def.icon = QStringLiteral("coordinate-system");
   def.tooltip = QObject::tr("A frame at a point with its axes along edges, for sketches, joints and exports");
-  def.group = QStringLiteral("CONSTRUCT");
   def.keywords = {QStringLiteral("frame"), QStringLiteral("triad"), QStringLiteral("ucs"),
                   QStringLiteral("datum"), QStringLiteral("construction")};
   def.featureType = QStringLiteral("coordinate_system");

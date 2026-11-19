@@ -630,9 +630,13 @@ the command changed, in `changes`:
   whose entries changed, that it recomputed, or that are left failed,
   each with `change` (`added`, `changed`, `recomputed`, `failed`)
 - `bodies`: the bodies it added or changed (their shape or their
-  attributes), each with `change` (`added`, `changed`) and its `bbox`
-  {`min`, `max`} (mitcad#714), so that the side of each piece of a split
-  and the place of a moved body show in the reply
+  attributes), each with `change` (`added`, `changed`) and, when it added
+  the body or changed its shape, its `bbox` {`min`, `max`} (mitcad#714),
+  so that the side of each piece of a split and the place of a moved body
+  show in the reply. Only those boxes are measured (mitcad#2021: the
+  boxes of every body of a design of 815, measured before its first
+  command after opening, took 7 s); a body whose attributes alone changed
+  has none
 - `removed_features`, `removed_bodies`: the uids of what it removed
 - `marker`, `feature_count`, `body_count`
 
@@ -2224,7 +2228,12 @@ in the geometry kernel failed)` before `at` when that was the reason);
 the document stays as it was before the command (an array's
 earlier entries are undone), and the server answers the next call. Do
 the work in smaller steps: for example, join the bodies in smaller
-groups. Imports keep their own memory guard; undo and redo are not
+groups. `import_file` is stopped the same way, during the file's
+transfer (STEP, IGES; the parsing before it cannot be stopped), with an
+error that starts with `the file could not be imported because it needs
+more memory than the system has left` and names the memory (mitcad#2032);
+the design stays as it was. The other imports (`import_f3d`,
+`import_ipt`, ...) keep their own memory guard; undo and redo are not
 stopped.
 
 If you open a document with failed geometry, the result is a handle, its

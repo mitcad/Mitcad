@@ -20,8 +20,9 @@
 //!   both ways. FreeCAD 1.0's groove turns by its angle whatever its type:
 //!   that reading too.
 //! - Their profile a planar face of a body, or chosen edges of a sketch
-//!   ([`super::profiles`], mitcad#539): `profile_face` (by distances or
-//!   angles), or the sketch's regions inside the chosen edges.
+//!   ([`super::profiles`], mitcad#539): `profile_face` (by every extent
+//!   of a sketch's, mitcad#2033, or by angles), or the sketch's regions
+//!   inside the chosen edges.
 //! - Fillet, Chamfer → `fillet` and `chamfer` on the referenced edges and
 //!   faces (an edge FreeCAD merged by the faces along it); `UseAllEdges` a
 //!   set of every edge of the body (`all_edges`, taken when the feature is
@@ -566,7 +567,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         variants.push((!flip, 1.0, 1.0));
         // A face profile (mitcad#539): the face along its outward normal,
-        // as FreeCAD sweeps it, by distances only.
+        // as FreeCAD sweeps it, with the extents of a sketch's (mitcad#2033:
+        // up to a face, a shape, the first or last face, through all).
         for (field, profile) in swept.readings() {
             for (flip, taper_sign, offset_sign) in &variants {
                 let extent = if mode == "Symmetric" && kind.starts_with("UpTo") {
@@ -589,9 +591,6 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         &offset.signed(*offset_sign),
                     )?
                 };
-                if swept.is_face() {
-                    super::profiles::face_extrusion_extent(&extent)?;
-                }
                 let mut def = json!({"type": "extrude", "extent": extent,
                                      "flip": flip, "operation": operation});
                 def[field] = profile.clone();

@@ -1,0 +1,24 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. Sheet process profiles (mitcad#1939): the same U-shaped box side, a contour (0,30)-(0,0)-(60,0)-(60,30) on XY, 40 wide, t=2, r=0.5, folded with a K-factor and then as board with a crease table: the flat patterns differ by the allowances. Both corners turn away from the material (setback r): straights 29.5, 59 and 29.5 = 118. K=0.44: two folds of pi/2 (0.5 + 0.88) each, area 40 (118 + 1.38 pi) = 4893.415914478156."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":0.5,"allowance":{"type":"k_factor","k":0.44},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_line","sketch":"F2","start":[0,30],"end":[0,0]},
+  {"cmd":"sketch.add_line","sketch":"F2","start":"p3","end":[60,0]},
+  {"cmd":"sketch.add_line","sketch":"F2","start":"p5","end":[60,30]},
+  {"cmd":"add_feature","def":{"type":"sheet_contour","rules":"F1","sketch":"F2","curves":["c1","c4","c6"],"width":40}},
+  {"expect":{"feature":"F3","status":"ok","bodies":1}},
+  {"cmd":"set_flat_pattern","body":"F3.b0"},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":4893.415914478156}}},
+  {"expect":{"query":{"query":"sheet_process"},"result":{"process":"metal","source":"default"}}},
+
+  {"comment":"Board with a crease table: the 2 mm row's deduction 1.5 (the 4 mm row is farther): each fold develops 2 (0.5 + 2) - 1.5 = 3.5, area 40 (118 + 7) = 5000."},
+  {"cmd":"edit_feature","uid":"F1","def":{"type":"sheet_rules","thickness":2,"bend_radius":0.5,"process":"board","flute":"C","allowance":{"type":"crease_table","rows":[{"thickness":4,"deduction":3},{"thickness":2,"flute":"C","deduction":1.5}]},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"expect":{"feature":"F3","status":"ok","bodies":1}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":5000}}},
+  {"expect":{"query":{"query":"sheet_process"},"result":{"process":"board","source":"rules"}}},
+
+  {"comment":"A nearly sharp crease of fluted plastic sheet, measured deduction 0.2: each fold develops 4.8, beyond what K = 1 gives (4.71): area 40 (118 + 9.6) = 5104."},
+  {"cmd":"edit_feature","uid":"F1","def":{"type":"sheet_rules","thickness":2,"bend_radius":0.5,"process":"board","allowance":{"type":"bend_deduction","deduction":0.2},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"expect":{"feature":"F3","status":"ok","bodies":1}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":5104}}}
+]

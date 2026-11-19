@@ -117,9 +117,10 @@ public:
 
   // Adds the view commands to the registry (before its actions are made).
   void registerCommands();
-  // Fills the View, Tools and Help menus (after the actions are made) and
-  // applies the saved settings.
-  void createMenus(QMenu* view, QMenu* tools, QMenu* help);
+  // The View, Tools and Help menus' actions made checkable and grouped,
+  // their roles set (after the actions are made, before the menu bar is
+  // built from the layout, mitcad#1951), and the saved settings applied.
+  void prepareMenuActions();
 
   const ViewSettings& settings() const { return m_settings; }
   // Grid snap in sketches: on or off, and the step when the grid is fixed.
@@ -149,7 +150,7 @@ public:
   // Navigation page follow.
   void setSpaceMouseSettings(const SpaceMouseSettings& settings);
   void setSnapToGrid(bool on);
-  // The View menu's Visual Style actions in menu order (after createMenus),
+  // The View menu's Visual Style actions in menu order (after prepareMenuActions),
   // Rendered after a null entry (a separator) when there is a render worker:
   // the navigation bar's drop-down (mitcad#1086).
   QList<QAction*> visualStyleActions() const;
@@ -181,6 +182,15 @@ public:
   void showRenderEnvironment();
   // Render Image (mitcad#48; only with the render worker).
   void showRenderImage();
+  // The Render workspace (mitcad#2013): the rendered view (null without the
+  // render worker), and Render Environment and Render Image closed while
+  // the workspace shows their contents.
+  RenderMode* renderMode() const { return m_render; }
+  void closeRenderWindows();
+  // While the Render workspace is open its stage (`light` for Render
+  // Environment, `output` for Render Image) shows instead of the window:
+  // true when it did.
+  std::function<bool(const QString& stage)> showInRenderWorkspace;
   // The design's file name without its folder and extension (the rendered
   // image's default name).
   void setDocumentName(const QString& name) { m_documentName = name; }

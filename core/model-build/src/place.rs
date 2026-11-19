@@ -115,7 +115,9 @@ pub struct PlaceAt {
     #[serde(default)]
     pub place: PlaceKind,
     /// On a side: the offset from `from` (mitcad#417); on a turned end:
-    /// the new part's end from the target's outer side.
+    /// the new part's end from the target's outer side; on a plane or a
+    /// face: off it along its normal, positive to the normal's side
+    /// (mitcad#2046).
     #[serde(default)]
     pub offset: Option<ValueInput>,
     /// What `offset` is measured from (end A when left out).
@@ -262,6 +264,10 @@ pub struct PlaceInput {
     /// (mitcad#1814).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub along: Option<crate::edge::AlongEdge>,
+    /// Members along sketch lines, one per line, their corners treated
+    /// (mitcad#1965).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<crate::lines::AlongLines>,
 }
 
 /// An end's cut in `build_edit`.
@@ -292,6 +298,8 @@ fn some<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EditAt {
+    /// On a side or a rail: from `from`; on a plane or a face: along its
+    /// normal (mitcad#2046).
     #[serde(default)]
     pub offset: Option<ValueInput>,
     #[serde(default)]
@@ -382,6 +390,9 @@ pub struct Placed {
     pub fits: Option<(bool, String)>,
     /// A spacing set's members (mitcad#478), the first the answer's part.
     pub set: Vec<ComponentUid>,
+    /// The members along sketch lines (mitcad#1965), the first the
+    /// answer's part.
+    pub members: Vec<ComponentUid>,
 }
 
 // Planning.
@@ -601,6 +612,58 @@ pub fn side_offset<K: Kernel>(doc: &Document<K>, component: ComponentUid) -> Opt
     } else {
         offset_of(from, tx, near, far, length)
     };
+    // Rounded to the nanometre, and never -0.
+    let offset = (offset * 1e6).round() / 1e6;
+    Some(if offset.abs() < 1e-9 { 0.0 } else { offset })
+}
+
+/// The shift of a frame `turned` on a plane or a face (its frame override
+/// without a shift) that moves it `offset` along the face's normal `up`, in
+/// `turned`'s own axes (mitcad#2046).
+fn ground_shift(turned: &Transform, up: V3, offset: f64) -> V3 {
+    scale(inverse(turned).apply_vector(up), offset)
+}
+
+/// The joint of a part placed on a plane or a face (mitcad#2046): rigid, on
+/// geometry that is no BUILD part and no frame (a member along an edge is
+/// on its edge frame's), not on a side or a rail.
+fn ground_joint<K: Kernel>(doc: &Document<K>, info: &PartInfo) -> Option<FeatureUid> {
+    let joint = info.record.joint?;
+    let Some(FeatureDef::Joint(j)) = doc.feature(joint).map(|e| &e.def) else {
+        return None;
+    };
+    let on_ground = j.kind == JointKind::Rigid
+        && info.record.from.is_none()
+        && !matches!(j.b.geometry, GeomRef::Mount { .. })
+        && doc.target(&j.b.occurrence.0).is_none();
+    on_ground.then_some(joint)
+}
+
+/// A ground part's offset along its plane's or face's normal and the
+/// frame its joint's override turns it to without it (mitcad#2046): the
+/// joint's origin b frame in its component's coordinates, the face's
+/// normal there, and the offset its override's shift gives.
+fn ground_frame<K: Kernel>(doc: &Document<K>, joint: FeatureUid) -> Option<(Transform, V3, f64)> {
+    let Some(FeatureDef::Joint(j)) = doc.feature(joint).map(|e| &e.def) else {
+        return None;
+    };
+    let local =
+        mitcad_model::internal::joints::origin_frame(&mut doc.resolver(), &j.b.geometry).ok()?;
+    let o = j.b.frame_override.unwrap_or_default();
+    let turned =
+        mitcad_model::internal::joints::apply_override(&local, &FrameOverride { shift: None, ..o })
+            .ok()?;
+    let up = z_axis(&local);
+    let offset = o.shift.map_or(0.0, |s| dot(turned.apply_vector(s), up));
+    Some((turned, up, offset))
+}
+
+/// The offset of a part on a plane or a face along its normal
+/// (mitcad#2046: `build_parts`' `offset`, which BUILD's Placement fills
+/// its Offset from), in mm; none for a part placed otherwise.
+pub fn ground_offset<K: Kernel>(doc: &Document<K>, component: ComponentUid) -> Option<f64> {
+    let info = doc.part_info(component)?;
+    let (_, _, offset) = ground_frame(doc, ground_joint(doc, &info)?)?;
     // Rounded to the nanometre, and never -0.
     let offset = (offset * 1e6).round() / 1e6;
     Some(if offset.abs() < 1e-9 { 0.0 } else { offset })
@@ -1015,6 +1078,10 @@ impl<K: Kernel> PlaceBuild<K> for Document<K> {
     }
 
     fn build_place(&mut self, input: &PlaceInput) -> Result<Placed, ModelError> {
+        // Along sketch lines (mitcad#1965).
+        if input.lines.is_some() {
+            return crate::lines::LinesCrateOps::build_place_lines(self, input);
+        }
         // Along an edge (mitcad#1814).
         if let Some(along) = &input.along {
             return self.build_place_along(input, along);
@@ -1042,6 +1109,13 @@ impl<K: Kernel> PlaceBuild<K> for Document<K> {
     }
 
     fn preview_place(&self, input: &PlaceInput) -> Result<Plan, ModelError> {
+        // Along sketch lines (mitcad#1965): the first member's.
+        if input.lines.is_some() {
+            return crate::lines::LinesCrateOps::preview_lines(self, input)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| refuse("no sketch lines"));
+        }
         self.plan_place_between(input, None)
     }
 }
@@ -1201,7 +1275,8 @@ pub(crate) trait PlaceCrateOps<K: Kernel> {
     /// `at.direction` when given; `lie` (and the part's box) turns a member
     /// about it, flat or on edge on the plane (mitcad#485). A member lying
     /// on it (`at.direction` along the plane) rests on it, on its normal's
-    /// side, as turned by `rotate` (mitcad#492).
+    /// side, as turned by `rotate` (mitcad#492). `at.offset` moves it off
+    /// the plane or face along its normal (mitcad#2046).
     #[allow(clippy::too_many_arguments)]
     fn plan_on_geometry(
         &self,
@@ -1282,7 +1357,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
         let along_run = match &input.along {
             Some(along) => {
                 crate::edge::check_along(input)?;
-                Some(self.plan_along(along)?.1)
+                Some(self.plan_along(along, input.flip)?.1)
             }
             None => None,
         };
@@ -1408,8 +1483,18 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             Some(value) => value_in(self, value, Unit::DEG)?,
             None => 0.0,
         };
+        // On a plane or a face any angle (mitcad#2046); on a part's side or
+        // end the slots need quarter turns.
+        let on_ground = input.to.is_none()
+            && input.along.is_none()
+            && input.at.as_ref().is_some_and(|a| {
+                a.geometry.is_some()
+                    && self
+                        .path_from_host(&a.occurrence)
+                        .is_ok_and(|path| self.target(&path).is_none())
+            });
         let quarter = rotate / FRAC_PI_2;
-        if (quarter - quarter.round()).abs() > 1e-6 {
+        if !on_ground && (quarter - quarter.round()).abs() > 1e-6 {
             return Err(refuse("the rotation is 0, 90, 180 or 270 degrees"));
         }
         // A tilt along the host (mitcad#444), only on a side.
@@ -1441,8 +1526,13 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             None => None,
         };
         // A member along an edge lies as `lie` says (mitcad#1814), on the
-        // edge frame's start.
-        if along_run.is_some() && rotate.abs() > 1e-12 {
+        // edge frame's start; along a sketch line it is turned by `rotate`
+        // and sits as `align` says (mitcad#1965).
+        let line = match &input.along {
+            Some(along) => crate::edge::line_turn(input, along, self)?,
+            None => None,
+        };
+        if along_run.is_some() && line.is_none() && rotate.abs() > 1e-12 {
             return Err(refuse(
                 "a member along an edge is turned by Lie: it takes no rotation",
             ));
@@ -1453,6 +1543,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 &mounts,
                 bounds.as_ref(),
                 input.lie.unwrap_or_default(),
+                line,
             ))
         });
         // A member by two points is turned by its axes, not the joint.
@@ -3031,6 +3122,18 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             }
             _ => 0.0,
         };
+        // Off the plane or face along its normal (mitcad#2046), positive
+        // to its normal's side: the frame's shift in its own axes, so that
+        // it follows the face, for every direction.
+        let offset = match &at.offset {
+            Some(value) => value_in(self, value, Unit::MM)?,
+            None => 0.0,
+        };
+        if offset.abs() > 1e-12 {
+            let o = override_frame.get_or_insert_with(FrameOverride::default);
+            o.shift = Some(ground_shift(&at_point, up, offset));
+            at_point = mitcad_model::internal::joints::apply_override(&local, o).map_err(refuse)?;
+        }
         let shift = point_local.map_or([0.0; 3], |p| inverse(&local).apply_point(p));
         let frame_b = placement.after(&at_point);
         Ok(Spot::Joint(Box::new(JointPlan {
@@ -3051,7 +3154,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                     geometry: geometry.clone(),
                     frame_override: None,
                 },
-                shift: [shift[0], shift[1], lift],
+                shift: [shift[0], shift[1], lift + offset],
                 shift_by_joint: false,
                 slide_extra: 0.0,
                 direction,
@@ -3523,6 +3626,10 @@ pub(crate) fn make_part(
                 .map(|g| g.neighbours()),
             _ => None,
         },
+        // The designation an automatic name follows (mitcad#2030); a name
+        // given at placement is the user's.
+        named_after: (plan.name.is_none() && !plan.designation.is_empty())
+            .then(|| plan.designation.clone()),
     };
     state.assembly.component_mut(made).expect("made").build = Some(record);
     Ok(Placed {
@@ -3537,6 +3644,7 @@ pub(crate) fn make_part(
         place: plan.place,
         fits: None,
         set: Vec::new(),
+        members: Vec::new(),
     })
 }
 
@@ -3834,21 +3942,62 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
         };
         let joint = info.record.joint;
         let label = format!("Edit {}", info.name);
+        // A part on a plane or a face (mitcad#2046).
+        let ground = ground_joint(self, &info);
         let rotate = match &input.rotate {
             Some(value) => {
                 let angle = value_in(self, value, Unit::DEG)?;
+                // Any angle on a plane or a face; on a side or an end the
+                // slots need quarter turns.
                 let quarter = angle / FRAC_PI_2;
-                if (quarter - quarter.round()).abs() > 1e-6 {
+                if ground.is_none() && (quarter - quarter.round()).abs() > 1e-6 {
                     return Err(refuse("the rotation is 0, 90, 180 or 270 degrees"));
                 }
                 Some(angle)
             }
             None => None,
         };
+        // The offset along a plane's or a face's normal (mitcad#2046): the
+        // override's shift anew, and the change for a bound length's ray.
+        let ground_edit = match (&input.at, ground) {
+            (Some(EditAt { from: Some(_), .. }), Some(_)) => {
+                return Err(refuse(format!(
+                    "{} is on a plane or a face: its offset is along the normal, from no reference",
+                    info.name
+                )));
+            }
+            (
+                Some(EditAt {
+                    offset: Some(value),
+                    ..
+                }),
+                Some(joint),
+            ) => {
+                let offset = value_in(self, value, Unit::MM)?;
+                let (turned, up, now) = ground_frame(self, joint).ok_or_else(|| {
+                    refuse(format!(
+                        "{}: the plane or face it is on is missing",
+                        info.name
+                    ))
+                })?;
+                let shift = (offset.abs() > 1e-12).then(|| ground_shift(&turned, up, offset));
+                Some((joint, shift, offset, offset - now))
+            }
+            _ => None,
+        };
+        // Its offset once edited: a part lying on the plane rests on it
+        // that far off.
+        let ground_offset_after = match (&ground_edit, ground) {
+            (Some((_, _, offset, _)), _) => *offset,
+            (None, Some(_)) => ground_offset(self, component).unwrap_or(0.0),
+            (None, None) => 0.0,
+        };
         // The offset along a side or a rail, bound to its reference
         // (mitcad#417): a new From alone keeps the part where it is.
         let offset = match &input.at {
-            Some(EditAt { offset, from, .. }) if offset.is_some() || from.is_some() => {
+            Some(EditAt { offset, from, .. })
+                if ground.is_none() && (offset.is_some() || from.is_some()) =>
+            {
                 let joint = joint.ok_or_else(|| refuse(format!("{} has no joint", info.name)))?;
                 let Some(FeatureDef::Joint(j)) = self.feature(joint).map(|e| &e.def) else {
                     return Err(refuse(format!("{} has no joint", info.name)));
@@ -3858,7 +4007,7 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
                     JointKind::Cylindrical => Motion::Tz,
                     _ => {
                         return Err(refuse(format!(
-                            "{} is not on a side or a rail: it has no offset to edit",
+                            "{} is not on a side, a rail, a plane or a face: it has no offset to edit",
                             info.name
                         )));
                     }
@@ -3936,6 +4085,30 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
         let side_turn = self.plan_side_lie(&info, input.flip);
         self.apply(|state| {
             let mut changed = Vec::new();
+            // Off the plane or face (mitcad#2046): the override's shift, and
+            // a bound length's ray from as far off.
+            if let Some((joint, shift, _, change)) = ground_edit {
+                edit_joint(state, joint, |j| {
+                    let mut o = j.b.frame_override.unwrap_or_default();
+                    o.shift = shift;
+                    j.b.frame_override = (o != FrameOverride::default()).then_some(o);
+                })?;
+                if change.abs() > 1e-12 {
+                    for bound in current_bounds(state, component) {
+                        edit_bound(state, bound, |b| {
+                            let z = match b.from.shift.get(&ShiftAxis::Z) {
+                                Some(ValueInput::Number(n)) => ValueInput::Number(n + change),
+                                Some(ValueInput::Name(e)) => {
+                                    ValueInput::Name(format!("{e}{}", plus(change)))
+                                }
+                                None => ValueInput::Number(change),
+                            };
+                            b.from.shift.insert(ShiftAxis::Z, z);
+                        })?;
+                    }
+                }
+                changed.push("offset".to_owned());
+            }
             if let Some((motion, value, from, from_given, neighbours)) = offset {
                 let joint = joint.expect("checked");
                 edit_joint(state, joint, |j| {
@@ -3995,10 +4168,12 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
                         o.origin = Some(origin);
                     }
                 })?;
+                // As far off the plane as its offset says (mitcad#2046).
+                let z = lift + ground_offset_after;
                 for bound in current_bounds(state, component) {
                     edit_bound(state, bound, |b| {
-                        if lift.abs() > 1e-12 {
-                            b.from.shift.insert(ShiftAxis::Z, ValueInput::Number(lift));
+                        if z.abs() > 1e-12 {
+                            b.from.shift.insert(ShiftAxis::Z, ValueInput::Number(z));
                         } else {
                             b.from.shift.remove(&ShiftAxis::Z);
                         }
@@ -4311,6 +4486,9 @@ impl<K: Kernel> EditCrateOps<K> for Document<K> {
             &local,
             &FrameOverride {
                 origin: Some(on_plane),
+                // Resting on the plane; its offset off it (mitcad#2046)
+                // stays the shift's.
+                shift: None,
                 ..o
             },
         )

@@ -243,8 +243,6 @@ void MainWindow::registerViewShowCommands() {
     def.tooltip = tooltip;
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Any;
-    def.tab.clear(); // the View menu's Show, the command search and shortcuts
-    def.group.clear();
     def.duringCommands = true;
     def.keywords = keywords;
     def.keywords << QStringLiteral("view") << QStringLiteral("show") << QStringLiteral("hide")
@@ -275,8 +273,6 @@ void MainWindow::registerViewShowCommands() {
     def.tooltip = tooltip;
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Any;
-    def.tab.clear(); // the command search and shortcuts
-    def.group.clear();
     def.duringCommands = true;
     def.keywords = {QStringLiteral("sketch"), QStringLiteral("sketches"), QStringLiteral("light bulb"),
                     QStringLiteral("eye"), QStringLiteral("visibility"), QStringLiteral("show"),

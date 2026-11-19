@@ -131,6 +131,11 @@ struct TextData {
   // mitcad#1089; the view draws the model's own).
   std::vector<Curve2> outline;
   QString fontFile;      // the font file its font comes from (mitcad#473)
+  // A text in a frame breaks its lines at spaces to the frame's width
+  // (mitcad#2029; the model's `wrap`).
+  bool wrap = false;
+  // The lines the model laid it out in (its `lines`; 0 for a QR code).
+  int lines = 0;
   // A QR code of `text` (mitcad#473): `height` is a module's size, `at` its
   // lower left corner; `ecc` its error correction (L, M, Q, H).
   bool code = false;
@@ -267,6 +272,10 @@ public:
   // name): the text they belong to, for a letter and its counter alike
   // (the `sketch` query's regions with a `text`, mitcad#1369).
   QHash<QString, QString> regionTexts;
+  // The regions Convert to Sketch Geometry takes, by region key
+  // (mitcad#2051): with projected curves on their boundaries (`projected`)
+  // or bounded by the supporting face's edges (`face_bounded`).
+  QStringList convertibleRegions;
   // The points, curves, constraints and dimensions in the order they were
   // made (the `sketch` query's `order`, mitcad#1492): sketch mode's list
   // of them in the timeline's place.

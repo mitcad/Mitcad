@@ -83,6 +83,10 @@ struct IncomingRow {
 
 class AgentIndicator : public QToolButton {
   Q_OBJECT
+  // The Floating layout's top bar (TitleBar::setFloatingRow, mitcad#1990):
+  // a flat icon button with a caret, the state's dot on the icon's corner;
+  // its text leads its tooltip and its menu.
+  Q_PROPERTY(bool compact READ isCompact WRITE setCompact)
 
 public:
   enum class State { NoAgent, Connected, Unavailable };
@@ -138,6 +142,8 @@ public:
   const QString& loggedText() const { return m_logged; }
   QSize sizeHint() const override;
   QSize minimumSizeHint() const override;
+  bool isCompact() const { return m_compact; }
+  void setCompact(bool compact);
 
 signals:
   // Native chrome observes the same text, tooltip and state.
@@ -170,6 +176,7 @@ private:
   QString m_logged;
   QString m_loggedPlace;
   bool m_placePending = false;
+  bool m_compact = false;
 };
 
 } // namespace mitcad::mcp

@@ -78,7 +78,14 @@ void MainWindow::createStartPage() {
   host.drop = [this](const QStringList& paths) { openDropped(paths); };
   host.defaultUnits = [] { return GeneralSettings::load().newDesignUnits; };
   host.openUrl = [](const QString& url) { openExternalUrl(QUrl(url)); };
-  host.tabBar = [this]() -> QWidget* { return m_ribbon != nullptr ? m_ribbon->tabBar() : nullptr; };
+  // The workspace tabs, or the toolbar panel that holds them on Windows and
+  // Linux (mitcad#1990): the page starts right below it.
+  host.tabBar = [this]() -> QWidget* {
+    if (m_ribbon == nullptr) {
+      return nullptr;
+    }
+    return m_ribbon->isPanel() ? static_cast<QWidget*>(m_ribbon) : m_ribbon->tabBar();
+  };
   // The Floating layout's message band over the view's bottom (mitcad#1042):
   // the page's footer keeps above it.
   host.bottomBar = [this]() -> QWidget* {
@@ -142,8 +149,9 @@ void MainWindow::updateStartPage(const QString& tab) {
   } else {
     m_startPage->hidePage();
     if (m_floating != nullptr) {
-      // A drawing that opened from the page keeps its browser (mitcad#1008).
-      m_floating->showOnlyCards(drawingOpen() ? QStringList{QStringLiteral("browserDock")} : QStringList());
+      // A drawing that opened from the page keeps its Drawings card
+      // (mitcad#1008, mitcad#1990).
+      m_floating->showOnlyCards(drawingOpen() ? drawingCards() : QStringList());
     } else if (!m_nativeUi) {
       for (const QString& name : std::as_const(m_startHiddenDocks)) {
         if (auto* dock = findChild<QDockWidget*>(name, Qt::FindDirectChildrenOnly)) {
@@ -166,6 +174,18 @@ void MainWindow::updateStartPage(const QString& tab) {
 void MainWindow::leaveStartPage() {
   if (startPageShown() && m_ribbon != nullptr) {
     m_ribbon->showTab(QStringLiteral("SOLID"));
+  }
+}
+
+void MainWindow::leaveStartPageForDesign() {
+  if (!startPageShown() || m_ribbon == nullptr) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Start page left by the design's tab");
+  if (m_ribbon->isPanel()) {
+    m_ribbon->showWorkspaceTab();
+  } else {
+    leaveStartPage();
   }
 }
 

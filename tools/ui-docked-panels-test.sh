@@ -32,8 +32,8 @@ wait "$UI_RUNNER" ||
   ui_fail "the docked panels driver failed: $(grep -E 'TestDriver' "$UI_LOG" | tail -8)"
 ui_expect_log 'TestDriver: popup entries: Browser | Timeline | Projects | Command' \
   "the window's menu of its panels offers no Configuration"
-ui_expect_log 'TestDriver: dock commandDock hidden, View/Command unchecked' 'the Command dock hidden'
-ui_expect_log 'TestDriver: dock projectsDock hidden, View/Projects unchecked' 'the Projects dock hidden'
+ui_expect_log 'TestDriver: dock commandDock hidden, View/Panels/Command unchecked' 'the Command dock hidden'
+ui_expect_log 'TestDriver: dock projectsDock hidden, View/Panels/Projects unchecked' 'the Projects dock hidden'
 ui_expect_log 'TestDriver: done' 'the Command and Projects docks come back with the View menu'
 grep -E 'TestDriver: (popup entries|dock) ' "$UI_LOG" | sed 's/^/     /'
 ui_finish 'UI Docked panels test'

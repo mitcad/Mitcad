@@ -43,7 +43,7 @@ Ui-Init $App $Out $QtBin @{} -StepPause 0
 # No Projects card: the Browser's card has the column from the rows down to
 # the timeline. The Browser on its card.
 $ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
-Add-Content -Encoding ascii $ini @('[projects]', 'panel=false', '[appearance]', 'browserBackground=card')
+Add-Content -Encoding ascii $ini @('[projects]', 'panel=false', 'panelTopBar=false', '[appearance]', 'browserBackground=card')
 
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
@@ -183,7 +183,10 @@ Write-Host "ok   no 'degree(s)' anywhere in the log"
 
 Write-Host "--- The pointer in the view: its place above the badge, clear of the cards too"
 Ui-Mark
-$inView = Ui-ViewAt 60 50
+# Left of the orientation cube: the Sketch Palette's card reaches up to the
+# rows, so the cube stands left of it, below the toolbar panel (mitcad#1990),
+# where it covered the view's middle in session 0's 1024x768 desktop.
+$inView = Ui-ViewAt 40 55
 # MK_SHIFT in wParam keeps the posted move in session 0: Qt drops a move
 # with nothing in it as the "enter" of a window shown under the cursor
 # while no window is under the pointer (there is no cursor there), and

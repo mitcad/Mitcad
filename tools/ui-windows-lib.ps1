@@ -429,6 +429,17 @@ function Ui-Init([string]$App, [string]$Out, [string]$QtBin = '', [hashtable]$Sh
   Remove-Item -Recurse -Force $script:UiThumbnails -ErrorAction SilentlyContinue
 }
 
+# Ui-IconsOnly: the toolbar's buttons without labels (Preferences >
+# Display > Toolbar labels: Icons only), for a test in the Floating layout
+# that clicks or counts toolbar buttons where they were laid out without
+# labels: the Floating toolbar panel shows labels by default (mitcad#1990),
+# which make its groups wider, and in session 0's 1028 px window more of
+# them fold. Call it before Ui-StartApp. As ui_icons_only in
+# tools/ui-test-lib.sh.
+function Ui-IconsOnly {
+  Add-Content -Encoding ascii (Join-Path $script:UiSettings 'Mitcad\Mitcad.ini') @('[appearance]', 'ribbonLabels=icons')
+}
+
 # Ui-StartApp name arguments... [-Recovery] [-Updates] [-DefaultChrome]:
 # starts Mitcad with its log in <out>\<name>.log and waits for the main
 # window ("<document> - MitCad <version>", mitcad#1209). The app offers no
@@ -467,6 +478,9 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   # The first dimension of a drawn sketch scales nothing (mitcad#860), as in
   # the Linux tests.
   $env:MITCAD_SKETCH_FIRST_DIMENSION_SCALE = '0'
+  # A new sketch on a face starts empty (mitcad#2051), as in the Linux
+  # tests; a test of the face's outline sets it to 1 first.
+  if (-not $env:MITCAD_SKETCH_PROJECT_FACE) { $env:MITCAD_SKETCH_PROJECT_FACE = '0' }
   # No question whether to activate a picked face's component (mitcad#960),
   # as in the Linux tests; a test of the question sets it to 1 first.
   if (-not $env:MITCAD_ASK_ACTIVATE_COMPONENT) { $env:MITCAD_ASK_ACTIVATE_COMPONENT = '0' }
@@ -1045,6 +1059,69 @@ function Ui-ClickLogged([string]$Text, [int]$Button = 1) {
   Ui-Click $at[0] $at[1] $Button
 }
 
+# Ui-LogCount "text": how many log lines contain the text.
+function Ui-LogCount([string]$Text) {
+  return @(Ui-LogLines | Where-Object { $_.Contains($Text) }).Count
+}
+
+# Ui-Workspace DESIGN|MAKE|RENDER|DRAWING: the toolbar panel's workspace
+# (mitcad#1990) chosen through its selector, as ui_workspace on Linux: a
+# click on the selector ("Ribbon workspace at"), then on the workspace's
+# entry in its list ("Ribbon workspace entry RENDER at"); waited for until
+# it is chosen. The Docked layout ("Chrome: docked" in the log) has no
+# selector and shows every workspace's tabs at once: nothing to choose.
+function Ui-Workspace([string]$Name) {
+  if ((Ui-LogCount 'Chrome: docked') -gt 0) {
+    Write-Host "     the Docked layout shows every workspace's tabs: $Name needs no choosing"
+    return
+  }
+  $menus = Ui-LogCount 'Ribbon workspace menu: '
+  $chosen = Ui-LogCount "Ribbon workspace chosen: $Name"
+  Ui-ClickLogged 'Ribbon workspace'
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  while ((Ui-LogCount 'Ribbon workspace menu: ') -le $menus -and $clock.ElapsedMilliseconds -lt 6000) {
+    Start-Sleep -Milliseconds 50
+  }
+  if ((Ui-LogCount 'Ribbon workspace menu: ') -le $menus) { Ui-Fail "the workspace selector's list did not open" }
+  Ui-Sync
+  Ui-ClickLogged "Ribbon workspace entry $Name"
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  while ((Ui-LogCount "Ribbon workspace chosen: $Name") -le $chosen -and $clock.ElapsedMilliseconds -lt 6000) {
+    Start-Sleep -Milliseconds 50
+  }
+  if ((Ui-LogCount "Ribbon workspace chosen: $Name") -le $chosen) { Ui-Fail "the workspace $Name was not chosen" }
+  Ui-Sync
+}
+
+# Ui-StartPageShown: whether the Start page is shown, as logged last.
+function Ui-StartPageShown {
+  $last = @(Ui-LogLines | Where-Object { $_ -match '^Start page (shown|hidden)\s*$' } | Select-Object -Last 1)
+  return ($last.Count -gt 0 -and $last[0] -match '^Start page shown')
+}
+
+# Ui-ClickTab TAB: a click on a workspace tab ("Ribbon tab MAKE_CNC at"), as
+# ui_click_tab on Linux. In the toolbar panel (mitcad#1990) a tab of
+# another workspace is out of sight ("Ribbon tab MAKE_CNC out of sight"):
+# that workspace is chosen first (MAKE_PRINT's, MAKE_LASER's and MAKE_CNC's
+# is Make, the other model tabs' Design);
+# over the Start page the panel is hidden, and a click on the design's tab
+# ("Document tab shown at") leaves the page first.
+function Ui-ClickTab([string]$Tab) {
+  $line = "$(Ui-PlaceLine "Ribbon tab $Tab")"
+  if ($line.EndsWith(' out of sight') -and $Tab -ne 'START' -and (Ui-StartPageShown)) {
+    Ui-ClickLogged 'Document tab shown'
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while ((Ui-StartPageShown) -and $clock.ElapsedMilliseconds -lt 6000) { Start-Sleep -Milliseconds 50 }
+    if (Ui-StartPageShown) { Ui-Fail "the design's tab did not leave the Start page" }
+    Ui-Sync
+    $line = "$(Ui-PlaceLine "Ribbon tab $Tab")"
+  }
+  if ($line.EndsWith(' out of sight')) {
+    if ($Tab -like 'MAKE_*') { Ui-Workspace 'MAKE' } else { Ui-Workspace 'DESIGN' }
+  }
+  Ui-ClickLogged "Ribbon tab $Tab"
+}
+
 # Ui-ClickWith "ctrl" x y: a left click with modifiers held ("ctrl",
 # "shift", "ctrl+shift"), such as a Ctrl+click that adds a browser row to
 # the selection; the button messages carry them too (MK_CONTROL, MK_SHIFT).
@@ -1309,6 +1386,51 @@ function Ui-PlaceOnXy([string]$Command) {
   Ui-ExpectNew "$Command Distance 1: 0 = 0 mm" 'Distance 1 typed' 30
   Ui-ExpectNew "$Command Distance 2: 0 = 0 mm" 'Distance 2 typed' 30
   Ui-ExpectNew "Preview ${Command}: ok" 'previewed at the origin' 30
+}
+
+# Ui-QuickAccessPlace "description" "line": in a "Floating cards: " line,
+# the title row has no title box (mitcad#1989: the window's title and the
+# document tabs show the design's name), and its quick-access group, when it
+# is there, sits where the box was: right of the document tabs (titleTabs,
+# mitcad#1990), its right end just left of the next part (the project,
+# agent or chat indicator, or Preferences and Help), the row's spacing (6)
+# apart, folded or not. With -None the group must not be there: the
+# Floating top bar's group has no commands by default and is hidden while
+# empty (mitcad#1990). As ui_quick_access_place in tools/ui-test-lib.sh.
+function Ui-QuickAccessPlace([string]$Description, [string]$Line, [switch]$None) {
+  $entries = @{}
+  foreach ($entry in (($Line -replace '^[^;]*;', '') -split ';')) {
+    if ($entry.Trim() -match '^(\S+) (-?\d+),(-?\d+) (\d+)x(\d+)$') {
+      $entries[$Matches[1]] = @([int]$Matches[2], [int]$Matches[3], [int]$Matches[4], [int]$Matches[5])
+    }
+  }
+  if ($entries.ContainsKey('titleBox')) { Ui-Fail "${Description}: a title box in the title row: '$Line'" }
+  if ($None -and $entries.ContainsKey('titleQuickAccess')) {
+    Ui-Fail "${Description}: a quick-access group in the title row, which has no commands by default: '$Line'"
+  }
+  if (-not $entries.ContainsKey('titleQuickAccess')) {
+    Write-Host "ok   ${Description}: no title box, no quick-access group in the row"
+    return
+  }
+  $group = $entries['titleQuickAccess']
+  $groupEnd = $group[0] + $group[2]
+  if (-not $entries.ContainsKey('titleTabs')) { Ui-Fail "${Description}: no title row tabs: '$Line'" }
+  $tabs = $entries['titleTabs']
+  if ($group[0] -lt $tabs[0] + $tabs[2]) {
+    Ui-Fail "${Description}: the quick-access group ($($group[0])) is not right of the tabs (end $($tabs[0] + $tabs[2])): '$Line'"
+  }
+  $next = $null
+  foreach ($name in @('titleBoost', 'titleIndicator', 'titleAgent', 'titleChat', 'titleSearch', 'titleSettings')) {
+    if (-not $entries.ContainsKey($name)) { continue }
+    $x = $entries[$name][0]
+    if ($x -ge $groupEnd -and ($null -eq $next -or $x -lt $next)) { $next = $x }
+  }
+  if ($null -eq $next) { Ui-Fail "${Description}: nothing right of the quick-access group: '$Line'" }
+  $gap = $next - $groupEnd
+  if ($gap -gt 24) {
+    Ui-Fail "${Description}: the quick-access group ends $gap px before the indicators or Preferences: '$Line'"
+  }
+  Write-Host "ok   ${Description}: no title box; the quick-access group at the free part's right end, $gap px before the next part"
 }
 
 function Ui-Finish([string]$Name) {

@@ -63,6 +63,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "sketch.axis",
     "sketch.paste",
     "sketch.scale",
+    "sketch.auto_constrain",
     "sketch3d.create",
     "sketch3d.add_point",
     "sketch3d.add_line",
@@ -271,7 +272,8 @@ fn planar(name: &str) -> Option<Value> {
                 "name": text("Its name; default the next Sketch<n>"),
                 "occurrence": text("Where the plane was picked: the occurrence path of another component's plane"),
                 "context": text("Where the active component is seen (its first occurrence path when left out)"),
-                "upright": flag(false, "Without frame: the frame that shows the design upright")
+                "upright": flag(false, "Without frame: the frame that shows the design upright"),
+                "project_face": flag(false, "On a planar face: its outline projected into the sketch, linked (result: projected)")
             },
             "required": [],
             "examples": [{"cmd": "sketch.create"}, {"cmd": "sketch.create", "plane": "xz", "name": "Profile"}]
@@ -806,10 +808,12 @@ fn planar(name: &str) -> Option<Value> {
             "examples": [{"cmd": "sketch.project_again", "sketch": "F2"}]
         }),
         "sketch.convert_projected" => json!({
-            "description": "Makes projected curves and points ordinary free sketch geometry.",
-            "properties": {"sketch": sketch(), "entities": ids("The curves and points (c<n>, p<n>)")},
-            "required": ["sketch", "entities"],
-            "examples": [{"cmd": "sketch.convert_projected", "sketch": "F2", "entities": ["c4"]}]
+            "description": "Makes projected curves and points ordinary free sketch geometry; of profiles, the projected curves of their boundaries and the face's edges that bound them.",
+            "properties": {"sketch": sketch(), "entities": ids("The curves and points (c<n>, p<n>)"),
+                           "profiles": ids("Region keys of the sketch's profiles (r{...})")},
+            "required": ["sketch"],
+            "examples": [{"cmd": "sketch.convert_projected", "sketch": "F2", "entities": ["c4"]},
+                         {"cmd": "sketch.convert_projected", "sketch": "F2", "profiles": ["r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"]}]
         }),
         "sketch.add_equal_spacing" => json!({
             "description": "Holds anchors equally spaced, with a common spacing dimension when asked.",
@@ -865,6 +869,20 @@ fn planar(name: &str) -> Option<Value> {
             },
             "required": ["sketch", "factor"],
             "examples": [{"cmd": "sketch.scale", "sketch": "F1", "factor": 2, "center": "p1"}]
+        }),
+        "sketch.auto_constrain" => json!({
+            "description": "Auto Constrain: adds the relations the geometry has within the tolerances (joined ends, points on curves, tangents, horizontal and vertical, parallel, perpendicular, equal, concentric, symmetric, the origin and axes), then driving dimensions with the current values for what is left free. Result: the editing commands' fields, added (by type), relations, joined, dof, summary.",
+            "properties": {
+                "sketch": sketch(),
+                "entities": ids("The curves and points to constrain (c3, p4); the whole sketch when left out"),
+                "relations": flag(true, "Phase 1: the relations the geometry has"),
+                "dimensions": flag(true, "Phase 2: dimensions for the degrees of freedom left"),
+                "length_tolerance": number("How far apart two places may be and still count as one, and how far a point may move (mm; 0.01 when left out)"),
+                "angle_tolerance": number("How far from level, square or parallel a direction may be (degrees, less than 45; 0.5 when left out)")
+            },
+            "required": ["sketch"],
+            "examples": [{"cmd": "sketch.auto_constrain", "sketch": "F1"},
+                         {"cmd": "sketch.auto_constrain", "sketch": "F1", "entities": ["c3", "c4"], "dimensions": false, "length_tolerance": 0.05}]
         }),
         _ => return None,
     };

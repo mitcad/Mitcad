@@ -570,6 +570,36 @@ impl<K: Kernel> Document<K> {
                 flex_edits.push((*f, flex));
             }
         }
+        // The free parts of flexible occurrences that the drag moved
+        // (mitcad#2016): where it left them is kept by the outermost
+        // flexible occurrence of their chain, for it alone, as a drag keeps
+        // a placed occurrence's own placement.
+        for ((chain, part), transform) in &dragged.flexed {
+            let Some(path) = self.free_part_moved(chain, *part, transform) else {
+                continue;
+            };
+            let outer = chain[0];
+            let at = match flex_edits.iter().position(|(o, _)| *o == outer) {
+                Some(at) => at,
+                None => {
+                    let Some(flex) = self
+                        .state
+                        .assembly
+                        .occurrence(outer)
+                        .and_then(|o| o.flexible.clone())
+                    else {
+                        continue;
+                    };
+                    flex_edits.push((outer, flex));
+                    flex_edits.len() - 1
+                }
+            };
+            // Where it is before the Move features that move it
+            // (mitcad#2025), so that they move it to where the drag left it.
+            let rigid = solved_placement(transform).unwrap_or(*transform);
+            let base = self.free_part_base(*part, &rigid);
+            flex_edits[at].1.keep_placement(path, base);
+        }
         let name = self.state.assembly.occurrence_name(occurrence);
         // Kept as rotations and translations to rounding (mitcad#1664,
         // mitcad#1666): rounding that piled up over many drags once made
@@ -641,6 +671,39 @@ impl<K: Kernel> Document<K> {
         )?;
         dragged.placements = placements;
         Ok(dragged)
+    }
+
+    /// The path under which the first flexible occurrence of `chain`
+    /// keeps where `part` is (mitcad#2016, [`crate::assembly::Flex`]), when
+    /// `part` is a free part of the last one (it has free parts, and no
+    /// joint of its component is on the part or on what a rigid group of
+    /// the component ties to it) that `transform` puts elsewhere than it is
+    /// at the marker; None otherwise. The parts the component's joints
+    /// move keep their joints' values instead.
+    fn free_part_moved(
+        &self,
+        chain: &[OccurrenceUid],
+        part: OccurrenceUid,
+        transform: &crate::transform::Transform,
+    ) -> Option<Vec<OccurrenceUid>> {
+        let assembly = &self.state.assembly;
+        let last = assembly.occurrence(*chain.last()?)?;
+        if !last.flexible.as_ref().is_some_and(|f| f.free_parts) {
+            return None;
+        }
+        let joints = &self.result.joints;
+        let members = crate::joints::group_of(&joints.groups, last.component, part);
+        if crate::joints::joined_in(joints, last.component, &members) {
+            return None;
+        }
+        let mut path = chain[1..].to_vec();
+        path.push(part);
+        if !assembly.flex_path_holds(chain[0], &path) {
+            return None;
+        }
+        let now = crate::joints::flexed_step(&joints.flexed, chain, part)
+            .or_else(|| self.placement(part))?;
+        (!same_placement(&now, transform)).then_some(path)
     }
 }
 

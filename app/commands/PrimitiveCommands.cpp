@@ -73,8 +73,6 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
                                                      : QStringLiteral("torus");
   def.id = QStringLiteral("solid.") + type;
   def.icon = type;
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("primitives");
   def.featureType = type;
   def.keywords = {QStringLiteral("primitive")};
   def.name = kind == Primitive::Box        ? QObject::tr("Box")
@@ -215,9 +213,6 @@ CommandDef newComponentCommand(const CommandContext& context) {
   def.icon = QStringLiteral("component");
   def.tooltip = QObject::tr("An empty component in the active one, or components made of bodies");
   // Registered with CREATE, so that it leads the ASSEMBLE group.
-  def.group = QStringLiteral("ASSEMBLE");
-  def.section = QStringLiteral("components"); // a section of its own (mitcad#1778)
-  def.pinned = true;
   def.keywords = {QStringLiteral("part"), QStringLiteral("assembly"), QStringLiteral("occurrence")};
   def.modelCommand = true;
   const auto fromBodies = [](const CommandState& s) {

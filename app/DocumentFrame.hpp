@@ -3,10 +3,12 @@
 
 #include <QMainWindow>
 #include <QPointer>
+#include <QString>
 #include <QList>
 
 class QStackedWidget;
 class QTabBar;
+class QVBoxLayout;
 
 namespace mitcad {
 class MainWindow;
@@ -18,6 +20,7 @@ class DocumentFrame final : public QMainWindow {
   Q_OBJECT
 public:
   explicit DocumentFrame(WindowManager& manager);
+  ~DocumentFrame() override;
   static void install(WindowManager& manager);
   static DocumentFrame* containing(MainWindow* document);
   void addDocument(MainWindow* document, int index = -1);
@@ -32,6 +35,15 @@ public:
   // the window is laid out exactly as a single document window. Returning
   // true here for one document shows the tabs always.
   static bool showsDocumentTabs(int documentCount);
+  // Whether the shown design's Floating title row holds the tab bar
+  // (mitcad#1990, Windows and Linux): then the tabs show for one design too,
+  // as a tab with the row's + beside it, and the frame's own menu bar and
+  // tab row stay hidden (each design keeps its own menu bar, so the window
+  // is laid out as a single document window). Elsewhere (Docked) the tabs
+  // are the frame's row under its menu bar, as showsDocumentTabs says.
+  bool tabsInTitleRow() const;
+  // Whether this frame shows its tab bar now.
+  bool showsTabs() const;
   // macOS: the system menu bar already shows the frame's menus, so the
   // window's own copy of them is hidden unless Preferences › Display asks
   // for it (off by default). Elsewhere the window's menu bar is the only
@@ -46,16 +58,25 @@ private:
   void updateDocument(MainWindow* document);
   void updateActiveDocument();
   void updateChrome();
+  // The tab bar into `host`'s Floating title row, or back into the frame's
+  // own row above the designs (null).
+  void placeTabs(MainWindow* host);
   void showTabMenu(int index, const QPoint& globalPosition);
+  // "Document tab shown at x,y" (the shown design's tab in its window) when
+  // it changed.
+  void logShownTab();
   void closeDocuments(const QList<MainWindow*>& documents);
   void continueClosing();
   void scheduleClosing();
   QPointer<WindowManager> m_manager;
   QTabBar* m_tabs;
   QStackedWidget* m_stack;
+  QWidget* m_root = nullptr;           // the central widget: the tabs' own row
+  QVBoxLayout* m_rootLayout = nullptr; // and the designs under it
   QPointer<MainWindow> m_active;
   QList<QPointer<MainWindow>> m_pendingClose;
   bool m_continuingClose = false;
   bool m_closePosted = false;
+  QString m_loggedTab; // logShownTab's last line
 };
 } // namespace mitcad

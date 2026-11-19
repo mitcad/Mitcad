@@ -96,6 +96,7 @@ const ObjcAllowed kObjcAllowed[] = {
     {"Show All", "a system menu item"},
     {"Hide MitCad", "a system menu item"},
     {"Quit MitCad", "a system menu item"},
+    {"About MitCad", "the application menu's About item, whose title the code compares with"},
     {"Minimize", "a system menu item"},
     {"Zoom", "a system menu item"},
     {"Show Tab Bar", "a system window-tab menu item"},

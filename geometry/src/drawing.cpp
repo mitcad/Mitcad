@@ -615,20 +615,33 @@ std::vector<Chain> chains_of(const std::vector<Segment>& segments) {
   return chains;
 }
 
-// A loop from its sharpest corner, so that a line or an arc is not cut
-// where the loop happens to start.
+// A loop from a sharp corner, or from the end of its longest chord when
+// it has none. On a rounded outline the largest turn is inside a round
+// corner: starting there splits that arc across the ends of the chain.
 void from_sharpest_corner(std::vector<Point2>& loop) {
   const std::size_t n = loop.size() - 1; // the last point is the first
   std::size_t best = 0;
   double sharpest = -1.0;
+  std::size_t after_longest = 0;
+  double longest = -1.0;
   for (std::size_t k = 0; k < n; ++k) {
     const Point2 in = minus2(loop[k], loop[(k + n - 1) % n]);
     const Point2 out = minus2(loop[(k + 1) % n], loop[k]);
+    const double length_squared = dot2(out, out);
+    if (length_squared > longest) {
+      longest = length_squared;
+      after_longest = (k + 1) % n;
+    }
     const double turn = std::abs(std::atan2(cross2(in, out), dot2(in, out)));
     if (turn > sharpest) {
       sharpest = turn;
       best = k;
     }
+  }
+  // The triangulation turns at most pi/6 between chords of a round edge.
+  // As in the polyline fitting below, a turn over 0.6 is a sharp corner.
+  if (sharpest <= 0.6) {
+    best = after_longest;
   }
   const auto corner = loop.begin() + static_cast<std::ptrdiff_t>(best);
   std::vector<Point2> rotated(corner, loop.begin() + static_cast<std::ptrdiff_t>(n));
@@ -1124,6 +1137,7 @@ void project_polygonal(const std::vector<TopoDS_Shape>& parts, const std::vector
   trace.mark("update");
   HLRBRep_PolyHLRToShape out;
   out.Update(algo);
+  trace.mark("hide");
   collect(out, loaded, sources, spec, view, trace, kFitted * deflection);
 }
 

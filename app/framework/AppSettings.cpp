@@ -129,7 +129,7 @@ QString projectsDirectory() {
     return QDir::cleanPath(QDir(given).absolutePath());
   }
   const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-  return documents.isEmpty() ? QString() : QDir(documents).filePath(QStringLiteral("Mitcad"));
+  return documents.isEmpty() ? QString() : QDir(documents).filePath(storedApplicationName());
 }
 
 QString recoveryDirectory() {
@@ -170,6 +170,9 @@ ProjectsSettings ProjectsSettings::load() {
   if (settings.contains(QStringLiteral("projects/panel"))) {
     projects.panelShown = settings.value(QStringLiteral("projects/panel")).toBool();
   }
+  if (settings.contains(QStringLiteral("projects/panelTopBar"))) {
+    projects.panelShownTopBar = settings.value(QStringLiteral("projects/panelTopBar")).toBool();
+  }
   projects.cardWidth = std::max(0, settings.value(QStringLiteral("projects/cardWidth")).toInt());
   projects.dockWidth = std::max(0, settings.value(QStringLiteral("projects/dockWidth")).toInt());
   projects.browseRoot = settings.value(QStringLiteral("projects/browseRoot")).toString();
@@ -184,6 +187,9 @@ void ProjectsSettings::save() const {
   // Never written before a choice: the default follows the projects.
   if (panelShown) {
     settings.setValue(QStringLiteral("projects/panel"), *panelShown);
+  }
+  if (panelShownTopBar) {
+    settings.setValue(QStringLiteral("projects/panelTopBar"), *panelShownTopBar);
   }
   // Written once dragged (mitcad#529).
   if (cardWidth > 0) {

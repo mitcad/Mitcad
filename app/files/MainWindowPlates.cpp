@@ -217,8 +217,6 @@ CommandDef MainWindow::platesCommand() {
   def.icon = QStringLiteral("print-plates");
   def.tooltip = tr("Puts bodies on print plates, each plate with its own settings");
   // The Make tab's 3D Print group, after Processes… (mitcad#1049).
-  def.tab = QStringLiteral("MAKE");
-  def.group = QStringLiteral("3D PRINT");
   def.keywords = {QStringLiteral("plate"),  QStringLiteral("plates"),  QStringLiteral("print"),
                   QStringLiteral("bed"),    QStringLiteral("slicer"),  QStringLiteral("vase"),
                   QStringLiteral("spiral"), QStringLiteral("arrange"), QStringLiteral("3mf")};

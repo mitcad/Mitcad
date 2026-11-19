@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Board (mitcad#1939): the reverse tuck end carton (ECMA A20) of 4 mm corrugated polypropylene, which creases nearly sharp (deduction 0.4: each crease develops 2 (0.5 + 4) - 0.4 = 8.6, beyond what K = 1 gives), inside 160 x 90 x 120: the closing panels with their tucks folded inside the opposite walls (touching them), the dust flaps, the glue flap and the walls: twelve folds, F5 to F16."},
+  {"cmd": "add_standard_box", "style": "ecma_a20", "length": 160, "width": 90, "height": 120, "board": "polypropylene_4", "radius": 0.5},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"feature": "F16", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"}, "result": {"status": "valid"}}},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_polypropylene.dxf"}
+]

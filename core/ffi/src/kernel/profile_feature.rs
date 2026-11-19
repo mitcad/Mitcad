@@ -248,7 +248,8 @@ impl Bodies {
     }
 }
 
-fn unset() -> ffi::TargetInput {
+/// No target: a side's distance (an offset for a start).
+pub fn unset() -> ffi::TargetInput {
     ffi::TargetInput {
         kind: ffi::TargetKind::Unset,
         plane_origin: [0.0; 3],
@@ -289,7 +290,8 @@ fn target(
     Ok(input)
 }
 
-fn bound(
+/// A target moved by its offset, its body added to `bodies`.
+pub fn bound(
     bound: &Bound<SharedPtr<Shape>>,
     bodies: &mut Bodies,
 ) -> Result<ffi::TargetInput, KernelError> {

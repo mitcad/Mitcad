@@ -30,7 +30,7 @@ Timber-Init
 
 Write-Host '--- 1. Fasteners: a frame''s and a set''s, Swap Fastener (mitcad#497)'
 Ui-StartApp 'timber-fasteners'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'

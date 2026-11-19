@@ -53,8 +53,11 @@ expect-dialog-gone '^Parameters$'
 
 # 2. MAKE.
 mark
-click-logged '^Ribbon tab MAKE at '
-wait-log '^Ribbon tab shown: MAKE$'
+# The Make tab is the Make workspace's in the Floating toolbar panel
+# (mitcad#1990): chosen first; nothing in the Docked layout.
+workspace MAKE
+click-logged '^Ribbon tab MAKE_PRINT at '
+wait-log '^Ribbon tab shown: MAKE_PRINT$'
 wait-idle
 mark
 click-logged '^Navigation bar Edit Parameters at '
@@ -68,6 +71,8 @@ expect-dialog-gone '^Parameters$'
 
 # 3. In a sketch: the sketch's entry, the sketch kept.
 mark
+# Back to the Design workspace's tabs (mitcad#1990).
+workspace DESIGN
 click-logged '^Ribbon tab SOLID at '
 wait-idle
 mark

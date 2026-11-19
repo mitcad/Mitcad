@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-auto-constrain.mitcad-ui (mitcad#2019): Sketch1 on XY holds a 30 x 20 rectangle from (10, 5) to (40, 25) drawn as four lines with points of their own, without a constraint or a dimension: 16 degrees of freedom."},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [10, 5], "end": [40, 5]},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [40, 5], "end": [40, 25]},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [40, 25], "end": [10, 25]},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [10, 25], "end": [10, 5]}
+]

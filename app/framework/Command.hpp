@@ -379,7 +379,9 @@ struct InputDef {
   // Called after a pick was taken, with the item as picked (with `at`).
   std::function<void(const SelectionItem&, CommandState&, const CommandContext&)> onPick;
   // Occurrences to draw as ghosts for an item of the input (mitcad#147):
-  // paths of uids from the root, `O1/O4`. Their bodies are see-through and
+  // paths of uids from the root, `O1/O4`, with the occurrences inside them,
+  // or ownBodiesGhost(path) for an occurrence's own bodies only
+  // (framework/ViewGhosts.hpp, mitcad#2027). Their bodies are see-through and
   // not pickable, and so are the highlights on them, while the item is in
   // the input and the input does not take picks itself; a later input then
   // picks what lies behind them. Called with each item, the state (a list
@@ -681,6 +683,12 @@ struct InputDef {
   // while it is shown (`visible`) it takes the view's picks when that
   // window makes it the active one (CommandSession::pickInWindow).
   bool windowPick = false;
+  // Selection: never the command's first selection (primarySelection), the
+  // one the selection made before the command fills and the view's context
+  // menu offers the command for: a pick of a later mode only, hidden at the
+  // start (mitcad#1965: Profile's Lines along sketch lines, ahead of its
+  // At by clicks in the panel).
+  bool notPrimary = false;
   // Text under the row, in grey, read after each preview that succeeded
   // (mitcad#656: Check Belt's belt length, nearest belt and travel, one
   // per line); none when empty.
@@ -710,6 +718,11 @@ struct InputDef {
   double sliderMaximum = 0.0;
   int sliderDecimals = 2;
   bool hasSlider() const { return type == Type::Value && sliderMaximum > sliderMinimum; }
+  // Text: a box of several lines (mitcad#2029: Edit Text's Text), a few
+  // lines tall and growing with its content up to a limit, where Enter
+  // starts a new line and Ctrl+Enter is OK; Tab still moves to the next
+  // field. Its text keeps its line breaks as `\n`.
+  bool multiLine = false;
 
   InputDef& withTooltip(const QString& tip) {
     tooltip = tip;
@@ -750,6 +763,10 @@ struct InputDef {
   }
   InputDef& withPlanesByDepth() {
     planesByDepth = true;
+    return *this;
+  }
+  InputDef& withMultiLine() {
+    multiLine = true;
     return *this;
   }
   InputDef& withSketchesBehind() {
@@ -1121,6 +1138,14 @@ public:
   int rows(const QString& list) const { return m_rows.value(key(list)); }
   void setRows(const QString& list, int count) { m_rows[key(list)] = count; }
   CommandState row(const QString& list, int index) const;
+  // The whole command's state, also from a row's state: its inputs outside
+  // the lists under their own ids (mitcad#2027: a constraint row's ghost
+  // reads the command's holder and component).
+  CommandState whole() const {
+    CommandState all = *this;
+    all.m_prefix.clear();
+    return all;
+  }
   void removeRow(const QString& list, int index);
   // The key of a row's input in the whole state.
   static QString rowKey(const QString& list, int index, const QString& id) {
@@ -1303,21 +1328,10 @@ struct CommandDef {
   // mode's. A 3D sketch drawing tool's placement keys (mitcad#1661) are
   // Sketch3dToolShortcutContext's.
   unsigned shortcutContexts = 0;
-  QString tab = QStringLiteral("SOLID");
-  QString group = QStringLiteral("CREATE");
-  bool pinned = false;  // also a button next to the group's menu
-  // A submenu of the group's menu (the sketch CREATE group's "Circles",
-  // mitcad#222): the commands with the same subgroup, together where the
-  // first of them is. Its pinned command is the default of a split button
-  // whose arrow opens the submenu; a subgroup of one command is a plain
-  // entry.
-  QString subgroup;
-  // The section of the group's menu (mitcad#579: the SOLID CREATE menu's
-  // "profiles", "faces", "primitives", ...): a separator stands between two
-  // consecutive entries of different sections (a submenu counts as its
-  // first command's). Commands without one, in a group without sections,
-  // have no separators between them.
-  QString section;
+  // Where it sits (its toolbar tab and group, the group menu's section and
+  // submenu, a button of its own, the menu bar's menus) is not here: it is
+  // the command layout's (mitcad#1951, framework/CommandLayout.hpp,
+  // app/resources/layout/default.json), by the command's id.
   QStringList keywords; // other words the command search finds it by
   Kind kind = Kind::Feature;
   Mode mode = Mode::Model;
@@ -1693,10 +1707,11 @@ struct CommandDef {
   // Whether the selection alone completes the command (mitcad#494): the
   // first selection input takes all of it and as many as it needs, every
   // other selection input shown at the start can stay empty, and, unless
-  // `completes` decides, it is no creation command (group CREATE) given a
-  // face or a plane, or anything its first input takes only as where the
-  // part goes (InputDef::places), which would only be where it goes.
-  bool completedBy(const Selection& selection) const;
+  // `completes` decides, it is no creation command (`creation`: its home is
+  // a CREATE group of the layout, mitcad#1951) given a face or a plane, or
+  // anything its first input takes only as where the part goes
+  // (InputDef::places), which would only be where it goes.
+  bool completedBy(const Selection& selection, bool creation = false) const;
 };
 
 } // namespace mitcad

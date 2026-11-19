@@ -1047,12 +1047,16 @@ fn command_entries(arguments: &Value) -> Result<Vec<&Value>, String> {
     }
 }
 
-/// The document as a `model_command` result compares it
-/// (`mitcad_mcp::SNAPSHOT_QUERIES`).
-fn command_snapshot(document: &Document) -> Result<Value, String> {
+/// The document as a `model_command` result compares it, before the
+/// command or `after` it (`mitcad_mcp::snapshot_queries`).
+fn command_snapshot(
+    document: &Document,
+    after: bool,
+    before: Option<&Value>,
+) -> Result<Value, String> {
     let mut snapshot = Map::new();
-    for (key, request) in mitcad_mcp::SNAPSHOT_QUERIES {
-        let answer = document.query(request).map_err(|e| e.to_string())?;
+    for (key, request) in mitcad_mcp::snapshot_queries(after, before) {
+        let answer = document.query(&request).map_err(|e| e.to_string())?;
         snapshot.insert(key.to_owned(), parse_result(&answer)?);
     }
     Ok(Value::Object(snapshot))
@@ -1112,7 +1116,7 @@ fn run_commands(
     hints: bool,
 ) -> Result<ToolResult, String> {
     let before = if mode.needs_before() {
-        Some(command_snapshot(document)?)
+        Some(command_snapshot(document, false, None)?)
     } else if hints {
         Some(json!({"timeline": query(document, "timeline")?}))
     } else {
@@ -1190,7 +1194,7 @@ fn run_commands(
             .command(&json!({"cmd": "merge_undo", "depth": depth, "label": label}).to_string())
             .map_err(|e| e.to_string())?;
     }
-    let after = command_snapshot(document)?;
+    let after = command_snapshot(document, true, before.as_ref())?;
     let evaluated = mitcad_mcp::evaluated_features(&times);
     let mut value = Value::Object(mitcad_mcp::command_document(
         mode,
@@ -1634,12 +1638,15 @@ impl Document {
     }
 }
 
-/// The queries of a live `model_command`'s snapshots, by the key each
-/// answer goes under (mitcad#689, `mitcad_mcp::SNAPSHOT_QUERIES`).
-pub fn mcp_snapshot_queries() -> String {
+/// The queries of a live `model_command`'s snapshot before the command or
+/// `after` it, by the key each answer goes under (mitcad#689,
+/// `mitcad_mcp::snapshot_queries`); `before` is the snapshot before it, or
+/// empty.
+pub fn mcp_snapshot_queries(after: bool, before: &str) -> String {
+    let before: Option<Value> = serde_json::from_str(before).ok();
     let mut queries = Map::new();
-    for (key, request) in mitcad_mcp::SNAPSHOT_QUERIES {
-        let request: Value = serde_json::from_str(request).expect("a query of our own");
+    for (key, request) in mitcad_mcp::snapshot_queries(after, before.as_ref()) {
+        let request: Value = serde_json::from_str(&request).expect("a query of our own");
         queries.insert(key.to_owned(), request);
     }
     Value::Object(queries).to_string()

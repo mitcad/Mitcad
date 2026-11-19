@@ -311,8 +311,6 @@ CommandDef embossCommand(const CommandContext& context) {
   def.name = QObject::tr("Emboss");
   def.icon = QStringLiteral("emboss");
   def.tooltip = QObject::tr("Raises or sinks sketch profiles on a face, flat, wrapped or projected");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("profiles");
   def.keywords = {QStringLiteral("deboss"), QStringLiteral("engrave"), QStringLiteral("wrap"),
                   QStringLiteral("text"),   QStringLiteral("label"),   QStringLiteral("project"),
                   QStringLiteral("projection")};

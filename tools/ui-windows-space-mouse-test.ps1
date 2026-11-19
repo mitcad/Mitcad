@@ -4,6 +4,7 @@
 # check-all sources: app/platform/windows/SpaceMouseWindows.cpp app/framework/TestDriver.cpp tools/ui-scripts/space-mouse.mitcad-ui
 # check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
 # check-all sources: app/view/ViewController.cpp app/framework/TestDriverNavigation.cpp
+# check-all sources: app/platform/windows/SpaceMouse3DxWare.cpp app/platform/windows/SpaceMouse3DxWare.hpp app/platform/SpaceMouseDriverReports.hpp
 # A 3D mouse (mitcad#951) in the build VM, through the test driver's input
 # (tools/ui-scripts/space-mouse.mitcad-ui, the same script as the Linux
 # test's): no device logs "3D mouse: none" (Raw Input finds none in the

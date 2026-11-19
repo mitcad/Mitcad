@@ -12,7 +12,15 @@
 //! An end moves out by changing the part's length when it is the part's
 //! free end; the end it is placed by moves its joint's frame on the other
 //! side (`shift`, along that frame's own axes) and changes its length, so
-//! that its other end stays; a grounded part moves its occurrence.
+//! that its other end stays; a grounded part moves its occurrence. A member
+//! along an edge or a sketch line (mitcad#1814, mitcad#1965) moves its end
+//! by its edge frame's Start or End offset, so that it still follows the
+//! edge or the line.
+//!
+//! The corners of members placed along sketch lines (mitcad#1965,
+//! `lines.rs`) are treated here too ([`CornersCrateOps`]): a shared miter
+//! where two ends meet in an L, a butt where an end meets another member's
+//! line (a T), all in one undo step.
 
 use crate::geometry::{
     V3, Z, add, angle_between, cross, dot, inverse, norm, parts, scale, sub, unit,
@@ -215,6 +223,14 @@ enum Move {
         by: V3,
         length: f64,
     },
+    /// Its edge frame's offset at that end changes (`start` for end A,
+    /// `end` for end B) and its bound length follows: a member along an
+    /// edge or a sketch line (mitcad#1965).
+    Along {
+        frames: FeatureUid,
+        end_b: bool,
+        offset: f64,
+    },
 }
 
 /// The document's BUILD methods of this block, as an extension trait
@@ -245,6 +261,13 @@ trait EndMeetsCrateOps<K: Kernel> {
     /// How a part's end moves out by `by` mm; None when it need not move.
     fn plan_move(&self, p: &Profile, end_b: bool, by: f64, out: V3)
     -> Result<Option<Move>, String>;
+
+    /// Edge frames with new offsets at their start and their end (mm),
+    /// ready to be edited in.
+    fn frame_defs(
+        &self,
+        offsets: &BTreeMap<FeatureUid, [Option<f64>; 2]>,
+    ) -> Result<Vec<(FeatureUid, FeatureDef<ValueInput>)>, ModelError>;
 }
 
 impl<K: Kernel> EndMeetsCrateOps<K> for Document<K> {
@@ -307,6 +330,27 @@ impl<K: Kernel> EndMeetsCrateOps<K> for Document<K> {
                 info.name
             ));
         };
+        // Along an edge or a sketch line (mitcad#1965): its edge frame's
+        // offset at the end, so that it still follows.
+        if let Some(along) = crate::edge::along_of(self, info.component) {
+            let Some(FeatureDef::EdgeFrame(frames)) = self.feature(along.frames).map(|e| &e.def)
+            else {
+                return Err(format!("{} has no edge frame", info.name));
+            };
+            let slot = if end_b { frames.end } else { frames.start };
+            let old = slot
+                .and_then(|id| self.parameters().value(id))
+                .unwrap_or(0.0);
+            let new = length + by;
+            if let Some(problem) = info.meta.length.as_ref().and_then(|l| l.outside(new)) {
+                return Err(problem);
+            }
+            return Ok(Some(Move::Along {
+                frames: along.frames,
+                end_b,
+                offset: ((old - by) * 1e6).round() / 1e6,
+            }));
+        }
         if info
             .record
             .bound
@@ -373,6 +417,29 @@ impl<K: Kernel> EndMeetsCrateOps<K> for Document<K> {
                 }))
             }
         }
+    }
+
+    fn frame_defs(
+        &self,
+        offsets: &BTreeMap<FeatureUid, [Option<f64>; 2]>,
+    ) -> Result<Vec<(FeatureUid, FeatureDef<ValueInput>)>, ModelError> {
+        let mut defs = Vec::new();
+        for (uid, [start, end]) in offsets {
+            let entry = self.feature(*uid).ok_or(ModelError::NoSuchFeature(*uid))?;
+            let FeatureDef::EdgeFrame(mut def) =
+                crate::parts::as_input(&entry.def, self.parameters())
+            else {
+                return Err(refuse("the member's edge frame is gone"));
+            };
+            if let Some(v) = start {
+                def.start = (v.abs() > 1e-9).then_some(ValueInput::Number(*v));
+            }
+            if let Some(v) = end {
+                def.end = (v.abs() > 1e-9).then_some(ValueInput::Number(*v));
+            }
+            defs.push((*uid, FeatureDef::EdgeFrame(def)));
+        }
+        Ok(defs)
     }
 }
 
@@ -516,6 +583,19 @@ impl<K: Kernel> EndMeetsBuild<K> for Document<K> {
         let label = format!("Shared miter of {} and {}", p.info.name, q.info.name);
         let angle = meet.angle;
         let tilts = meet.tilts;
+        // The edge frames' offsets of members along an edge or a line.
+        let mut offsets: BTreeMap<FeatureUid, [Option<f64>; 2]> = BTreeMap::new();
+        for planned in moves.iter().flatten() {
+            if let Move::Along {
+                frames,
+                end_b,
+                offset,
+            } = planned
+            {
+                offsets.entry(*frames).or_default()[usize::from(*end_b)] = Some(*offset);
+            }
+        }
+        let frame_defs = self.frame_defs(&offsets)?;
         self.apply(|state| {
             let mut changed = vec!["ends".to_owned()];
             for (i, ((part, length_name, b), planned)) in parts_of.iter().zip(&moves).enumerate() {
@@ -541,6 +621,11 @@ impl<K: Kernel> EndMeetsBuild<K> for Document<K> {
                         changed.push("moved".to_owned());
                         Some(*length)
                     }
+                    // Its edge frame's offset, below; its length follows.
+                    Some(Move::Along { .. }) => {
+                        changed.push("along".to_owned());
+                        None
+                    }
                     None => None,
                 };
                 let name = length_name.clone();
@@ -557,6 +642,9 @@ impl<K: Kernel> EndMeetsBuild<K> for Document<K> {
                 if length.is_some() {
                     changed.push("length".to_owned());
                 }
+            }
+            for (uid, def) in &frame_defs {
+                state.edit_feature(*uid, def)?;
             }
             // The joints' frames moved: the parts' own, and those placed
             // on a moved end, back.
@@ -597,4 +685,171 @@ fn why_none(profiles: &[Profile], p: &Profile, pb: bool) -> String {
             NEAR
         )
     }
+}
+
+// The corners of members along sketch lines (mitcad#1965).
+
+/// A corner of members placed along sketch lines to treat.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Corner {
+    /// Two ends that meet in an L: a shared miter.
+    Mitre {
+        p: ComponentUid,
+        pb: bool,
+        q: ComponentUid,
+        qb: bool,
+    },
+    /// An end on another member's line (a T): butted against its side.
+    /// `at` is where the line ends, in the BUILD host's coordinates.
+    Butt {
+        stem: ComponentUid,
+        end_b: bool,
+        through: ComponentUid,
+        at: V3,
+    },
+}
+
+/// The document's BUILD methods of the corners, used inside the crate.
+pub(crate) trait CornersCrateOps<K: Kernel> {
+    /// Treats the corners in one undo step named `label`: each L's ends
+    /// cut by the shared miter and moved out so that their outer corners
+    /// meet, each T's end moved back to the side of the member it meets.
+    /// Returns, in words, the corners left as they are.
+    fn treat_corners(&mut self, corners: &[Corner], label: &str)
+    -> Result<Vec<String>, ModelError>;
+}
+
+impl<K: Kernel> CornersCrateOps<K> for Document<K> {
+    fn treat_corners(
+        &mut self,
+        corners: &[Corner],
+        label: &str,
+    ) -> Result<Vec<String>, ModelError> {
+        let profiles = self.end_profiles();
+        let find = |c: ComponentUid| profiles.iter().find(|p| p.info.component == c);
+        let mut left = Vec::new();
+        let mut offsets: BTreeMap<FeatureUid, [Option<f64>; 2]> = BTreeMap::new();
+        let mut cuts: BTreeMap<FeatureUid, [Option<EndCut<ValueInput>>; 2]> = BTreeMap::new();
+        let mut take = |planned: Option<Move>, left: &mut Vec<String>, name: &str| match planned {
+            Some(Move::Along {
+                frames,
+                end_b,
+                offset,
+            }) => {
+                offsets.entry(frames).or_default()[usize::from(end_b)] = Some(offset);
+                true
+            }
+            None => true,
+            Some(_) => {
+                left.push(format!(
+                    "{name} does not follow a line: its corner is left as it is"
+                ));
+                false
+            }
+        };
+        for corner in corners {
+            match corner {
+                Corner::Mitre { p, pb, q, qb } => {
+                    let (Some(pp), Some(qq)) = (find(*p), find(*q)) else {
+                        continue;
+                    };
+                    let Some((_, m)) = meet(pp, *pb, qq, *qb) else {
+                        left.push(format!(
+                            "{} and {} do not meet in a corner: their ends are left square",
+                            pp.info.name, qq.info.name
+                        ));
+                        continue;
+                    };
+                    let (_, _, u) = pp.end(*pb);
+                    let (_, _, v) = qq.end(*qb);
+                    let moves = match (
+                        self.plan_move(pp, *pb, m.lengthen[0], u),
+                        self.plan_move(qq, *qb, m.lengthen[1], v),
+                    ) {
+                        (Ok(a), Ok(b)) => [a, b],
+                        (Err(e), _) | (_, Err(e)) => {
+                            left.push(e);
+                            continue;
+                        }
+                    };
+                    let [a, b] = moves;
+                    if !take(a, &mut left, &pp.info.name) || !take(b, &mut left, &qq.info.name) {
+                        continue;
+                    }
+                    for (prof, b, tilt) in [(pp, *pb, m.tilts[0]), (qq, *qb, m.tilts[1])] {
+                        if let Some(part) = prof.info.part {
+                            cuts.entry(part).or_default()[usize::from(b)] = Some(EndCut {
+                                angle: ValueInput::Number(m.angle),
+                                tilt: Some(tilt),
+                            });
+                        }
+                    }
+                }
+                Corner::Butt {
+                    stem,
+                    end_b,
+                    through,
+                    at,
+                } => {
+                    let (Some(pp), Some(qq)) = (find(*stem), find(*through)) else {
+                        continue;
+                    };
+                    let Some(back) = butt_back(pp, *end_b, qq, *at) else {
+                        left.push(format!(
+                            "{} runs along {}: its end is left as it is",
+                            pp.info.name, qq.info.name
+                        ));
+                        continue;
+                    };
+                    let (_, _, u) = pp.end(*end_b);
+                    match self.plan_move(pp, *end_b, -back, u) {
+                        Ok(planned) => {
+                            take(planned, &mut left, &pp.info.name);
+                        }
+                        Err(e) => left.push(e),
+                    }
+                }
+            }
+        }
+        let frame_defs = self.frame_defs(&offsets)?;
+        if frame_defs.is_empty() && cuts.is_empty() {
+            return Ok(left);
+        }
+        let label = label.to_owned();
+        self.apply(|state| {
+            for (uid, def) in &frame_defs {
+                state.edit_feature(*uid, def)?;
+            }
+            for (part, [a, b]) in cuts {
+                edit_part(state, part, |def| {
+                    if let Some(a) = a {
+                        def.ends.a = Some(a);
+                    }
+                    if let Some(b) = b {
+                        def.ends.b = Some(b);
+                    }
+                })?;
+            }
+            Ok((label, ()))
+        })?;
+        Ok(left)
+    }
+}
+
+/// How far an end of `p` (`end_b`), ending at `at` on the line of `q`,
+/// moves back for its end to meet `q`'s side (a T): the reach of `q`'s
+/// section from `at` towards `p`, over the sine of the angle between them.
+/// None when `p` runs along `q`.
+fn butt_back(p: &Profile, end_b: bool, q: &Profile, at: V3) -> Option<f64> {
+    let (_, _, u) = p.end(end_b);
+    let a = unit(q.world.apply_vector(Z))?;
+    let square = sub(u, scale(a, dot(u, a)));
+    let sin = norm(square);
+    if sin < 1e-6 {
+        return None;
+    }
+    // Towards p's body, square to q's axis.
+    let towards = scale(square, -1.0 / sin);
+    let local = inverse(&q.world).apply_point(at);
+    Some(q.reach(local, towards) / sin)
 }

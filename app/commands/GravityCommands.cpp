@@ -152,7 +152,6 @@ CommandDef letItHangCommand(const CommandContext& context, LetItHangHooks hooks)
   def.name = QObject::tr("Let It Hang");
   def.icon = QStringLiteral("flex-hang");
   def.tooltip = QObject::tr("Lets a cable or hose hang under gravity, then keeps the shape it rests in");
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("hang"),  QStringLiteral("drape"),   QStringLiteral("cable"),
                   QStringLiteral("hose"),  QStringLiteral("wire"),    QStringLiteral("flex"),
                   QStringLiteral("sag"),   QStringLiteral("gravity"), QStringLiteral("down"),

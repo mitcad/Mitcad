@@ -53,7 +53,7 @@ ui_start_app --no-native-dialogs
 
 echo "--- 1. Floor / Roof: a floor"
 ui_mark
-ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_step "the BUILD tab"                    ui_click_tab "BUILD"
 ui_expect_new "Ribbon BUILD/TIMBER at" "its TIMBER group"
 ui_expect_new "Ribbon button build.floor_roof at" "the Floor / Roof button"
 ui_mark

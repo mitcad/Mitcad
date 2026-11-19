@@ -19,6 +19,11 @@
 //!   environment's: point, spot, area and sun lights, placed in the design
 //!   or relative to the camera. A list, changed by commands of its own
 //!   (`add_render_light`, `edit_render_light`, `delete_render_light`).
+//! - `shots` (mitcad#2013): the cameras of the Render workspace's Frame
+//!   stage, each a named camera an image is rendered through. A list,
+//!   changed by commands of its own (`add_render_shot`,
+//!   `edit_render_shot`, `delete_render_shot`); left out of a file without
+//!   any, so that files without shots open in older versions.
 //!
 //! More sections are added as fields of [`RenderSettings`] and
 //! [`RenderSettingsChange`] with defaults, so files without them open.
@@ -41,6 +46,8 @@ pub struct RenderSettings {
     pub film: Film,
     pub output: Output,
     pub lights: Vec<Light>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shots: Vec<Shot>,
 }
 
 /// The light around the bodies.
@@ -470,6 +477,115 @@ impl Light {
     }
 }
 
+/// A shot (mitcad#2013): a named camera of the Render workspace that an
+/// image is rendered through. The same camera as a named view's: where the
+/// eye is, what it looks at, which way is up, the projection and how much
+/// of the design it shows. Lengths in mm, Z up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Shot {
+    /// The id commands name it by (`shot1`); it never changes.
+    pub id: String,
+    pub name: String,
+    /// Where the camera is.
+    pub eye: [f64; 3],
+    /// The point it looks at.
+    pub target: [f64; 3],
+    /// Upwards in the image; not along the line of sight.
+    pub up: [f64; 3],
+    /// A perspective projection; orthographic when false.
+    pub perspective: bool,
+    /// How much of the design the image shows: its height at the target,
+    /// in mm.
+    pub height: f64,
+}
+
+impl Default for Shot {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            eye: [0.0, -500.0, 0.0],
+            target: [0.0, 0.0, 0.0],
+            up: [0.0, 0.0, 1.0],
+            perspective: true,
+            height: 200.0,
+        }
+    }
+}
+
+/// The most shots a document keeps.
+pub const MAX_SHOTS: usize = 256;
+
+impl Shot {
+    /// Why the shot cannot be kept, if it cannot (`at` names it).
+    pub fn check(&self) -> Result<(), String> {
+        let at = format!("shots.{}", self.id);
+        if !crate::appearance::valid_id(&self.id) {
+            return Err(format!(
+                "{} is no shot id: use letters, digits, '_' and '-'",
+                self.id
+            ));
+        }
+        if self.name.trim().is_empty() {
+            return Err(format!("{at}.name is empty"));
+        }
+        let numbers = self.eye.iter().chain(&self.target).chain(&self.up);
+        if !numbers
+            .copied()
+            .all(|c| c.is_finite() && c.abs() <= MAX_LIGHT_DISTANCE)
+        {
+            return Err(format!(
+                "{at}: the camera must be finite and within {MAX_LIGHT_DISTANCE} mm"
+            ));
+        }
+        let sight = [
+            self.target[0] - self.eye[0],
+            self.target[1] - self.eye[1],
+            self.target[2] - self.eye[2],
+        ];
+        let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let (along, up) = (norm(sight), norm(self.up));
+        if along <= 1e-9 || up <= 1e-12 {
+            return Err(format!(
+                "{at}: the eye must differ from the target, and up must not be zero"
+            ));
+        }
+        let dot =
+            (sight[0] * self.up[0] + sight[1] * self.up[1] + sight[2] * self.up[2]) / (along * up);
+        if dot.abs() > 1.0 - 1e-9 {
+            return Err(format!("{at}: up must not be along the line of sight"));
+        }
+        if !(self.height.is_finite() && self.height > 0.0 && self.height <= MAX_LIGHT_DISTANCE) {
+            return Err(format!(
+                "{at}.height must be positive and within {MAX_LIGHT_DISTANCE} mm, got {}",
+                self.height
+            ));
+        }
+        Ok(())
+    }
+
+    /// This shot with the fields `fields` gives (null: the field's
+    /// default; `id` cannot change), checked.
+    pub fn changed(&self, fields: &Map<String, Value>) -> Result<Self, String> {
+        if let Some(id) = fields.get("id")
+            && id.as_str() != Some(self.id.as_str())
+        {
+            return Err(format!("shots.{}: the id cannot change", self.id));
+        }
+        let mut next = self.clone();
+        merge(
+            &mut next,
+            &Some(fields.clone()),
+            &format!("shots.{}", self.id),
+        )?;
+        next.id = self.id.clone();
+        next.name = next.name.trim().to_owned();
+        next.check()?;
+        Ok(next)
+    }
+}
+
 /// The smallest and largest image side, in pixels.
 pub const MIN_IMAGE_SIZE: u32 = 16;
 pub const MAX_IMAGE_SIZE: u32 = 16384;
@@ -575,11 +691,27 @@ impl RenderSettings {
                 return Err(format!("there are two lights {}", light.id));
             }
         }
+        if self.shots.len() > MAX_SHOTS {
+            return Err(format!(
+                "a design keeps at most {MAX_SHOTS} shots, got {}",
+                self.shots.len()
+            ));
+        }
+        for (i, shot) in self.shots.iter().enumerate() {
+            shot.check()?;
+            if self.shots[..i].iter().any(|other| other.id == shot.id) {
+                return Err(format!("there are two shots {}", shot.id));
+            }
+        }
         Ok(())
     }
 
     pub fn light(&self, id: &str) -> Option<&Light> {
         self.lights.iter().find(|light| light.id == id)
+    }
+
+    pub fn shot(&self, id: &str) -> Option<&Shot> {
+        self.shots.iter().find(|shot| shot.id == id)
     }
 
     /// These settings with the fields `change` gives (a field given as null
@@ -602,8 +734,8 @@ impl RenderSettings {
         let a = serde_json::to_value(self).expect("render settings serialize");
         let b = serde_json::to_value(other).expect("render settings serialize");
         for (section, fields) in a.as_object().into_iter().flatten() {
-            if section == "lights" {
-                continue; // by light, below
+            if section == "lights" || section == "shots" {
+                continue; // by light and by shot, below
             }
             let empty = Map::new();
             let fields = fields.as_object().unwrap_or(&empty);
@@ -649,6 +781,37 @@ impl RenderSettings {
                     format!("lights.{}", light.id),
                     Value::Null,
                     Value::String(light.summary()),
+                ));
+            }
+        }
+        // Shots by id (mitcad#2013): added, removed, or their fields.
+        for shot in &self.shots {
+            let Some(theirs) = other.shot(&shot.id) else {
+                out.push((
+                    format!("shots.{}", shot.id),
+                    Value::String(shot.name.clone()),
+                    Value::Null,
+                ));
+                continue;
+            };
+            let x = serde_json::to_value(shot).expect("shots serialize");
+            let y = serde_json::to_value(theirs).expect("shots serialize");
+            for (name, value) in x.as_object().into_iter().flatten() {
+                if y.get(name) != Some(value) {
+                    out.push((
+                        format!("shots.{}.{name}", shot.id),
+                        value.clone(),
+                        y.get(name).cloned().unwrap_or(Value::Null),
+                    ));
+                }
+            }
+        }
+        for shot in &other.shots {
+            if self.shot(&shot.id).is_none() {
+                out.push((
+                    format!("shots.{}", shot.id),
+                    Value::Null,
+                    Value::String(shot.name.clone()),
                 ));
             }
         }

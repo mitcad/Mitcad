@@ -17,6 +17,7 @@
 #include <QObject>
 #include <QSettings>
 #include <QString>
+#include <QStringList>
 #include <QTemporaryDir>
 
 namespace {
@@ -66,6 +67,18 @@ void settingsTests() {
   CHECK((told == QList<bool>{true, false}));
   QObject::disconnect(connection);
   QSettings().remove(key);
+
+  // A run's layout may make labels the default (mitcad#1990): without a
+  // saved choice they show, and Icons only is then saved as a choice.
+  CHECK(mitcad::defaultRibbonLabels() == RibbonLabels::IconsOnly);
+  mitcad::setDefaultRibbonLabels(RibbonLabels::UnderIcons);
+  CHECK(mitcad::savedRibbonLabels() == RibbonLabels::UnderIcons);
+  CHECK(!mitcad::saveRibbonLabels(RibbonLabels::UnderIcons));
+  CHECK(mitcad::saveRibbonLabels(RibbonLabels::IconsOnly));
+  CHECK(QSettings().value(key).toString() == QStringLiteral("icons"));
+  CHECK(mitcad::savedRibbonLabels() == RibbonLabels::IconsOnly);
+  QSettings().remove(key);
+  mitcad::setDefaultRibbonLabels(RibbonLabels::IconsOnly);
 }
 
 void labelTests() {
@@ -84,6 +97,18 @@ void labelTests() {
   CHECK(std::abs(mitcad::ribbonLabelFontScale(100, 125) - 0.68) < 1e-9);
   CHECK(mitcad::ribbonLabelWidthLimit(28) == 70);
   CHECK(mitcad::ribbonLabelWidthLimit(26) == 65);
+
+  // The short labels of long names (mitcad#1975): each id once, each label
+  // at most ten letters, none for a command without one.
+  QStringList ids = mitcad::shortLabelIds();
+  CHECK(ids.size() > 30);
+  CHECK(ids.removeDuplicates() == 0);
+  for (const QString& id : ids) {
+    const QString label = mitcad::defaultShortLabel(id);
+    CHECK(!label.isEmpty() && label.size() <= 10);
+  }
+  CHECK(mitcad::defaultShortLabel(QStringLiteral("construct.offset_plane")) == QStringLiteral("Offset"));
+  CHECK(mitcad::defaultShortLabel(QStringLiteral("solid.extrude")).isEmpty());
 }
 
 } // namespace

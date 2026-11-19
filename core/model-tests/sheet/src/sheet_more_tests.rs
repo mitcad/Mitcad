@@ -4,7 +4,8 @@
 //! bent geometry is checked with OCCT by the CLI fixtures `sheet_contour`,
 //! `sheet_convert` and `sheet_perforate`.
 
-use mitcad_model::features::SketchPlane;
+use mitcad_model::features::sheet_folded::SheetMiter;
+use mitcad_model::features::{FeatureDef, SketchPlane};
 use mitcad_model::ids::{BodyUid, FeatureUid};
 use mitcad_model::test_support::def;
 use mitcad_model::testing::MockKernel;
@@ -179,6 +180,68 @@ fn conversion_refuses_repeated_bends_and_other_rules_and_names_its_references() 
     assert!(refs.features.contains(&rules) && refs.features.contains(&block));
     // The mock kernel reads no face geometry: the body stays an ordinary
     // solid with the failure named.
+    assert!(matches!(doc.status(uid), Some(FeatureStatus::Failed(_))));
+    assert!(doc.body_shape(body).is_some());
+}
+
+#[test]
+fn conversion_with_rips_refuses_a_rip_twice_a_bend_as_a_rip_and_a_negative_gap() {
+    // mitcad#1949: the rips, the corner gap and the miter of a conversion.
+    let mut doc = Document::new(MockKernel::default());
+    let rules = doc.add_feature(&def(rules()), None).unwrap().uid;
+    let block = doc
+        .add_feature(
+            &def(
+                json!({"type":"box","plane":"xy","corner":[0,0],"length":60,"width":40,
+                "height":20,"operation":"new_body"}),
+            ),
+            None,
+        )
+        .unwrap()
+        .uid;
+    let body = BodyUid::new(block, 0);
+    let bends: Vec<String> = (0..4)
+        .map(|k| format!("E{{{block}:bottom|{block}:side{k}}}"))
+        .collect();
+    let rip = format!("E{{{block}:side0|{block}:side1}}");
+    let convert = |extra: Value| {
+        let mut d = json!({"type":"sheet_convert","rules":rules,"body":body,
+            "face":format!("{block}:bottom"),"bends":bends});
+        for (key, value) in extra.as_object().unwrap() {
+            d[key] = value.clone();
+        }
+        def(d)
+    };
+    assert!(
+        doc.add_feature(&convert(json!({"rips":[rip, rip]})), None)
+            .is_err()
+    );
+    assert!(
+        doc.add_feature(&convert(json!({"rips":[bends[0]]})), None)
+            .is_err()
+    );
+    assert!(
+        doc.add_feature(&convert(json!({"corner_gap":-1})), None)
+            .is_err()
+    );
+    let uid = doc
+        .add_feature(
+            &convert(json!({"rips":[rip],"corner_gap":1.5,"miter":"earlier_runs_past"})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    let saved = doc.feature(uid).unwrap().def.clone();
+    let FeatureDef::SheetConvert(d) = &saved else {
+        panic!("a conversion");
+    };
+    assert_eq!(d.rips.len(), 1);
+    assert_eq!(d.miter, Some(SheetMiter::EarlierRunsPast));
+    assert!(d.corner_gap.is_some());
+    let refs = saved.info().references();
+    assert!(refs.features.contains(&rules) && refs.features.contains(&block));
+    // The mock kernel reads no face geometry: the failure is named and the
+    // body stays an ordinary solid.
     assert!(matches!(doc.status(uid), Some(FeatureStatus::Failed(_))));
     assert!(doc.body_shape(body).is_some());
 }

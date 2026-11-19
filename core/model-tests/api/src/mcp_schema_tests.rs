@@ -148,6 +148,10 @@ const UNPROBED: &[(&str, &str)] = &[
         "its fields are the light's, a map read after the light is looked up: on the empty design it is refused as no such light",
     ),
     (
+        "edit_render_shot",
+        "its fields are the shot's, a map read after the shot is looked up: on the empty design it is refused as no such shot, and without id as needing the shot's id",
+    ),
+    (
         "link_gears",
         "it has no command struct: link_gears_json reads its fields and refuses an unknown one as \"link_gears has no field\" and a missing gear as \"link_gears needs a gear\"",
     ),

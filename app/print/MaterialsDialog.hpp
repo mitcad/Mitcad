@@ -252,6 +252,10 @@ private:
   QWidget* m_editor = nullptr;
   QLineEdit* m_name = nullptr;
   QComboBox* m_class = nullptr;
+  // The sheet process its sheet parts default to (mitcad#1939): By Class or
+  // one of the profiles.
+  QComboBox* m_sheetProcess = nullptr;
+  QString m_loggedProcess;
   QWidget* m_builtIn = nullptr; // "Built-in" with its lock and Duplicate
   QPushButton* m_headerDuplicate = nullptr;
   QLabel* m_editing = nullptr; // editingLine (mitcad#1135)

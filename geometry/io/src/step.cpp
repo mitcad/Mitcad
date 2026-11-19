@@ -178,8 +178,13 @@ void write_step_tree(const std::string& path, const StepTree& tree, const StepWr
 namespace {
 
 // A STEP file read into a new document (the caller holds the exchange
-// lock).
-occ::handle<TDocStd_Document> read_step_document(const std::string& path) {
+// lock), in two steps (mitcad#2032): OCCT parses the file into its
+// entities (ReadFile, ReadStream), which takes no progress range and
+// cannot be stopped, then transfers them into the document within `range`
+// (detail::stoppable_transfer), which the command's memory guard and the
+// user's cancel stop.
+occ::handle<TDocStd_Document> read_step_document(const std::string& path,
+                                                 const Message_ProgressRange& range) {
   const occ::handle<TDocStd_Document> document = detail::new_document();
 
   DESTEP_Parameters parameters;
@@ -203,16 +208,22 @@ occ::handle<TDocStd_Document> read_step_document(const std::string& path) {
   // escapes first, and OCCT reads the rewritten text (under the file's
   // name, for the files an assembly refers to).
   std::optional<std::string> recoded = recoded_step_text(path);
-  bool done = false;
+  IFSelect_ReturnStatus parsed = IFSelect_RetVoid;
   if (recoded) {
     TextBuffer buffer(*recoded);
     std::istream stream(&buffer);
-    done = reader.ChangeReader().ReadStream(path.c_str(), parameters, stream) == IFSelect_RetDone &&
-           reader.Transfer(document);
+    parsed = reader.ChangeReader().ReadStream(path.c_str(), parameters, stream);
   } else {
-    done = reader.Perform(path.c_str(), document, parameters);
+    parsed = reader.ChangeReader().ReadFile(path.c_str(), parameters);
   }
+  // (The parsed entities are the reader's own: the text is not needed for
+  // the transfer.)
   recoded.reset();
+  if (parsed != IFSelect_RetDone) {
+    throw Error("cannot read STEP file " + path);
+  }
+  const bool done = detail::stoppable_transfer(
+      range, [&](const Message_ProgressRange& transfer) { return reader.Transfer(document, transfer); });
   if (!done) {
     throw Error("cannot read STEP file " + path);
   }
@@ -221,18 +232,19 @@ occ::handle<TDocStd_Document> read_step_document(const std::string& path) {
 
 } // namespace
 
-std::vector<Body> read_step(const std::string& path) {
+std::vector<Body> read_step(const std::string& path, const Message_ProgressRange& range) {
   const auto lock = detail::exchange_lock();
-  std::vector<Body> bodies = detail::document_bodies(read_step_document(path));
+  std::vector<Body> bodies = detail::document_bodies(read_step_document(path, range));
   if (bodies.empty()) {
     throw Error("STEP file " + path + " has no shapes");
   }
   return bodies;
 }
 
-StepRead read_step_structured(const std::string& path, bool keep_assembly) {
+StepRead read_step_structured(const std::string& path, bool keep_assembly,
+                              const Message_ProgressRange& range) {
   const auto lock = detail::exchange_lock();
-  const occ::handle<TDocStd_Document> document = read_step_document(path);
+  const occ::handle<TDocStd_Document> document = read_step_document(path, range);
   StepRead read;
   if (keep_assembly) {
     read.assembly = detail::document_assembly(document);

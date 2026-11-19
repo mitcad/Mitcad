@@ -50,7 +50,7 @@ use mitcad_model_build::prelude::*;
 use mitcad_model_drawing::bspline::Spline2;
 use mitcad_model_drawing::cut_sheet::{self, BendLine, OutlineLoop, PartView, Piece, PlacedPart};
 use mitcad_model_drawing::cut_sheet_def::{
-    self as def, CutPart, CutSheet, DEFAULT_HEIGHT, DEFAULT_WIDTH, MAX_COUNT,
+    self as def, CutMark, CutPart, CutSheet, DEFAULT_HEIGHT, DEFAULT_WIDTH, MAX_COUNT, MarkKind,
 };
 use mitcad_model_drawing::def::{Drawing, DrawingSheet, DrawingUid, Subject, SubjectBody};
 use mitcad_model_drawing::{P2, ViewSpec, section_axes};
@@ -102,6 +102,12 @@ pub(super) struct AddCutSheetCommand {
     /// The bodies' Flat Patterns (mitcad#1980).
     #[serde(default)]
     flat: bool,
+    /// The cutting beam's width (mitcad#1939).
+    #[serde(default)]
+    kerf: Option<f64>,
+    /// The parts placed by nesting (mitcad#1939).
+    #[serde(default)]
+    nest: bool,
 }
 
 /// `edit_cut_sheet`: its name and its material's size.
@@ -115,6 +121,9 @@ pub(super) struct EditCutSheetCommand {
     width: Option<f64>,
     #[serde(default)]
     height: Option<f64>,
+    /// The cutting beam's width, 0 for none (mitcad#1939).
+    #[serde(default)]
+    kerf: Option<f64>,
 }
 
 /// `add_cut_sheet_parts`: bodies as parts, each `count` times.
@@ -135,6 +144,9 @@ pub(super) struct AddPartsCommand {
     /// The bodies' Flat Patterns (mitcad#1980).
     #[serde(default)]
     flat: bool,
+    /// Sketches marked on the parts (mitcad#1939).
+    #[serde(default)]
+    marks: Vec<CutMark>,
 }
 
 /// `edit_cut_sheet_part`: what is given changes.
@@ -156,6 +168,9 @@ pub(super) struct EditPartCommand {
     /// A planar face of its body; null for the largest.
     #[serde(default, deserialize_with = "present")]
     face: Option<Option<FaceName>>,
+    /// The sketches marked on it (mitcad#1939), in place of its marks.
+    #[serde(default)]
+    marks: Option<Vec<CutMark>>,
 }
 
 /// `export_cut_sheet`: the file and its format (from its extension when
@@ -207,6 +222,12 @@ named_enum! {
         },
         "export_cut_sheet" => Export(Box<ExportCutSheetCommand>),
         "export_face_dxf" => ExportFace(Box<ExportFaceDxfCommand>),
+        // The parts laid out by simple automatic nesting (mitcad#1939).
+        "nest_cut_sheet" => Nest {
+            drawing: String,
+            #[serde(default)]
+            gap: Option<f64>,
+        },
     }
 }
 
@@ -229,6 +250,8 @@ pub(super) struct PartEdit {
     pub(super) rotation: Option<f64>,
     pub(super) turn: Option<f64>,
     pub(super) face: Option<Option<FaceName>>,
+    /// The sketches marked on it (mitcad#1939).
+    pub(super) marks: Option<Vec<CutMark>>,
 }
 
 /// A part laid out on its sheet.
@@ -241,6 +264,8 @@ struct PartState {
     loops: Vec<OutlineLoop>,
     /// A Flat Pattern's bend lines on the sheet (mitcad#1980).
     bends: Vec<BendLine>,
+    /// Its marks on the sheet (mitcad#1939).
+    marks: Vec<cut_sheet::Mark>,
     /// Its body (or the occurrence placing it) is gone.
     missing: bool,
     off_sheet: bool,
@@ -432,6 +457,50 @@ trait CutSheetsLocal<K: Kernel> {
     fn export_face_dxf(&self, command: &ExportFaceDxfCommand) -> Result<Value, ApiError>;
 }
 
+/// A kerf as a cut sheet keeps it: none for 0 (mitcad#1939).
+fn check_kerf(kerf: Option<f64>) -> Result<Option<f64>, ApiError> {
+    match kerf {
+        None => Ok(None),
+        Some(k) if (0.0..10.0).contains(&k) => Ok((k > 0.0).then_some(k)),
+        Some(k) => Err(ApiError(format!(
+            "the kerf must be from 0 to 10 mm, got {k}"
+        ))),
+    }
+}
+
+/// Every part of a cut sheet placed by simple automatic nesting
+/// (mitcad#1939, [`cut_sheet::nest`]); a part that cannot be worked out
+/// keeps its place.
+fn nest_parts<K: Kernel>(
+    doc: &Document<K>,
+    drawing: &mut Drawing,
+    gap: f64,
+) -> Result<(), ApiError> {
+    let component = drawing.component;
+    let Some(cut) = drawing.cut_sheet.as_mut() else {
+        return Err(ApiError(format!("{} is not a cut sheet", drawing.name)));
+    };
+    let mut sizes = Vec::new();
+    let mut nested = Vec::new();
+    for (i, part) in cut.parts.iter().enumerate() {
+        if let Ok(view) = doc.part_view(component, part)
+            && let Some((lo, hi)) = view.outline.bounds()
+        {
+            sizes.push((hi[0] - lo[0], hi[1] - lo[1]));
+            nested.push(i);
+        }
+    }
+    for (k, (place, degrees)) in cut_sheet::nest(&sizes, cut.width, gap)
+        .into_iter()
+        .enumerate()
+    {
+        let part = &mut cut.parts[nested[k]];
+        part.place = place;
+        part.rotation = degrees;
+    }
+    Ok(())
+}
+
 impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
     fn part_view(&self, component: ComponentUid, part: &CutPart) -> Result<Arc<PartView>, String> {
         if part.flat {
@@ -566,6 +635,16 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                 .collect(),
             outline,
             bends: Vec::new(),
+            // The projection's coordinates (mitcad#1939): along the view's
+            // axes from the origin, the body where its occurrence puts it.
+            frame: Some(cut_sheet::MarkFrame {
+                transform: Some(first.transform),
+                origin: [0.0; 3],
+                x: x_axis,
+                y: y_axis,
+                mirror: false,
+            }),
+            own_marks: Vec::new(),
         });
         self.drawing_cache().keep_part_view(key, Arc::clone(&view));
         Ok(view)
@@ -604,9 +683,20 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                     mitcad_model::notice::user_message(&e)
                 )
             })?;
+        // A kerf bend's slits are cuts in place of its line (mitcad#1939).
+        let slits: Vec<cut_sheet::Mark> = pattern
+            .bends
+            .iter()
+            .flat_map(|bend| &bend.slits)
+            .map(|line| cut_sheet::Mark {
+                kind: MarkKind::Cut,
+                piece: cut_sheet::Piece::Line(line.start, line.end),
+            })
+            .collect();
         let bends: Vec<BendLine> = pattern
             .bends
             .iter()
+            .filter(|bend| bend.slits.is_empty())
             .flat_map(|bend| {
                 let up = bend.direction == "up";
                 bend.centerlines.iter().map(move |line| BendLine {
@@ -616,7 +706,15 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                 })
             })
             .collect();
-        let view = cut_sheet::flat_part_view(&loops, bends);
+        let mut view = cut_sheet::flat_part_view(&loops, bends);
+        view.frame = Some(cut_sheet::MarkFrame {
+            transform: None,
+            origin: pattern.frame.origin,
+            x: pattern.frame.x_axis,
+            y: pattern.frame.y_axis,
+            mirror: pattern.def.reference_side == mitcad_model::sheet::SheetReferenceSide::Back,
+        });
+        view.own_marks = slits;
         if view.outline.loops.is_empty() {
             return Err(format!(
                 "the Flat Pattern of {} has no outline",
@@ -644,6 +742,20 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                     Ok(view) => cut_sheet::placed_bends(view, part.place, part.rotation),
                     Err(_) => Vec::new(),
                 };
+                let marks = match &view {
+                    Ok(view) => {
+                        let mut marks = view.own_marks.clone();
+                        if let Some(frame) = &view.frame {
+                            for mark in &part.marks {
+                                if let Some(lines) = self.sketch_mark_polylines(mark.sketch) {
+                                    marks.extend(frame.marks(mark.kind, &lines));
+                                }
+                            }
+                        }
+                        cut_sheet::placed_marks(view, &marks, part.place, part.rotation)
+                    }
+                    Err(_) => Vec::new(),
+                };
                 let missing = match &view {
                     Ok(_) => false,
                     Err(e) => self.body_shape(part.body).is_none() || e.ends_with("is gone"),
@@ -660,6 +772,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                     view,
                     loops,
                     bends,
+                    marks,
                     missing,
                     off_sheet,
                     overlaps: Vec::new(),
@@ -757,6 +870,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                 place: [0.0, 0.0],
                 rotation: 0.0,
                 flat,
+                marks: Vec::new(),
             };
             let view = self.part_view(drawing.component, &part).map_err(ApiError)?;
             let (lo, hi) = view
@@ -791,6 +905,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             place: [0.0, 0.0],
             rotation: 0.0,
             flat: false,
+            marks: Vec::new(),
         };
         let view = self
             .part_view(ComponentUid::ROOT, &part)
@@ -805,6 +920,8 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             name: name.clone(),
             loops: cut_sheet::placed(&view.outline, [size[0] / 2.0, size[1] / 2.0], 0.0),
             bends: Vec::new(),
+            marks: Vec::new(),
+            process: self.sheet_process_of_body(command.body),
         };
         let path = &command.path;
         let unit = super::exchange::dxf_unit(self, command.units.as_deref())?;
@@ -868,12 +985,16 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                         width,
                         height,
                         parts: Vec::new(),
+                        kerf: check_kerf(c.kerf)?,
                     }),
                 };
                 let parts = self.new_parts(&drawing, &c.bodies, None, c.count, None, c.flat)?;
                 let ids: Vec<u32> = parts.iter().map(|p| p.id).collect();
                 if let Some(cut) = &mut drawing.cut_sheet {
                     cut.parts = parts;
+                }
+                if c.nest {
+                    nest_parts(self, &mut drawing, GAP)?;
                 }
                 let uid = self.add_drawing(drawing)?;
                 let added = self.find_drawing(&uid.to_string())?.clone();
@@ -895,8 +1016,11 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 cut.width = c.width.unwrap_or(cut.width);
                 cut.height = c.height.unwrap_or(cut.height);
                 def::check_size(cut.width, cut.height).map_err(ApiError)?;
+                if c.kerf.is_some() {
+                    cut.kerf = check_kerf(c.kerf)?;
+                }
                 changed.cut_sheet = Some(cut);
-                let label = if c.width.is_none() && c.height.is_none() {
+                let label = if c.width.is_none() && c.height.is_none() && c.kerf.is_none() {
                     format!("Rename {}", old.name)
                 } else {
                     format!("Edit {}", old.name)
@@ -909,8 +1033,11 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 if c.bodies.is_empty() {
                     return Err(ApiError("add_cut_sheet_parts needs bodies".to_owned()));
                 }
-                let parts =
+                let mut parts =
                     self.new_parts(&old, &c.bodies, c.face.as_ref(), c.count, c.at, c.flat)?;
+                for part in &mut parts {
+                    part.marks.clone_from(&c.marks);
+                }
                 let ids: Vec<u32> = parts.iter().map(|p| p.id).collect();
                 let label = match ids.as_slice() {
                     [one] => format!("Add part {one} to {}", old.name),
@@ -933,6 +1060,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                     rotation: c.rotation,
                     turn: c.turn,
                     face: c.face,
+                    marks: c.marks,
                 },
             ),
             CutSheetCommand::DeleteParts { drawing, parts } => {
@@ -947,6 +1075,19 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 &|_: &str| Ok(()),
             ),
             CutSheetCommand::ExportFace(c) => self.export_face_dxf(&c),
+            CutSheetCommand::Nest { drawing, gap } => {
+                let (old, _) = self.find_cut_sheet(&drawing)?;
+                let gap = gap.unwrap_or(GAP);
+                if !gap.is_finite() || gap < 0.0 {
+                    return Err(ApiError(format!("the gap must not be negative, got {gap}")));
+                }
+                let mut changed = old.clone();
+                nest_parts(self, &mut changed, gap)?;
+                self.set_drawing(old.uid, format!("Nest the parts of {}", old.name), changed)?;
+                let now = self.find_drawing(&old.uid.to_string())?.clone();
+                let warnings = self.lay_out(&now).warnings;
+                Ok(json!({"drawing": old.uid, "warnings": warnings}))
+            }
         }
     }
 
@@ -986,12 +1127,16 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 old.name
             )));
         }
+        let marked = edit.marks.is_some();
+        if let Some(marks) = edit.marks {
+            part.marks = marks;
+        }
         if let Some(face) = edit.face {
             part.face = face;
             let checked = part.clone();
             self.part_view(component, &checked).map_err(ApiError)?;
         }
-        let label = match (moved, turned, refaced) {
+        let label = match (moved, turned, refaced || marked) {
             (true, false, false) => format!("Move part {id} of {}", old.name),
             (false, true, false) => format!("Turn part {id} of {}", old.name),
             _ => format!("Edit part {id} of {}", old.name),
@@ -1058,8 +1203,12 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             .map(|s| PlacedPart {
                 id: s.part.id,
                 name: s.name.clone(),
-                loops: s.loops.clone(),
+                // The beam's path half the kerf away from the material
+                // (mitcad#1939).
+                loops: cut_sheet::kerf_compensated(&s.loops, cut.kerf.unwrap_or(0.0)),
                 bends: s.bends.clone(),
+                marks: s.marks.clone(),
+                process: self.sheet_process_of_body(s.part.body),
             })
             .collect();
         if parts.is_empty() {
@@ -1176,6 +1325,8 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 name: s.name.clone(),
                 loops: s.loops.clone(),
                 bends: s.bends.clone(),
+                marks: s.marks.clone(),
+                process: self.sheet_process_of_body(s.part.body),
             })
             .collect();
         let sheet_name = drawing
@@ -1216,6 +1367,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             "kind": "cut_sheet",
             "width": cut.width,
             "height": cut.height,
+            "kerf": cut.kerf.unwrap_or(0.0),
             "sheet": 0,
             "sheets": [sheet],
             "revisions": [],

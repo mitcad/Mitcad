@@ -6,7 +6,8 @@
 # test's): the Configurations window opens with its options and row, a
 # choice in the browser's Configuration bar changes the body, and a
 # parameter column added in the Rows tab (mitcad#999) drives the body when
-# its row is applied.
+# its row is applied. The window's minimum height fits a screen 720
+# logical px high (mitcad#2036).
 param(
   [string]$App,
   [string]$Cli,
@@ -31,5 +32,14 @@ if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
 Ui-ExpectLog 'TestDriver: done' 'the window opened, the bar''s choice changed the body and a parameter column drove it'
 Ui-ExpectLog 'Configurations: column Extra added' 'Add Column made Extra a column'
 Ui-ExpectLog 'Configurations: column Extra removed' 'Remove Column took it out'
+# The window's minimum height on every tab fits a screen 720 logical px
+# high with a typical window frame (48 px; mitcad#2036): the Rules
+# palette's full height is its preferred height, not its minimum.
+$minimum = [regex]::Match("$(Ui-LogText)", 'Configurations window minimum size (\d+)x(\d+)')
+if (-not $minimum.Success) { Ui-Fail 'the window''s minimum size is not in the log' }
+if ([int]$minimum.Groups[2].Value + 48 -gt 720) {
+  Ui-Fail "the window's minimum height $($minimum.Groups[2].Value) px does not fit 720 px with its frame"
+}
+Write-Host "ok   the window's minimum height $($minimum.Groups[2].Value) px fits 720 px with its frame"
 Ui-StopApp
 Write-Host 'PASS: configurations'

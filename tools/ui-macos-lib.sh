@@ -229,6 +229,9 @@ JSON
   # The first dimension of a drawn sketch scales nothing (mitcad#860), as in
   # ui-test-lib.sh.
   export MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0
+  # A new sketch on a face starts empty (mitcad#2051), as in ui-test-lib.sh;
+  # a test of the face's outline sets it to 1 after ui_init.
+  export MITCAD_SKETCH_PROJECT_FACE=0
   # No question whether to activate a picked face's component (mitcad#960),
   # as in ui-test-lib.sh.
   export MITCAD_ASK_ACTIVATE_COMPONENT=0

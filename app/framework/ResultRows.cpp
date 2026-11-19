@@ -154,7 +154,8 @@ void ResultRows::setFloatingStyle(bool floating) {
   if (floating) {
     setFrameShape(QFrame::NoFrame);
     setStyleSheet(QStringLiteral(
-        "QFrame#commandResultRows { background: rgba(128, 128, 128, 18); border: none; border-radius: 10px; }"));
+        "QFrame#commandResultRows { background: rgba(128, 128, 128, 18); border: none; border-radius: %1px; }")
+                      .arg(kControlRadius));
   } else {
     setStyleSheet(QString());
     setFrameShape(QFrame::StyledPanel);

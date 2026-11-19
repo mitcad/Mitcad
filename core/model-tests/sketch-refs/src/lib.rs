@@ -45,3 +45,6 @@ mod projection_successor_tests;
 // when the text moves them apart; a letter whose outline does not close
 // (mitcad#1993).
 mod text_profiles_1993_tests;
+// A sketch on a planar face starts with the face's outline, and Convert to
+// Sketch Geometry takes a profile (mitcad#2051).
+mod face_outline_on_create_tests;

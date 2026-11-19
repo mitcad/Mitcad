@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+# Sheet process profiles (mitcad#1939; app/COMMANDS.md "Sheet process
+# profiles"), on sheet-process.json (the sketch F1, a 60 x 40 rectangle):
+#   1. Sheet Rules: Process Board, Allowance Crease Table, Flute C,
+#      Thickness 2, the crease table's first row 2 mm deducting 1.5 and an
+#      added second row deducting 1.2: OK adds the board's rules F2.
+#   2. The rules' profile dims Corner Relief (metal's) in the command
+#      search, with Glue Flap offered.
+#   3. A Face of the rectangle with them is a board sheet; editing the
+#      rules loads the board, its crease table and its flute.
+# Run by tools/ui-sheet-process-test.sh (Linux),
+# tools/ui-windows-sheet-process-test.ps1 (Windows) and
+# tools/ui-macos-sheet-process-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+
+# 1. Board rules with a crease table.
+mark
+command sheet.rules
+wait-log '^Command Sheet Rules started' 30
+wait-idle
+qt-choice input_process 'Board'
+wait-idle
+qt-choice input_allowance_type 'Crease Table'
+wait-idle
+qt-choice input_flute 'C'
+wait-idle
+type-in '^Panel Sheet Rules input thickness at ' '2'
+type-in '^Panel Sheet Rules input crease_rows[.]0[.]thickness at ' '2'
+type-in '^Panel Sheet Rules input crease_rows[.]0[.]value at ' '1.5'
+wait-idle
+# A second row: folds along the flutes deduct less.
+mark
+click-logged '^Panel Sheet Rules add crease_rows at '
+wait-idle
+type-in '^Panel Sheet Rules input crease_rows[.]1[.]thickness at ' '2'
+type-in '^Panel Sheet Rules input crease_rows[.]1[.]value at ' '1.2'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Sheet rules: thickness .*, board, crease_table$' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+
+# 2. Corner Relief is metal's: dimmed for the board.
+command tools.search
+focus-widget commandSearchInput
+type 'Corner Relief'
+expect-command-search 'Corner Relief' - disabled
+key Escape
+focus-main
+wait-idle
+
+# 3. A board sheet; the rules edited load their board.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"sheet_face","rules":"F2","profiles":[{"sketch":"F1","region":"r{c5[c8,c6],c6[c5,c7],c7[c6,c8],c8[c7,c5]}"}]}}'
+wait-idle
+expect-model-bodies 1 4800
+mark
+dblclick-logged '^Timeline SheetRules1 at '
+wait-log '^Editing F2 with Sheet Rules$' 30
+wait-idle
+expect-choice-text process '^Board$'
+expect-choice-text allowance_type '^Crease Table$'
+expect-choice-text flute '^C$'
+expect-input-text crease_rows.1.value '^1[.]2'
+mark
+key Escape
+wait-log '^Command Sheet Rules cancelled$' 30
+wait-idle

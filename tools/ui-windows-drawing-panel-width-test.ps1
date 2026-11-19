@@ -140,6 +140,21 @@ function Close-Drawing {
   Ui-ExpectNew 'Drawing closed' 'the 3D view again'
 }
 
+# Drawings-In-Sight: a design taller than the browser opens folded below
+# the root (mitcad#426): in session 0's 1024x768 desktop the Floating
+# toolbar panel with its labels (mitcad#1990) leaves the browser fewer
+# rows than this design has. Its Drawings folder is then opened, so that
+# Drawing1's row is in sight.
+function Drawings-In-Sight {
+  Ui-ExpectLog 'Browser opened ' 'the browser fitted to the design'
+  if ((Ui-LogLines | Where-Object { $_.StartsWith('Browser opened folded') }) -and
+      -not (Ui-PlaceValid 'Browser Root/Drawings/Drawing1')) {
+    Ui-Mark
+    Ui-Step 'open the Drawings folder'    { Ui-ClickLogged 'Browser arrow Root/Drawings' }
+    Ui-ExpectNew 'Browser Root/Drawings/Drawing1 at ' "the drawing's row in sight"
+  }
+}
+
 function Open-Drawing {
   Ui-Mark
   Ui-Step 'open Drawing1 (double-click)'  { Ui-DoubleClickLogged 'Browser Root/Drawings/Drawing1' }
@@ -150,6 +165,7 @@ function Open-Drawing {
 Write-Host '--- 1. Floating: the panel at its narrowest'
 Ui-StartApp 'drawing-panel-width' @('--chrome=floating', '--open', $design)
 Ui-ExpectLog 'plates.mitcad' 'the design opened'
+Drawings-In-Sight
 Open-Drawing
 Select-View
 Wait-Width 'Drawing panel' 230 'the panel at its narrowest at first'
@@ -179,6 +195,7 @@ Wait-Width 'Drawing panel drawingViewShows' ($shows + $wide - 230) 'Shows keeps 
 Write-Host '--- 4. Docked, at the next start: the width again, and wider still'
 Ui-StartApp 'drawing-panel-width-docked' @('--open', $design)
 Ui-ExpectLog 'plates.mitcad' 'the design opened'
+Drawings-In-Sight
 Open-Drawing
 Ui-ExpectLog "Drawing panel width $wide (remembered)" 'the width read from the settings'
 Select-View

@@ -369,8 +369,6 @@ CommandDef MainWindow::imageReferenceCommand() {
   def.name = tr("Image Reference");
   def.icon = QStringLiteral("image-reference");
   def.tooltip = tr("Places an image on a plane or a face to model from");
-  def.tab = QStringLiteral("SOLID");
-  def.group = QStringLiteral("INSERT");
   def.keywords = {QStringLiteral("canvas"), QStringLiteral("picture"), QStringLiteral("photo"),
                   QStringLiteral("image"), QStringLiteral("trace"), QStringLiteral("insert image")};
   def.modelCommand = true;
@@ -653,8 +651,6 @@ void MainWindow::registerImageReferenceCommands() {
   calibrate.icon = QStringLiteral("image-calibrate");
   calibrate.tooltip = tr("Scales an image by two points on it and the distance between them");
   calibrate.kind = CommandDef::Kind::Action;
-  calibrate.tab = QStringLiteral("SOLID");
-  calibrate.group = QStringLiteral("INSERT");
   calibrate.keywords = {QStringLiteral("canvas"), QStringLiteral("scale"), QStringLiteral("image"),
                         QStringLiteral("picture")};
   calibrate.run = [this] { calibrateImageReference(QString()); };

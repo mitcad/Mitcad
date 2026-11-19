@@ -3,7 +3,8 @@
 //! (mitcad#1771, GitHub mitcad/Mitcad#292): `set_folder_visible` hides and
 //! shows a folder as display state, one undo step that changes no light
 //! bulb; a shown folder lets each item follow its own light bulb again, and
-//! the design keeps the folder's eye when it is saved and opened.
+//! the design keeps the folder's eye when it is saved and opened. The
+//! root's Annotations folder has the same eye (mitcad#2041).
 
 use serde_json::{Value, json};
 
@@ -135,7 +136,8 @@ fn the_sketches_folder_keeps_the_sketches_own_eyes() {
     assert_eq!(undo_label(&doc), "Hide Sketches");
     assert_eq!(
         display(&doc)["folders"],
-        json!({"C0": {"bodies": true, "sketches": false, "construction": true}})
+        json!({"C0": {"bodies": true, "sketches": false, "construction": true,
+                      "annotations": true}})
     );
     assert_eq!(sketch_bulbs(&doc), bulbs, "no light bulb changes");
 
@@ -344,5 +346,184 @@ fn each_component_has_folders_of_its_own() {
                 .to_string()
         )
         .is_err()
+    );
+}
+
+// The root's Annotations folder (mitcad#2041).
+
+const R: &str = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
+
+/// A 20 x 20 x 20 block (F2.b0) on XY with three dimensions between its
+/// top and bottom faces (two parallel faces: offsets), Offset1-Offset3,
+/// Offset2 hidden by its own light bulb.
+fn annotated_block() -> Document<MockKernel> {
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures_selections.set(true);
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+        ]),
+    );
+    let top = json!({"body": "F2.b0", "face": format!("F2:end({R})")});
+    let bottom = json!({"body": "F2.b0", "face": format!("F2:start({R})")});
+    for _ in 0..3 {
+        command(
+            &mut doc,
+            json!({"cmd": "add_annotation", "a": top.clone(), "b": bottom.clone()}),
+        );
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "set_measurement_visible", "name": "Offset2", "visible": false}),
+    );
+    doc
+}
+
+/// The annotations' own light bulbs: (name, visible), in order.
+fn annotation_bulbs(doc: &Document<MockKernel>) -> Vec<(String, bool)> {
+    query(doc, json!({"query": "annotations"}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["name"].as_str().unwrap().to_owned(),
+                a["visible"].as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_annotations_folder_keeps_the_annotations_own_eyes() {
+    let mut doc = annotated_block();
+    let bulbs = annotation_bulbs(&doc);
+    assert_eq!(
+        bulbs,
+        [
+            ("Offset1".to_owned(), true),
+            ("Offset2".to_owned(), false),
+            ("Offset3".to_owned(), true),
+        ]
+    );
+    assert_eq!(display(&doc).get("folders"), None);
+
+    // Hidden: one undo step, no annotation's own light bulb changes.
+    command(
+        &mut doc,
+        json!({"cmd": "set_folder_visible", "folder": "annotations", "visible": false}),
+    );
+    assert_eq!(undo_label(&doc), "Hide Annotations");
+    assert_eq!(
+        display(&doc)["folders"],
+        json!({"C0": {"bodies": true, "sketches": true, "construction": true,
+                      "annotations": false}})
+    );
+    assert_eq!(annotation_bulbs(&doc), bulbs, "no light bulb changes");
+
+    // Hidden again: nothing changes, no undo step.
+    command(
+        &mut doc,
+        json!({"cmd": "set_folder_visible", "component": "C0", "folder": "annotations",
+               "visible": false}),
+    );
+    assert_eq!(undo_label(&doc), "Hide Annotations");
+
+    // An annotation's own light bulb still changes under the hidden folder.
+    command(
+        &mut doc,
+        json!({"cmd": "set_measurement_visible", "name": "Offset3", "visible": false}),
+    );
+    assert_eq!(undo_label(&doc), "Hide Offset3");
+    command(
+        &mut doc,
+        json!({"cmd": "set_measurement_visible", "name": "Offset3", "visible": true}),
+    );
+
+    // Saved hidden: the file keeps the folder's eye; opened, still hidden,
+    // the light bulbs as they were.
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert_eq!(
+        file["display"]["folders"],
+        json!({"C0": {"annotations": true}})
+    );
+    let mut opened = reopened(&doc);
+    opened.kernel().measures_selections.set(true);
+    assert_eq!(display(&opened), display(&doc));
+    assert_eq!(annotation_bulbs(&opened), bulbs);
+
+    // Shown again: each follows its own light bulb, the same one hidden;
+    // nothing of the folder is left in the display state or the file.
+    command(
+        &mut opened,
+        json!({"cmd": "set_folder_visible", "component": "Root", "folder": "annotations",
+               "visible": true}),
+    );
+    assert_eq!(undo_label(&opened), "Show Annotations");
+    assert_eq!(display(&opened).get("folders"), None);
+    assert_eq!(annotation_bulbs(&opened), bulbs);
+    let file: Value = serde_json::from_str(&opened.to_json()).unwrap();
+    assert_eq!(file.get("display"), None, "nothing left in the file");
+
+    // Undo hides the folder again.
+    opened.undo();
+    assert_eq!(
+        display(&opened)["folders"]["C0"]["annotations"],
+        json!(false),
+        "undo hides the folder again"
+    );
+}
+
+#[test]
+fn the_annotations_folder_is_the_roots_own() {
+    let mut doc = annotated_block();
+    // The other folders' eyes leave it as it is, and it leaves them.
+    command(
+        &mut doc,
+        json!({"cmd": "set_folder_visible", "folder": "bodies", "visible": false}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_folder_visible", "folder": "annotations", "visible": false}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_folder_visible", "folder": "bodies", "visible": true}),
+    );
+    assert_eq!(
+        display(&doc)["folders"],
+        json!({"C0": {"bodies": true, "sketches": true, "construction": true,
+                      "annotations": false}})
+    );
+    // Another component has no Annotations folder: refused, and its entry
+    // has no annotations.
+    command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Part", "activate": false}),
+    );
+    let error = doc
+        .command(
+            &json!({"cmd": "set_folder_visible", "component": "Part", "folder": "annotations",
+                    "visible": false})
+            .to_string(),
+        )
+        .expect_err("another component's Annotations folder");
+    assert!(
+        error
+            .to_string()
+            .contains("only the root has an Annotations folder"),
+        "{error}"
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_folder_visible", "component": "Part", "folder": "sketches", "visible": false}),
+    );
+    assert_eq!(
+        display(&doc)["folders"]["C1"],
+        json!({"bodies": true, "sketches": false, "construction": true})
     );
 }

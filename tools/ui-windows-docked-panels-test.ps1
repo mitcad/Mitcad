@@ -25,8 +25,8 @@ if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "the docked panels driver failed (exit code $exitCode)"
 }
 Ui-ExpectLog 'TestDriver: popup entries: Browser | Timeline | Projects | Command' "the window's menu of its panels offers no Configuration"
-Ui-ExpectLog 'TestDriver: dock commandDock hidden, View/Command unchecked' 'the Command dock hidden'
-Ui-ExpectLog 'TestDriver: dock projectsDock hidden, View/Projects unchecked' 'the Projects dock hidden'
+Ui-ExpectLog 'TestDriver: dock commandDock hidden, View/Panels/Command unchecked' 'the Command dock hidden'
+Ui-ExpectLog 'TestDriver: dock projectsDock hidden, View/Panels/Projects unchecked' 'the Projects dock hidden'
 Ui-ExpectLog 'TestDriver: done' 'the Command and Projects docks come back with the View menu'
 Get-Content $script:UiLog | Where-Object { $_ -like '*TestDriver: popup entries*' -or $_ -like '*TestDriver: dock *' } | ForEach-Object { Write-Host "     $_" }
 Ui-StopApp

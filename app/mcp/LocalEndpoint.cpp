@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "LocalEndpoint.hpp"
+#include "framework/AppSettings.hpp"
 
 #include <QDir>
 #include <QFile>
@@ -75,7 +76,7 @@ QString discoveryDirectory() {
     return QDir::cleanPath(override);
   }
   return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation))
-      .filePath(QStringLiteral("Mitcad/mcp"));
+      .filePath(storedApplicationName() + QStringLiteral("/mcp"));
 }
 
 bool prepareDiscoveryDirectory(QString* error) {

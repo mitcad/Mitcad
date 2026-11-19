@@ -18,7 +18,6 @@
 namespace mitcad::cmd {
 namespace {
 
-const QString kGroup = QStringLiteral("SURFACE");
 const QString kOneSide = QStringLiteral("one_side");
 const QString kTwoSides = QStringLiteral("two_sides");
 const QString kSymmetric = QStringLiteral("symmetric");
@@ -40,8 +39,6 @@ CommandDef surfaceCommand(const char* id, const QString& name, const char* icon,
   def.name = name;
   def.icon = QString::fromLatin1(icon);
   def.tooltip = tooltip;
-  def.tab = QStringLiteral("SOLID");
-  def.group = kGroup;
   def.keywords = {QStringLiteral("surface"), QStringLiteral("sheet")};
   return def;
 }
@@ -128,7 +125,6 @@ CommandDef surfaceExtrudeCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.extrude", QObject::tr("Surface Extrude"), "surface-extrude",
                                   QObject::tr("Pushes profiles' boundaries and sketch curves into surfaces, "
                                               "without caps"));
-  def.pinned = true;
   def.featureType = QStringLiteral("extrude");
   def.inputs = sheetInputs(context);
   def.inputs += {
@@ -752,7 +748,6 @@ CommandDef patchCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.patch", QObject::tr("Patch"), "patch",
                                   QObject::tr("Fills sketch profiles, or a closed loop of a body's edges, with "
                                               "surfaces"));
-  def.pinned = true;
   def.keywords << QStringLiteral("fill") << QStringLiteral("cap");
   def.featureType = QStringLiteral("patch");
   def.inputs = {
@@ -925,7 +920,6 @@ CommandDef stitchCommand(const CommandContext& context) {
 CommandDef thickenCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.thicken", QObject::tr("Thicken"), "thicken",
                                   QObject::tr("Makes surface bodies solid by a wall along their normals"));
-  def.pinned = true;
   def.featureType = QStringLiteral("thicken");
   def.surfaceBodiesOnly = true; // the view's context menu (mitcad#494)
   def.inputs = {
@@ -1269,7 +1263,6 @@ const QString kKept = QStringLiteral("kept_points");
 CommandDef trimSurfaceCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.trim", QObject::tr("Trim"), "surface-trim",
                                   QObject::tr("Cuts a surface body and keeps the pieces clicked"));
-  def.pinned = true; // mitcad#1778
   def.featureType = QStringLiteral("trim_surface");
   def.surfaceBodiesOnly = true; // the view's context menu (mitcad#494)
   def.extendedToolPreview = true; // the trimming tool as it is extended (mitcad#712)
@@ -1915,38 +1908,32 @@ namespace mitcad {
 
 void registerSurfaceCommands(CommandRegistry& registry, const CommandContext& context) {
   using namespace cmd;
-  // Registration order is the menu's order: each section's commands
-  // together, the sections in their order (CommandDef::section,
-  // mitcad#1778).
-  const auto add = [&registry](CommandDef def, const char* section) {
-    def.section = QString::fromLatin1(section);
-    registry.add(def);
-  };
+  // Their places on the toolbar are the layout's (mitcad#1951).
   // Surfaces from sketch profiles and curves.
-  add(surfaceExtrudeCommand(context), "profiles");
-  add(surfaceRevolveCommand(context), "profiles");
-  add(surfaceSweepCommand(context), "profiles");
-  add(surfaceLoftCommand(context), "profiles");
+  registry.add(surfaceExtrudeCommand(context));
+  registry.add(surfaceRevolveCommand(context));
+  registry.add(surfaceSweepCommand(context));
+  registry.add(surfaceLoftCommand(context));
   // A surface helix of profiles and sketch curves (mitcad#1777).
-  add(surfaceHelixCommand(context), "profiles");
+  registry.add(surfaceHelixCommand(context));
   // Surfaces from edges.
-  add(patchCommand(context), "edges");
-  add(ruledSurfaceCommand(context), "edges");
-  add(boundarySurfaceCommand(context), "edges");
-  add(blendSurfaceCommand(context), "edges");
+  registry.add(patchCommand(context));
+  registry.add(ruledSurfaceCommand(context));
+  registry.add(boundarySurfaceCommand(context));
+  registry.add(blendSurfaceCommand(context));
   // Changing a surface.
-  add(extendSurfaceCommand(context), "edit");
-  add(trimSurfaceCommand(context), "edit");
-  add(untrimSurfaceCommand(context), "edit");
-  add(offsetSurfaceCommand(context), "edit");
+  registry.add(extendSurfaceCommand(context));
+  registry.add(trimSurfaceCommand(context));
+  registry.add(untrimSurfaceCommand(context));
+  registry.add(offsetSurfaceCommand(context));
   // Its quality and orientation.
-  add(matchSurfaceCommand(context), "quality");
-  add(fairSurfaceCommand(context), "quality");
-  add(reverseNormalCommand(context), "quality");
+  registry.add(matchSurfaceCommand(context));
+  registry.add(fairSurfaceCommand(context));
+  registry.add(reverseNormalCommand(context));
   // Surface bodies and solids.
-  add(stitchCommand(context), "bodies");
-  add(unstitchCommand(context), "bodies");
-  add(thickenCommand(context), "bodies");
+  registry.add(stitchCommand(context));
+  registry.add(unstitchCommand(context));
+  registry.add(thickenCommand(context));
 }
 
 } // namespace mitcad

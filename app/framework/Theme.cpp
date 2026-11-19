@@ -365,6 +365,12 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_ROLE(CamLeftThin, hex(0x4fb3bf), hex(0x6fd0db), View, CamLeftThin),
       MITCAD_ROLE(CamLeftThick, hex(0x5e35b1), hex(0x9575cd), View, CamLeftThick),
       MITCAD_ROLE(CamGouge, hex(0xd81b60), hex(0xff5c8d), View, CamGouge),
+      // The Boost development pill (mitcad#1990): an outline and a rocket in
+      // a warm pink, the label in the window's text; it fills with a
+      // translucent tint of the pink only under the pointer. At least 3:1
+      // on the windows as an indicator; lighter on a dark theme; off the
+      // error's red.
+      MITCAD_ROLE(Support, hex(0xd81b60), hex(0xf06292), Indicator, Support),
   };
   return table;
 }

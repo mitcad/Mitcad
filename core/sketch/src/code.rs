@@ -178,5 +178,6 @@ pub fn outline(text: &SketchText, code: &SketchCode) -> Result<TextOutline, Stri
         stored: false,
         contours,
         dropped: Vec::new(),
+        lines: 0,
     })
 }

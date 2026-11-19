@@ -17,6 +17,7 @@
 #include <QTimer>
 #include <QtLogging>
 
+#include <AIS_AnimationCamera.hxx>
 #include <Bnd_Box.hxx>
 #include <gp.hxx>
 #include <gp_Trsf.hxx>
@@ -64,6 +65,34 @@ void MainWindow::applyOriginDisplay(bool redraw) {
 double MainWindow::originDrawnSize() const {
   return m_originDisplay.size == OriginSize::Screen ? kOriginScreenPixels * m_viewer->devicePixelRatioF()
                                                     : m_originDisplay.millimetres;
+}
+
+Bnd_Box MainWindow::originPlanesBox() const {
+  const double side = originModelSize();
+  Bnd_Box box;
+  if (m_originDisplay.style == OriginStyle::Corner) {
+    box.Update(0.0, 0.0, 0.0, side, side, side);
+  } else {
+    box.Update(-side / 2.0, -side / 2.0, -side / 2.0, side / 2.0, side / 2.0, side / 2.0);
+  }
+  return box;
+}
+
+void MainWindow::keepOriginClearOfCards() {
+  // Only the Floating layout's cards float over the view; Docked panels are
+  // beside it.
+  if (m_floating == nullptr || !m_originClearArmed || m_mode != Mode::PickPlane) {
+    return;
+  }
+  // The planes' size on the screen where the view is going (a new design's
+  // framing made first).
+  m_viewer->settleCamera();
+  if (m_viewer->panClearOfCards(originPlanesBox(), QStringLiteral("the origin planes"))) {
+    // The animated move's end is no navigation of the user's; the datums'
+    // places are logged again once it rests (cameraRested), the faces' too.
+    m_originClearMoving = !m_viewer->ViewAnimation()->IsStopped();
+    m_originClearLogPicks = true;
+  }
 }
 
 double MainWindow::originModelSize() const {

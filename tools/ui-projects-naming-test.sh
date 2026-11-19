@@ -81,7 +81,7 @@ export MITCAD_GIT=$work/slow-git
 # The panel shown at the start, as for a user who turned it on (mitcad#1020:
 # hidden until then); New Design replaces the open design (mitcad#1172).
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[projects]\npanel=true\n[documents]\nopenInCurrentWindow=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[projects]\npanel=true\npanelTopBar=true\n[documents]\nopenInCurrentWindow=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 export MITCAD_TEST_WORK=$work MITCAD_TEST_SHOP=$shop MITCAD_TEST_STEP_MS=100
 ui_start_display

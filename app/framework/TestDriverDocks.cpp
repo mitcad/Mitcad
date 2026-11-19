@@ -178,11 +178,14 @@ bool TestDriver::runDockStep(const QString& name, const QStringList& a, int line
     fail(line, QStringLiteral("expect-dock <dock> shown|hidden"));
     return true;
   }
-  const QPointer<QMenu> view = m_main->findChild<QMenu*>(QStringLiteral("viewMenu"));
+  // The entry in View › Panels (mitcad#1975), found each time: a change of
+  // the layout fills the menu bar again.
+  const QPointer<QWidget> main = m_main;
   whenReady(
-      [this, dock, view, wantShown, shown] {
-        if (dock.isNull() || view.isNull()) {
-          m_waitDetail = QStringLiteral("the dock or the View menu is gone");
+      [this, dock, main, wantShown, shown] {
+        QMenu* view = main ? main->findChild<QMenu*>(QStringLiteral("viewPanelsMenu")) : nullptr;
+        if (dock.isNull() || view == nullptr) {
+          m_waitDetail = QStringLiteral("the dock or the View menu's Panels is gone");
           return false;
         }
         const QString title = entryText(dock->windowTitle());
@@ -205,7 +208,7 @@ bool TestDriver::runDockStep(const QString& name, const QStringList& a, int line
         if (entry != nullptr) {
           entryState = entry->isChecked() ? QStringLiteral("checked") : QStringLiteral("unchecked");
         }
-        m_waitDetail = QStringLiteral("dock %1, View/%2 %3").arg(dockState, title, entryState);
+        m_waitDetail = QStringLiteral("dock %1, View/Panels/%2 %3").arg(dockState, title, entryState);
         if (entry == nullptr || entry->isChecked() != wantShown) {
           return false;
         }
@@ -213,7 +216,7 @@ bool TestDriver::runDockStep(const QString& name, const QStringList& a, int line
       },
       6, QStringLiteral("the dock '%1' is not %2 with its View menu entry").arg(dockName, a.at(1)),
       [dock, dockName, wantShown] {
-        qDebug().noquote() << QStringLiteral("TestDriver: dock %1 %2, View/%3 %4")
+        qDebug().noquote() << QStringLiteral("TestDriver: dock %1 %2, View/Panels/%3 %4")
                                   .arg(dockName, wantShown ? QStringLiteral("shown") : QStringLiteral("hidden"),
                                        dock.isNull() ? QString() : entryText(dock->windowTitle()),
                                        wantShown ? QStringLiteral("checked") : QStringLiteral("unchecked"));

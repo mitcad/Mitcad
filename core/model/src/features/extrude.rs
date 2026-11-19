@@ -259,10 +259,14 @@ pub struct ExtrudeDef<P = ParamId> {
     /// A planar face of a body as the profile instead of sketch regions
     /// (mitcad#535): its bounded area, holes kept, swept along its outward
     /// normal (reversed by `flip` or a negative distance), found by its
-    /// topological name on every recompute. Distances only, with their
-    /// tapers, along `direction` when given (mitcad#541; a curved face only
-    /// along a direction, without a taper or offset); from the face or an
-    /// offset from it; no thin walls, surface, curves, wrap or `cut_scope`.
+    /// topological name on every recompute. The extents of sketch profiles
+    /// (mitcad#2033): distances, up to an object (a plane, a face, a body, a
+    /// point or a line, of the face's own body or another one) with its
+    /// offset, through all, on one side, symmetric or two sides, with their
+    /// tapers (up to an object only along the face's normal); along
+    /// `direction` when given (mitcad#541; a curved face only along a
+    /// direction, without a taper or offset); from the face or an offset
+    /// from it; no thin walls, surface, curves, wrap or `cut_scope`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_face: Option<super::reference::FaceRef>,
     /// The direction the profiles are extruded along instead of the sketch
@@ -937,10 +941,11 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
             return self.surface_output(ctx);
         }
         if let Some(face) = &self.profile_face {
-            // A body face as the profile (mitcad#535).
+            // A body face as the profile (mitcad#535), through all of the
+            // participants (mitcad#2033).
             let participants = participant_bodies(ctx, self.operation, &self.participants)?;
             let uid = ctx.uid;
-            let tool = self.face_tool(ctx, face, uid)?;
+            let tool = self.face_tool(ctx, face, &participants, uid, None)?;
             return apply_operation(ctx, self.operation, participants, tool, "extrusion");
         }
         let (sketch, regions) = self.sketch_regions(ctx)?;
@@ -1032,13 +1037,17 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
         feature: FeatureUid,
         placement: &Transform,
     ) -> Option<Result<K::Shape, String>> {
-        // A body face's extrusion goes distances only: its tool is moved.
-        if self.surface || self.profile_face.is_some() || !self.depends_on_bodies() {
+        if self.surface || !self.depends_on_bodies() {
             return None;
         }
-        let (sketch, regions) = match self.sketch_regions(ctx) {
-            Ok(p) => p,
-            Err(e) => return Some(Err(e)),
+        // A body face's extrusion (mitcad#2033) has no sketch: its face is
+        // moved with the copy.
+        let sketch = match &self.profile_face {
+            Some(_) => None,
+            None => match self.sketch_regions(ctx) {
+                Ok(p) => Some(p),
+                Err(e) => return Some(Err(e)),
+            },
         };
         let participants = if let Some(scope) = self.active_cut_scope() {
             // Preserve Through All's assembly bounds, including excluded
@@ -1077,7 +1086,13 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
         };
         // Objects the original took away are found as it found them.
         let outer = ctx.objects_before.replace(feature);
-        let tool = self.tool(ctx, &sketch, &regions, &participants, placement, feature);
+        let tool = match (&self.profile_face, &sketch) {
+            (Some(face), _) => self.face_tool(ctx, face, &participants, feature, Some(placement)),
+            (None, Some((sketch, regions))) => {
+                self.tool(ctx, sketch, regions, &participants, placement, feature)
+            }
+            (None, None) => Err("no profiles selected".to_owned()),
+        };
         ctx.objects_before = outer;
         Some(tool)
     }
@@ -1471,7 +1486,11 @@ impl ExtrudeDef {
                         }
                     );
                     SideEnd::Distance(through_all_length(
-                        ctx.kernel, origin, along, &bodies, both,
+                        ctx.kernel,
+                        &[origin],
+                        along,
+                        &bodies,
+                        both,
                     )?)
                 }
             };
@@ -1563,14 +1582,11 @@ impl ExtrudeDef {
 
 // A planar body face as the profile (mitcad#535).
 
-/// What an extrusion of a body face goes: distances on one side, both
-/// sides alike or two sides, each with its taper (mitcad#541).
-const FACE_EXTENTS: &str =
-    "an extrusion of a body face goes a distance (one side, symmetric or two sides)";
-
 /// Checks an extrusion whose profile is a body face: nothing a sketch
-/// profile has besides it, distances only, the face's body and features
-/// before the feature.
+/// profile has besides it, a start at the face or offset from it, the
+/// face's body and features before the feature. Its extents are a sketch
+/// profile's (mitcad#2033): distances, up to an object and through all, on
+/// one side, both sides alike or two sides.
 fn check_face_profile(
     def: &ExtrudeDef,
     ctx: &CheckContext<'_>,
@@ -1594,33 +1610,75 @@ fn check_face_profile(
     if matches!(def.start, Start::Object { .. }) {
         return Err("an extrusion of a body face starts at the face or offset from it".to_owned());
     }
-    let distance = |side: &Side| matches!(side, Side::Distance { .. });
-    let by_distance = match &def.extent {
-        Extent::Distance { .. } | Extent::Symmetric { .. } => true,
-        Extent::TwoSides { side1, side2, .. } => distance(side1) && distance(side2),
-        _ => false,
-    };
-    if !by_distance {
-        return Err(FACE_EXTENTS.to_owned());
-    }
     face.check(ctx)
 }
 
+/// One side of a body face's extrusion as evaluation sees it
+/// (mitcad#2033): a distance (> 0, or any but zero with two sides), up to
+/// an object moved by an offset, or through all (both ways alike with
+/// `both`).
+enum FaceSide<'a> {
+    Distance(f64),
+    ToObject(&'a ExtentObject, f64),
+    ThroughAll { both: bool },
+}
+
 impl ExtrudeDef {
+    /// One side of a body face's extrusion: its distance (by its size
+    /// unless `signed`), its object and offset, or through all.
+    fn face_side<'a, K: Kernel>(
+        ctx: &mut EvalContext<'_, K>,
+        side: &'a Side,
+        signed: bool,
+    ) -> Result<(FaceSide<'a>, Option<ParamId>), String> {
+        Ok(match side {
+            Side::Distance { distance, taper } => {
+                let d = ctx.param(*distance)?;
+                (FaceSide::Distance(if signed { d } else { d.abs() }), *taper)
+            }
+            Side::ToObject {
+                object,
+                offset,
+                taper,
+            } => {
+                let offset = offset.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0);
+                (FaceSide::ToObject(object, offset), *taper)
+            }
+            Side::ThroughAll { taper } => (FaceSide::ThroughAll { both: false }, *taper),
+        })
+    }
+
     /// The tool of an extrusion whose profile is a body face: the face as
     /// found on its body now (a face a sketch change renamed is found
     /// again, with a warning), swept by the kernel along its outward
-    /// normal, its faces named after `feature`. A face that is gone, not
+    /// normal, its faces named after `feature`. A side runs its distance,
+    /// up to an object (a plane, a face or a body, of the face's own body
+    /// or another one) or through `participants` (all bodies when none), as
+    /// a sketch profile's does (mitcad#2033). A face that is gone, not
     /// planar or of a mesh body fails the feature; no other profile is
-    /// taken instead.
+    /// taken instead. With `placement`, a pattern's copy of feature
+    /// `feature` (Adjust): the face as the original found it, on its body
+    /// before it, moved by the placement with its direction, its ends found
+    /// again at the copy.
     fn face_tool<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
         face: &super::reference::FaceRef,
+        participants: &[(BodyUid, K::Shape)],
         feature: FeatureUid,
+        placement: Option<&Transform>,
     ) -> Result<K::Shape, String> {
-        let body = ctx.surface_body(face.body)?;
+        let mut body = match placement.and_then(|_| ctx.body_before(feature, face.body)) {
+            Some(before) => before,
+            None => ctx.surface_body(face.body)?,
+        };
         let found = ctx.face_on(face.body, &body, &face.face)?;
+        if let Some(placement) = placement {
+            body = ctx
+                .kernel
+                .transform_shape(&body, placement, None)
+                .map_err(|e| e.to_string())?;
+        }
         let start = match &self.start {
             Start::ProfilePlane => 0.0,
             Start::Offset { offset } => ctx.param(*offset)?,
@@ -1631,15 +1689,10 @@ impl ExtrudeDef {
             }
         };
         let mut reversed = self.flip;
-        // Each side's taper (mitcad#541), none when not given.
-        let taper = |ctx: &mut EvalContext<'_, K>, t: &Option<ParamId>| -> Result<f64, String> {
-            Ok(match *t {
-                Some(id) => ctx.param(id)?,
-                None => 0.0,
-            })
-        };
-        let (side1, side2, taper1, taper2) = match &self.extent {
-            Extent::Distance { distance, taper: t } => {
+        // The sides as given, each with its taper (mitcad#541), none when
+        // not given.
+        let (mut one, mut two, mut taper1, mut taper2) = match &self.extent {
+            Extent::Distance { distance, taper } => {
                 let d = ctx.param(*distance)?;
                 if d == 0.0 {
                     return Err(format!("{} must not be zero", ctx.param_name(*distance)));
@@ -1648,63 +1701,127 @@ impl ExtrudeDef {
                 if d < 0.0 {
                     reversed = !reversed;
                 }
-                (d.abs(), None, taper(ctx, t)?, 0.0)
+                (FaceSide::Distance(d.abs()), None, *taper, None)
             }
+            Extent::ToObject {
+                object,
+                offset,
+                taper,
+            } => {
+                let offset = offset.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0);
+                (FaceSide::ToObject(object, offset), None, *taper, None)
+            }
+            // Both ways through all: the same length each way.
+            Extent::ThroughAll { both_sides, taper } => (
+                FaceSide::ThroughAll { both: *both_sides },
+                both_sides.then_some(FaceSide::ThroughAll { both: true }),
+                *taper,
+                both_sides.then_some(*taper).flatten(),
+            ),
             Extent::Symmetric {
                 distance,
                 full_length,
-                taper: t,
+                taper,
             } => {
                 let d = ctx.positive(*distance)?;
                 let d = if *full_length { d / 2.0 } else { d };
-                let t = taper(ctx, t)?;
-                (d, Some(d), t, t)
+                (
+                    FaceSide::Distance(d),
+                    Some(FaceSide::Distance(d)),
+                    *taper,
+                    *taper,
+                )
             }
             Extent::TwoSides {
-                side1:
-                    Side::Distance {
-                        distance: d1,
-                        taper: t1,
-                    },
-                side2:
-                    Side::Distance {
-                        distance: d2,
-                        taper: t2,
-                    },
+                side1,
+                side2,
                 signed,
             } => {
                 // Each side goes its own way by its distance's size, as a
                 // sketch profile's, or with `signed` (mitcad#765) by its
                 // signed distance: a negative side ends on the other side's
-                // side. A side of length zero leaves one side.
-                let (a, b) = (ctx.param(*d1)?, ctx.param(*d2)?);
-                let (a, b) = if *signed {
-                    if !is_positive(a + b) {
-                        return Err(sides_overlap(a, b));
-                    }
-                    (a, b)
-                } else {
-                    (a.abs(), b.abs())
-                };
-                let (t1, t2) = (taper(ctx, t1)?, taper(ctx, t2)?);
-                match (a == 0.0, b == 0.0) {
-                    (false, false) => (a, Some(b), t1, t2),
-                    (false, true) => (a, None, t1, 0.0),
-                    (true, false) => {
-                        reversed = !reversed;
-                        (b, None, t2, 0.0)
-                    }
-                    (true, true) => {
-                        return Err(
-                            "the two extrude distances must add up to more than zero".to_owned()
-                        );
-                    }
+                // side.
+                let (a, t1) = Self::face_side(ctx, side1, *signed)?;
+                let (b, t2) = Self::face_side(ctx, side2, *signed)?;
+                if *signed
+                    && let (FaceSide::Distance(d1), FaceSide::Distance(d2)) = (&a, &b)
+                    && !is_positive(d1 + d2)
+                {
+                    return Err(sides_overlap(*d1, *d2));
                 }
+                (a, Some(b), t1, t2)
             }
-            _ => return Err(FACE_EXTENTS.to_owned()),
         };
-        // A direction of its own (mitcad#541), as a unit vector.
-        let direction = self.direction.map(unit_direction).transpose()?;
+        // A side of length zero leaves the other side alone.
+        let zero = |side: &FaceSide<'_>| matches!(side, FaceSide::Distance(d) if *d == 0.0);
+        if two.as_ref().is_some_and(zero) {
+            two = None;
+            taper2 = None;
+        } else if zero(&one)
+            && let Some(other) = two.take()
+        {
+            reversed = !reversed;
+            one = other;
+            taper1 = taper2.take();
+        }
+        if zero(&one) {
+            return Err("the two extrude distances must add up to more than zero".to_owned());
+        }
+        let (taper1, taper2) = (
+            taper1.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0),
+            taper2.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0),
+        );
+        // A direction of its own (mitcad#541), as a unit vector, moved with
+        // a pattern's copy.
+        let direction = self
+            .direction
+            .map(|d| unit_direction(placement.map_or(d, |p| p.apply_vector(d))))
+            .transpose()?;
+        // Up to an object or through all: the way the face goes and where it
+        // lies (mitcad#2033), found for the first side that needs it.
+        let mut way: Option<FaceWay> = None;
+        let mut ends = Vec::with_capacity(2);
+        for (k, side) in [Some(one), two].into_iter().flatten().enumerate() {
+            if !matches!(side, FaceSide::Distance(_)) && way.is_none() {
+                way = Some(self.face_way(ctx, &body, &found, direction, reversed, start)?);
+            }
+            let end = match side {
+                FaceSide::Distance(d) => SideEnd::Distance(d),
+                FaceSide::ToObject(object, offset) => {
+                    let way = way.as_ref().expect("the way of a side up to an object");
+                    // A point or a line object stands for the plane through
+                    // it parallel to the face (mitcad#1329).
+                    let across = Across {
+                        normal: way.normal,
+                        lies: "in a plane parallel to the profile's plane",
+                    };
+                    SideEnd::Target(Bound {
+                        target: object.resolve_across(ctx, &self.object_links, Some(across))?,
+                        offset,
+                    })
+                }
+                FaceSide::ThroughAll { both } => {
+                    let way = way.as_ref().expect("the way of a side through all");
+                    let along = if k == 0 {
+                        way.along
+                    } else {
+                        way.along.map(|v| -v)
+                    };
+                    let bodies = if participants.is_empty() {
+                        ctx.bodies()
+                    } else {
+                        participants.to_vec()
+                    };
+                    SideEnd::Distance(through_all_length(
+                        ctx.kernel, &way.from, along, &bodies, both,
+                    )?)
+                }
+            };
+            ends.push(end);
+        }
+        let mut ends = ends.into_iter();
+        let side1 = ends.next().expect("side one");
+        let side2 = ends.next();
         let spec = FaceExtrudeSpec {
             feature,
             body: &body,
@@ -1722,13 +1839,59 @@ impl ExtrudeDef {
             .extrude_face(&spec)
             .map_err(super::face_refs::kernel_error)
     }
+
+    /// The way a body face's extrusion goes (mitcad#2033): side one along
+    /// `along` (the direction, else the face's outward normal; reversed
+    /// with `reversed`), the plane objects stand for across `normal` (the
+    /// face's normal, a curved face's direction), and the points the face
+    /// may start from, `from`, for through all: the middle of a planar face
+    /// moved by the start offset, else the corners of its body's box (a face
+    /// along a direction off its normal starts at points further apart).
+    fn face_way<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        body: &K::Shape,
+        face: &crate::FaceName,
+        direction: Option<[f64; 3]>,
+        reversed: bool,
+        start: f64,
+    ) -> Result<FaceWay, String> {
+        // A curved face has no plane: it goes along its direction.
+        let (plane, normal) = match (ctx.kernel.face_plane(body, face), direction) {
+            (Ok(plane), _) => (Some(plane), plane.normal),
+            (Err(_), Some(d)) => (None, d),
+            (Err(e), None) => return Err(super::face_refs::kernel_error(e)),
+        };
+        let sweep = direction.unwrap_or(normal);
+        let along = if reversed { sweep.map(|v| -v) } else { sweep };
+        let shift = |p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|i| p[i] + start * normal[i]) };
+        let from = match (plane, direction) {
+            (Some(plane), None) => vec![shift(plane.origin)],
+            _ => match ctx.kernel.bounding_box(body).map_err(|e| e.to_string())? {
+                Some(bounds) => bounds.corners().map(shift).collect(),
+                None => return Err("there are no bodies to extrude through".to_owned()),
+            },
+        };
+        Ok(FaceWay {
+            along,
+            normal,
+            from,
+        })
+    }
 }
 
-/// A length along `direction` from `origin` that reaches past every body
-/// (both ways with `both`).
+/// See [`ExtrudeDef::face_way`].
+struct FaceWay {
+    along: [f64; 3],
+    normal: [f64; 3],
+    from: Vec<[f64; 3]>,
+}
+
+/// A length along `direction` that reaches past every body from each of
+/// the points `from` (both ways with `both`).
 fn through_all_length<K: Kernel>(
     kernel: &K,
-    origin: [f64; 3],
+    from: &[[f64; 3]],
     direction: [f64; 3],
     bodies: &[(BodyUid, K::Shape)],
     both: bool,
@@ -1739,8 +1902,10 @@ fn through_all_length<K: Kernel>(
             continue;
         };
         for corner in bounds.corners() {
-            let offset = dot(std::array::from_fn(|i| corner[i] - origin[i]), direction);
-            reach = reach.max(if both { offset.abs() } else { offset });
+            for origin in from {
+                let offset = dot(std::array::from_fn(|i| corner[i] - origin[i]), direction);
+                reach = reach.max(if both { offset.abs() } else { offset });
+            }
         }
     }
     if reach == f64::NEG_INFINITY {

@@ -2089,6 +2089,46 @@ bool feature_ok(const mitcad::Document& document, const std::string& name) {
   return true;
 }
 
+// mitcad#2033: a stepped block's lower top extruded up to the higher step's
+// top (To Selected Face) and joined: one level body. It follows the block
+// made higher and the step made higher. A face's extrusion through all.
+void test_face_extruded_up_to_a_face_of_its_own_body() {
+  auto document = mitcad::new_demo_document();           // F1, F2: 60 x 40 x 20, d1-d3
+  run(*document, R"({"cmd": "sketch.create"})");          // F3
+  run(*document, sketch_rectangle("F3", 30, 0, 30, 40));  // d4, d5
+  run(*document, extrude("F3", kRectangle, 30, "join", R"(["F2.b0"])")); // F4, d6
+  CHECK(near(body_volume(*document), 60.0 * 40.0 * 20.0 + 30.0 * 40.0 * 10.0));
+  const std::string lower = "F2:end(" + kRectangle + ")";
+  const std::string higher = "F4:end(" + kRectangle + ")";
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "extrude", "profile_face": {"body": "F2.b0", "face": ")" +
+                     lower + R"("}, "extent": {"type": "to_object", "object": {"type": "face", "body": "F2.b0", "face": ")" +
+                     higher + R"("}}, "operation": "join"}})"); // F5
+  CHECK(!contains(std::string(document->query(R"({"query": "timeline"})")), R"("status":"error")"));
+  CHECK(body_count(*document) == 1);
+  CHECK(near(body_volume(*document), 60.0 * 40.0 * 30.0));
+  const auto level = document->body_shape("F2.b0");
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(level->occt(), box, false, false);
+  double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+  box.Get(x0, y0, z0, x1, y1, z1);
+  CHECK(std::abs(z1 - 30.0) < 1e-6);
+
+  // The block 25 high: the lower top rises, the body stays level.
+  run(*document, set("d3", 25));
+  CHECK(near(body_volume(*document), 60.0 * 40.0 * 30.0));
+  // The step 35 high: the extrusion follows its top.
+  run(*document, set("d6", 35));
+  CHECK(near(body_volume(*document), 60.0 * 40.0 * 35.0));
+
+  // Through all: a block's top into it as a new body reaches past the
+  // block's far side (its depth 20, by a quarter and 1 mm more).
+  auto block = mitcad::new_demo_document();
+  run(*block, R"({"cmd": "add_feature", "def": {"type": "extrude", "profile_face": {"body": "F2.b0", "face": ")" +
+                  lower + R"("}, "extent": {"type": "through_all"}, "flip": true, "operation": "new_body"}})"); // F3
+  CHECK(body_count(*block) == 2);
+  CHECK(near(body_volume(*block, "F3.b0"), 60.0 * 40.0 * 26.0));
+}
+
 void test_thread_end_pieces_keep_their_names() {
   const std::string end = "E{" + kBore + "|F3:high_thread(" + kBore + ")#0}";
   const std::string chamfer_face = "F4:chamfer(" + end + ")#0";
@@ -2245,6 +2285,7 @@ int main(int argc, char** argv) {
   test_pattern_of_features_in_one_boolean();
   test_exceptions_across_the_bridge();
   test_thread_end_pieces_keep_their_names();
+  test_face_extruded_up_to_a_face_of_its_own_body();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

@@ -1,0 +1,146 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: where patch 0870 walks a run of a stripe's pieces again and the
+run holds the stripe's first or last piece, the stripe's curve at that end
+gets its parameter curve on the new pieces' surface (mitcad#1858).
+
+Expected: the edge where a closed stripe's blend closes on itself (the
+stripe's first and last curve, one curve) lies on both blend faces beside
+it within the walk's 3D tolerance, as every other edge between its pieces.
+Actual: a stadium-shaped block 40 deep with a hole of radius 12 in its
+middle, the hole's rim rounded with 6, so that the top is a strip 2 wide in
+front of the hole and behind it; the top's outer rim, one closed chain of
+tangent edges, rounded with 3. The contact on the top crosses the rounded
+rim's tangent edge and comes back in front and behind, and 0870 walks
+those runs again. Started from the front edge, the front run holds the
+stripe's first pieces: the closing edge's tolerance is 4.33 mm. Started
+from the right arc, the back run holds its last pieces: 174 mm, and the
+solid is not valid. A reported nut design (a closed chain of 38 edges
+rounded with 5, mitcad#1858) closed with a tolerance of 4.79 mm, which no
+later step could repair.
+
+Cause (traced): ChFi3d_MakeExtremities makes a periodic stripe's end
+curve from the first piece's first section and its parameter curve on the
+last piece's surface (LastPCurve), a line between that piece's contacts
+at its end. KeepFacesAcrossTangentEdges runs after it in Compute and, for
+a run ending at the last piece, replaces the pieces with three on a newly
+walked surface (KeepFaceAcrossTangentEdge). That surface has its own
+parameters (here the section's parameter runs to 28.7 where the old one
+ran to 1.22), so the old line on it lies off the curve by up to the
+section's length, and ChFi3d_FilDS puts the edge there. The stripe's
+contract that its end curves lie on its end pieces' surfaces is broken by
+the replacement, not by the end curves' construction.
+
+- KeepFaceAcrossTangentEdge: where the run starts at the stripe's first
+  piece or ends at its last, after the replacement the stripe's parameter
+  curve at that end is made again on the new end piece's surface
+  (endPCurveOnPiece), as ChFi3d_MakeExtremities makes it: the line between
+  the piece's contacts at that end, from ChFi3d_ComputePCurv, which also
+  gives the tolerance reached; the end curve's tolerance is raised to it.
+  The 3D curve stays: the run is walked again between the same sections.
+- Runs inside a stripe, and stripes with no curve at an end (a corner
+  there makes its own), are unchanged.
+
+Upstream: KeepFacesAcrossTangentEdges is Mitcad's (0870); stock OCCT has
+no step that replaces a stripe's pieces after its extremities are made,
+so the change does nothing there. Within the port, JoinOverNarrowFaceFrom
+also takes pieces off a stripe's ends; its stripes end at corners, which
+make their end curves afterwards.
+Test: geometry/tests/port/p0871-closing-curve-after-a-kept-face.cpp (ctest
+geometry.port.0871): the block above, the chain started from the front
+edge and from the right arc: one valid solid, every tolerance within the
+walk's 1e-4, the same volume; the boundary, a hole of radius 9 leaving the
+strip 5 wide (no run), as before. Before the patch the first two fail
+(4.33 and 174, the second not valid).
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
+index fa9444c9d..87c63d904 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
+@@ -2554,6 +2554,61 @@ static bool ChFi3d_SectionCut(const occ::handle<Geom_Surface>& S,
+ }
+ 
+ 
++//=======================================================================
++// function : endPCurveOnPiece
++// purpose  : The stripe's curve at its first (or last) end lies on the
++//            surface of its first (last) piece: its parameter curve there
++//            made again on that piece's surface, from the piece's contacts
++//            at that end (ChFi3d_MakeExtremities' line between them), for a
++//            piece whose surface replaced the one the curve was made on. The
++//            curve's tolerance covers the new parameter curve. False where
++//            the stripe has no curve at that end or it has no 3D curve.
++//=======================================================================
++
++static bool endPCurveOnPiece(const occ::handle<ChFiDS_Stripe>& St,
++                             const bool                        theFirst,
++                             TopOpeBRepDS_DataStructure&       DStr,
++                             const double                      theTol3d)
++{
++  const int anIc = St->Curve(theFirst);
++  if (anIc == 0)
++  {
++    return false;
++  }
++  const occ::handle<Geom_Curve>& aC3d = DStr.Curve(anIc).Curve();
++  if (aC3d.IsNull())
++  {
++    return false;
++  }
++  const NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeq = St->SetOfSurfData()->Sequence();
++  const occ::handle<ChFiDS_SurfData>& aPiece = theFirst ? aSeq.First() : aSeq.Last();
++  const ChFiDS_FaceInterference&      aFi1   = aPiece->InterferenceOnS1();
++  const ChFiDS_FaceInterference&      aFi2   = aPiece->InterferenceOnS2();
++  if (aFi1.PCurveOnSurf().IsNull() || aFi2.PCurveOnSurf().IsNull())
++  {
++    return false;
++  }
++  const gp_Pnt2d aUV1 =
++    aFi1.PCurveOnSurf()->Value(theFirst ? aFi1.FirstParameter() : aFi1.LastParameter());
++  const gp_Pnt2d aUV2 =
++    aFi2.PCurveOnSurf()->Value(theFirst ? aFi2.FirstParameter() : aFi2.LastParameter());
++  double aPardeb = 0., aParfin = 0.;
++  St->Parameters(theFirst, aPardeb, aParfin);
++  double aTolReached = 0.;
++  ChFi3d_ComputePCurv(aC3d,
++                      aUV1,
++                      aUV2,
++                      St->ChangePCurve(theFirst),
++                      DStr.Surface(aPiece->Surf()).Surface(),
++                      aPardeb,
++                      aParfin,
++                      theTol3d,
++                      aTolReached);
++  TopOpeBRepDS_Curve& aCurve = DStr.ChangeCurve(anIc);
++  aCurve.Tolerance(std::max(aCurve.Tolerance(), aTolReached));
++  return true;
++}
++
+ //=======================================================================
+ // function : KeepFaceAcrossTangentEdge
+ // purpose  : One run of KeepFacesAcrossTangentEdges, pieces i to j of St.
+@@ -2573,6 +2628,10 @@ bool ChFi3d_Builder::KeepFaceAcrossTangentEdge(const occ::handle<ChFiDS_Stripe>&
+   NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeq = St->ChangeSetOfSurfData()->ChangeSequence();
+   const occ::handle<ChFiDS_SurfData> Di = aSeq.Value(i);
+   const occ::handle<ChFiDS_SurfData> Dj = aSeq.Value(j);
++  // (The stripe's end curves, already made on the first and last pieces'
++  // surfaces, follow those pieces when the run replaces them.)
++  const bool                         aRunsFromFirst = i == 1;
++  const bool                         aRunsToLast    = j == aSeq.Length();
+   const double                       R  = occ::down_cast<ChFiDS_FilSpine>(sp)->Radius();
+   const double                       W0 = Di->FirstSpineParam(), W1 = Dj->LastSpineParam();
+   const double aTolMeet = std::max(std::max(100. * tolapp3d, 1.e-4), 1.e-3 * R);
+@@ -2927,5 +2986,13 @@ bool ChFi3d_Builder::KeepFaceAcrossTangentEdge(const occ::handle<ChFiDS_Stripe>&
+     aSeq.InsertBefore(i, Q2);
+     aSeq.InsertBefore(i, Q1);
+   }
++  if (aRunsFromFirst)
++  {
++    endPCurveOnPiece(St, true, DStr, tolapp3d);
++  }
++  if (aRunsToLast)
++  {
++    endPCurveOnPiece(St, false, DStr, tolapp3d);
++  }
+   return true;
+ }

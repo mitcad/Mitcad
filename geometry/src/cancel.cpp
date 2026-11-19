@@ -55,6 +55,24 @@ void throw_if_cancelled() {
   }
 }
 
+// The indicator of a CancelRange made under a CancelScope.
+struct CancelRange::State {
+  occ::handle<Message_ProgressIndicator> indicator;
+};
+
+CancelRange::CancelRange() {
+  if (t_source != nullptr) {
+    m_state = std::make_unique<State>();
+    m_state->indicator = new Breaker(*t_source);
+  }
+}
+
+CancelRange::~CancelRange() = default;
+
+Message_ProgressRange CancelRange::range() {
+  return m_state == nullptr ? Message_ProgressRange() : m_state->indicator->Start();
+}
+
 namespace detail {
 
 Interrupt::Interrupt() {

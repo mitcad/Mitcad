@@ -267,12 +267,14 @@ struct DocumentSnapshot {
   bool showConstruction = true;
   bool showSketches = true;
   // The eyes of each component's Bodies, Sketches and Construction folders
-  // (mitcad#1771): display state the design keeps (the model's
-  // set_folder_visible, the `document` query's display.folders). A hidden
-  // folder leaves out everything in it, the items' own light bulbs as they
-  // are; the model leaves a hidden Bodies folder's bodies out of the
-  // `instances` query itself.
-  enum class Folder { Bodies, Sketches, Construction };
+  // (mitcad#1771) and of the root's Annotations folder (mitcad#2041):
+  // display state the design keeps (the model's set_folder_visible, the
+  // `document` query's display.folders). A hidden folder leaves out
+  // everything in it, the items' own light bulbs as they are; the model
+  // leaves a hidden Bodies folder's bodies out of the `instances` query
+  // itself, the application leaves a hidden Annotations folder's
+  // annotations out of the view (annotationsShown).
+  enum class Folder { Bodies, Sketches, Construction, Annotations };
   // The folders hidden, by component uid; a component with none hidden has
   // no entry.
   QHash<QString, QVector<Folder>> hiddenFolders;
@@ -280,8 +282,13 @@ struct DocumentSnapshot {
   bool folderShown(const QString& component, Folder folder) const {
     return !hiddenFolders.value(component).contains(folder);
   }
-  // The model's name of a folder: bodies, sketches, construction.
+  // The model's name of a folder: bodies, sketches, construction,
+  // annotations.
   static QString folderKey(Folder folder);
+  // Whether the root's Annotations folder is shown by its eye (mitcad#2041):
+  // hidden, the view draws none of the design's annotations and none can be
+  // picked there, their own light bulbs as they are.
+  bool annotationsShown() const { return folderShown(QStringLiteral("C0"), Folder::Annotations); }
   // Show Dimensions of a sketch's row (mitcad#1772): the planar sketches
   // whose dimensions the view draws while they are shown and not edited
   // (the `document` query's display.sketch_dimensions; display state the

@@ -60,7 +60,7 @@ echo "ok   the designs are made"
 # The panel shown at the start, as for a user who turned it on (mitcad#1020:
 # hidden until then).
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[projects]\npanel=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[projects]\npanel=true\npanelTopBar=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 export MITCAD_TEST_WORK=$work MITCAD_TEST_SHOP=$shop MITCAD_TEST_STEP_MS=100
 export MITCAD_TEST_INPUT=$here/ui-scripts/picker-new-folder.mitcad-ui

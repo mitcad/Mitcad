@@ -144,8 +144,6 @@ void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchContro
   def.kind = CommandDef::Kind::Feature;
   // Outside sketches (with a sketch picked) and in the sketch being edited.
   def.mode = CommandDef::Mode::Any;
-  def.tab.clear(); // the sketch's context menus and the command search
-  def.group = QStringLiteral("MODIFY");
   def.sketchCommand = true;
   // Only from the sketch's own menus: never a guess of the view's menus or
   // the selection card from what is selected.

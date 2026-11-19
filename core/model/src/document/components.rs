@@ -252,13 +252,8 @@ impl DocState {
 /// The occurrences a joint moves, in its own component: the first of
 /// each of its paths (mitcad#1811). None for other features.
 pub(crate) fn joint_sides(def: &FeatureDef) -> Vec<OccurrenceUid> {
-    let paths: Vec<&[OccurrenceUid]> = match def {
-        FeatureDef::Joint(j) => vec![j.a.occurrence.0.as_slice(), j.b.occurrence.0.as_slice()],
-        FeatureDef::AsBuiltJoint(j) => vec![j.a.0.as_slice(), j.b.0.as_slice()],
-        _ => Vec::new(),
-    };
     let mut sides = Vec::new();
-    for path in paths {
+    for path in joint_paths(def) {
         if let Some(first) = path.first()
             && !sides.contains(first)
         {
@@ -266,6 +261,17 @@ pub(crate) fn joint_sides(def: &FeatureDef) -> Vec<OccurrenceUid> {
         }
     }
     sides
+}
+
+/// A joint's paths from its own component, side a's first (mitcad#2017:
+/// the free parts of flexible occurrences they reach). None for other
+/// features.
+pub(crate) fn joint_paths(def: &FeatureDef) -> Vec<&[OccurrenceUid]> {
+    match def {
+        FeatureDef::Joint(j) => vec![j.a.occurrence.0.as_slice(), j.b.occurrence.0.as_slice()],
+        FeatureDef::AsBuiltJoint(j) => vec![j.a.0.as_slice(), j.b.0.as_slice()],
+        _ => Vec::new(),
+    }
 }
 
 impl<K: Kernel> Document<K> {
@@ -1097,8 +1103,11 @@ impl<K: Kernel> Document<K> {
                             .assembly
                             .occurrence_mut(occurrence)
                             .expect("placed")
-                            .flexible =
-                            Some(flex.remapped(&|uid| copied.features.get(&uid).copied()));
+                            .flexible = Some(
+                            flex.remapped(&|uid| copied.features.get(&uid).copied(), &|o| {
+                                copied.occurrences.get(&o).copied()
+                            }),
+                        );
                     }
                     (made, occurrence)
                 }
@@ -1205,8 +1214,10 @@ impl<K: Kernel> Document<K> {
 
     /// Deletes an occurrence. The last occurrence of a component takes the
     /// component with it: its features, the feature that made it, what
-    /// depends on them and the components only it contained. Returns the
-    /// deleted features.
+    /// depends on them and the components only it contained. What the
+    /// joints that go with it placed stays where it is (mitcad#1811; a free
+    /// part of a flexible occurrence as that occurrence's own placement of
+    /// it, mitcad#2017). Returns the deleted features.
     pub fn delete_occurrence(&mut self, uid: OccurrenceUid) -> Result<Vec<FeatureUid>, ModelError> {
         let occurrence = self.state.require_occurrence(uid)?;
         if occurrence.pattern.is_some() {
@@ -1226,6 +1237,15 @@ impl<K: Kernel> Document<K> {
             .filter(|(_, s)| !s.is_empty())
             .collect();
         let held = self.held_placements(sides.values().flatten().copied());
+        // And the free parts of flexible occurrences they placed
+        // (mitcad#2017).
+        let held_free: BTreeMap<FeatureUid, Vec<super::HeldFreePart>> = self
+            .state
+            .features
+            .iter()
+            .map(|f| (f.uid, self.held_free_parts(joint_paths(&f.def))))
+            .filter(|(_, h)| !h.is_empty())
+            .collect();
         self.apply(|state| {
             let name = state.assembly.occurrence_name(uid);
             state.assembly.occurrences.retain(|o| o.uid != uid);
@@ -1252,6 +1272,11 @@ impl<K: Kernel> Document<K> {
                 .flatten()
                 .copied();
             state.hold_placements(freed, &held);
+            for f in &deleted {
+                if let Some(free) = held_free.get(f) {
+                    state.hold_free_parts(free);
+                }
+            }
             // Cut scopes no longer leave the occurrence alone (mitcad#1236).
             state.drop_gone_exclusions();
             Ok((format!("Delete {name}"), deleted))

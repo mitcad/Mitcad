@@ -10,6 +10,7 @@
 #include <gp_Dir.hxx>
 
 #include "mitcad/geometry/shape.hpp"
+#include "mitcad/geometry/target.hpp"
 
 namespace mitcad::geometry {
 
@@ -31,13 +32,25 @@ namespace mitcad::geometry {
 // is not planar (a curved face) needs a direction, and takes no taper and
 // no start offset: its prism along the direction.
 //
+// mitcad#2033: with `target1` side one runs up to that target instead of
+// `distance1` (which is then not used), and with `target2` side two (two
+// sides: `distance2` or `target2`) up to its own, as a side of an extrusion
+// of sketch profiles does (see Target: a plane, a face or a body, moved by
+// its offset): the face's prism past the target, trimmed where it reaches
+// it. The other side may be a distance, negative too (it ends on the
+// target's side). A side up to a target takes a taper only along the face's
+// normal; a curved face's side has no taper and no start offset.
+//
 // Faces are named after `feature`, as an extrusion's:
 //   side(<edge>)   swept from an edge of the face, by the edge's name in
 //                  the body; an edge without a name (a surface body's free
 //                  edge) by its index among the face's edges
 //   start(<key>)   one side: the cap at the start; two sides: the far cap
 //                  of side one
-//   end(<key>)     the far cap (of side two with two sides)
+//   end(<key>)     the far cap (of side two with two sides); the faces of a
+//                  target where a side ends are named as its far cap
+//   mid(<key>)     two sides built apart (a taper or a target): what
+//                  remains of the face between them
 // `key` is the face reference the feature stores (`face` is that reference
 // as found in the body now).
 struct FaceExtrudeSpec {
@@ -51,6 +64,8 @@ struct FaceExtrudeSpec {
   std::optional<gp_Dir> direction;
   double taper1 = 0.0;
   double taper2 = 0.0;
+  std::optional<Target> target1;
+  std::optional<Target> target2;
 };
 
 ShapePtr extrude_face(const Shape& body, const FaceExtrudeSpec& spec);

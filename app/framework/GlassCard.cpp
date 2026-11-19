@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <initializer_list>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QEvent>
@@ -16,6 +17,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QScrollArea>
 #include <QSpacerItem>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -62,6 +64,25 @@ QIcon drawnChevron(bool collapsed, const QPalette& palette, qreal ratio) {
   return QIcon(pixmap);
 }
 
+// A scroll area's page is opaque (QScrollArea::setWidget fills the widget's
+// background, the viewport fills its own): in a card, a square page in the
+// palette's color inside the card's rounded, translucent material. The
+// card's material shows through them instead, so that the card's rounded
+// corners are the only ones (mitcad#1990, docs/ui-conventions.md "Corners").
+void showMaterialThrough(QWidget* content) {
+  QList<QScrollArea*> areas = content->findChildren<QScrollArea*>();
+  if (auto* own = qobject_cast<QScrollArea*>(content)) {
+    areas.prepend(own);
+  }
+  for (QScrollArea* area : std::as_const(areas)) {
+    area->setAutoFillBackground(false);
+    area->viewport()->setAutoFillBackground(false);
+    if (QWidget* page = area->widget()) {
+      page->setAutoFillBackground(false);
+    }
+  }
+}
+
 } // namespace
 
 void setFlatCardButton(QToolButton* button) {
@@ -70,10 +91,11 @@ void setFlatCardButton(QToolButton* button) {
   styleMacToolButton(button);
 #else
   button->setStyleSheet(QStringLiteral(
-      "QToolButton { border: none; background: transparent; border-radius: 6px; padding: 2px; }"
+      "QToolButton { border: none; background: transparent; border-radius: %1px; padding: 2px; }"
       "QToolButton:hover { background: rgba(128, 128, 128, 40); }"
       "QToolButton:pressed { background: rgba(128, 128, 128, 80); }"
-      "QToolButton:disabled { background: transparent; }"));
+      "QToolButton:disabled { background: transparent; }")
+                                .arg(kControlRadius));
 #endif
 }
 
@@ -103,7 +125,8 @@ void CapsuleButton::paintEvent(QPaintEvent*) {
   painter.setRenderHint(QPainter::Antialiasing);
   const QPalette pal = palette();
   const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-  const qreal radius = box.height() / 2;
+  // A button inside a card: the controls' radius (mitcad#1990).
+  const qreal radius = std::min<qreal>(kControlRadius, box.height() / 2);
   QColor text = pal.color(QPalette::ButtonText);
   if (m_prominent) {
     QColor fill = accentColor(pal);
@@ -317,6 +340,7 @@ void GlassCard::setContent(QWidget* content, const QMargins& margins) {
   m_contentMargins = margins;
   m_holderLayout->setContentsMargins(margins);
   if (content != nullptr) {
+    showMaterialThrough(content);
     m_holderLayout->addWidget(content);
     content->installEventFilter(this);
   }
@@ -418,7 +442,7 @@ void GlassCard::setCapsule(bool capsule) {
 }
 
 qreal GlassCard::cornerRadius() const {
-  const qreal radius = m_capsule ? height() / 2.0 : static_cast<qreal>(kRadius);
+  const qreal radius = static_cast<qreal>(kRadius); // a capsule's too (mitcad#1990)
   return std::min(radius, std::min(width(), height()) / 2.0);
 }
 

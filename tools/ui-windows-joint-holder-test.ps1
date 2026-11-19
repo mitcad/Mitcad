@@ -8,7 +8,9 @@
 # asks whether to make it in the root, which holds both picks; Make it in
 # mounts the roller whole, Don't ask again sets the preference, and
 # Preferences > Assembly sets it back to Ask; a selection made before Joint
-# asks too (mitcad#1864).
+# asks too (mitcad#1864); with the root active, picks inside one
+# sub-assembly ghost only side A's own bodies and ask for that
+# sub-assembly (mitcad#2027).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-joint-holder-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(
@@ -28,7 +30,7 @@ $env:MITCAD_TEST_STEP_MS = '100'
 $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/joint-holder.mitcad-ui'
 Ui-StartApp 'joint-holder' @('--ui=qt', '--no-mcp', '--open', $design)
 $null = $script:UiProcess.Handle
-if (-not $script:UiProcess.WaitForExit(360000)) { Ui-Fail 'joint holder driver timed out' }
+if (-not $script:UiProcess.WaitForExit(540000)) { Ui-Fail 'joint holder driver timed out' }
 $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "joint holder driver failed (exit code $exitCode)"
@@ -39,6 +41,8 @@ Ui-ExpectLog 'Preferences: when the picks are in another component holder' 'Don'
 Ui-ExpectLog 'Preferences: when the picks are in another component ask' 'Preferences set it back to Ask'
 Ui-ExpectLog 'Joint component answer: keep Roller' 'asked again, Keep Roller'
 Ui-ExpectLog 'Joint component of the selection made before it: 2 pick(s)' 'the selection made before Joint is asked about'
+Ui-ExpectLog 'View ghosts: only O6/O7 (1 body)' 'side A inside the sub-assembly ghosts only its own body'
+Ui-ExpectLog 'Joint component answer: make it in Carrier' 'Make it in the sub-assembly that holds both'
 Ui-ExpectLog 'TestDriver: done' 'the joint goes into the component that holds its picks'
 Ui-StopApp
 Write-Host 'PASS: the component that holds the joint''s picks'

@@ -442,6 +442,7 @@ fn machine(changer: ToolChanger, park: Option<P3>) -> Machine {
         zones: vec![],
         tool_changer: changer,
         park,
+        lathe: None,
     }
 }
 

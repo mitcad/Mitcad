@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: MIT
+# A profile placed off a face by Offset and Rotate, both edited later with
+# Placement (mitcad#2046, GitHub mitcad/Mitcad#446), on build-face-normal.json
+# with the profile library the runner makes (one 20 mm square profile): a
+# box standing for an imported machine's leg, 40 along X and 60 along Y,
+# 500 high, its bottom face's centre at (120, 230, 0).
+#   1. Profile, 300 long, on the leg's bottom face (Face normal): Offset
+#      and Rotate are offered there; Offset 20 mm and Rotate 30 deg are in
+#      the preview before Place (end A 20 below the face's centre); placed,
+#      the profile's body (F2.b0) runs from z = -20 to -320, turned 30 deg
+#      (build_parts: offset 20, rotate 30 deg).
+#   2. Placement of that profile: its Offset and Rotate load from the
+#      model, From is not offered; Offset 50 mm and Rotate 45 deg move it in
+#      one undo step: from z = -50 to -350, build_parts offset 50 and
+#      rotate 45 deg.
+#   3. Rotate 90° on it: a quarter further, 135 deg (not snapped).
+# Run by tools/ui-build-ground-offset-test.sh (Linux),
+# tools/ui-windows-build-ground-offset-test.ps1 (Windows) and
+# tools/ui-macos-build-ground-offset-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+wait-idle
+command view.bottom
+wait-idle
+command view.fit
+wait-idle
+
+# 1. Off the leg's bottom face and turned, shown before Place.
+mark
+command build.profile
+wait-log '^Command Profile started' 30
+wait-log '^Inspect Profile: place grounded' 30
+wait-idle
+type-in '^Panel Profile input length at ' '300'
+wait-idle
+mark
+click-pick 'face F1[.]b0/F1:bottom'
+wait-log '^BUILD face picked: Direction Face normal, at the face.s center along its longest edge$' 30
+wait-log '^Panel Profile input ground_offset at [0-9]+,[0-9]+$' 20
+wait-log '^Panel Profile input ground_rotate at [0-9]+,[0-9]+$' 20
+expect-no-log '^Panel Profile input rotate at [0-9]+,[0-9]+$'
+wait-log '^Inspect Profile: place geometry, length 300[.]00 mm .*; along normal; .*; end A at 120[.]0, 230[.]0, 0[.]0; offset ' 30
+wait-idle
+mark
+type-in '^Panel Profile input ground_offset at ' '20 mm'
+wait-log '^Inspect Profile: place geometry, .*; along normal; runs 0[.]000, 0[.]000, -1[.]000; .*; end A at 120[.]0, 230[.]0, -20[.]0; offset 20 mm, rotate ' 30
+wait-idle
+mark
+type-in '^Panel Profile input ground_rotate at ' '30 deg'
+wait-log '^Inspect Profile: place geometry, .*; end A at 120[.]0, 230[.]0, -20[.]0; offset 20 mm, rotate 30 deg' 30
+wait-idle
+mark
+key Return
+wait-log '^Placed ' 60
+wait-idle 30
+capture-model-number low '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.2
+expect-near ${low} -320
+capture-model-number high '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.max.2
+expect-near ${high} -20
+capture-model-number offset '{"query": "build_parts"}' parts.0.offset
+expect-near ${offset} 20
+capture-model-number turn '{"query": "build_parts"}' parts.0.rotate
+expect-near ${turn} 0.5235987756
+# Profile stays for the next one: closed (Close keeps what was placed).
+mark
+button '^Close$'
+wait-log '^Closed Profile after' 10
+wait-idle
+
+# 2. Placement: Offset and Rotate loaded, changed in one undo step.
+mark
+command build.placement
+wait-log '^Command Placement started' 30
+wait-idle
+mark
+click-logged '^Panel Placement input part at '
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/'
+wait-log '^BUILD placement of C[0-9]+: on a plane or a face, offset 20 mm, rotate 30 deg$' 30
+wait-log '^Inspect Placement: C[0-9]+ on a plane or a face, offset 20 mm, rotate 30 deg$' 30
+wait-log '^Panel Placement input rotate at [0-9]+,[0-9]+$' 20
+expect-no-log '^Panel Placement input from at [0-9]+,[0-9]+$'
+wait-idle
+mark
+type-in '^Panel Placement input offset at ' '50 mm'
+wait-log '^Inspect Placement: C[0-9]+ on a plane or a face, offset 50 mm, rotate 30 deg$' 30
+wait-idle
+mark
+type-in '^Panel Placement input rotate at ' '45 deg'
+wait-log '^Inspect Placement: C[0-9]+ on a plane or a face, offset 50 mm, rotate 45 deg$' 30
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^Placement of C[0-9]+: offset 50 mm, rotate 45 deg$' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number low '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.2
+expect-near ${low} -350
+capture-model-number high '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.max.2
+expect-near ${high} -50
+capture-model-number offset '{"query": "build_parts"}' parts.0.offset
+expect-near ${offset} 50
+capture-model-number turn '{"query": "build_parts"}' parts.0.rotate
+expect-near ${turn} 0.7853981634
+
+# 3. Rotate 90°: a quarter further from 45 deg, 135 deg, not a snap.
+mark
+command build.rotate
+wait-log '^Command Rotate 90. started' 30
+wait-idle
+mark
+click-logged '^Panel Rotate 90. input parts at '
+click-pick 'face F2[.]b0/'
+wait-log '^Inspect Rotate 90.: ' 30
+wait-idle
+mark
+key Return
+wait-log '^BUILD rotate C[0-9]+: 45 deg to 135 deg$' 60
+wait-idle 30
+capture-model-number turn '{"query": "build_parts"}' parts.0.rotate
+expect-near ${turn} 2.3561944902
+expect-never 'TestDriver: FAIL'

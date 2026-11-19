@@ -22,6 +22,7 @@ class QEvent;
 class QFormLayout;
 class QLabel;
 class QLineEdit;
+class QPlainTextEdit;
 class QListWidget;
 class QPushButton;
 class QSlider;
@@ -161,6 +162,7 @@ private:
     QWidget* picks = nullptr;     // `order` with its buttons (mitcad#1780)
     bool missingShown = false;    // the chip shows gone picks in the error colour
     QLineEdit* edit = nullptr;
+    QPlainTextEdit* lines = nullptr; // a text of several lines (InputDef::multiLine)
     QSlider* slider = nullptr; // beside a value field (InputDef::withSlider)
     int leftAt = -1; // the cursor as the field lost the keyboard
     // A value field's mark (InputDef::markFor, mitcad#980), in the field;

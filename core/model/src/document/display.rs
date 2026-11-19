@@ -2,7 +2,8 @@
 //! What the browser shows that the document keeps (P9): the root's Origin
 //! folder shown or not, the bodies and components the view is isolated to,
 //! View › Show, the eyes of each component's Bodies, Sketches and
-//! Construction folders (mitcad#1771), the sketches whose dimensions are
+//! Construction folders (mitcad#1771) and of the root's Annotations folder
+//! (mitcad#2041), the sketches whose dimensions are
 //! drawn outside sketch mode (mitcad#1772), and the favourite parameters.
 //! Each change is an undo step that recomputes nothing, as the light bulbs
 //! are (`browser.rs`).
@@ -56,13 +57,15 @@ pub struct DisplayState {
 }
 
 /// A component's Browser folder with an eye of its own (mitcad#1771): its
-/// Bodies, its Sketches and its Construction.
+/// Bodies, its Sketches and its Construction; and the root's Annotations
+/// (mitcad#2041), the design's annotations, which only the root has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Folder {
     Bodies,
     Sketches,
     Construction,
+    Annotations,
 }
 
 /// The folders of one component hidden by their eyes (mitcad#1771): the
@@ -82,6 +85,9 @@ pub struct HiddenFolders {
     /// Curves.
     #[serde(default, skip_serializing_if = "is_false")]
     pub construction: bool,
+    /// The design's annotations (mitcad#2041): the root's only.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub annotations: bool,
 }
 
 impl HiddenFolders {
@@ -95,6 +101,7 @@ impl HiddenFolders {
             Folder::Bodies => self.bodies,
             Folder::Sketches => self.sketches,
             Folder::Construction => self.construction,
+            Folder::Annotations => self.annotations,
         }
     }
 
@@ -103,6 +110,7 @@ impl HiddenFolders {
             Folder::Bodies => self.bodies = hidden,
             Folder::Sketches => self.sketches = hidden,
             Folder::Construction => self.construction = hidden,
+            Folder::Annotations => self.annotations = hidden,
         }
     }
 }
@@ -398,13 +406,16 @@ impl<K: Kernel> Document<K> {
     }
 
     // The eyes of each component's Bodies, Sketches and Construction
-    // folders (mitcad#1771): display state as View › Show's, each change an
-    // undo step that recomputes nothing.
+    // folders (mitcad#1771) and of the root's Annotations folder
+    // (mitcad#2041): display state as View › Show's, each change an undo
+    // step that recomputes nothing.
 
     /// Shows or hides a component's folder by its eye (`Hide Sketches`,
-    /// `Show Bodies`) unless nothing changes. No item's own light bulb
-    /// changes: a hidden folder leaves its items out of the view, a shown
-    /// one lets each follow its own light bulb (and a body its Show When).
+    /// `Show Bodies`, `Hide Annotations`) unless nothing changes. No item's
+    /// own light bulb changes: a hidden folder leaves its items out of the
+    /// view, a shown one lets each follow its own light bulb (and a body its
+    /// Show When). The Annotations folder is the root's only: another
+    /// component's is refused.
     pub fn set_folder_visible(
         &mut self,
         component: ComponentUid,
@@ -413,6 +424,9 @@ impl<K: Kernel> Document<K> {
     ) -> Result<(), ModelError> {
         if !self.assembly().exists(component) {
             return Err(invalid(format!("{component} does not exist")));
+        }
+        if folder == Folder::Annotations && component != ComponentUid::ROOT {
+            return Err(invalid("only the root has an Annotations folder"));
         }
         if self.state.display.folder_shown(component, folder) == visible {
             return Ok(());
@@ -424,6 +438,8 @@ impl<K: Kernel> Document<K> {
             (Folder::Sketches, false) => "Hide Sketches",
             (Folder::Construction, true) => "Show Construction",
             (Folder::Construction, false) => "Hide Construction",
+            (Folder::Annotations, true) => "Show Annotations",
+            (Folder::Annotations, false) => "Hide Annotations",
         };
         self.apply_with(|state| {
             let mut hidden = state

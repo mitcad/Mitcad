@@ -17,7 +17,9 @@ struct CommandDef;
 
 // The command search (S): type a few letters of a
 // command, Enter runs the first match or the chosen one. The ranking is
-// CommandSearchRank's.
+// CommandSearchRank's. Each result says where the command sits: its
+// toolbar tab and group, or the menu bar, from the layout held in memory
+// (mitcad#1983).
 class CommandSearch : public QFrame {
   Q_OBJECT
 
@@ -32,6 +34,15 @@ public:
   // empty otherwise (mitcad#1681). The list shows it above such commands
   // when they match better than any that can run, and selects nothing.
   void setModeHint(std::function<QString(const CommandDef&)> hint) { m_modeHint = std::move(hint); }
+  // A menu bar menu's title by its layout key ("TOOLS" -> "&Tools"), for
+  // each result's place line (mitcad#1983); without it the key is shown.
+  void setMenuCaption(std::function<QString(const QString&)> caption) { m_menuCaption = std::move(caption); }
+  // A result's right-click (mitcad#1990): Add to Quick Access, or Remove
+  // from Quick Access while the quick-access group has the command
+  // (QuickAccessSettings::choose); logged as "Command search menu
+  // view.look_at: Add to Quick Access". Off (no Qt quick-access group), a
+  // right-click does nothing.
+  void setQuickAccessEntries(bool on) { m_quickAccessEntries = on; }
 
 signals:
   void chosen(const QString& commandId);
@@ -44,11 +55,14 @@ protected:
 private:
   void fill(const QString& text);
   void choose();
+  void openRowMenu(const QPoint& at);
 
   CommandRegistry& m_registry;
   std::function<QString(const CommandDef&)> m_modeHint;
+  std::function<QString(const QString&)> m_menuCaption;
   QLineEdit* m_edit = nullptr;
   QTreeWidget* m_list = nullptr;
+  bool m_quickAccessEntries = false;
 };
 
 } // namespace mitcad

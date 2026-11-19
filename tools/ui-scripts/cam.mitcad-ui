@@ -31,8 +31,10 @@ command view.fit
 wait-idle
 
 mark
-click-logged '^Ribbon tab MAKE at '
-wait-log '^Ribbon tab shown: MAKE$'
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
 
 # 1. New Setup: the router chosen for the design's only machine.
 mark

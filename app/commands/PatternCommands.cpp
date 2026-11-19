@@ -284,9 +284,6 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
   def.name = QObject::tr("Rectangular Pattern");
   def.icon = QStringLiteral("rectangular-pattern");
   def.tooltip = QObject::tr("Copies in rows, columns and layers along up to three directions");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("patterns");
-  def.subgroup = QStringLiteral("Pattern");
   def.keywords = {QStringLiteral("array"), QStringLiteral("linear pattern"), QStringLiteral("copy")};
   def.featureType = QStringLiteral("rectangular_pattern");
   const auto second = [](const CommandState& s) { return !s.items(QStringLiteral("direction2")).isEmpty(); };
@@ -424,9 +421,6 @@ CommandDef circularPatternCommand(const CommandContext& context) {
   def.name = QObject::tr("Circular Pattern");
   def.icon = QStringLiteral("circular-pattern");
   def.tooltip = QObject::tr("Copies about an axis");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("patterns");
-  def.subgroup = QStringLiteral("Pattern");
   def.keywords = {QStringLiteral("array"), QStringLiteral("polar pattern"), QStringLiteral("radial")};
   def.featureType = QStringLiteral("circular_pattern");
   // Axis 2 (mitcad#1588): the copies turned again about a second axis; its
@@ -532,9 +526,6 @@ CommandDef pathPatternCommand(const CommandContext& context) {
   def.name = QObject::tr("Pattern on Path");
   def.icon = QStringLiteral("path-pattern");
   def.tooltip = QObject::tr("Copies along a sketch line, arc or circle, or a chain of lines and arcs");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("patterns");
-  def.subgroup = QStringLiteral("Pattern");
   def.keywords = {QStringLiteral("array"), QStringLiteral("path pattern"), QStringLiteral("curve")};
   def.featureType = QStringLiteral("path_pattern");
   def.inputs = patternObjects();
@@ -675,9 +666,7 @@ CommandDef mirrorCommand(const CommandContext& context) {
   def.name = QObject::tr("Mirror");
   def.icon = QStringLiteral("mirror");
   def.tooltip = QObject::tr("A mirror image about a plane");
-  def.group = QStringLiteral("CREATE");
   // A plain entry after the Pattern submenu, in its section (mitcad#579).
-  def.section = QStringLiteral("patterns");
   def.keywords = {QStringLiteral("reflect"), QStringLiteral("symmetry")};
   def.featureType = QStringLiteral("mirror");
   def.inputs = patternObjects();

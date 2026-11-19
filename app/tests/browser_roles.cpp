@@ -15,6 +15,8 @@
 #include <QApplication>
 #include <QColor>
 #include <QIcon>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QModelIndex>
 #include <QPalette>
 #include <QSize>
@@ -418,6 +420,49 @@ void folderEyeTests() {
   }
 }
 
+// The root's Annotations folder's eye (mitcad#2041), as the Bodies
+// folder's: open while the folder is shown, the row plain while one
+// annotation is drawn; closed and greyed while the folder is hidden; open
+// and greyed while every annotation is hidden by its own light bulb.
+void annotationsFolderEyeTests() {
+  DocumentSnapshot snapshot = usedSketchesDesign();
+  snapshot.measurements = QJsonArray{
+      QJsonObject{{QStringLiteral("name"), QStringLiteral("Offset1")}, {QStringLiteral("visible"), true}},
+      QJsonObject{{QStringLiteral("name"), QStringLiteral("Offset2")}, {QStringLiteral("visible"), false}},
+  };
+  CHECK(snapshot.annotationsShown());
+  CHECK(DocumentSnapshot::folderKey(DocumentSnapshot::Folder::Annotations) == QStringLiteral("annotations"));
+  const auto annotationsRow = [](const DocumentSnapshot& shown, const auto& checkLook) {
+    BrowserPanel panel;
+    panel.rebuild(shown, false);
+    auto* tree = panel.findChild<QTreeWidget*>();
+    CHECK(tree != nullptr);
+    if (tree == nullptr) {
+      return;
+    }
+    checkLook(look(tree, rowNamed(tree, QStringLiteral("Annotations"))), tree->palette().color(QPalette::Text));
+  };
+  annotationsRow(snapshot, [](const Look& row, const QColor& plain) {
+    CHECK(row.bulb == QStringLiteral("eye"));
+    CHECK(row.text == plain);
+  });
+  snapshot.hiddenFolders.insert(QStringLiteral("C0"), {DocumentSnapshot::Folder::Annotations});
+  CHECK(!snapshot.annotationsShown());
+  CHECK(snapshot.folderShown(QStringLiteral("C0"), DocumentSnapshot::Folder::Bodies));
+  annotationsRow(snapshot, [](const Look& row, const QColor& plain) {
+    CHECK(row.bulb == QStringLiteral("eye-off"));
+    CHECK(row.text != plain);
+  });
+  snapshot.hiddenFolders.clear();
+  snapshot.measurements = QJsonArray{
+      QJsonObject{{QStringLiteral("name"), QStringLiteral("Offset2")}, {QStringLiteral("visible"), false}},
+  };
+  annotationsRow(snapshot, [](const Look& row, const QColor& plain) {
+    CHECK(row.bulb == QStringLiteral("eye"));
+    CHECK(row.text != plain);
+  });
+}
+
 } // namespace
 
 int browserRolesTests() {
@@ -425,6 +470,7 @@ int browserRolesTests() {
   usedSketchesTests();
   isolationEyeTests();
   folderEyeTests();
+  annotationsFolderEyeTests();
   return failures;
 }
 MITCAD_UNIT_TEST(browserRolesTests);

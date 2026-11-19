@@ -1337,6 +1337,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_NO_UPDATE_CHECK=1` | No update checks; update test variables, read only by a build with `MITCAD_UPDATE_TEST_HOOKS`: [updates.md](updates.md#the-test-hooks). |
 | `MITCAD_TEST_PREFERENCES_SHOTS` | A folder where the Preferences pages whose list takes the page's height (Navigation, Cloud) save a picture of their window each time they log their layout, `navigation-<area height>.png`, `cloud-<area height>.png` (mitcad#1394, `tools/ui-preferences-test.sh`, `app.ui-windows-preferences`). |
 | `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0` | Preferences › Sketch › *Scale the sketch to its first dimension* is off until it is saved (mitcad#860); the UI test libraries set it, so that their drawn sketches keep their sizes. |
+| `MITCAD_SKETCH_PROJECT_FACE=0` | Preferences › Sketch › *Project the face's edges into a sketch on a face* is off until it is saved (mitcad#2051); the UI test libraries set it, so that their sketches on faces start empty. |
 | `MITCAD_REMEMBER_PANEL_VALUES=0` | Command panels start from their definitions' defaults and keep nothing on OK: no remembered Fillet Radius or Chamfer Distance (mitcad#1028, [app/COMMANDS.md](../app/COMMANDS.md#remembered-values)), and no Thread starting from the last thread's settings on a face of its size (mitcad#1298); the UI test libraries set it, so that a value one step gives never changes where a later step's panel starts. |
 | `MITCAD_START_PAGE=0`, `MITCAD_START_PAGE=1` | `0`: MitCad never starts on the Start tab (mitcad#1258, [app/COMMANDS.md](../app/COMMANDS.md#the-start-tab)); the UI test libraries set it, so that every test starts on an empty design. `1`: the Start tab at launch by its *Show start page at launch*, also in a UI test script's run (`MITCAD_TEST_INPUT`), which without the variable starts without it. |
 | `MITCAD_NEW_DESIGN_VIEW=0` | A new design opens as before mitcad#1683, in the exact isometric view with its origin hidden, not looking at Top with the origin shown and centred, and a design opened at the start stays in that view instead of the default view of mitcad#1698 ([app/COMMANDS.md](../app/COMMANDS.md)); the UI test libraries and the Python UI tests set it, as their tests were written for; `tools/ui-new-design-start-test.sh` sets `1`. |
@@ -2265,6 +2266,11 @@ runs one step after another. Build and lint use half the cores unless
   [UI conventions](ui-conventions.md); the ctest `repo.ui-strings`
   checks what a pattern can (retired words, Title Case's short words,
   "×" and "°", AppKit texts through `tr()`, the core's `'{x}'` quoting).
+- The chrome's look (spacing on a 4 px grid, the two corner radii
+  `kCardRadius` and `kControlRadius`, type sizes, the top bar, the toolbar
+  panel's one height, cards, the bottom bar, buttons and states) follows
+  the [UI conventions](ui-conventions.md#7-principles) (chapters 7 to
+  19); a change of a value there changes the code and the page together.
 - An error, warning, refusal or notice a person reads never names
   topological names (`E{…}`, `V{…}`, `F3:side(…)`, `F1:top`), sketch
   region keys (`r{…}`), internal ids (`k5`, `p15`, `F57`, `F2.b0`) or

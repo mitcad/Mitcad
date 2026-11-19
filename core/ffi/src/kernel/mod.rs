@@ -2475,12 +2475,26 @@ impl Kernel for OcctKernel {
         &self,
         spec: &mitcad_model::FaceExtrudeSpec<'_, Self::Shape>,
     ) -> Result<Self::Shape, KernelError> {
+        // A side's distance, or its target (mitcad#2033) with no distance.
+        let mut bodies = profile_feature::Bodies::default();
+        let mut end =
+            |side: Option<&mitcad_model::SideEnd<Self::Shape>>| -> Result<_, KernelError> {
+                Ok(match side {
+                    None => (0.0, profile_feature::unset()),
+                    Some(mitcad_model::SideEnd::Distance(d)) => (*d, profile_feature::unset()),
+                    Some(mitcad_model::SideEnd::Target(b)) => {
+                        (0.0, profile_feature::bound(b, &mut bodies)?)
+                    }
+                })
+            };
+        let (side1, target1) = end(Some(&spec.side1))?;
+        let (side2, target2) = end(spec.side2.as_ref())?;
         let extrusion = face_extrude::ffi::FaceExtrusion {
             reversed: spec.reversed,
             start: spec.start,
-            side1: spec.side1,
+            side1,
             two_sides: spec.side2.is_some(),
-            side2: spec.side2.unwrap_or(0.0),
+            side2,
             has_direction: spec.direction.is_some(),
             direction: spec.direction.unwrap_or([0.0; 3]),
             taper1: spec.taper1,
@@ -2492,6 +2506,9 @@ impl Kernel for OcctKernel {
             &spec.face.to_string(),
             &spec.key.to_string(),
             &extrusion,
+            &target1,
+            &target2,
+            bodies.list(),
         )
         .map_err(failed)
     }
@@ -3299,6 +3316,25 @@ impl Kernel for OcctKernel {
         let list = shape_list(shapes)?;
         let boxes = query::ffi::bounding_boxes(&list).map_err(failed)?;
         Ok(boxes.into_iter().map(item_box).collect())
+    }
+
+    // Many shapes placed at once (mitcad#2021; transform.rs).
+
+    fn transform_shapes(
+        &self,
+        shapes: &[(&Self::Shape, &Transform)],
+    ) -> Result<Vec<Self::Shape>, KernelError> {
+        let refs: Vec<&Self::Shape> = shapes.iter().map(|(shape, _)| *shape).collect();
+        let list = shape_list(&refs)?;
+        let maps: Vec<transform::ffi::Affine> = shapes
+            .iter()
+            .map(|(_, map)| transform::ffi::Affine {
+                linear: std::array::from_fn(|i| map.linear[i / 3][i % 3]),
+                translation: map.translation,
+            })
+            .collect();
+        let mapped = transform::ffi::transform_shapes(&list, &maps).map_err(failed)?;
+        Ok((0..mapped.size()).map(|i| mapped.at(i)).collect())
     }
 }
 

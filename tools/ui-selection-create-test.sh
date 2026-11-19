@@ -139,8 +139,8 @@ round() {
 
   echo "--- 3b. The Make tab: no Create row, the Make section in its place"
   ui_mark
-  ui_step "the Make tab"                   ui_click_logged "Ribbon tab MAKE"
-  ui_expect_new "Ribbon tab shown: MAKE" "the Make tab shown"
+  ui_step "the 3D Print tab"               ui_click_tab "MAKE_PRINT"
+  ui_expect_new "Ribbon tab shown: MAKE_PRINT" "the Make tab shown"
   expect_create "none"
   ui_expect_new "Make card: Body1: " "the Make section of the face's body"
   ui_expect_new "Selection card section Make: " "its place logged"
@@ -149,7 +149,7 @@ round() {
     ui_fail "the Create row laid out on the Make tab"
   echo "ok   no Create row laid out on the Make tab"
   ui_mark
-  ui_step "the Solid tab"                  ui_click_logged "Ribbon tab SOLID"
+  ui_step "the Solid tab"                  ui_click_tab "SOLID"
   ui_expect_new "Ribbon tab shown: SOLID" "the Solid tab shown"
   ui_expect_new "Selection card create: Thread" "the Create row back, Thread first"
   ui_expect_new "Make card: none" "no Make section on the Solid tab"

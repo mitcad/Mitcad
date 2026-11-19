@@ -346,6 +346,10 @@ vcpkg_from_github(
         1800-chfi3d-analytic-line-round-the-period-outside-a-blends-domain-passed-over.patch
         1801-chfi3d-corner-set-back-past-a-short-sharp-edge-walks-over-its-vertex.patch
         1802-brepblend-walk-whose-first-point-lies-on-a-restriction-ends-there.patch
+        0871-chfi3d-stripe-end-curve-follows-a-run-walked-again.patch
+        1803-chfi3d-border-from-a-point-walked-onto-leaves-it-at-no-set-angle.patch
+        1804-brepmesh-polygons-crossing-at-a-cusp-of-a-wire-untangled.patch
+        1810-hlr-polygonal-hiding-pass-in-parallel-through-a-grid-of-the-hiding-faces.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

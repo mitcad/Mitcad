@@ -1387,6 +1387,28 @@ void SketchController::deleteSelection() {
   qDebug().noquote() << QStringLiteral("Deleted %1").arg(names.join(QStringLiteral(", ")));
 }
 
+SketchController::SelectedConstruction SketchController::selectedConstruction() const {
+  if (m_tool) {
+    return SelectedConstruction::NoCurves;
+  }
+  bool any = false;
+  bool all = true;
+  bool curves = false;
+  for (const SelectionItem& item : m_host.selection()) {
+    if (item.owner == m_uid && item.kind == SelectKind::SketchCurve && !isAxisSelection(item)) {
+      curves = true;
+      const CurveData* c = m_model.curve(item.name);
+      const bool construction = c != nullptr && c->construction;
+      any = any || construction;
+      all = all && construction;
+    }
+  }
+  if (!curves) {
+    return SelectedConstruction::NoCurves;
+  }
+  return all ? SelectedConstruction::All : any ? SelectedConstruction::Mixed : SelectedConstruction::None;
+}
+
 void SketchController::toggleConstruction() {
   QJsonArray curves;
   bool allConstruction = true;
@@ -1473,6 +1495,11 @@ bool SketchController::selectionHasProjected() const {
     if (item.owner != m_uid) {
       return false;
     }
+    // A profile with projected curves on its boundary, or bounded by the
+    // face's edges, converts them (mitcad#2051).
+    if (item.kind == SelectKind::Profile) {
+      return m_model.convertibleRegions.contains(item.name);
+    }
     const PointData* p = m_model.point(item.name);
     const CurveData* c = m_model.curve(item.name);
     // A curve an offset made converts too: the offset's curves are freed
@@ -1493,19 +1520,29 @@ void SketchController::updateConvertAction() {
 
 void SketchController::convertProjected() {
   QJsonArray entities;
+  // Profiles by their region keys (mitcad#2051): the model converts the
+  // projected curves of their boundaries and projects and frees the
+  // face's edges that bound them.
+  QJsonArray profiles;
   for (const SelectionItem& item : m_host.selection()) {
     if (item.owner == m_uid && (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint) &&
         !isAxisSelection(item)) {
       entities.append(item.name);
+    } else if (item.owner == m_uid && item.kind == SelectKind::Profile &&
+               m_model.convertibleRegions.contains(item.name)) {
+      profiles.append(item.name);
     }
   }
-  if (entities.isEmpty()) {
+  if (entities.isEmpty() && profiles.isEmpty()) {
     hint(tr("Convert to Sketch Geometry: select projected geometry or a curve an offset made first."));
     return;
   }
   SketchOp op(*this);
   QJsonObject cmd = op.command(QStringLiteral("sketch.convert_projected"));
   cmd.insert(QStringLiteral("entities"), entities);
+  if (!profiles.isEmpty()) {
+    cmd.insert(QStringLiteral("profiles"), profiles);
+  }
   QJsonObject result;
   if (!op.run(cmd, &result)) {
     const QString reason = op.error();

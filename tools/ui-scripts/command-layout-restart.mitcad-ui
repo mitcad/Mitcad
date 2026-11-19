@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT
+# The command layout's user layer after a restart (mitcad#1991), run by the
+# wrappers of tools/ui-scripts/command-layout.mitcad-ui on the settings that
+# script left, in the same layout (Floating or Docked):
+#   1. Kept: Revolve has no button of Create's but is in its menu, where its
+#      row menu offers Show on Toolbar; Inspect is after Modify.
+#   2. Show on Toolbar ▸ Revolve, from Create's caption (the way back also
+#      where a group menu's rows have no row menu): its button again.
+#   3. Remove from Toolbar from Revolve's row in Create's menu.
+#   4. Preferences › Display › Restore Default Layout: Sweep in Create only,
+#      Revolve's button back, Inspect after Construct again.
+# Preferences is a dialog on Windows and Linux and the Settings window on
+# macOS; the button acts at once in both.
+expect-ever 'View area' 30
+wait-idle
+expect-ever '^Ribbon SOLID/CREATE at ' 30
+wait-idle
+
+# 1. Kept after the restart.
+expect-ever '^Ribbon group SOLID/CREATE buttons: ' 30
+expect-never '^Ribbon group SOLID/CREATE buttons: .*solid\.revolve'
+expect-ever '^Ribbon groups of SOLID: CREATE, MODIFY, INSPECT, ASSEMBLE, CONSTRUCT, ' 30
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: .*\bRevolve\b'
+row-menu solid.revolve
+wait-log '^Toolbar menu SOLID/CREATE solid.revolve: .*Show on Toolbar'
+expect-no-log '^Toolbar menu SOLID/CREATE solid.revolve: .*Remove from Toolbar'
+key Escape
+wait-idle
+key Escape
+wait-idle
+
+# 2. Show on Toolbar ▸ Revolve from Create's caption.
+mark
+context-menu-logged '^Ribbon SOLID/CREATE at ' 'Show on Toolbar/Revolve'
+wait-log '^Ribbon group SOLID/CREATE removed buttons: solid.revolve$'
+wait-log '^Layout: showed the button of solid.revolve in SOLID/CREATE again$'
+wait-log '^Ribbon groups made again from the layout$'
+wait-log '^Ribbon group SOLID/CREATE buttons: .*solid\.revolve'
+wait-idle
+sleep 300
+
+# 3. Remove from Toolbar from Revolve's row in Create's menu.
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: .*\bRevolve\b'
+row-menu solid.revolve
+wait-log '^Toolbar menu SOLID/CREATE solid.revolve: .*Remove from Toolbar'
+popup 'Remove from Toolbar'
+wait-log '^Layout: removed the button of solid.revolve from SOLID/CREATE$'
+wait-log '^Ribbon groups made again from the layout$'
+wait-log '^Ribbon group SOLID/CREATE buttons: '
+expect-no-log '^Ribbon group SOLID/CREATE buttons: .*solid\.revolve'
+wait-idle
+sleep 300
+
+# 4. Restore Default Layout.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+focus-widget restoreDefaultLayout
+key space
+wait-log '^Preferences: layout restored to the default$'
+key Escape
+focus-main
+wait-log '^Ribbon groups made again from the layout$'
+wait-log '^Ribbon groups of SOLID: CREATE, MODIFY, ASSEMBLE, CONSTRUCT, INSPECT, '
+wait-log '^Ribbon group SOLID/CREATE buttons: .*solid\.revolve'
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon SOLID/MODIFY at '
+wait-log '^Ribbon menu SOLID/MODIFY: '
+expect-no-log '^Ribbon menu SOLID/MODIFY: .*\bSweep\b'
+key Escape
+wait-idle
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: .*\bSweep\b'
+key Escape
+wait-idle

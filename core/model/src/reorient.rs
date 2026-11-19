@@ -812,6 +812,16 @@ pub(crate) fn turn_lights(render: &mut RenderSettings, turn: Turn) -> usize {
     count
 }
 
+/// The shots' cameras (mitcad#2013). Returns how many turned.
+pub(crate) fn turn_shots(render: &mut RenderSettings, turn: Turn) -> usize {
+    for shot in &mut render.shots {
+        shot.eye = turn.vector(shot.eye);
+        shot.target = turn.vector(shot.target);
+        shot.up = turn.vector(shot.up);
+    }
+    render.shots.len()
+}
+
 /// What split features remember of their pieces: centres of mass in their
 /// components' coordinates.
 pub(crate) fn turn_split_pieces(

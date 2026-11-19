@@ -47,6 +47,19 @@ std::shared_ptr<geometry::Shape> move_shape(const geometry::Shape& shape, const 
   return geometry::move_shape(shape, affine_of(map), std::string(rename));
 }
 
+std::unique_ptr<ShapeList> transform_shapes(const ShapeList& shapes, rust::Slice<const Affine> maps) {
+  std::vector<geometry::Affine> affines;
+  affines.reserve(maps.size());
+  for (const Affine& map : maps) {
+    affines.push_back(affine_of(map));
+  }
+  auto out = std::make_unique<ShapeList>();
+  for (std::shared_ptr<geometry::Shape>& shape : geometry::transform_shapes(shapes.items(), affines)) {
+    out->push(std::move(shape));
+  }
+  return out;
+}
+
 std::shared_ptr<geometry::Shape> unite(const ShapeList& shapes) {
   std::vector<const geometry::Shape*> raw;
   for (const auto& shape : shapes.items()) {

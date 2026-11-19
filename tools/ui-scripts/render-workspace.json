@@ -1,0 +1,10 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The Render workspace (mitcad#2013, tools/ui-render-workspace-test.sh): a 40 mm box (F1.b0, Body1) in red, a cylinder (F2.b0, Body2) beside it in the default look, and a third body (F3.b0, Body3) hidden for Ready to Render to find. Small final images with few samples."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":40,"width":40,"height":40,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"cylinder","plane":"xy","center":[20,70],"diameter":30,"height":50,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[80,0],"length":20,"width":20,"height":20,"operation":"new_body"}},
+  {"cmd":"set_body_appearance","uid":"F1.b0","appearance":"paint_red"},
+  {"cmd":"set_body_visible","uid":"F3.b0","visible":false},
+  {"cmd":"set_render_settings","ground":{"shadows":false},"output":{"width":96,"height":64,"aspect":"fixed","samples":4,"denoise":false}}
+]

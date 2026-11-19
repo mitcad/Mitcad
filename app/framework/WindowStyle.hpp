@@ -13,6 +13,7 @@
 #include <QWidget>
 
 #include "TreeItemDelegate.hpp"
+#include "UiSizes.hpp"
 
 class QAbstractButton;
 class QDockWidget;
@@ -47,11 +48,11 @@ QSize dockedTreeMinimumSize(const QTreeView* tree, const QSize& fallback);
 // The geometry of the panels.
 namespace panel {
 constexpr int kGap = 6;          // between the panels, and to the window's edges
-constexpr int kRadius = 8;       // a panel's corners
+constexpr int kRadius = kCardRadius;       // a panel's corners, every card's (mitcad#1990)
 constexpr int kTitleHeight = 32; // a panel's title row
 constexpr int kStripWidth = 26;  // a panel's title as a strip at its left (the timeline)
 constexpr int kRowHeight = 28;   // a tree's rows
-constexpr int kRowRadius = 6;    // a selected row's band
+constexpr int kRowRadius = kControlRadius; // a selected row's band
 constexpr int kRowInset = 2;     // the band's room to the tree's sides
 } // namespace panel
 

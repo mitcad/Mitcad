@@ -138,6 +138,9 @@ pub mod inputs;
 pub mod text_move;
 // The same for a 3D sketch's drawing commands (mitcad#1912).
 pub mod spatial_inputs;
+// Auto Constrain: the relations a sketch has, then dimensions for what is
+// left free (mitcad#2019).
+pub mod auto_constrain;
 
 /// A refusal or note of a sketch edit that names the sketch's ids
 /// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`
@@ -169,6 +172,9 @@ mod offset_fold_tests;
 // contours that bound no profile (mitcad#1993).
 #[cfg(test)]
 mod text_regions_1993_tests;
+// A text in a frame wrapped to the frame's width (mitcad#2029).
+#[cfg(test)]
+mod text_wrap_2029_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;

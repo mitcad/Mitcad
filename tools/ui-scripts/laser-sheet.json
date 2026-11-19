@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Laser sheet's joints (mitcad#1939) for tools/ui-scripts/laser-sheet.mitcad-ui: a front plate 100 x 6 x 60 (Body1) and a side plate 6 x 80 x 60 (Body2) overlapping at the corner; a plate 100 x 60 x 6 lying at y = 200 (Body3, its end face F3:side1 at x = 100, 60 long along y) and its mate 6 x 20 x 40 against the end's first third (Body4), so that the end face's middle shows."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 100, "width": 6, "height": 60, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 6, "width": 80, "height": 60, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 200], "length": 100, "width": 60, "height": 6, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [100, 200], "length": 6, "width": 20, "height": 40, "operation": "new_body"}}
+]

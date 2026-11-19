@@ -18,6 +18,9 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -74,6 +77,98 @@ bool sharp_vertical_edge_at(const Shape& shape, double x, double y) {
     }
   }
   return false;
+}
+
+// Tangent Chain off on a chain that runs on (mitcad#2037).
+
+// One closed solid that OCCT's checker finds valid.
+bool closed_valid_solid(const Shape& shape) {
+  int solids = 0;
+  for (TopExp_Explorer solid(shape.occt(), TopAbs_SOLID); solid.More(); solid.Next()) {
+    ++solids;
+    for (TopExp_Explorer shell(solid.Current(), TopAbs_SHELL); shell.More(); shell.Next()) {
+      if (!BRep_Tool::IsClosed(shell.Current())) {
+        return false;
+      }
+    }
+  }
+  return solids == 1 && BRepCheck_Analyzer(shape.occt()).IsValid();
+}
+
+// The name of the edge whose middle is nearest the point.
+std::string edge_at(const Shape& shape, const gp_Pnt& middle) {
+  int best = -1;
+  double nearest = 1.0e100;
+  for (int i = 0; i < shape.edge_count(); ++i) {
+    const BRepAdaptor_Curve curve(shape.edge(i));
+    const double d = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter())).Distance(middle);
+    if (d < nearest) {
+      nearest = d;
+      best = i;
+    }
+  }
+  return best < 0 ? std::string() : shape.edge_name(best);
+}
+
+// Faces named `name` or one of its split pieces.
+int faces_matching(const Shape& shape, const std::string& name) {
+  int count = 0;
+  for (int i = 0; i < shape.face_count(); ++i) {
+    count += face_matches(shape.face_names(i), name) ? 1 : 0;
+  }
+  return count;
+}
+
+// Whether a face the feature made reaches the point.
+bool made_face_at(const Shape& shape, const std::string& feature, const gp_Pnt& point) {
+  const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point).Vertex();
+  for (int i = 0; i < shape.face_count(); ++i) {
+    bool made = false;
+    for (const std::string& name : shape.face_names(i)) {
+      made = made || name.compare(0, feature.size() + 1, feature + ":") == 0;
+    }
+    if (made) {
+      BRepExtrema_DistShapeShape distance(shape.face(i), vertex);
+      if (distance.IsDone() && distance.Value() < 1.0e-4) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The block's top front edge alone dressed with Tangent Chain off, on the
+// block with its vertical corners rounded with 5: one valid closed solid;
+// the straight edge's whole dressup (`straight` mm3) and less than the
+// whole of each corner arc's (`arc` mm3), the run-out on both arcs and no
+// made face at their far vertices; the other top edges and arcs sharp.
+void check_top_front_run_out(const Shape& rounded, const Shape& result, const std::string& feature,
+                             const std::string& role, double straight, double arc) {
+  CHECK(closed_valid_solid(result));
+  const double removed = volume(rounded) - volume(result);
+  std::printf("%s run out over the corner arcs: %.6f removed, %.6f along the straight edge, %.6f along each arc "
+              "in full\n",
+              role.c_str(), removed, straight, arc);
+  CHECK(removed > straight + 0.1 * 2.0 * arc);
+  CHECK(removed < straight + 0.9 * 2.0 * arc);
+  CHECK(faces_matching(result, feature + ":" + role + "(" + top_front() + ")") == 1);
+  const double c = 5.0 * std::sqrt(0.5);
+  const std::string arc0 = edge_at(rounded, gp_Pnt(5.0 - c, 5.0 - c, 20.0));
+  const std::string arc1 = edge_at(rounded, gp_Pnt(55.0 + c, 5.0 - c, 20.0));
+  CHECK(faces_matching(result, feature + ":runout(" + arc0 + ")") >= 1);
+  CHECK(faces_matching(result, feature + ":runout(" + arc1 + ")") >= 1);
+  CHECK(!made_face_at(result, feature, gp_Pnt(0.0, 5.0, 20.0)));
+  CHECK(!made_face_at(result, feature, gp_Pnt(60.0, 5.0, 20.0)));
+  for (int i = 1; i < 4; ++i) {
+    CHECK(faces_matching(result, feature + ":" + role + "(" + edge(end_cap("F2", 1), side("F2", 1, i)) + ")") == 0);
+  }
+  for (const gp_Pnt& far : {gp_Pnt(55.0 + c, 35.0 + c, 20.0), gp_Pnt(5.0 - c, 35.0 + c, 20.0)}) {
+    const std::string name = edge_at(rounded, far);
+    CHECK(faces_matching(result, feature + ":" + role + "(" + name + ")") == 0);
+    CHECK(faces_matching(result, feature + ":runout(" + name + ")") == 0);
+  }
+  CHECK(faces_matching(result, feature + ":runout_tool") == 0);
+  CHECK(faces_matching(result, feature + ":runout_end") == 0);
 }
 
 void test_fillet_volume_and_names() {
@@ -302,9 +397,16 @@ void test_fillet_tangent_chains() {
     CHECK(faces_named(*second, "F6:fillet(" + arc + ")") == 1);
   }
   CHECK(edge_names_unique(*second));
-  // Without a tangent chain only the one edge would be rounded: unsupported.
+  // Without a tangent chain only the one edge is rounded, the rounding
+  // running out over the corner arcs beside it (mitcad#2037).
   top.tangent_chain = false;
-  CHECK(throws_with([&] { fillet("F6", *first, {top}); }, "unsupported: edge"));
+  check_top_front_run_out(*first, *fillet("F6", *first, {top}), "F6", "fillet", fillet_loss(3) * 50,
+                          fillet_loss(3) * (kPi / 2) * (5 - 3 * (5.0 / 6 - kPi / 4) / (1 - kPi / 4)));
+  // Variable radii cannot run out: refused in words.
+  FilletSet variable = top;
+  variable.size = FilletSize::Variable;
+  variable.radius2 = 2;
+  CHECK(throws_with([&] { fillet("F6", *first, {variable}); }, "need Tangent Chain on"));
   // On a block without tangent neighbours it makes no difference.
   CHECK(near(volume(*fillet("F6", *block(), {top})), 48000.0 - fillet_loss(3) * 60));
 }
@@ -892,8 +994,11 @@ void test_chamfer_sets_and_reference_faces() {
   rim.edges = {top_front()};
   rim.spec.distance = 1;
   CHECK(chamfer("F5", *rounded, {rim})->face_count() == rounded->face_count() + 8);
+  // Without one only the selected edge is bevelled, the bevel running out
+  // over the corner arcs beside it (mitcad#2037).
   rim.tangent_chain = false;
-  CHECK(throws_with([&] { chamfer("F5", *rounded, {rim}); }, "unsupported:"));
+  check_top_front_run_out(*rounded, *chamfer("F5", *rounded, {rim}), "F5", "chamfer", 0.5 * 50,
+                          0.5 * (kPi / 2) * (5 - 1.0 / 3));
 }
 
 // The area of the face named (or split from) `name`.
@@ -1063,15 +1168,6 @@ void test_end_rounded_to_a_half_round_in_one_fillet() {
   CHECK(apart->face_count() == 8);
   CHECK(faces_named(*one, "F3:fillet(" + left + ")") == 1);
   CHECK(faces_named(*one, "F3:fillet(" + right + ")") == 1);
-}
-
-// Faces named `name` or one of its split pieces.
-int faces_matching(const Shape& shape, const std::string& name) {
-  int count = 0;
-  for (int i = 0; i < shape.face_count(); ++i) {
-    count += face_matches(shape.face_names(i), name) ? 1 : 0;
-  }
-  return count;
 }
 
 void test_dressups_of_circles_built_as_rings() {
@@ -1707,6 +1803,112 @@ void test_window_floor_rounded_up_to_pillar_ends_in_halves() {
 
 } // namespace
 
+Segment line_segment(const std::string& name, double x0, double y0, double x1, double y1) {
+  Segment s;
+  s.name = name;
+  s.kind = SegmentKind::Line;
+  s.start = gp_Pnt2d(x0, y0);
+  s.end = gp_Pnt2d(x1, y1);
+  return s;
+}
+
+Segment arc_segment(const std::string& name, double cx, double cy, double radius, double from, double to) {
+  Segment s;
+  s.name = name;
+  s.kind = SegmentKind::Arc;
+  s.center = gp_Pnt2d(cx, cy);
+  s.radius = radius;
+  s.start_angle = from;
+  s.end_angle = to;
+  return s;
+}
+
+// A plate 60 x 40 x 10 with a slot through it, 20 long between the centres
+// of its rounded ends of radius 5; one straight edge of the slot's rim on
+// the top face chamfered by 1 with Tangent Chain off (mitcad#2037). The
+// rim's chain is the two straight edges and the two half circles: the
+// bevel runs out over both half circles and is gone before their far
+// vertices; the other straight edge stays sharp. One valid closed solid.
+void test_chamfer_runs_out_over_a_slots_rounded_ends() {
+  Region plate = rectangle(1, 0, 0, 60, 40);
+  Loop slot;
+  slot.segments.push_back(line_segment("c5[c8,c6]", 20, 15, 40, 15));
+  slot.segments.push_back(arc_segment("c6[c5,c7]", 40, 20, 5, -kPi / 2, kPi / 2));
+  slot.segments.push_back(line_segment("c7[c6,c8]", 40, 25, 20, 25));
+  slot.segments.push_back(arc_segment("c8[c7,c5]", 20, 20, 5, kPi / 2, 3 * kPi / 2));
+  plate.loops.push_back(slot);
+  const ShapePtr body = extrude("F2", {plate}, 0, 10);
+  ChamferSet rim;
+  rim.edges = {edge_at(*body, gp_Pnt(30, 15, 10))};
+  rim.spec.distance = 1;
+  rim.tangent_chain = false;
+  const ShapePtr bevelled = chamfer("F5", *body, {rim});
+  CHECK(closed_valid_solid(*bevelled));
+  // The straight edge's bevel whole, the half circles' less than whole
+  // (a bevel round a hole of radius 5: its centroid at 5 + 1/3).
+  const double straight = 0.5 * 20;
+  const double half_circle = 0.5 * kPi * (5 + 1.0 / 3);
+  const double removed = volume(*body) - volume(*bevelled);
+  std::printf("slot rim run out: %.6f removed, %.6f along the straight edge, %.6f along each half circle in full\n",
+              removed, straight, half_circle);
+  CHECK(removed > straight + 0.1 * 2 * half_circle);
+  CHECK(removed < straight + 0.9 * 2 * half_circle);
+  CHECK(faces_matching(*bevelled, "F5:chamfer(" + rim.edges.front() + ")") == 1);
+  CHECK(faces_matching(*bevelled, "F5:runout(" + edge_at(*body, gp_Pnt(45, 20, 10)) + ")") >= 1);
+  CHECK(faces_matching(*bevelled, "F5:runout(" + edge_at(*body, gp_Pnt(15, 20, 10)) + ")") >= 1);
+  CHECK(faces_matching(*bevelled, "F5:chamfer(" + edge_at(*body, gp_Pnt(30, 25, 10)) + ")") == 0);
+  CHECK(!made_face_at(*bevelled, "F5", gp_Pnt(40, 25, 10)));
+  CHECK(!made_face_at(*bevelled, "F5", gp_Pnt(20, 25, 10)));
+  CHECK(faces_matching(*bevelled, "F5:runout_tool") == 0);
+  // The input is not changed.
+  CHECK(near(volume(*body), 60.0 * 40 * 10 - (20 * 10 + kPi * 25) * 10));
+}
+
+// A block whose front edge runs from (0, 0) along x to 50, turns by 20
+// degrees in an arc of radius 2 (0.70 long) and runs on straight to a sharp
+// corner; its top edge along x chamfered by 1 with Tangent Chain off
+// (mitcad#2037). The arc is shorter than the bevel is wide (1.41): no
+// run-out, the bevel ends flat in the plane x = 50 at the arc's vertex,
+// and the arc and the edge after it stay sharp. One valid closed solid.
+void test_chamfer_ends_flat_where_the_next_edge_is_too_short() {
+  const double turn = 20.0 * kPi / 180.0;
+  const double ax = 50 + 2 * std::sin(turn);
+  const double ay = 2 - 2 * std::cos(turn);
+  const double cx = ax + 20 * std::cos(turn);
+  const double cy = ay + 20 * std::sin(turn);
+  Region outline;
+  outline.name = "r{c1,c2,c3,c4,c5,c6}";
+  Loop loop;
+  loop.segments.push_back(line_segment("c1[c6,c2]", 0, 0, 50, 0));
+  loop.segments.push_back(arc_segment("c2[c1,c3]", 50, 2, 2, -kPi / 2, -kPi / 2 + turn));
+  loop.segments.push_back(line_segment("c3[c2,c4]", ax, ay, cx, cy));
+  loop.segments.push_back(line_segment("c4[c3,c5]", cx, cy, cx, 40));
+  loop.segments.push_back(line_segment("c5[c4,c6]", cx, 40, 0, 40));
+  loop.segments.push_back(line_segment("c6[c5,c1]", 0, 40, 0, 0));
+  outline.loops.push_back(loop);
+  const ShapePtr body = extrude("F2", {outline}, 0, 20);
+  ChamferSet front;
+  front.edges = {edge_at(*body, gp_Pnt(25, 0, 20))};
+  front.spec.distance = 1;
+  front.tangent_chain = false;
+  const ShapePtr bevelled = chamfer("F5", *body, {front});
+  CHECK(closed_valid_solid(*bevelled));
+  // The bevel's prism, 50 long, exactly.
+  CHECK(near(volume(*body) - volume(*bevelled), 0.5 * 50));
+  CHECK(faces_matching(*bevelled, "F5:chamfer(" + front.edges.front() + ")") == 1);
+  // The flat end, named after the vertex it ends at.
+  const std::string end = "F5:runout_end(";
+  int ends = 0;
+  for (int i = 0; i < bevelled->face_count(); ++i) {
+    for (const std::string& name : bevelled->face_names(i)) {
+      ends += name.compare(0, end.size(), end) == 0 ? 1 : 0;
+    }
+  }
+  CHECK(ends == 1);
+  CHECK(!made_face_at(*bevelled, "F5", gp_Pnt(ax, ay, 20)));
+  CHECK(faces_matching(*bevelled, "F5:runout_tool") == 0);
+}
+
 void dressup_tests() {
   test_fillet_volume_and_names();
   test_fillet_corner_blends_are_named();
@@ -1740,6 +1942,9 @@ void dressup_tests() {
           test_convex_and_concave_roundings_overlapping_on_a_step);
   guarded("test_window_floor_rounded_up_to_pillar_ends_in_halves",
           test_window_floor_rounded_up_to_pillar_ends_in_halves);
+  guarded("test_chamfer_runs_out_over_a_slots_rounded_ends", test_chamfer_runs_out_over_a_slots_rounded_ends);
+  guarded("test_chamfer_ends_flat_where_the_next_edge_is_too_short",
+          test_chamfer_ends_flat_where_the_next_edge_is_too_short);
 }
 
 } // namespace test

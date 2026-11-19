@@ -65,7 +65,6 @@ CommandDef dogboneCommand(const CommandContext& context) {
   def.name = QObject::tr("Dogbone");
   def.icon = QStringLiteral("dogbone");
   def.tooltip = QObject::tr("Relief cuts at inside corners, so that a router bit clears them");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("cnc"), QStringLiteral("router"), QStringLiteral("relief"),
                   QStringLiteral("t-bone"), QStringLiteral("corner")};
   def.featureType = QStringLiteral("dogbone");

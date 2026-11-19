@@ -2,7 +2,8 @@
 //! CAM for MitCad (docs/cam.md): tools and the tool library, the machine
 //! model with its collision zones and tool changer, the toolpaths of the
 //! 2.5-axis milling operations, and the post-processors that write them
-//! as the G-code of a controller.
+//! as the G-code of a controller; turning on a 2-axis lathe in
+//! [`turning`].
 //!
 //! The crate knows no document: the model and the api give it planar
 //! outlines (from faces, sketches and the stock) in the work coordinates
@@ -44,6 +45,9 @@ pub mod gcode;
 pub use collision::{ChangeMove, check_tool_changes, check_with_tool_changes};
 pub use gcode::{GMove, GcodeError, GcodeReader};
 pub use post::ChangeLines;
+// Turning on a 2-axis lathe (mitcad#1869).
+pub mod turning;
+pub use turning::{Lathe, TurnPath, TurningProgram, TurningTool, turning_dialect, turning_post};
 
 /// Why an operation or a post run could not be made: `message` says it
 /// in words for the person using the app.
@@ -161,6 +165,7 @@ mod tests {
             }],
             tool_changer: ToolChanger::Manual,
             park: None,
+            lathe: None,
         };
         // The stock's corner at (100, 100), its top 100 mm down: the clamp
         // is 20 mm off the stock's left side and 20 mm above its top,

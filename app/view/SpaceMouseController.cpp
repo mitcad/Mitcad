@@ -49,6 +49,8 @@ void SpaceMouseController::refresh() {
   if (!m_backend && m_factory) {
     m_backend = m_factory();
     if (m_backend) {
+      m_backend->acceptsInput = m_hooks.acceptsInput;
+      m_backend->nativeWindow = m_hooks.nativeWindow;
       m_backend->motion = [this](const SpaceMouseAxes& axes) { motion(axes, true); };
       m_backend->button = [this](int index, bool pressed) { button(index, pressed); };
       m_backend->connection = [this](bool present, const QString& device) {
@@ -66,7 +68,8 @@ void SpaceMouseController::refresh() {
         connected(device);
       } else {
         qInfo().noquote() << QStringLiteral("3D mouse: none");
-        setStatus(tr("No 3D mouse found"));
+        const auto status = m_backend->unavailableStatus();
+        setStatus(status.isEmpty() ? tr("No 3D mouse found") : status);
       }
     } else {
       qInfo().noquote() << QStringLiteral("3D mouse: none");

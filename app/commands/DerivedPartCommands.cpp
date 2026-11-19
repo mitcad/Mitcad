@@ -437,8 +437,6 @@ CommandDef derivedPartCommand(DocumentHost& host) {
   def.name = QObject::tr("Derived Component");
   def.icon = QStringLiteral("build-length");
   def.tooltip = QObject::tr("A placed or inserted component's configuration, length, values and end cuts");
-  def.tab.clear(); // opened by editing its feature
-  def.group = QStringLiteral("ASSEMBLE");
   def.keywords = {QStringLiteral("configuration"), QStringLiteral("length"), QStringLiteral("options"),
                   QStringLiteral("build"), QStringLiteral("profile")};
   def.featureType = QStringLiteral("derived_part");

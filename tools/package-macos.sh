@@ -80,9 +80,23 @@ cmake "${install_args[@]}"
 # it); the product is called Mitcad. A rename in two steps because the file
 # system ignores case.
 [ -d "$stage/mitcad.app" ] || { echo "cmake --install left no mitcad.app in $stage" >&2; exit 1; }
-mv "$stage/mitcad.app" "$stage/Mitcad.app.tmp"
-mv "$stage/Mitcad.app.tmp" "$stage/Mitcad.app"
-app="$stage/Mitcad.app"
+bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$stage/mitcad.app/Contents/Info.plist")
+app_name=Mitcad
+dmg_name=Mitcad
+if [ "$bundle_id" = org.mitcad.3dxware-test ]; then
+  if [ -n "$sign_identity" ]; then
+    echo "The 3DxWare test package uses an ad-hoc signature." >&2
+    exit 1
+  fi
+  app_name="MitCad 3DxWare Test"
+  dmg_name=MitCad-3DxWare-Test
+  preview_plist="$stage/mitcad.app/Contents/Info.plist"
+  mv "$stage/mitcad.app/Contents/MacOS/mitcad" "$stage/mitcad.app/Contents/MacOS/mitcad-3dxware-test"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable mitcad-3dxware-test" "$preview_plist"
+fi
+mv "$stage/mitcad.app" "$stage/mitcad.app.tmp"
+app="$stage/$app_name.app"
+mv "$stage/mitcad.app.tmp" "$app"
 
 version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist")
 executable=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist")
@@ -152,12 +166,16 @@ echo "== Checking the bundle"
 "$repo/tools/check-bundle-macos.sh" "$app"
 
 # --- Disk image -----------------------------------------------------------------
-dmg="$out_dir/Mitcad-$version-macos-$archs.dmg"
+dmg="$out_dir/$dmg_name-$version-macos-$archs.dmg"
 rm -f "$dmg"
 echo "== Creating $dmg"
-ditto "$app" "$dmg_root/Mitcad.app"
+ditto "$app" "$dmg_root/$app_name.app"
 ln -s /Applications "$dmg_root/Applications"
-hdiutil create -volname "MitCad $version" -srcfolder "$dmg_root" -ov -format UDZO "$dmg" >/dev/null
+volname="MitCad $version"
+if [ "$bundle_id" = org.mitcad.3dxware-test ]; then
+  volname="$app_name $version"
+fi
+hdiutil create -volname "$volname" -srcfolder "$dmg_root" -ov -format UDZO "$dmg" >/dev/null
 rm -rf "$dmg_root"
 
 # --- Developer ID and notarisation (off unless the variables are set) --------------

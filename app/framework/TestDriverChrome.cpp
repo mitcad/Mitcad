@@ -575,9 +575,13 @@ void TestDriver::testSketchFinishLayout() {
       for (QToolButton* button : title->findChildren<QToolButton*>()) {
         if (button->defaultAction() == action) return false;
       }
-      QWidget* search = title->findChild<QWidget*>(QStringLiteral("titleSearch"));
+      // The row's last control: the search field, in the Floating row of
+      // Windows and Linux the version (mitcad#1990: the search field is the
+      // toolbar panel's there).
+      QWidget* search = title->findChild<QWidget*>(title->isFloatingRow() ? QStringLiteral("titleVersion")
+                                                                          : QStringLiteral("titleSearch"));
       QLayout* row = title->layout();
-      // Search is the final layout item and reaches its normal right margin:
+      // It is the final layout item and reaches its normal right margin:
       // removing Finish Sketch must release its whole slot and spacing.
       if (search == nullptr || row == nullptr || row->indexOf(search) != row->count() - 1 ||
           title->width() - search->geometry().right() - 1 != row->contentsMargins().right()) {

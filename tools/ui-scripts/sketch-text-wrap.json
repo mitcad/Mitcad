@@ -1,0 +1,7 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for a text wrapped in its frame (mitcad#2029): two free points that frame the view's fit at (-30, -22) and (30, 22). The text and its frame are drawn with the Text tool."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-30,-22]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[30,22]}
+]

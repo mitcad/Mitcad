@@ -226,7 +226,6 @@ void MainWindow::registerWaitCursorTestCommands() {
   leave.icon = QStringLiteral("warning");
   leave.kind = CommandDef::Kind::Action;
   leave.mode = CommandDef::Mode::Any;
-  leave.tab.clear();
   leave.tooltip = QStringLiteral("For tests: an override cursor set and left on, which the idle recovery clears");
   leave.run = [] { WaitCursor::leaveOnForTest(QStringLiteral("test hook")); };
   m_registry->add(leave);

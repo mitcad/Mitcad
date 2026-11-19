@@ -56,8 +56,6 @@ void MainWindow::registerFormCommands() {
     def.tooltip = tooltip;
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Model;
-    def.tab.clear(); // the context menu and the command search
-    def.group = QStringLiteral("CREATE");
     def.keywords = keywords;
     def.duringCommands = true;
     def.enabled = [this] { return formEditOpen(); };

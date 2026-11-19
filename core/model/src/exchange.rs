@@ -504,12 +504,40 @@ impl<K: Kernel> Document<K> {
         name: Option<&str>,
     ) -> Result<Imported, ModelError> {
         check_unit(options)?;
-        let bodies = self
-            .kernel()
-            .read_file(path, options)
-            .map_err(kernel_error)?;
+        let bodies = self.read_stoppable(|kernel| kernel.read_file(path, options))?;
         self.import_read_bodies(path, bodies, name, false)
             .map(|(imported, _)| imported)
+    }
+
+    /// Runs `read`, a file's read by the kernel, so that the document's
+    /// monitor stops it inside (mitcad#2032): the memory guard of model
+    /// commands, or the user's cancel, stops a STEP or IGES transfer
+    /// ([`Kernel::interruptible`]; the parsing before it cannot be
+    /// stopped). A read cancelled before it starts, while it runs or just
+    /// after it ends fails with the monitor's reason (the guard's refusal
+    /// of an import), else as cancelled; nothing of the file is in the
+    /// design yet, so it is as it was before the command.
+    pub(crate) fn read_stoppable<T>(
+        &self,
+        read: impl FnOnce(&K) -> Result<T, crate::kernel::KernelError>,
+    ) -> Result<T, ModelError> {
+        let Some(monitor) = self.monitor().cloned() else {
+            return read(self.kernel()).map_err(kernel_error);
+        };
+        let stopped = |monitor: &crate::RecomputeMonitor| {
+            monitor
+                .cancel_reason()
+                .map_or(ModelError::Cancelled, ModelError::Invalid)
+        };
+        if monitor.is_cancelled() {
+            return Err(stopped(&monitor));
+        }
+        let kernel = self.kernel();
+        let result = kernel.interruptible(&monitor, || read(kernel));
+        if monitor.is_cancelled() {
+            return Err(stopped(&monitor));
+        }
+        result.map_err(kernel_error)
     }
 
     /// The bodies read from the file at `path` as one base feature

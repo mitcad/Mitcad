@@ -39,6 +39,7 @@
 #include "browser/TimelineWidget.hpp"
 #include "files/ProjectIndicator.hpp"
 #include "files/LockController.hpp"
+#include "framework/CommandLayout.hpp"
 #include "framework/AppSettings.hpp"
 #include "framework/AutoselectPanel.hpp"
 #include "framework/CommandRegistry.hpp"
@@ -799,10 +800,14 @@ void MainWindow::refreshNativeActions() {
   }
   QList<mac::NativeMacAction> actions;
   QSet<QAction*> assigned;
+  // The commands in the layout's order (mitcad#1951), the others after.
   QHash<QString, int> commandOrder;
   int order = 0;
+  for (const QString& id : commandLayout().placedCommands()) {
+    commandOrder.insert(id, order++);
+  }
   for (const auto& def : m_registry->commands()) {
-    commandOrder.insert(def->id, order++);
+    if (!commandOrder.contains(def->id)) commandOrder.insert(def->id, order++);
   }
   m_nativeActions.clear();
   // The commands that are a button of their group (Qt's ribbon_<id>, also a
@@ -860,15 +865,16 @@ void MainWindow::refreshNativeActions() {
     item.shortcut = action->shortcut().toString(QKeySequence::PortableText);
     for (const QKeySequence& key : action->shortcuts()) item.shortcuts.append(key.toString(QKeySequence::PortableText));
     if (const CommandDef* def = m_registry->find(item.id)) {
-      item.group = def->group;
-      item.workspace = def->tab;
+      // Its place: its home in the layout (mitcad#1951).
+      const LayoutPlace home = commandLayout().home(def->id);
+      item.group = home.group;
+      item.workspace = home.tab;
       item.keywords = def->keywords;
-      item.toolbarPinned = def->pinned;
+      item.toolbarPinned = ownButtons.contains(def->id);
       item.toolbarOrder = commandOrder.value(def->id);
-      item.section = def->section;
       // Pin to Toolbar as the Qt row menu offers it (mitcad#1084): pinned
       // in its own group, or pinnable unless a button of its group already.
-      item.pinnedToToolbar = m_ribbon->pins().isPinned(def->tab, def->id);
+      item.pinnedToToolbar = m_ribbon->pins().isPinned(home.tab, def->id);
       item.pinnable = !item.pinnedToToolbar && !ownButtons.contains(def->id);
       if (!item.workspace.isEmpty()) {
         item.symbol.clear(); // Keep the familiar CAD command drawing.
@@ -935,11 +941,13 @@ void MainWindow::refreshNativeActions() {
   QTabBar* tabs = m_ribbon->tabBar();
   for (int tab = 0; tab < tabs->count(); ++tab) workspaces.append(tabs->tabText(tab).toUpper());
   // Keep the hidden sketch page available before its tab is added.
-  // MAKE (mitcad#1049) as SOLID and BUILD: the native toolbar reads its groups here.
+  // MAKE (mitcad#1049) as SOLID and BUILD: the native toolbar reads its groups here;
+  // SURFACE, SHEET METAL and MANAGE (mitcad#1975) likewise.
   // DRAWING and CUT SHEET (mitcad#1008, mitcad#1073): the tab a drawing
   // shows alone while it is open (Ribbon::setDrawingMode).
   for (const QString& workspace :
-       {QStringLiteral("SOLID"), QStringLiteral("BUILD"), QStringLiteral("MAKE"), QStringLiteral("SKETCH"),
+       {QStringLiteral("SOLID"), QStringLiteral("SURFACE"), QStringLiteral("SHEET METAL"), QStringLiteral("BUILD"),
+        QStringLiteral("MAKE_PRINT"), QStringLiteral("MAKE_LASER"), QStringLiteral("MAKE_CNC"), QStringLiteral("MANAGE"), QStringLiteral("SKETCH"),
         QStringLiteral("DRAWING"), QStringLiteral("CUT SHEET")}) {
     for (const QString& name : Ribbon::groups(workspace)) {
       auto* caption = m_ribbon->findChild<QToolButton*>(QStringLiteral("ribbonMenu_") + workspace + QLatin1Char('/') + name);

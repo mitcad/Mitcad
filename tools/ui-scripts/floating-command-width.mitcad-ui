@@ -10,6 +10,9 @@
 #      the Sketch Palette whole within it ("Palette rows cut: none"), no
 #      Create or Constraints button clipped (each as large as its icon), the
 #      constraints in two rows of seven.
+# The runners start with Toolbar labels: Icons only, as the toolbar was laid
+# out when the test was written (the Floating toolbar panel shows labels by
+# default on Windows and Linux, mitcad#1990, and is the higher for them).
 # The runner prints the card's width. Run by
 # tools/ui-floating-command-width-test.sh (Linux),
 # tools/ui-windows-floating-command-width-test.ps1 (Windows) and
@@ -37,6 +40,13 @@ wait-idle
 #    The rows are scrolled to the end: where the screen keeps the window
 #    smaller (Windows' 1024 x 768, the window 1028 x 749), the XY row lies
 #    below the Browser's card at these sizes and is not logged (#1859).
+#    The timeline is hidden first (View > Panels > Timeline): below the
+#    toolbar panel (mitcad#1990) the Browser's card has room for too few
+#    rows at these sizes in that window, the XY row not among the last ones.
+mark
+menu View/Panels/Timeline
+wait-idle
+expect-log '^Floating cards: (?!.*timelineDock)' 10
 mark
 command sketch.create
 expect-log '^Create Sketch: select a plane' 10

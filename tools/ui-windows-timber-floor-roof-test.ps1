@@ -28,7 +28,7 @@ Timber-Init
 
 Write-Host '--- 1. Floor / Roof: a floor (mitcad#520)'
 Ui-StartApp 'timber-floor'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-ExpectLog 'Ribbon button build.floor_roof at' 'the Floor / Roof button'
 Ui-Mark
 Ui-Step 'Floor / Roof (F5)'              { Ui-Key 'F5' }

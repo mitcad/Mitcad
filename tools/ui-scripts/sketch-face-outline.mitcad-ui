@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: MIT
+# A sketch on a planar face starts with the face's outline, and Convert to
+# Sketch Geometry takes a profile (mitcad#2051, GitHub mitcad/Mitcad#426),
+# on sketch-face-outline.json (a 60 x 40 x 20 block; the sketch's x and y
+# on its top face are the design's):
+#   1. Create Sketch on the block's top face, the preference Project the
+#      face's edges into a sketch on a face on (the wrappers set
+#      MITCAD_SKETCH_PROJECT_FACE=1): Sketch2 starts with the face's
+#      outline as one linked projection, in the undo step that adds it;
+#      its one profile is shaded.
+#   2. A click inside the outline selects its profile; Convert to Sketch
+#      Geometry frees the outline's four lines in one undo step (no
+#      linked projection left), and a dragged edge moves. Undo the drag,
+#      then one undo brings the linked outline back.
+#   3. A rectangle drawn inside: a click inside it selects its profile of
+#      ordinary curves, whose context menu has no Convert to Sketch
+#      Geometry. Finish, and undo the rectangle and Sketch2.
+#   4. The preference turned off in Preferences › Sketch: logged and saved.
+#   5. Create Sketch on the top face again: the new sketch starts empty, its
+#      one profile the face's region. A click there selects it, and its
+#      context menu's Convert to Sketch Geometry projects and frees the
+#      outline in one undo step, which one undo takes back.
+# Run by tools/ui-sketch-face-outline-test.sh (Linux),
+# tools/ui-windows-sketch-face-outline-test.ps1 (Windows) and
+# tools/ui-macos-sketch-face-outline-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. Create Sketch on the top face: the outline comes with it.
+capture-undo-depth start
+mark
+command sketch.create
+wait-log '^Create Sketch: select a plane'
+wait-log '^Pick face F2[.]b0/F2:end[(]'
+mark
+click-logged '^Pick face F2[.]b0/F2:end[(]'
+wait-log '^Sketch started on '
+wait-log '^Sketch Sketch2 starts with the face.s outline: c[0-9]+, c[0-9]+, c[0-9]+, c[0-9]+'
+wait-log '^Sketch Sketch2: 1 linked projection\(s\)'
+wait-idle
+expect-undo-depth ${start} 1
+expect-profiles 1
+
+# 2. Its profile converts: the outline is free, one undo restores it.
+mark
+sketch-click 40 30
+expect-selection 1 1
+capture-undo-depth converting
+mark
+command sketch.convert_projected
+wait-log '^Converted to sketch geometry: c[0-9]+, c[0-9]+, c[0-9]+, c[0-9]+'
+wait-log '^Sketch Sketch2: 0 linked projection\(s\)'
+wait-idle
+expect-undo-depth ${converting} 1
+key Escape
+wait-idle
+mark
+sketch-drag 30 0 30 -5
+wait-log '^Dragged c[0-9]+ to '
+expect-no-log 'did not move it'
+wait-idle
+mark
+key ctrl+z
+wait-log '^Undo: Drag in Sketch2'
+wait-idle
+mark
+key ctrl+z
+wait-log '^Undo: Convert to Sketch Geometry in Sketch2'
+wait-log '^Sketch Sketch2: 1 linked projection\(s\)'
+wait-idle
+expect-undo-depth ${start} 1
+
+# 3. A profile of ordinary curves offers no Convert.
+mark
+command sketch.rectangle
+wait-log '^Sketch tool 2-Point Rectangle'
+wait-idle
+sketch-click 10 10
+sketch-click 20 20
+wait-log '^Added rectangle '
+key Escape
+wait-log '^Sketch tool ended: 2-Point Rectangle'
+wait-idle
+expect-profiles 2
+mark
+sketch-click 15 15
+expect-selection 1 1
+mark
+sketch-click 15 15 right
+wait-log '^Context menu: '
+expect-no-log '^Context menu: .*Convert to Sketch Geometry'
+key Escape
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+mark
+key ctrl+z
+wait-log '^Undo: '
+wait-idle
+mark
+key ctrl+z
+wait-log '^Undo: Add Sketch2$'
+wait-idle
+expect-undo-depth ${start} 0
+
+# 4. The preference turned off.
+mark
+command tools.preferences.sketch
+focus-dialog '^Preferences$'
+expect-widget-property projectFaceOnCreate checked true
+button '^Project the face.s edges into a sketch on a face$' projectFaceOnCreate
+expect-widget-property projectFaceOnCreate checked false
+button '^OK$'
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: project the face.s edges into a sketch on a face off$'
+expect-setting sketch/projectFaceOnCreate false
+wait-idle
+
+# 5. A new sketch on the face starts empty; its face region converts.
+mark
+command sketch.create
+wait-log '^Create Sketch: select a plane'
+wait-log '^Pick face F2[.]b0/F2:end[(]'
+mark
+click-logged '^Pick face F2[.]b0/F2:end[(]'
+wait-log '^Sketch started on '
+wait-log '^Sketch Sketch[0-9]+: 0 linked projection\(s\)'
+expect-no-log 'starts with the face.s outline'
+wait-idle
+expect-profiles 1
+mark
+sketch-click 40 30
+expect-selection 1 1
+capture-undo-depth freeing
+mark
+sketch-click 40 30 right
+wait-log '^Context menu: .*Convert to Sketch Geometry'
+popup 'Convert to Sketch Geometry'
+wait-log '^Converted to sketch geometry: c[0-9]+, c[0-9]+, c[0-9]+, c[0-9]+'
+wait-idle
+expect-undo-depth ${freeing} 1
+mark
+key ctrl+z
+wait-log '^Undo: Convert to Sketch Geometry in Sketch[0-9]+'
+wait-idle
+expect-undo-depth ${freeing} 0
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

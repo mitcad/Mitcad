@@ -5,6 +5,7 @@
 # check-all sources: app/platform/macos/SpaceMouseMac.cpp app/framework/TestDriver.cpp tools/ui-scripts/space-mouse.mitcad-ui
 # check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
 # check-all sources: app/view/ViewController.cpp app/framework/TestDriverNavigation.cpp
+# check-all sources: app/platform/macos/SpaceMouse3DxWare.cpp app/platform/macos/SpaceMouse3DxWare.hpp
 # A 3D mouse (mitcad#951) in the macOS VM, through the test driver's input
 # (tools/ui-scripts/space-mouse.mitcad-ui, the same script as the Linux and
 # Windows tests'): no device logs "3D mouse: none" (IOKit HID finds none

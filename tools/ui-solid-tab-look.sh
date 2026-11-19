@@ -32,7 +32,7 @@ picture() {
   local layout=$1 theme=$2 name=solid-$1-$2
   export MITCAD_TEST_COLOR_SCHEME=$theme
   ui_start_app --no-mcp --demo --no-native-dialogs --chrome="$layout"
-  ui_step "the Solid tab"                 ui_click_logged "Ribbon tab SOLID"
+  ui_step "the Solid tab"                 ui_click_tab "SOLID"
   ui_expect_log "Ribbon SOLID/CREATE at" "$layout, $theme: the Create group"
   ui_expect_log "Ribbon SOLID/MODIFY at" "$layout, $theme: the Modify group"
   xdotool mousemove 5000 5000

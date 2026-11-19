@@ -116,6 +116,20 @@ close_drawing() {
   ui_expect_new "Drawing closed" "the 3D view again"
 }
 
+# drawings_in_sight: a design taller than the browser opens folded below
+# the root (mitcad#426; the Floating toolbar panel with its labels,
+# mitcad#1990, leaves a small window's browser fewer rows than this design
+# has): its Drawings folder is then opened, so that Drawing1's row is in
+# sight.
+drawings_in_sight() {
+  ui_expect_log "Browser opened " "the browser fitted to the design"
+  if grep -q "^Browser opened folded" "$UI_LOG" && ! ui_place_valid "Browser Root/Drawings/Drawing1"; then
+    ui_mark
+    ui_step "open the Drawings folder"     ui_click_logged "Browser arrow Root/Drawings"
+    ui_expect_new "Browser Root/Drawings/Drawing1 at " "the drawing's row in sight"
+  fi
+}
+
 open_drawing() {
   ui_mark
   ui_step "open Drawing1 (double-click)"   ui_double_click_logged "Browser Root/Drawings/Drawing1"
@@ -128,6 +142,7 @@ ui_start_display
 echo "--- Floating: the panel at its narrowest"
 ui_start_app --chrome=floating --open "$FILE" --no-native-dialogs
 ui_expect_log "plates.mitcad" "the design opened"
+drawings_in_sight
 open_drawing
 select_view
 wait_width "Drawing panel" 230 "the panel at its narrowest at first"
@@ -159,6 +174,7 @@ ui_stop_app
 ui_start_app --open "$FILE" --no-native-dialogs
 UI_MARK=0 # a new log
 ui_expect_log "plates.mitcad" "the design opened"
+drawings_in_sight
 open_drawing
 ui_expect_log "Drawing panel width $wide (remembered)" "the width read from the settings"
 select_view

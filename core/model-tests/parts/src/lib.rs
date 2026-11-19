@@ -16,3 +16,5 @@ mod pulley_tests;
 mod seat_tests;
 // Mortise and Tenon (mitcad#1012).
 mod mortise_tenon_tests;
+// Laser sheet joints and the flat pack (mitcad#1939).
+mod laser_sheet_tests;

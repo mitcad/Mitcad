@@ -42,6 +42,7 @@ fn lost_look(version: u32, appearance: &str) -> ItemData {
     let colour = BTreeMap::from([("default_filament_colour".to_owned(), ORANGE.to_owned())]);
     ItemData::Material {
         material: Material {
+            sheet_process: None,
             id: ID.to_owned(),
             name: "Generic TPU X".to_owned(),
             density: 1.22,

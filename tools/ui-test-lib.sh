@@ -79,6 +79,10 @@ export MITCAD_NO_UPDATE_CHECK=1
 # The first dimension of a drawn sketch scales nothing (mitcad#860): the
 # tests' sketches keep the sizes they are drawn at, as their clicks expect.
 export MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0
+# A new sketch on a face starts empty (mitcad#2051): the tests' sketches on
+# faces hold what their steps draw. A test of the face's outline sets it to
+# 1 after sourcing this file.
+export MITCAD_SKETCH_PROJECT_FACE=0
 # Create Sketch and the Construct commands on another component's face ask
 # nothing (mitcad#960): the tests' picks stay as they were. A test of the
 # question sets it to 1 after sourcing this file.
@@ -298,6 +302,17 @@ ui_chooses_chrome() {
 ui_open_in_current_window() {
   mkdir -p "$UI_CONFIG/Mitcad"
   printf '[documents]\nopenInCurrentWindow=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+}
+
+# ui_icons_only: the toolbar's buttons without labels (Preferences >
+# Display > Toolbar labels: Icons only), for a test in the Floating layout
+# that clicks or counts toolbar buttons where they were laid out without
+# labels: the Floating toolbar panel shows labels by default (mitcad#1990),
+# which make its groups wider, and more of them fold. Call it before
+# ui_start_app.
+ui_icons_only() {
+  mkdir -p "$UI_CONFIG/Mitcad"
+  printf '\n[appearance]\nribbonLabels=icons\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 }
 
 ui_start_app() {
@@ -721,6 +736,105 @@ ui_logged_at() {
 }
 
 ui_click_logged() { xdotool mousemove $(ui_logged_at "$1") click "${2:-1}"; }
+
+# ui_workspace DESIGN|MAKE|RENDER|DRAWING: the toolbar panel's workspace
+# (mitcad#1990) chosen through its selector: a click on the selector
+# ("Ribbon workspace at"), then on the workspace's entry in its list
+# ("Ribbon workspace entry RENDER at"); waited for until it is chosen.
+# The Docked layout ("Chrome: docked" in the log) has no selector and shows
+# every workspace's tabs at once: nothing to choose.
+ui_workspace() {
+  local before chosen
+  if grep -q "Chrome: docked" "$UI_LOG"; then
+    echo "     the Docked layout shows every workspace's tabs: $1 needs no choosing"
+    return 0
+  fi
+  before=$(grep -c "^Ribbon workspace menu: " "$UI_LOG")
+  chosen=$(grep -c "^Ribbon workspace chosen: $1$" "$UI_LOG")
+  ui_click_logged "Ribbon workspace"
+  for _ in $(seq 1 25); do
+    [ "$(grep -c "^Ribbon workspace menu: " "$UI_LOG")" -gt "$before" ] && break
+    sleep 0.2
+  done
+  [ "$(grep -c "^Ribbon workspace menu: " "$UI_LOG")" -gt "$before" ] || ui_fail "the workspace selector's list did not open"
+  ui_sync
+  ui_click_logged "Ribbon workspace entry $1"
+  for _ in $(seq 1 25); do
+    [ "$(grep -c "^Ribbon workspace chosen: $1$" "$UI_LOG")" -gt "$chosen" ] && break
+    sleep 0.2
+  done
+  [ "$(grep -c "^Ribbon workspace chosen: $1$" "$UI_LOG")" -gt "$chosen" ] || ui_fail "the workspace $1 was not chosen"
+  ui_sync
+}
+
+# ui_drawing_tool NAME TAB/GROUP: starts the drawing tool NAME of the
+# toolbar panel's group TAB/GROUP ("Datum Label" DRAWING/SYMBOLS): a click
+# on its button ("Drawing tool Datum Label at"), or, where the tab's groups
+# do not fit and that group is collapsed to its name ("Ribbon collapsed
+# DRAWING: SYMBOLS, TABLES"; mitcad#1990's Sheet group took the room at
+# 1280 pixels), its entry in the group's menu, chosen with the keys.
+ui_drawing_tool() {
+  local tab=${2%%/*} group=${2#*/} collapsed before menu entry downs=0 found=0
+  collapsed=$(grep "^Ribbon collapsed $tab: " "$UI_LOG" | tail -1)
+  if [[ ", ${collapsed#*: }, " != *", $group, "* ]]; then
+    ui_click_logged "Drawing tool $1"
+    return
+  fi
+  before=$(grep -c "^Ribbon menu $2: " "$UI_LOG")
+  ui_click_logged "Ribbon $2"
+  for _ in $(seq 1 50); do
+    [ "$(grep -c "^Ribbon menu $2: " "$UI_LOG")" -gt "$before" ] && break
+    sleep 0.2
+  done
+  menu=$(grep "^Ribbon menu $2: " "$UI_LOG" | tail -1)
+  [ "$(grep -c "^Ribbon menu $2: " "$UI_LOG")" -gt "$before" ] || ui_fail "the $2 menu did not open for $1"
+  menu=${menu#"Ribbon menu $2: "}
+  while IFS= read -r entry; do
+    [ "$entry" = "-" ] && continue
+    downs=$((downs + 1))
+    # (A name another command shares has its place after it in the menu:
+    # "Bill of Materials (Drawing)".)
+    if [ "$entry" = "$1" ] || [[ $entry == "$1 ("*")" ]]; then
+      found=1
+      break
+    fi
+  done < <(printf '%s\n' "${menu// | /$'\n'}")
+  [ "$found" = 1 ] || ui_fail "$1 is not in the $2 menu: $menu"
+  xdotool key --delay 80 --repeat "$downs" Down
+  ui_key Return
+}
+
+# ui_start_page_shown: whether the Start page is shown, as logged last.
+ui_start_page_shown() { grep -E "^Start page (shown|hidden)$" "$UI_LOG" | tail -1 | grep -q "shown"; }
+
+# ui_click_tab TAB: a click on a workspace tab ("Ribbon tab MAKE_CNC at"). In
+# the toolbar panel (mitcad#1990) a tab of another workspace is out of
+# sight ("Ribbon tab MAKE_CNC out of sight"): that workspace is chosen first
+# (MAKE_PRINT's, MAKE_LASER's and MAKE_CNC's is Make, the other model tabs'
+# Design); over the Start page the
+# panel is hidden, and a click on the design's tab ("Document tab shown
+# at") leaves the page first.
+ui_click_tab() {
+  local last
+  last=$(grep -E "^Ribbon tab $1 (at |out of sight)" "$UI_LOG" | tail -1)
+  if [[ $last == *" out of sight" ]] && [ "$1" != START ] && ui_start_page_shown; then
+    ui_click_logged "Document tab shown"
+    for _ in $(seq 1 25); do
+      ui_start_page_shown || break
+      sleep 0.2
+    done
+    ui_start_page_shown && ui_fail "the design's tab did not leave the Start page"
+    ui_sync
+    last=$(grep -E "^Ribbon tab $1 (at |out of sight)" "$UI_LOG" | tail -1)
+  fi
+  if [[ $last == *" out of sight" ]]; then
+    case $1 in
+      MAKE_*) ui_workspace MAKE ;;
+      *) ui_workspace DESIGN ;;
+    esac
+  fi
+  ui_click_logged "Ribbon tab $1"
+}
 
 # ui_command "name": runs a command through the command search (S).
 ui_command() {
@@ -1261,6 +1375,53 @@ ui_save_state() {
     sleep 0.2
   done
   ui_fail "$2: Save is not $1 (last: '$last')"
+}
+
+# ui_quick_access_place description line [none]: in a "Floating cards: "
+# line, the title row has no title box (mitcad#1989: the window's title and
+# the document tabs show the design's name), and its quick-access group,
+# when it is there, sits where the box was: right of the document tabs
+# (titleTabs, mitcad#1990), its right end just left of the next part (the
+# Boost development button, the project, agent or chat indicator, or
+# Preferences and Help), the row's
+# spacing (6) apart, folded or not. With "none" the group must not be
+# there: the Floating top bar's group has no commands by default and is
+# hidden while empty (mitcad#1990).
+ui_quick_access_place() {
+  local description=$1 line=$2 name xy size x w tabs_end="" qa_x="" qa_end="" next="" gap
+  local entries
+  grep -qE "(^|; )titleBox " <<< "$line" && ui_fail "$description: a title box in the title row: '$line'"
+  if [ "${3:-}" = none ] && grep -qE "(^|; )titleQuickAccess " <<< "$line"; then
+    ui_fail "$description: a quick-access group in the title row, which has no commands by default: '$line'"
+  fi
+  entries=$(tr ';' '\n' <<< "${line#*; }" | sed 's/^ *//')
+  while read -r name xy size; do
+    x=${xy%,*}
+    w=${size%x*}
+    case $name in
+      titleTabs) tabs_end=$((x + w)) ;;
+      titleQuickAccess) qa_x=$x qa_end=$((x + w)) ;;
+    esac
+  done <<< "$entries"
+  if [ -z "$qa_x" ]; then
+    echo "ok   $description: no title box, no quick-access group in the row"
+    return
+  fi
+  [ -n "$tabs_end" ] && [ "$qa_x" -ge "$tabs_end" ] ||
+    ui_fail "$description: the quick-access group ($qa_x) is not right of the tabs (end $tabs_end): '$line'"
+  while read -r name xy size; do
+    x=${xy%,*}
+    case $name in
+      titleBoost | titleIndicator | titleAgent | titleChat | titleSearch | titleSettings)
+        [ "$x" -ge "$qa_end" ] && { [ -z "$next" ] || [ "$x" -lt "$next" ]; } && next=$x
+        ;;
+    esac
+  done <<< "$entries"
+  [ -n "$next" ] || ui_fail "$description: nothing right of the quick-access group: '$line'"
+  gap=$((next - qa_end))
+  [ "$gap" -le 24 ] ||
+    ui_fail "$description: the quick-access group ends $gap px before the indicators or Preferences: '$line'"
+  echo "ok   $description: no title box; the quick-access group at the free part's right end, $gap px before the next part"
 }
 
 # ui_save_if_changed file: Ctrl+S and "Saved <file>" while Save is enabled;

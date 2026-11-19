@@ -117,6 +117,11 @@ pub struct Machine {
     /// coordinates), if anywhere.
     #[serde(default)]
     pub park: Option<P3>,
+    /// A lathe's own data (mitcad#1869): the machine is a lathe, its
+    /// controller a turning dialect, X the distance from the spindle axis
+    /// (`turning::lathe`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lathe: Option<crate::turning::Lathe>,
 }
 
 /// Where the work offset is on the machine: the machine position of the
@@ -306,6 +311,7 @@ mod tests {
             }],
             tool_changer: ToolChanger::Manual,
             park: Some([0.0, 780.0, 0.0]),
+            lathe: None,
         }
     }
 

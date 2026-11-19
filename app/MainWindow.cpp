@@ -106,6 +106,7 @@
 #include "framework/OpeningEdges.hpp"
 #include "framework/Appearances.hpp"
 #include "framework/AutoselectPanel.hpp"
+#include "framework/BoostButton.hpp"
 #include "framework/Dialogs.hpp"
 #include "framework/DisplayMeshes.hpp"
 #include "framework/CommandRegistry.hpp"
@@ -170,12 +171,14 @@
 #include "view/SmallCirclesPreference.hpp"
 #include "view/SpaceMouseController.hpp"
 #include "view/ViewController.hpp"
+#include "render/RenderWorkspace.hpp"
 #include "view/NavigationBar.hpp"
 #include "view/ViewTessellation.hpp"
 #include "view/VersionWatermark.hpp"
 #include "mitcad/geometry/datum.hpp"
 #include "mitcad/io/mesh.hpp"
 #include "framework/UiSizes.hpp"
+#include "framework/CommandLayout.hpp"
 
 namespace mitcad {
 namespace {
@@ -794,6 +797,10 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     if (!groups.contains(QStringLiteral("pins"))) {
       return;
     }
+    // The command layout's user layer (mitcad#1951): read again when the
+    // file brought another one, once for every window (their toolbars and
+    // menus follow its change).
+    CommandLayoutStore::instance().reloadIfChanged();
     if (m_navigationBar != nullptr) {
       m_navigationBar->reloadPins();
     }
@@ -840,6 +847,15 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       lock->setChecked(locked);
     }
   };
+  spaceMouseHooks.acceptsInput = [this] { return isActiveWindow(); };
+#if defined(Q_OS_WIN)
+  spaceMouseHooks.nativeWindow = [this] { return static_cast<std::uintptr_t>(window()->winId()); };
+#elif defined(Q_OS_LINUX)
+  // The X11 driver's window only when it exists: winId() would create it,
+  // and a design's window made native before it sits in its frame paints
+  // the Floating cards' translucent margins black (mitcad#2059).
+  spaceMouseHooks.nativeWindow = [this] { return static_cast<std::uintptr_t>(window()->internalWinId()); };
+#endif
   m_spaceMouse = new SpaceMouseController(std::move(spaceMouseHooks), &createSpaceMouseBackend, this);
   m_viewController->toggleSpaceMouseRotation = [this] {
     const bool locked = m_spaceMouse->toggleRotationLock();
@@ -857,6 +873,10 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   m_confirmAction->setShortcuts({QKeySequence(Qt::Key_Return), QKeySequence(Qt::Key_Enter)});
   connect(m_confirmAction, &QAction::triggered, this, &MainWindow::confirm);
   addAction(m_confirmAction);
+  // Repeat's own key, when a user gave it one (mitcad#2052): a widget with
+  // the focus that takes Enter gets it as a key press; in the view it is
+  // named in the log.
+  m_repeatKeys = new RepeatKeyFilter(m_registry->action(QStringLiteral("edit.repeat")), this);
   m_focusRepeat = connect(qApp, &QApplication::focusChanged, this, [this] {
     if (m_mode == Mode::Idle) {
       updateConfirmEnabled();
@@ -957,7 +977,8 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       }
     }
   } else if (auto* titleBar = findChild<TitleBar*>()) {
-    // Beside the document's name in the title bar row.
+    // Before the search field in the title bar row (the Floating row of
+    // Windows and Linux: before Preferences and Help, mitcad#1990).
     titleBar->setIndicator(m_indicator);
     titleBar->setAgentIndicator(m_agentIndicator);
   }
@@ -969,6 +990,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   m_search = new CommandSearch(*m_registry, this);
   connect(m_search, &CommandSearch::chosen, this, &MainWindow::trigger, Qt::QueuedConnection);
   m_search->setModeHint([this](const CommandDef& def) { return modeHint(def); });
+  // Each result's place on the toolbar or in the menu bar (mitcad#1983).
+  m_search->setMenuCaption(menuCaption);
+  // A result's right-click: Add to Quick Access (mitcad#1990), wherever the
+  // Qt quick-access group is (createRibbon).
+  m_search->setQuickAccessEntries(!m_nativeUi);
   createAutosave();
   createLive();
   // The chat panel (mitcad#947).
@@ -1037,7 +1063,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     }
   } else if (m_titleRow != nullptr && m_floating != nullptr) {
     // Windows and Linux (mitcad#425): the notices in a card of their own
-    // below the group cards, shown while one of them is.
+    // below the toolbar panel, shown while one of them is.
     auto* notices = new QWidget;
     auto* column = new QVBoxLayout(notices);
     column->setContentsMargins(0, 0, 0, 0);
@@ -1193,7 +1219,6 @@ void MainWindow::registerCommands() {
     def.icon = QString::fromLatin1(icon);
     def.kind = CommandDef::Kind::Action;
     def.mode = mode;
-    def.tab.clear(); // menus only, unless placed below
     def.run = std::move(run);
     return def;
   };
@@ -1206,10 +1231,6 @@ void MainWindow::registerCommands() {
   });
   sketch.tooltip =
       tr("Starts a sketch on a plane, a planar face, or a cylindrical or conical face");
-  sketch.tab = QStringLiteral("SOLID");
-  sketch.group = QStringLiteral("CREATE");
-  sketch.section = QStringLiteral("sketch"); // a section of its own (mitcad#579)
-  sketch.pinned = true;
   // Under its button with Ribbon labels (mitcad#1936).
   sketch.shortLabel = QCoreApplication::translate("RibbonLabel", "Sketch");
   sketch.keywords = {QStringLiteral("new sketch"), QStringLiteral("draw")};
@@ -1269,16 +1290,12 @@ void MainWindow::registerCommands() {
       action("inspect.remove_section", tr("Remove Section Analysis"), "section-analysis",
              CommandDef::Mode::Model, [this] { removeSection(); });
   removeDef.tooltip = tr("Hides the section analysis shown: the bodies whole again");
-  removeDef.tab = QStringLiteral("SOLID");
-  removeDef.group = QStringLiteral("INSPECT");
   removeDef.keywords = {QStringLiteral("section"), QStringLiteral("clip")};
   removeDef.enabled = [this] { return sectionShown(); };
   m_registry->add(removeDef);
   CommandDef flip = action("inspect.flip_section", tr("Flip Section Analysis"), "flip",
                            CommandDef::Mode::Model, [this] { flipSection(); });
   flip.tooltip = tr("Shows the other side of the section");
-  flip.tab = QStringLiteral("SOLID");
-  flip.group = QStringLiteral("INSPECT");
   flip.keywords = {QStringLiteral("section"), QStringLiteral("clip"), QStringLiteral("other side")};
   flip.enabled = [this] { return sectionShown(); };
   m_registry->add(flip);
@@ -1287,9 +1304,6 @@ void MainWindow::registerCommands() {
   CommandDef animate = action("assemble.animate_joint", tr("Animate Joint"), "drive-joint",
                               CommandDef::Mode::Model, [this] { animateSelectedJoint(); });
   animate.tooltip = tr("Plays a joint's free motion back and forth until stopped");
-  animate.tab = QStringLiteral("SOLID");
-  animate.group = QStringLiteral("ASSEMBLE");
-  animate.section = QStringLiteral("motion"); // mitcad#1778
   animate.keywords = {QStringLiteral("motion"), QStringLiteral("play"), QStringLiteral("simulate")};
   animate.enabled = [this] {
     const QJsonArray joints = m_snapshot.joints.value(QStringLiteral("joints")).toArray();
@@ -1303,9 +1317,6 @@ void MainWindow::registerCommands() {
   CommandDef study = action("assemble.motion_study", tr("Motion Study…"), "motion-study", CommandDef::Mode::Model,
                             [this] { openMotionStudy(QString()); });
   study.tooltip = tr("Keys joints' values along steps and plays them back");
-  study.tab = QStringLiteral("SOLID");
-  study.group = QStringLiteral("ASSEMBLE");
-  study.section = QStringLiteral("motion");
   study.keywords = {QStringLiteral("motion"), QStringLiteral("play"), QStringLiteral("simulate"),
                     QStringLiteral("animation"), QStringLiteral("keys")};
   study.enabled = [this] {
@@ -1320,9 +1331,6 @@ void MainWindow::registerCommands() {
   CommandDef finish = action("sketch.finish", tr("Finish Sketch"), "finish-sketch",
                              CommandDef::Mode::Sketch, [this] { finishSketch(); });
   finish.shortcut = QKeySequence(Qt::CTRL | Qt::Key_Return);
-  finish.tab = QStringLiteral("SKETCH");
-  finish.group = QStringLiteral("FINISH SKETCH");
-  finish.pinned = true;
   m_registry->add(finish);
 
   CommandDef undoDef =
@@ -1446,6 +1454,28 @@ void MainWindow::registerCommands() {
                                 CommandDef::Mode::Any, [this] { editShortcuts(); });
   shortcuts.keywords = {QStringLiteral("keys"), QStringLiteral("hotkeys")};
   m_registry->add(shortcuts);
+  // Repeat (mitcad#2052): what Enter does outside commands and sketches
+  // (mitcad#1620) as a command of its own, with no key, so that a user can
+  // give it one in Keyboard Shortcuts (Space too). Available only while
+  // Enter would repeat: not in a sketch or while a panel is open, where its
+  // key keeps its meaning for the widget with the focus. In no toolbar
+  // group (no Pin to Toolbar); the view's context menu keeps its own
+  // Repeat <command>.
+  CommandDef repeat = action("edit.repeat", tr("Repeat"), "redo", CommandDef::Mode::Model, [this] {
+    const QKeySequence key = m_repeatKeys != nullptr ? m_repeatKeys->takeKey() : QKeySequence();
+    if (repeatableCommand()) {
+      repeatLastCommand(key.toString(QKeySequence::PortableText));
+    }
+  });
+  repeat.tooltip = tr("Starts the last command again with the settings of its last OK");
+  repeat.keywords = {QStringLiteral("repeat"), QStringLiteral("last command"), QStringLiteral("again")};
+  // The last command's own availability, read here rather than from its
+  // action, whose state may be updated after this one's.
+  repeat.enabled = [this] {
+    const CommandDef* last = m_mode == Mode::Idle ? m_registry->find(m_lastCommand) : nullptr;
+    return last != nullptr && isAvailable(*last);
+  };
+  m_registry->add(repeat);
 
   // Appearances with their physically based parameters (mitcad#46): the
   // library window, which assigns nothing (the Appearance tool does,
@@ -1454,9 +1484,6 @@ void MainWindow::registerCommands() {
   CommandDef appearances = action("solid.appearances", tr("Edit Appearances…"), "appearance",
                                   CommandDef::Mode::Model, [this] { m_controller->openAppearances({}); });
   appearances.tooltip = tr("Creates, edits and deletes appearances");
-  appearances.tab = QStringLiteral("SOLID");
-  appearances.group = QStringLiteral("MODIFY");
-  appearances.section = QStringLiteral("look");
   appearances.keywords = {QStringLiteral("material"), QStringLiteral("colour"), QStringLiteral("color"),
                           QStringLiteral("render"), QStringLiteral("glass"), QStringLiteral("metal")};
   m_registry->add(appearances);
@@ -1464,9 +1491,6 @@ void MainWindow::registerCommands() {
   CommandDef parameters = action("solid.parameters", tr("Edit Parameters…"), "parameters",
                                  CommandDef::Mode::Model, [this] { openParameterTable(); });
   parameters.tooltip = tr("User and model parameters: names, expressions, units and comments");
-  parameters.tab = QStringLiteral("SOLID");
-  parameters.group = QStringLiteral("MODIFY");
-  parameters.section = QStringLiteral("parameters"); // the menu's last section (mitcad#1778)
   parameters.keywords = {QStringLiteral("parameters"), QStringLiteral("user parameter"),
                          QStringLiteral("expression"), QStringLiteral("fx"), QStringLiteral("change parameters")};
   // Also while a panel is open, which stays open (mitcad#564); not in a
@@ -1480,9 +1504,6 @@ void MainWindow::registerCommands() {
   CommandDef configurations = action("solid.configurations", tr("Configurations…"), "configurations",
                                      CommandDef::Mode::Model, [this] { m_controller->openConfigurations(); });
   configurations.tooltip = tr("Options, rows and rules: the design as a family of products");
-  configurations.tab = QStringLiteral("SOLID");
-  configurations.group = QStringLiteral("MODIFY");
-  configurations.section = QStringLiteral("parameters");
   configurations.keywords = {QStringLiteral("configuration"), QStringLiteral("configuration table"),
                              QStringLiteral("option"),        QStringLiteral("variant"),
                              QStringLiteral("rows"),          QStringLiteral("rules"),
@@ -1512,9 +1533,6 @@ void MainWindow::registerCommands() {
   CommandDef materials = action("solid.materials", tr("Edit Materials…"), "material", CommandDef::Mode::Model,
                                 [this] { m_controller->openMaterial({}); });
   materials.tooltip = tr("Creates, edits, imports and deletes materials");
-  materials.tab = QStringLiteral("MAKE");
-  materials.group = QStringLiteral("MATERIALS");
-  materials.pinned = true;
   materials.keywords = {QStringLiteral("material"), QStringLiteral("density"), QStringLiteral("filament"),
                         QStringLiteral("print"),    QStringLiteral("plastic"), QStringLiteral("metal"),
                         QStringLiteral("library"),  QStringLiteral("physical material"), QStringLiteral("mass"),
@@ -1611,61 +1629,264 @@ void MainWindow::restartApplication() {
 }
 
 void MainWindow::createMenus() {
-  createFileMenu();
-
-  QMenu* edit = menuBar()->addMenu(tr("&Edit"));
-  edit->setObjectName(QStringLiteral("editMenu"));
-  edit->addAction(m_registry->action(QStringLiteral("edit.undo")));
-  edit->addAction(m_registry->action(QStringLiteral("edit.redo")));
-  edit->addSeparator();
-  edit->addAction(m_registry->action(QStringLiteral("solid.parameters")));
-  edit->addAction(m_registry->action(QStringLiteral("solid.configurations")));
-  edit->addAction(m_registry->action(QStringLiteral("view.search_timeline")));
-  edit->addAction(m_registry->action(QStringLiteral("view.find_in_design")));
-  QMenu* view = menuBar()->addMenu(tr("&View"));
-  view->setObjectName(QStringLiteral("viewMenu"));
-  view->addAction(m_registry->action(QStringLiteral("view.fit")));
-  QMenu* tools = menuBar()->addMenu(tr("&Tools"));
-  tools->setObjectName(QStringLiteral("toolsMenu"));
-  tools->addAction(m_registry->action(QStringLiteral("tools.search")));
-  tools->addAction(m_registry->action(QStringLiteral("tools.shortcuts")));
-  // Component libraries (mitcad#64, mitcad#63).
-  createLibraryMenu(tools);
-  // For the UI tests: the entries as the menu opens (mitcad#1135: no My
-  // Library… since the print managers show My library).
-  connect(tools, &QMenu::aboutToShow, this, [tools] {
-    QStringList entries;
-    for (const QAction* entry : tools->actions()) {
-      entries << (entry->isSeparator() ? QStringLiteral("-") : entry->text().remove(QLatin1Char('&')));
-    }
-    qDebug().noquote() << QStringLiteral("Tools menu: %1").arg(entries.join(QStringLiteral(" | ")));
-  });
-#ifdef MITCAD_MAC_UI
-  createWindowMenu();
-#endif
-  QMenu* help = menuBar()->addMenu(tr("&Help"));
-  // The user guide first (mitcad#1032), then the Keyboard and Mouse
-  // Overview (ViewController::createMenus).
-  help->addAction(m_registry->action(QStringLiteral("help.user_guide")));
-  m_viewController->createMenus(view, tools, help);
+  // The actions' menu texts, check marks and roles; then the menus as the
+  // command layout has them (mitcad#1951, buildMenuBar).
+  prepareFileMenuActions();
+  prepareLibraryMenuActions();
+  m_viewController->prepareMenuActions();
+  buildMenuBar();
   syncViewShowChecks(); // View › Show's check marks (mitcad#1287)
-  help->addAction(m_registry->action(QStringLiteral("help.connect_assistant")));
-  help->addAction(m_registry->action(QStringLiteral("help.diagnostics")));
-  help->addAction(m_registry->action(QStringLiteral("help.open_log_folder")));
-  help->addAction(m_registry->action(QStringLiteral("help.check_updates")));
-  help->addAction(m_registry->action(QStringLiteral("help.send_feedback")));
-  // About and About Qt: on macOS Qt moves them to the application menu
-  // (AboutRole, AboutQtRole); elsewhere they end the Help menu.
-#ifndef Q_OS_MACOS
-  help->addSeparator();
-#endif
-  QAction* about = help->addAction(tr("&About MitCad"));
-  about->setMenuRole(QAction::AboutRole);
-  connect(about, &QAction::triggered, this, [this] { showAboutDialog(this); });
-  QAction* aboutQt = help->addAction(tr("About &Qt"));
-  aboutQt->setMenuRole(QAction::AboutQtRole);
-  connect(aboutQt, &QAction::triggered, this, [] { QApplication::aboutQt(); });
+  // The user's layout could not be read (mitcad#1951): the default is
+  // shown, and the window says so.
+  if (const QString notice = CommandLayoutStore::instance().notice(); !notice.isEmpty()) {
+    QTimer::singleShot(0, this, [this, notice] { showHint(notice); });
+  }
+  // The menu bar follows the user's layout (moved, added, hidden,
+  // imported, restored).
+  connect(&CommandLayoutStore::instance(), &CommandLayoutStore::changed, this, [this] {
+    buildMenuBar();
+    syncViewShowChecks();
+    // The Floating top bar's hidden menu bar (mitcad#1990): the refilled
+    // menus' keys the window's.
+    if (MenuBarReveal::instance().keepsHidden(menuBar())) {
+      MenuBarReveal::keepShortcuts(menuBar());
+    }
+  });
+  // Hidden while Preferences › Display › Show the menu bar is cleared
+  // (mitcad#1620, Windows and Linux): its menus stay reachable by Alt and
+  // the ☰ button (createRibbon).
+  if (!m_nativeUi) {
+    MenuBarReveal::instance().watch(menuBar());
+  }
+}
 
+namespace {
+
+// The menu bar's menus and submenus as the interface shows them, by their
+// keys in the layout (mitcad#1951), in the contexts their texts had; empty
+// for a key without one.
+QString menuTitle(const QString& key) {
+  static const std::pair<const char*, const char*> mainWindow[] = {
+      {"FILE", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&File")},
+      {"EDIT", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Edit")},
+      {"VIEW", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&View")},
+      {"TOOLS", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Tools")},
+      {"WINDOW", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Window")},
+      {"HELP", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Help")},
+      {"PROJECT", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Project")},
+      {"LIBRARIES", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Libraries")},
+      {"PANELS", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Panels")}};
+  static const std::pair<const char*, const char*> view[] = {
+      {"STANDARD VIEWS", QT_TRANSLATE_NOOP("mitcad::ViewController", "Standard Views")},
+      {"CAMERA", QT_TRANSLATE_NOOP("mitcad::ViewController", "Camera")},
+      {"VISUAL STYLE", QT_TRANSLATE_NOOP("mitcad::ViewController", "Visual Style")},
+      {"ENVIRONMENT", QT_TRANSLATE_NOOP("mitcad::ViewController", "Environment")},
+      {"SHOW", QT_TRANSLATE_NOOP("mitcad::ViewController", "Show")},
+      {"GRID AND SNAPS", QT_TRANSLATE_NOOP("mitcad::ViewController", "Grid and Snaps")},
+      {"NAMED VIEWS", QT_TRANSLATE_NOOP("mitcad::ViewController", "Named Views")}};
+  const QByteArray wanted = key.toUtf8();
+  for (const auto& [name, text] : mainWindow) {
+    if (wanted == name) {
+      return QCoreApplication::translate("mitcad::MainWindow", text);
+    }
+  }
+  for (const auto& [name, text] : view) {
+    if (wanted == name) {
+      return QCoreApplication::translate("mitcad::ViewController", text);
+    }
+  }
+  return QString();
+}
+
+} // namespace
+
+bool hasMenuTitle(const QString& key) { return !menuTitle(key).isEmpty(); }
+
+QString menuCaption(const QString& key) { return menuTitle(key); }
+
+bool checkLayoutCoverage(const CommandRegistry& registry) {
+  const CommandLayout& layout = CommandLayoutStore::instance().defaults();
+  bool covered = !layout.tabs.empty();
+  const auto problem = [&covered](const QString& text) {
+    qCritical().noquote() << QStringLiteral("Layout coverage: %1").arg(text);
+    covered = false;
+  };
+  if (layout.tabs.empty()) {
+    problem(QStringLiteral("the default layout has no tabs"));
+  }
+  const QStringList placed = layout.placedCommands();
+  for (const auto& def : registry.commands()) {
+    if (!placed.contains(def->id) && !layout.unplaced.contains(def->id)) {
+      problem(QStringLiteral("%1 is neither placed nor listed as on no toolbar").arg(def->id));
+    }
+  }
+  for (const QString& id : placed + layout.unplaced) {
+    const CommandDef* def = registry.find(id);
+    if (def == nullptr && !layout.optional.contains(id)) {
+      problem(QStringLiteral("%1 is no command").arg(id));
+    } else if (def != nullptr && def->id != id) {
+      problem(QStringLiteral("%1 is an old id of %2").arg(id, def->id));
+    }
+  }
+  for (const QString& id : layout.unplaced) {
+    if (placed.contains(id)) {
+      problem(QStringLiteral("%1 is placed and listed as on no toolbar").arg(id));
+    }
+  }
+  for (const LayoutTab& tab : layout.tabs) {
+    if (!hasRibbonCaption(tab.key)) {
+      problem(QStringLiteral("the tab %1 has no caption").arg(tab.key));
+    }
+  }
+  for (const QString& key : layout.groupKeys()) {
+    if (!hasRibbonCaption(key)) {
+      problem(QStringLiteral("the group %1 has no caption").arg(key));
+    }
+  }
+  QStringList menuKeys;
+  for (const LayoutEntry& menu : layout.menus) {
+    menuKeys.append(menu.id);
+  }
+  for (const QString& key : layout.submenuKeys()) {
+    const bool menu = menuKeys.contains(key) || hasMenuTitle(key);
+    if (!menu && !hasRibbonCaption(key)) {
+      problem(QStringLiteral("the menu %1 has no caption").arg(key));
+    }
+  }
+  static const QStringList extras = {QStringLiteral("solid.selection"), QStringLiteral("sketch.selection"),
+                                     QStringLiteral("cut_sheet.close"), QStringLiteral("cut_sheet.export"),
+                                     QStringLiteral("recent"),          QStringLiteral("panels"),
+                                     QStringLiteral("window"),          QStringLiteral("about"),
+                                     QStringLiteral("about_qt")};
+  for (const QString& key : layout.extraKeys()) {
+    if (!extras.contains(key)) {
+      problem(QStringLiteral("the extra %1 is none the code provides").arg(key));
+    }
+  }
+  // The commands' other names (mitcad#1983) name real commands.
+  for (const auto& names : search::otherNames()) {
+    const QString& id = names.first;
+    const CommandDef* def = registry.find(id);
+    if (def == nullptr || def->id != id) {
+      problem(QStringLiteral("the other names of %1 are for no command").arg(id));
+    }
+  }
+  if (covered) {
+    qInfo().noquote() << QStringLiteral("Layout coverage: %1 commands placed, %2 on no toolbar")
+                             .arg(placed.size())
+                             .arg(layout.unplaced.size());
+  }
+  return covered;
+}
+
+namespace {
+
+// A key without a title of its own shows as a ribbon name would.
+QString shownMenuTitle(const QString& key) {
+  const QString title = menuTitle(key);
+  return title.isEmpty() ? displayName(key) : title;
+}
+
+} // namespace
+
+namespace {
+
+// The objects the code and the UI tests find the menus by.
+QString menuObjectName(const QString& key) {
+  static const std::pair<const char*, const char*> names[] = {
+      {"FILE", "fileMenu"},           {"EDIT", "editMenu"},          {"VIEW", "viewMenu"},
+      {"TOOLS", "toolsMenu"},         {"WINDOW", "windowMenu"},      {"HELP", "helpMenu"},
+      {"PROJECT", "fileProjectMenu"}, {"LIBRARIES", "librariesMenu"}, {"SHOW", "viewShowMenu"},
+      {"PANELS", "viewPanelsMenu"}};
+  const QByteArray wanted = key.toUtf8();
+  for (const auto& [name, object] : names) {
+    if (wanted == name) {
+      return QString::fromLatin1(object);
+    }
+  }
+  return QStringLiteral("layoutMenu_") + key;
+}
+
+// How many of a menu's entries the layout put there: what the code
+// appended after them (the View menu's panels: Browser, Timeline,
+// Projects, Command, Chat) is kept when the menu is filled again.
+const char* const kLayoutCount = "mitcadLayoutEntries";
+
+} // namespace
+
+void MainWindow::buildMenuBar() {
+  const CommandLayout& layout = commandLayout();
+  for (const LayoutEntry& entry : layout.menus) {
+    const QString object = menuObjectName(entry.id);
+    QMenu* menu = menuBar()->findChild<QMenu*>(object, Qt::FindDirectChildrenOnly);
+    QList<QAction*> appended;
+    const bool known = menu != nullptr;
+    if (known) {
+      // Filled again (the layout changed): what the code appended after the
+      // layout's entries stays, at the end.
+      const QList<QAction*> actions = menu->actions();
+      const int count = menu->property(kLayoutCount).toInt();
+      for (int i = count; i < actions.size(); ++i) {
+        appended.append(actions.at(i));
+        menu->removeAction(actions.at(i));
+      }
+      if (m_recentMenu != nullptr && m_recentMenu->parent() == menu) {
+        m_recentMenu = nullptr;
+      }
+      for (QMenu* submenu : menu->findChildren<QMenu*>(QString(), Qt::FindDirectChildrenOnly)) {
+        submenu->deleteLater();
+      }
+      menu->clear();
+    } else {
+      menu = new QMenu(shownMenuTitle(entry.id), menuBar());
+      menu->setObjectName(object);
+      // For the UI tests: the entries as the menus open (mitcad#1135: no My
+      // Library… since the print managers show My library).
+      if (entry.id == QLatin1String("FILE")) {
+        // Print… only while there is something to print, in the Floating
+        // top bar's File menu (the owner, 17.11.2026: not a greyed row
+        // outside a drawing); its key and the drawing's toolbar button stay
+        // (mitcad#1990). Before the menu's entries are logged.
+        connect(menu, &QMenu::aboutToShow, this, [this] {
+          QAction* print = m_registry->action(QStringLiteral("file.print"));
+          if (m_titleRow != nullptr && print != nullptr && print->isVisible() &&
+              printTarget() == PrintTarget::None) {
+            print->setVisible(false);
+            m_printHiddenInMenu = true;
+          }
+        });
+        connect(menu, &QMenu::aboutToHide, this, [this] {
+          if (m_printHiddenInMenu) {
+            m_printHiddenInMenu = false;
+            if (QAction* print = m_registry->action(QStringLiteral("file.print"))) {
+              print->setVisible(true);
+            }
+          }
+        });
+        logFileMenu(menu);
+      } else if (entry.id == QLatin1String("TOOLS")) {
+        connect(menu, &QMenu::aboutToShow, this, [menu] {
+          QStringList shown;
+          for (const QAction* item : menu->actions()) {
+            shown << (item->isSeparator() ? QStringLiteral("-") : item->text().remove(QLatin1Char('&')));
+          }
+          qDebug().noquote() << QStringLiteral("Tools menu: %1").arg(shown.join(QStringLiteral(" | ")));
+        });
+      }
+    }
+    fillLayoutMenu(menu, entry.entries, QStringLiteral("menu/") + entry.id);
+    menu->setProperty(kLayoutCount, static_cast<int>(menu->actions().size()));
+    menu->addActions(appended);
+    if (!known) {
+      // A menu without entries is left out (the Window menu outside macOS).
+      if (menu->isEmpty()) {
+        delete menu;
+        continue;
+      }
+      menuBar()->addMenu(menu);
+    }
+    menu->menuAction()->setVisible(!menu->isEmpty());
+  }
   // On macOS Qt guesses a role for every action without one from its text
   // (a name beginning or ending with "Settings", "Options", "Setup", "About"
   // moves to the application menu): the actions with a role (Exit, About,
@@ -1683,19 +1904,152 @@ void MainWindow::createMenus() {
   for (QAction* top : menuBar()->actions()) {
     mac::hideMenuImages(top->menu());
   }
-  // Hidden while Preferences › Display › Show the menu bar is cleared
-  // (mitcad#1620, Windows and Linux): its menus stay reachable by Alt and
-  // the ☰ button (createRibbon).
-  if (!m_nativeUi) {
-    MenuBarReveal::instance().watch(menuBar());
+}
+
+void MainWindow::fillLayoutMenu(QMenu* menu, const std::vector<LayoutEntry>& entries, const QString& place) {
+  // A separator where the layout has one, only between entries: never at
+  // the top or the bottom, never two in a row (an entry that is not there,
+  // a command a build lacks, leaves none behind).
+  bool separator = false;
+  const auto separate = [&separator, menu] {
+    if (separator && !menu->isEmpty()) {
+      menu->addSeparator();
+    }
+    separator = false;
+  };
+  for (const LayoutEntry& entry : entries) {
+    switch (entry.kind) {
+    case LayoutEntry::Kind::Separator:
+      separator = true;
+      break;
+    case LayoutEntry::Kind::Command: {
+      const CommandDef* def = m_registry->find(entry.id);
+      QAction* action = def != nullptr ? m_registry->action(def->id) : nullptr;
+      if (action == nullptr) {
+        if (def == nullptr && !commandLayout().optional.contains(entry.id)) {
+          qInfo().noquote() << QStringLiteral("Layout: dropped %1 from %2: no such command")
+                                   .arg(entry.id, place.split(QLatin1Char('/')).join(QStringLiteral(" › ")));
+        }
+        break;
+      }
+#ifdef Q_OS_MACOS
+      // macOS moves Quit and Settings to the application menu: no separator
+      // before them in this one.
+      if (action->menuRole() == QAction::QuitRole || action->menuRole() == QAction::PreferencesRole) {
+        separator = false;
+      }
+#endif
+      separate();
+      menu->addAction(action);
+      break;
+    }
+    case LayoutEntry::Kind::Submenu: {
+      auto* submenu = new QMenu(shownMenuTitle(entry.id), menu);
+      submenu->setObjectName(menuObjectName(entry.id));
+      if (!entry.icon.isEmpty()) {
+        submenu->setIcon(themeIcon(entry.icon));
+      }
+      fillLayoutMenu(submenu, entry.entries, place + QLatin1Char('/') + entry.id);
+      if (submenu->isEmpty()) {
+        delete submenu;
+        break;
+      }
+      if (entry.id == QLatin1String("LIBRARIES")) {
+        logLibraryMenu(submenu);
+      }
+      separate();
+      menu->addMenu(submenu);
+      break;
+    }
+    case LayoutEntry::Kind::Extra: {
+      // The code's entries; the separator before them stays when they add
+      // something, or when they say it stays for what their code appends.
+      const qsizetype before = menu->actions().size();
+      QAction* line = separator && !menu->isEmpty() ? menu->addSeparator() : nullptr;
+      separator = false;
+      const bool keep = addMenuExtra(menu, entry.id);
+      if (line != nullptr && !keep && menu->actions().size() == before + 1) {
+        menu->removeAction(line);
+        delete line;
+        separator = true;
+      }
+      break;
+    }
+    }
   }
 }
 
+bool MainWindow::addMenuExtra(QMenu* menu, const QString& key) {
+  if (key == QLatin1String("recent")) {
+    addRecentMenu(menu);
+  } else if (key == QLatin1String("about") || key == QLatin1String("about_qt")) {
+    // About and About Qt: on macOS Qt moves them to the application menu
+    // (AboutRole, AboutQtRole); elsewhere they end the Help menu.
+    const bool qt = key == QLatin1String("about_qt");
+#ifdef Q_OS_MACOS
+    // No separator before them in this menu (they leave it).
+    if (!menu->isEmpty() && menu->actions().constLast()->isSeparator()) {
+      menu->actions().constLast()->setVisible(false);
+    }
+#endif
+    QAction* about = menu->addAction(qt ? tr("About &Qt") : tr("&About MitCad"));
+    about->setMenuRole(qt ? QAction::AboutQtRole : QAction::AboutRole);
+    if (qt) {
+      connect(about, &QAction::triggered, this, [] { QApplication::aboutQt(); });
+    } else {
+      connect(about, &QAction::triggered, this, [this] { showAboutDialog(this); });
+    }
+  } else if (key == QLatin1String("window")) {
 #ifdef MITCAD_MAC_UI
-// The standard Window menu of macOS applications.
-void MainWindow::createWindowMenu() {
-  QMenu* window = menuBar()->addMenu(tr("&Window"));
-  window->setObjectName(QStringLiteral("windowMenu"));
+    fillWindowMenu(menu);
+#endif
+  } else if (key == QLatin1String("panels")) {
+    // View › Panels (mitcad#1975): the panels' entries (Projects, Browser,
+    // Timeline, Command, Chat) their code registered so far; the later ones
+    // go before the marker after them (addPanelEntry).
+    for (const auto& entry : std::as_const(m_panelEntries)) {
+      if (entry.second) {
+        menu->addAction(entry.second);
+      }
+    }
+    auto* end = new QAction(menu);
+    end->setObjectName(QStringLiteral("panelsEnd"));
+    end->setVisible(false);
+    menu->addAction(end);
+    return true;
+  }
+  return false;
+}
+
+void MainWindow::addPanelEntry(QAction* action, int rank) {
+  if (action == nullptr) {
+    return;
+  }
+  auto at = std::find_if(m_panelEntries.begin(), m_panelEntries.end(),
+                         [rank](const QPair<int, QPointer<QAction>>& entry) { return entry.first > rank; });
+  at = m_panelEntries.insert(at, qMakePair(rank, QPointer<QAction>(action)));
+  QMenu* panels = findChild<QMenu*>(QStringLiteral("viewPanelsMenu"));
+  if (panels == nullptr) {
+    return; // the menu is built later and takes it then
+  }
+  // Before the next entry of a higher rank that is in the menu, else at the
+  // end of the panels' part.
+  QAction* before = nullptr;
+  for (auto next = at + 1; next != m_panelEntries.end() && before == nullptr; ++next) {
+    if (next->second && panels->actions().contains(next->second.data())) {
+      before = next->second;
+    }
+  }
+  if (before == nullptr) {
+    before = panels->findChild<QAction*>(QStringLiteral("panelsEnd"), Qt::FindDirectChildrenOnly);
+  }
+  panels->insertAction(before, action);
+}
+
+#ifdef MITCAD_MAC_UI
+// The standard Window menu of macOS applications (the layout's extra
+// "window").
+void MainWindow::fillWindowMenu(QMenu* window) {
   QAction* minimize = window->addAction(tr("Minimize"));
   minimize->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
   connect(minimize, &QAction::triggered, this, [this] { showMinimized(); });
@@ -1773,14 +2127,16 @@ void MainWindow::createRibbon() {
   windowAction->setEnabled(false);
   auto* clearAction = new QAction(tr("Clear Selection"), this);
   connect(clearAction, &QAction::triggered, this, [this] { clearSelection(); });
-  m_ribbon->addGroupExtras(QStringLiteral("SOLID"), QStringLiteral("SELECT"),
+  m_ribbon->addGroupExtras(QStringLiteral("solid.selection"),
                            {windowAction, filterAction, clearAction}, {filterAction});
   // Sketch mode has its own three-state filter (mitcad#217).
   QAction* sketchFilter = createSketchFilterAction();
-  m_ribbon->addGroupExtras(QStringLiteral("SKETCH"), QStringLiteral("SELECT"),
+  m_ribbon->addGroupExtras(QStringLiteral("sketch.selection"),
                            {windowAction, sketchFilter, clearAction}, {sketchFilter});
   // A cut sheet's tab (mitcad#1008).
   addDrawingRibbonExtras();
+  // The Render tab's stages (mitcad#2013), its page before the tabs are made.
+  createRenderWorkspace();
   m_ribbon->build();
   // Preferences › Display › Ribbon labels (mitcad#1936): every window's
   // ribbon follows a change at once.
@@ -1792,8 +2148,16 @@ void MainWindow::createRibbon() {
   // with the tab.
   connect(m_ribbon, &Ribbon::tabChanged, this, [this](const QString& tab) {
     qDebug().noquote() << QStringLiteral("Ribbon tab shown: %1").arg(tab);
-    // The Start page over the view with the Start tab (mitcad#1258).
-    updateStartPage(tab);
+    // The Render workspace (mitcad#2013) with the Render tab, and the Start
+    // page over the view with the Start tab (mitcad#1258): the one that
+    // closes gives the view and the panels back before the other opens.
+    if (tab == QLatin1String("RENDER")) {
+      updateStartPage(tab);
+      updateRenderWorkspace(tab);
+    } else {
+      updateRenderWorkspace(tab);
+      updateStartPage(tab);
+    }
     updateSelectionCreate(); // none on the Make tab (mitcad#1178)
     updateMakeCard();
     updateMakeMarkers();
@@ -1805,8 +2169,9 @@ void MainWindow::createRibbon() {
   }
 
   // The quick-access group (mitcad#1090): the File, Edit, View and Tools
-  // menus' commands the user chose, after the tabs in the Floating title
-  // row and in the Docked toolbar's tab row.
+  // menus' commands the user chose, in the Floating title row at the right
+  // end of the free part before the indicators (mitcad#1989, mitcad#1990),
+  // after the tabs in the Docked toolbar's tab row.
   QuickAccessGroup::Hooks quickHooks;
   quickHooks.menus = [this] {
     QList<QMenu*> menus;
@@ -1817,11 +2182,21 @@ void MainWindow::createRibbon() {
     }
     return menus;
   };
+  // The Floating top bar of Windows and Linux (mitcad#1990): no default
+  // commands, as the bar has its own File menu, Save and Preferences;
+  // the group shows once the user adds commands. A saved choice still wins.
+  const bool topBar = floating && floatingTopCards();
+  QuickAccessSettings::setTopBarDefaults(topBar);
   quickHooks.disabledReason = [this](const QString& id) {
     const CommandDef* def = m_registry->find(id);
     return def != nullptr ? unavailableReason(*def) : QString();
   };
   auto* quickAccess = new QuickAccessGroup(*m_registry, std::move(quickHooks));
+  quickAccess->setHiddenWhileEmpty(topBar);
+  // A command's Add to Quick Access (mitcad#1990): its toolbar button's
+  // right-click and its row in a group's menu (the command search's rows:
+  // where it is made).
+  m_ribbon->setQuickAccessEntries(true);
 
   // Undo and Redo get the system's symbol on macOS, the drawing elsewhere.
   for (const char* id : {"edit.undo", "edit.redo"}) {
@@ -1846,19 +2221,70 @@ void MainWindow::createRibbon() {
                                   m_registry->action(QStringLiteral("tools.search")));
     titleBar->setQuickAccess(quickAccess);
     // The ☰ of the hidden menu bar (mitcad#1620), before Undo and Redo,
-    // while Preferences › Display › Show the menu bar is cleared.
+    // while Preferences › Display › Show the menu bar is cleared; always in
+    // the top bar of Windows and Linux, where the menu bar never shows
+    // (mitcad#1990).
     titleBar->setMenuButton(new MenuBarButton(menuBar(), uiIconSize(18)));
-    titleBar->setMenuButtonVisible(MenuBarButton::wanted());
-    connect(&MenuBarNotifier::instance(), &MenuBarNotifier::shownChanged, titleBar,
-            [titleBar](bool) { titleBar->setMenuButtonVisible(MenuBarButton::wanted()); });
-    if (floatingTopCards()) {
-      // Windows and Linux (mitcad#425): only the menu bar is a bar; the title
-      // row floats over the view without a card, its controls and the
-      // document's name on boxes of their own (mitcad#429), and each of the
-      // ribbon's groups is a card (createFloatingPanels places them).
+    const bool rowMenus = floatingTopCards();
+    titleBar->setMenuButtonVisible(rowMenus || MenuBarButton::wanted());
+    if (!rowMenus) {
+      connect(&MenuBarNotifier::instance(), &MenuBarNotifier::shownChanged, titleBar,
+              [titleBar](bool) { titleBar->setMenuButtonVisible(MenuBarButton::wanted()); });
+    }
+    if (rowMenus) {
+      // Windows and Linux (mitcad#425): the title row is the window's one
+      // top row (mitcad#1990), a flat bar across the view's top: Home,
+      // File, Save, Undo and Redo, the document tabs (the document frame
+      // puts its tab bar there; no + of a new design, the owner 18.11.2026:
+      // New Design is in File, Ctrl+N and the Start page), the
+      // quick-access group's commands, the indicators, Preferences,
+      // Help and the version. Below it the toolbar panel: the workspace
+      // selector, and a card of the workspace's tabs with the search field
+      // and under them the tab's groups (createFloatingPanels places
+      // both).
       titleBar->setFloatingRow(true);
+      auto* home = new QAction(themeIcon(QStringLiteral("home")), tr("Home"), titleBar);
+      home->setToolTip(tr("Shows the Start page: recent designs, new designs and projects"));
+      connect(home, &QAction::triggered, this, [this] {
+        qDebug().noquote() << QStringLiteral("Title row: Home");
+        // The Start tab is with Design's (Render's tab is alone).
+        setRenderWorkspace(false);
+        m_ribbon->showTab(QStringLiteral("START"));
+      });
+      TitleBar::RowControls controls;
+      controls.home = home;
+      controls.file = menuBar()->findChild<QMenu*>(QStringLiteral("fileMenu"), Qt::FindDirectChildrenOnly);
+      controls.save = m_registry->action(QStringLiteral("file.save"));
+      controls.preferences = m_registry->action(QStringLiteral("tools.preferences"));
+      controls.help = menuBar()->findChild<QMenu*>(QStringLiteral("helpMenu"), Qt::FindDirectChildrenOnly);
+      titleBar->setRowControls(controls);
+      // The Boost development button (mitcad#1990) in the bar's right part,
+      // left of the indicators; its × hides it until Preferences › Display
+      // shows it again.
+      auto* boost = new BoostButton(uiIconSize(18) + 10, [](const QUrl& url) { openExternalUrl(url); });
+      titleBar->setBoostButton(boost);
+      boost->applyVisible();
       m_titleRow = titleBar;
-      m_ribbon->setGroupCards(true);
+      // No menu bar under the system's title bar (the owner, 17.11.2026: one
+      // bar, not two): the window's menu bar is hidden, its commands' keys
+      // the window's (MenuBarReveal::keepShortcuts), and its menus' keys
+      // open them from the top bar's File, ? and ☰ (MenuBarReveal's opener).
+      MenuBarReveal::instance().watch(menuBar(), [titleBar = QPointer<TitleBar>(titleBar)](QMenu* menu,
+                                                                                          const QString& how) {
+        if (titleBar != nullptr) {
+          titleBar->openMenuByKeys(menu, how);
+        }
+      });
+      if (menuBar()->isHidden()) {
+        qDebug().noquote() << "Menu bar hidden: Floating";
+      }
+      // Start is no workspace's: Home shows it, and is its tab's place.
+      m_ribbon->setStartButton(titleBar->homeButton());
+      m_ribbon->setPanel(titleBar->takeSearchField());
+      // The selector's Drawing opens a drawing, its Render the rendered
+      // view, its Design or Make closes the one open.
+      connect(m_ribbon, &Ribbon::workspaceRequested, this,
+              [this](const QString& workspace) { requestWorkspace(workspace); });
       return;
     }
     m_header = new QWidget;
@@ -1910,6 +2336,11 @@ void MainWindow::createRibbon() {
   m_ribbon->addTabRowWidget(quickAccess);
   // Unless the user hid it (mitcad#1189): then the tabs' row closes up.
   quickAccess->applyVisible();
+  // The Boost development button (mitcad#1990) at the tabs' row's right
+  // end, as high as the tabs.
+  auto* boost = new BoostButton(m_ribbon->tabBar()->sizeHint().height(), [](const QUrl& url) { openExternalUrl(url); });
+  m_ribbon->addTabRowEndWidget(boost);
+  boost->applyVisible();
 }
 
 void MainWindow::createPanels() {
@@ -1958,10 +2389,9 @@ void MainWindow::createPanels() {
   timelineDock->setObjectName(QStringLiteral("timelineDock"));
   timelineDock->setWidget(createTimelinePlace());
   addDockWidget(Qt::BottomDockWidgetArea, timelineDock);
-  if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
-    view->addAction(browserDock->toggleViewAction());
-    view->addAction(timelineDock->toggleViewAction());
-  }
+  // View › Panels › Browser and Timeline (mitcad#1975).
+  addPanelEntry(browserDock->toggleViewAction(), 1);
+  addPanelEntry(timelineDock->toggleViewAction(), 2);
   // The Projects panel above the browser (mitcad#145), then the
   // Configuration panel between them (mitcad#1020): split from the
   // browser's dock once Projects is above it (a split moves the second dock
@@ -2010,9 +2440,9 @@ void MainWindow::createPanels() {
   // menu of its panels hid it, as View › Browser and View › Timeline do
   // theirs (mitcad#1455: nothing brought it back). After View › Projects,
   // in the order of that menu.
-  if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
-    view->addAction(commandDock->toggleViewAction());
-  }
+  addPanelEntry(commandDock->toggleViewAction(), 3);
+  // The Render workspace's docks (mitcad#2013), hidden until its tab shows.
+  addRenderPanels();
 }
 
 void MainWindow::createFloatingPanels() {
@@ -2044,7 +2474,7 @@ void MainWindow::createFloatingPanels() {
   auto* timelineCard = new GlassCard;
   timelineCard->setObjectName(QStringLiteral("timelineDock"));
   timelineCard->setCapsule(true);
-  timelineCard->setContent(createTimelinePlace(), QMargins(18, 4, 18, 4));
+  timelineCard->setContent(createTimelinePlace(), GlassCard::barMargins());
 
   m_commandPages = new QStackedWidget;
   m_idleInfo = new QLabel;
@@ -2069,12 +2499,13 @@ void MainWindow::createFloatingPanels() {
 
   m_floating = new FloatingLayout(m_viewer, m_header, this);
   if (m_titleRow != nullptr) {
-    // Windows and Linux (mitcad#425): the title row, below it a row of the
-    // ribbon's group cards, at the top of the view; the cards below them.
-    // Both take the mouse only on their controls and cards.
+    // Windows and Linux (mitcad#425): the title row, a bar flush with the
+    // view's top and edges, below it the toolbar panel (mitcad#1990); the
+    // cards below them. Both take the mouse on their whole width.
+    m_floating->setFlushRow(m_titleRow);
     m_floating->addTopRow(m_titleRow, [row = m_titleRow] { return row->rowParts(); });
     connect(m_titleRow, &TitleBar::rowPartsChanged, m_floating, &FloatingLayout::requestLayout);
-    m_floating->addTopRow(m_ribbon, [ribbon = m_ribbon] { return ribbon->groupCards(); });
+    m_floating->addTopRow(m_ribbon, [ribbon = m_ribbon] { return ribbon->panelParts(); }, m_ribbon->panelRowParts());
     connect(m_ribbon, &Ribbon::groupCardsChanged, m_floating, &FloatingLayout::requestLayout);
   }
   // The Projects card above the browser's (mitcad#145), the Configuration
@@ -2164,16 +2595,21 @@ void MainWindow::createFloatingPanels() {
   }
   m_floating->watchContent(m_palette);
 
-  // The View menu shows and hides the cards as it did the docks.
-  if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
-    for (const auto& [text, card] : {std::pair<QString, GlassCard*>{tr("Browser"), browserCard},
-                                     std::pair<QString, GlassCard*>{tr("Timeline"), timelineCard}}) {
-      QAction* action = view->addAction(text);
-      action->setCheckable(true);
-      action->setChecked(true);
-      connect(action, &QAction::toggled, card, &QWidget::setVisible);
-    }
+  // View › Panels shows and hides the cards as it did the docks.
+  int rank = 1;
+  for (const auto& [text, card] : {std::pair<QString, GlassCard*>{tr("Browser"), browserCard},
+                                   std::pair<QString, GlassCard*>{tr("Timeline"), timelineCard}}) {
+    auto* action = new QAction(text, this);
+    action->setCheckable(true);
+    action->setChecked(true);
+    connect(action, &QAction::toggled, card, &QWidget::setVisible);
+    addPanelEntry(action, rank++);
   }
+  // The Render workspace's cards (mitcad#2013), hidden until its tab shows.
+  addRenderPanels();
+  // The Drawing workspace's Drawings card (mitcad#1990), hidden until a
+  // drawing opens.
+  addDrawingsCard();
 }
 
 QWidget* MainWindow::createTimelinePlace() {
@@ -2582,7 +3018,7 @@ void MainWindow::trigger(const QString& id) {
   // menus' others (Open, Import, Undo, Preferences) leave it only when a
   // design opens or something comes in.
   if (def->kind != CommandDef::Kind::Action ||
-      (!def->tab.isEmpty() && !def->id.startsWith(QLatin1String("file.")))) {
+      (!defaultHome(def->id).isEmpty() && !def->id.startsWith(QLatin1String("file.")))) {
     leaveStartPage();
   }
   // Each start of a sketch tool counts for the Sketch Palette's Create
@@ -3049,14 +3485,22 @@ void MainWindow::confirm() {
   // unless the focus takes Enter itself (a field, a rename, a list) or the
   // command is not available now.
   if (repeatableCommand() && !focusTakesEnter(QApplication::focusWidget())) {
-    const QString id = m_lastCommand;
-    const CommandDef* last = m_registry->find(id);
-    qDebug().noquote() << QStringLiteral("Repeat %1 (Enter)").arg(last != nullptr ? last->name : id);
-    if (m_reports != nullptr) {
-      m_reports->noteAction(QStringLiteral("repeat ") + id);
-    }
-    repeatCommand(id);
+    repeatLastCommand(QStringLiteral("Enter"));
   }
+}
+
+void MainWindow::repeatLastCommand(const QString& key) {
+  const QString id = m_lastCommand;
+  const CommandDef* last = m_registry->find(id);
+  const QString name = last != nullptr ? last->name : id;
+  // `Repeat Extrude (Enter)`, `Repeat Extrude (Space)` by Repeat's own key
+  // (mitcad#2052), `Repeat Extrude` from the command search or MCP.
+  qDebug().noquote() << (key.isEmpty() ? QStringLiteral("Repeat %1").arg(name)
+                                       : QStringLiteral("Repeat %1 (%2)").arg(name, key));
+  if (m_reports != nullptr) {
+    m_reports->noteAction(QStringLiteral("repeat ") + id);
+  }
+  repeatCommand(id);
 }
 
 void MainWindow::repeatCommand(const QString& id) {
@@ -4206,6 +4650,8 @@ void MainWindow::refreshScene() {
   } catch (const std::exception& e) {
     qWarning().noquote() << "Render settings not read:" << errorText(e);
   }
+  // The Render workspace's scene, shots and settings (mitcad#2013).
+  refreshRenderWorkspace();
   m_placements.clear();
   std::function<void(const QVector<DocumentSnapshot::Occurrence>&)> place =
       [this, &place](const QVector<DocumentSnapshot::Occurrence>& occurrences) {
@@ -4903,9 +5349,70 @@ void MainWindow::showSketches() {
   }
   std::vector<SketchEntityDisplay> entities;
   QStringList shown;
+  // The shaded colour of the face a sketch lies on (mitcad#2034): the
+  // view draws the fully constrained curves' halos over a dark face only,
+  // on a light background. The appearances read once, when a shown sketch
+  // lies on a face.
+  bool looksRead = false;
+  QHash<QString, QColor> appearanceColors;
+  QHash<QString, QJsonObject> bodyLooks;
+  const auto faceColorOf = [&](const QString& sketch) {
+    if (isSpatialSketch(sketch)) {
+      return QColor();
+    }
+    const QJsonObject plane =
+        queryObject({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), sketch}})
+            .value(QStringLiteral("plane"))
+            .toObject();
+    const QString body = plane.value(QStringLiteral("body")).toString();
+    const QString face = plane.value(QStringLiteral("face")).toString();
+    if (body.isEmpty() || face.isEmpty()) {
+      return QColor(); // a construction or origin plane
+    }
+    if (!looksRead) {
+      looksRead = true;
+      for (const Appearance& appearance : appearancesOf(queryArray(QStringLiteral("appearances")))) {
+        appearanceColors.insert(appearance.id, appearance.displayColor);
+      }
+      for (const QJsonValue& value : queryArray(QStringLiteral("bodies"))) {
+        const QJsonObject look = value.toObject();
+        bodyLooks.insert(look.value(QStringLiteral("uid")).toString(), look);
+      }
+    }
+    const QJsonObject look = bodyLooks.value(body);
+    // The body's appearance, else the default look (an unknown id too).
+    QColor color = appearanceColors.value(look.value(QStringLiteral("appearance")).toString(),
+                                          viewColor(ColorRole::Body, false));
+    // A face appearance on the face itself (mitcad#53), the later one
+    // where two name it.
+    const QJsonArray faceLooks = look.value(QStringLiteral("face_appearances")).toArray();
+    if (!faceLooks.isEmpty()) {
+      if (const auto shape = idleDocument().body_shape(utf8(body))) {
+        const std::vector<int> under = shape->find_faces(utf8(face));
+        for (const QJsonValue& value : faceLooks) {
+          const QJsonObject faceLook = value.toObject();
+          bool named = false;
+          for (const QJsonValue& name : faceLook.value(QStringLiteral("faces")).toArray()) {
+            for (const int index : shape->find_faces(utf8(name.toString()))) {
+              named = named || std::find(under.begin(), under.end(), index) != under.end();
+            }
+          }
+          if (named) {
+            color = appearanceColors.value(faceLook.value(QStringLiteral("appearance")).toString(),
+                                           viewColor(ColorRole::Body, false));
+          }
+        }
+      }
+    }
+    return color;
+  };
   for (const QString& sketch : sketches) {
     try {
       std::vector<SketchEntityDisplay> some = sketchDisplay(sketch);
+      const QColor faceColor = faceColorOf(sketch);
+      for (SketchEntityDisplay& entity : some) {
+        entity.faceColor = faceColor;
+      }
       // Every shown sketch tells how constrained it is, edited or not
       // (mitcad#286): entering or leaving its edit keeps its colours.
       // A component's sketch where its occurrence places it.
@@ -5960,6 +6467,11 @@ void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifier
     annotationPicked(window ? Selection() : items);
     return;
   }
+  // The Render workspace's Paint and Pick Up (mitcad#2013): a click is
+  // theirs and selects nothing.
+  if (m_renderWorkspace != nullptr && m_mode == Mode::Idle && !window && m_renderWorkspace->takePick(items)) {
+    return;
+  }
   if (m_mode == Mode::PickPlane) {
     qDebug().noquote() << QStringLiteral("Create Sketch picked %1").arg(summarize(items));
     for (const SelectionItem& item : items) {
@@ -6070,6 +6582,10 @@ void MainWindow::setSelection(const Selection& items) {
     qDebug().noquote() << QStringLiteral("Selected: %1%2").arg(
         summarize(items),
         names.isEmpty() ? QString() : QStringLiteral(" [%1]").arg(names.join(QStringLiteral("; "))));
+    // The Render workspace's Look shows what is picked and its appearance.
+    if (m_renderWorkspace != nullptr && m_renderWorkspace->isOpen()) {
+      m_renderWorkspace->selectionChanged();
+    }
   }
   // Each part's time, so that a slow selection names its slow part
   // (mitcad#981): the view's highlights and the card, the sketch, the
@@ -6201,6 +6717,10 @@ void MainWindow::updateIdleView() {
     if (flexPick) {
       // A Flex node pulled: what it can be put on, whatever the idle filter takes (mitcad#1713).
       m_viewer->setPickFilter(m_flexEdit->pickFilter());
+    } else if (m_mode == Mode::Idle && m_renderWorkspace != nullptr && m_renderWorkspace->takesPicks()) {
+      // The Render workspace's Look (mitcad#2013): bodies, faces or
+      // components, as its Pick says.
+      m_viewer->setPickFilter(m_renderWorkspace->pickFilter());
     } else {
       m_viewer->setPickFilter(idleFilter());
     }
@@ -6828,9 +7348,15 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
       add(m_registry->action(text->code ? QStringLiteral("sketch.edit_code") : QStringLiteral("sketch.edit_text")));
       menu.addSeparator();
     } else if (!m_selection.isEmpty()) {
+      // A profile with projected curves or the face's edges on its
+      // boundary converts them (mitcad#2051).
+      bool offered = false;
+      if (m_sketch->selectionHasProjected()) {
+        add(m_registry->action(QStringLiteral("sketch.convert_projected")));
+        offered = true;
+      }
       // The model's faces, edges and vertices go into the sketch: Project,
       // and Intersect (mitcad#736) for faces, edges and bodies.
-      bool offered = false;
       for (const char* id : {"sketch.project", "sketch.intersect"}) {
         const CommandDef* reference = m_registry->find(QString::fromLatin1(id));
         const InputDef* input = reference != nullptr ? reference->primarySelection() : nullptr;
@@ -7042,6 +7568,10 @@ void MainWindow::createSketch(const QJsonObject& fields) {
   // screen's horizontal stays the sketch's x (mitcad#692, commands.md "An
   // upright sketch frame").
   request.insert(QStringLiteral("upright"), true);
+  // On a planar face of a body, the face's outline projected into it
+  // (mitcad#2051, Preferences › Sketch); the model gives other planes
+  // nothing.
+  request.insert(QStringLiteral("project_face"), sketch::projectFaceOnCreate());
   const int depth = undoDepth();
   QJsonObject result;
   if (!runCommand(request, &result)) {
@@ -7076,6 +7606,21 @@ void MainWindow::createSketch(const QJsonObject& fields) {
                             .arg(origin.X())
                             .arg(origin.Y())
                             .arg(origin.Z());
+  // The outline's curves, then its points (the model lists them as it
+  // made them).
+  QStringList projected;
+  QStringList points;
+  for (const QJsonValue& entity : result.value(QStringLiteral("projected")).toArray()) {
+    (entity.toString().startsWith(QLatin1Char('p')) ? points : projected) << entity.toString();
+  }
+  projected << points;
+  if (!projected.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Sketch %1 starts with the face's outline: %2")
+                              .arg(m_sketch->model().name, projected.join(QStringLiteral(", ")));
+  }
+  for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
+    qDebug().noquote() << QStringLiteral("Create Sketch: %1").arg(warning.toString());
+  }
   // The component it went into: the active one (mitcad#220).
   const QJsonObject components = queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
   const QString active = components.value(QStringLiteral("active")).toString();

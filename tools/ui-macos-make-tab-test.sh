@@ -83,12 +83,15 @@ for frontend in $frontends; do
     else
       echo 'window-resize 1280 820'
     fi
-    echo 'expect-ribbon-labels Start Solid Build Make'
+    echo "expect-ribbon-labels Start Solid Build '3D Print' Laser CNC"
     if [ "$frontend" = qt ]; then
       echo 'mark'
-      echo "click-logged '^Ribbon tab MAKE at '"
-      echo "expect-log 'Ribbon tab shown: MAKE'"
-      echo "expect-log 'Ribbon MAKE/ANNOTATE at '"
+      # Make's workspace first where the toolbar panel has the selector
+      # (mitcad#1990); nothing in the Docked layout.
+      echo 'workspace MAKE'
+      echo "click-logged '^Ribbon tab MAKE_PRINT at '"
+      echo "expect-log 'Ribbon tab shown: MAKE_PRINT'"
+      echo "expect-log 'Ribbon MAKE_PRINT/ANNOTATE at '"
       echo "expect-log 'Browser Make markers: Root/Bodies/Body2: Own print settings: Walls'"
     fi
     for command in inspect.print_analysis:'Print Analysis' make.print3d:'Send to Slicer' make.dimension:'Dimension'; do

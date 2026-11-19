@@ -16,6 +16,8 @@
 //! parameters on the one timeline. The records only say what BUILD made,
 //! so that it can edit, connect and remove it again.
 
+// A part's automatic name follows its designation (mitcad#2030).
+mod auto_name;
 // A part centred in a free stretch whose neighbour goes (mitcad#1401).
 mod gap;
 pub(crate) mod geometry;
@@ -29,6 +31,7 @@ pub(crate) mod part_info;
 mod side_middle;
 pub(crate) mod sources;
 
+pub use auto_name::is_automatic_name;
 pub(crate) use geometry::*;
 pub use library_material::{library_material, library_material_density, library_material_name};
 pub use meta::*;
@@ -176,6 +179,14 @@ pub struct BuildRecord {
     /// side's end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap: Option<[Option<ComponentUid>; 2]>,
+    // A part's automatic name (mitcad#2030).
+    /// The designation the component's name came from (set at placement
+    /// and at each automatic rename, `auto_name.rs`): while the name is it,
+    /// or it with the ` (k)` suffix a free name adds, the name follows the
+    /// part's designation. None in a design saved before it: a name equal
+    /// to the designation (or with the suffix) counts as automatic then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named_after: Option<String>,
 }
 
 /// What a placement's offset along a profile is measured from

@@ -958,7 +958,10 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
     m_toolRow->setVisible(!cut && !m_ribbonPlace);
     m_cutRow->setVisible(cut && !m_ribbonPlace);
     m_addSheet->setVisible(!cut);
-    m_addRevision->setVisible(!cut);
+    // Sheet… and Add Revision… on the ribbon's DRAWING tab (mitcad#1990);
+    // a cut sheet's Material… stays here.
+    m_addRevision->setVisible(!cut && !m_ribbonPlace);
+    m_sheetButton->setVisible(cut || !m_ribbonPlace);
     m_tabs->setVisible(!cut);
     m_sheetButton->setText(cut ? tr("Material…") : tr("Sheet…"));
     m_sheetButton->setToolTip(cut ? tr("The cut sheet's material: its width and height")
@@ -2989,6 +2992,7 @@ void DrawingWorkspace::switchSheet(int index) {
   dropPicks();
   qDebug().noquote() << QStringLiteral("Drawing sheet %1 shown").arg(index + 1);
   refresh();
+  emit sheetShown(index);
 }
 
 bool DrawingWorkspace::isModelShortcut(const QKeyEvent* key) const {
@@ -4127,40 +4131,60 @@ void DrawingWorkspace::place() {
   const QRect whole = m_viewer->rect();
   const QMargins insets = m_viewer->overlayInsets();
   const QRect area = whole.marginsRemoved(insets);
-  // The cards floating at the view's sides (the Floating layout's browser)
-  // cover the bar where they reach its row: its controls start beside
-  // them, so that they stay clickable (mitcad#725: Close Drawing lay under
-  // the browser). The sheet goes on under them, fitted beside them.
+  // The cards floating at the view's sides (the Floating layout's Drawings
+  // card) stand in a column of their own (mitcad#1990, owner on test build
+  // 10): the bar and the sheet start right of a card at the left, so that
+  // the card lines up with the bar's top as the Browser does with the 3D
+  // view's, and nothing lies under it (mitcad#725: Close Drawing lay under
+  // the browser). A card at the right only narrows the bar's controls.
   const int band = std::max(m_bar->sizeHint().height(), 40);
   const QRect barRow(area.left(), area.top(), area.width(), band);
-  const QRect body(area.left(), area.top() + band, area.width(), std::max(0, area.height() - band));
   constexpr int kEdge = 24; // how near a side a card stands to count
   constexpr int kGap = 8;
-  QRect room = area;
-  int coveredLeft = 0; // of the sheet, from its left
+  int besideLeft = 0; // the column's start, from the area's left
+  int barRight = 0;   // the bar's controls' end, from the area's right
+  QRect leftCard;     // the widest card at the left, in the view
   for (const QRect& card : m_viewer->coveredRects()) {
     const bool atLeft = card.left() <= area.left() + kEdge && card.right() < area.center().x();
     const bool atRight = card.right() >= area.right() - kEdge && card.left() > area.center().x();
-    if (card.intersects(barRow)) {
-      if (atLeft) {
-        room.setLeft(std::max(room.left(), card.right() + 1 + kGap));
-      } else if (atRight) {
-        room.setRight(std::min(room.right(), card.left() - 1 - kGap));
+    if (atLeft && card.intersects(area)) {
+      const int beside = card.right() + 1 + kGap - area.left();
+      if (beside > besideLeft) {
+        besideLeft = beside;
+        leftCard = card;
       }
-    }
-    if (atLeft && card.intersects(body)) {
-      coveredLeft = std::max(coveredLeft, card.right() + 1 + kGap - area.left());
+    } else if (atRight && card.intersects(barRow)) {
+      barRight = std::max(barRight, area.right() + 1 + kGap - card.left());
     }
   }
-  if (room.width() < area.width() / 2) {
-    room = area;
+  if (besideLeft > area.width() / 2) {
+    besideLeft = 0; // a window too narrow for a column: the card floats over it
+    leftCard = QRect();
   }
-  m_column->setContentsMargins(insets);
-  m_bar->layout()->setContentsMargins(6 + room.left() - area.left(), 4, 6 + area.right() - room.right(), 4);
-  m_sheetView->setFitMargins(QMargins(std::min(coveredLeft, body.width() / 2), 0, 0, 0));
-  fitTools(room.width());
+  if (barRight > (area.width() - besideLeft) / 2) {
+    barRight = 0;
+  }
+  m_column->setContentsMargins(insets + QMargins(besideLeft, 0, 0, 0));
+  m_bar->layout()->setContentsMargins(6, 4, 6 + barRight, 4);
+  m_sheetView->setFitMargins(QMargins());
+  fitTools(area.width() - besideLeft - barRight);
   if (whole != geometry()) {
     setGeometry(whole);
+  }
+  // "Drawing column at x,y beside card x,y WxH" (or "beside no card"): where
+  // the bar and the sheet start and the card left of them, in the window.
+  if (window() != nullptr) {
+    const QPoint column = m_viewer->mapTo(window(), QPoint(area.left() + besideLeft, area.top()));
+    QString beside = QStringLiteral("no card");
+    if (leftCard.isValid()) {
+      const QPoint at = m_viewer->mapTo(window(), leftCard.topLeft());
+      beside = QStringLiteral("card %1,%2 %3x%4").arg(at.x()).arg(at.y()).arg(leftCard.width()).arg(leftCard.height());
+    }
+    const QString line = QStringLiteral("Drawing column at %1,%2 beside %3").arg(column.x()).arg(column.y()).arg(beside);
+    if (isVisible() && line != m_loggedColumn) {
+      m_loggedColumn = line;
+      qDebug().noquote() << line;
+    }
   }
 }
 
@@ -4170,6 +4194,10 @@ void DrawingWorkspace::setRibbonTools(std::function<QWidget*(const QString&)> bu
   m_close->setVisible(own);
   m_toolRow->setVisible(own && !m_cutSheet);
   m_cutRow->setVisible(own && m_cutSheet);
+  // Sheet… and Add Revision… are the ribbon's Sheet group's (mitcad#1990);
+  // a cut sheet's Material… stays on the bar.
+  m_sheetButton->setVisible(own || m_cutSheet);
+  m_addRevision->setVisible(own && !m_cutSheet);
   m_toolsWidth = -1;
   if (isVisible()) {
     place();
@@ -4400,12 +4428,20 @@ void DrawingWorkspace::logButtons() {
   const QString ribbonTab = m_cutSheet ? QStringLiteral("CUT SHEET") : QStringLiteral("DRAWING");
   add(QStringLiteral("Close Drawing"), m_close, QStringLiteral("drawing.close"));
   lines << QStringLiteral("Drawing Add Sheet at %1").arg(at(m_addSheet));
-  lines << QStringLiteral("Drawing Sheet at %1").arg(at(m_sheetButton));
+  if (m_cutSheet || !m_ribbonPlace) {
+    lines << QStringLiteral("Drawing Sheet at %1").arg(at(m_sheetButton));
+  } else {
+    add(QStringLiteral("Sheet"), m_sheetButton, QStringLiteral("drawing.edit_sheet"));
+  }
   add(QStringLiteral("Export"), m_cutSheet ? m_cutExport : m_export, ribbonTab + QStringLiteral("/EXPORT"));
   if (m_cutSheet) {
     add(QStringLiteral("Add Parts"), m_addParts, QStringLiteral("drawing.add_parts"));
   }
-  lines << QStringLiteral("Drawing Add Revision at %1").arg(at(m_addRevision));
+  if (m_ribbonPlace && !m_cutSheet) {
+    add(QStringLiteral("Add Revision"), m_addRevision, QStringLiteral("drawing.add_revision"));
+  } else {
+    lines << QStringLiteral("Drawing Add Revision at %1").arg(at(m_addRevision));
+  }
   // The window's commands on the bar (addBarAction, mitcad#1582).
   for (const QToolButton* b : std::as_const(m_barActions)) {
     if (b->isVisible() && b->defaultAction() != nullptr) {
@@ -4768,7 +4804,12 @@ void DrawingWorkspace::fitBarRow() {
   if (m_barRow == nullptr || m_bar == nullptr || m_sheetButton == nullptr || m_addRevision == nullptr) {
     return;
   }
-  QList<QToolButton*> buttons{m_sheetButton, m_addRevision};
+  QList<QToolButton*> buttons;
+  for (QToolButton* b : {m_sheetButton, m_addRevision}) {
+    if (!b->isHidden()) {
+      buttons.append(b);
+    }
+  }
   buttons.append(m_barActions);
   for (QToolButton* b : std::as_const(buttons)) {
     b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);

@@ -107,7 +107,7 @@ grep -q "Annotation kept: " <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "M
 
 echo "--- Dimension on the Make tab"
 ui_mark
-ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
+ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
 ui_expect_new "Ribbon button make.dimension at" "the Make tab's Dimension"
 ui_step "Dimension"                        ui_click_logged "Ribbon button make.dimension"
 ui_expect_new "Command Dimension started" "Dimension started"

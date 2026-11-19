@@ -67,7 +67,7 @@ echo "ok   the project is shared"
 
 # The panel shown at the start, as for a user who turned it on.
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[projects]\npanel=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[projects]\npanel=true\npanelTopBar=true\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 # Every connection waits 5 s; a gap of the UI thread over 4 s is logged.
 export SLOW_SSH_SECONDS=5 MITCAD_TEST_UI_STALL_MS=4000 MITCAD_TEST_REMOTE_RETRY_SECONDS=2

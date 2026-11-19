@@ -25,8 +25,11 @@ focus-main
 
 # 1. Body1's card: Fixture Fine on the body.
 mark
-click-logged '^Ribbon tab MAKE at '
-wait-log '^Ribbon tab shown: MAKE$'
+# The Make tab is the Make workspace's in the Floating toolbar panel
+# (mitcad#1990): chosen first; nothing in the Docked layout.
+workspace MAKE
+click-logged '^Ribbon tab MAKE_PRINT at '
+wait-log '^Ribbon tab shown: MAKE_PRINT$'
 mark
 click-logged '^Browser Root/Bodies/Body1 at '
 wait-log '^Make card: Body1: .*; process Slicer default \(default\); '

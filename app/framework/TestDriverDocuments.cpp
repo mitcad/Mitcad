@@ -34,10 +34,11 @@ bool liveBar(QTabBar* tabs) {
 }
 
 // The frame is shown, and its tab bar is shown exactly when the frame's
-// policy shows tabs for its documents (one document: no tab bar).
+// policy shows tabs for its documents (one document: no tab bar, but in a
+// Floating title row, mitcad#1990, where each design is a tab).
 bool barAsPolicy(DocumentFrame* frame, QTabBar* tabs) {
   if (!frame || !tabs || !frame->isVisible()) return false;
-  return DocumentFrame::showsDocumentTabs(int(frame->documents().size())) ? liveBar(tabs) : tabs->isHidden();
+  return frame->showsTabs() ? liveBar(tabs) : tabs->isHidden();
 }
 
 template<class Event> auto dragPosition(const QPoint& point) {
@@ -57,9 +58,9 @@ bool TestDriver::runDocumentFrameStep(const QString& name, const QStringList& a,
   auto* current = qobject_cast<MainWindow*>(m_main.data());
   QPointer<DocumentFrame> frame = DocumentFrame::containing(current);
   QPointer<QTabBar> tabs = tabsOf(frame);
-  // Expectations also hold for a frame with one document and no tab bar,
-  // and a drop needs only the destination's bar; other tab input needs
-  // this frame's shown bar.
+  // Expectations also hold for a frame with one document and no tab bar
+  // (Docked), and a drop needs only the destination's bar; other tab input
+  // needs this frame's shown bar.
   const bool ownBar = !name.startsWith(QLatin1String("expect-document-")) && name != QLatin1String("document-tab-drop");
   if (!frame || !tabs || (ownBar ? !liveBar(tabs) : !frame->isVisible())) {
     fail(line, QStringLiteral("%1 requires a visible portable document frame%2").arg(name, ownBar ? QStringLiteral(" and tab bar") : QString()));

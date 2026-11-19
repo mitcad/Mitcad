@@ -27,6 +27,7 @@
 #include <QImage>
 #include <QList>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
@@ -241,6 +242,40 @@ bool prepareHeadlessTestApplication(QString& error) {
     return false;
   }
   return headlessTestApplicationIsolated(error);
+}
+
+bool systemMenuBarMatches(QMenuBar& bar, const QStringList& expected, QString& error) {
+  if (!NSApp.isActive || !NSApp.keyWindow) {
+    error = QStringLiteral("the application has no active native window");
+    return false;
+  }
+  NSMenu* menu = NSApp.mainMenu;
+  NSMenuItem* applicationMenu = menu.itemArray.firstObject;
+  QStringList titles;
+  for (NSMenuItem* item in menu.itemArray) {
+    // A detached Qt menu can leave its title in AppKit with no submenu.
+    if (!item.hidden && item.submenu.numberOfItems > 0) titles.append(QString::fromNSString(item.title));
+  }
+  error = QStringLiteral("usable menus: [%1]").arg(titles.join(QStringLiteral(", ")));
+  if (!bar.isNativeMenuBar() || menu == nil || menu != bar.toNSMenu() ||
+      applicationMenu.hidden || applicationMenu.submenu.numberOfItems == 0) return false;
+  titles.removeFirst();
+  if (titles != expected) return false;
+
+  QStringList applicationTitles;
+  bool about = false;
+  bool settings = false;
+  bool quit = false;
+  for (NSMenuItem* item in applicationMenu.submenu.itemArray) {
+    if (item.hidden || item.separatorItem) continue;
+    applicationTitles.append(QString::fromNSString(item.title));
+    about = about || [item.title isEqualToString:@"About MitCad"];
+    if (!(item.keyEquivalentModifierMask & NSEventModifierFlagCommand)) continue;
+    settings = settings || [item.keyEquivalent isEqualToString:@","];
+    quit = quit || [item.keyEquivalent isEqualToString:@"q"];
+  }
+  error = QStringLiteral("application menu: [%1]").arg(applicationTitles.join(QStringLiteral(", ")));
+  return about && settings && quit;
 }
 
 #ifdef MITCAD_MAC_UI

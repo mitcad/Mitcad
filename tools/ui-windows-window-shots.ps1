@@ -100,7 +100,7 @@ foreach ($theme in @('light', 'dark')) {
   $settings = Join-Path $Out "$name-settings"
   Remove-Item -Recurse -Force $settings -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force (Join-Path $settings 'Mitcad') | Out-Null
-  Set-Content -Encoding ascii (Join-Path $settings 'Mitcad\Mitcad.ini') @('[projects]', 'panel=true')
+  Set-Content -Encoding ascii (Join-Path $settings 'Mitcad\Mitcad.ini') @('[projects]', 'panel=true', 'panelTopBar=true')
   $projects = Join-Path $Out "$name-projects"
   Remove-Item -Recurse -Force $projects -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force $projects | Out-Null

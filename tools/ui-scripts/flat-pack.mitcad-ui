@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# Flat Pack (mitcad#1939; app/COMMANDS.md "Sheet process profiles"), on
+# flat-pack.json (a box 200 x 120 x 80, Body1):
+#   1. Flat Pack: the box picked, Sheet Thickness 6, Finger Width 15, the
+#      cut sheet 1000 x 600: OK makes six finger-jointed plates (539011.2
+#      mm3 in all, as cli.sheet_flat_pack gives) and a cut sheet with them.
+#   2. FlatPack1 edited from the timeline opens in Flat Pack; 4 mm sheet.
+#   3. Two undos take both back: the box again.
+# Run by tools/ui-flat-pack-test.sh (Linux),
+# tools/ui-windows-flat-pack-test.ps1 (Windows) and
+# tools/ui-macos-flat-pack-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+expect-model-bodies 1 1920000
+
+# 1. Six plates on a cut sheet.
+mark
+command sheet.flat_pack
+wait-log '^Command Flat Pack started' 30
+wait-idle
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-idle
+type-in '^Panel Flat Pack input thickness at ' '6'
+type-in '^Panel Flat Pack input finger_width at ' '15'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Flat pack: six plates of 6' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 6 539011.2
+
+# 2. The Flat Pack edited from the timeline: 4 mm sheet.
+mark
+dblclick-logged '^Timeline FlatPack1 at '
+wait-log '^Editing F2 with Flat Pack$' 30
+wait-idle
+expect-input-text thickness '^6'
+type-in '^Panel Flat Pack input thickness at ' '4'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited flat pack: plates of 4' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+
+# 3. One undo step each.
+mark
+key ctrl+z
+wait-idle
+key ctrl+z
+wait-idle
+expect-model-bodies 1 1920000

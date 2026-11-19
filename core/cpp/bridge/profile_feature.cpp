@@ -84,6 +84,10 @@ AxisOutput axis_output(const gp_Ax1& axis) {
 
 } // namespace
 
+std::optional<geometry::Target> target_of(const TargetInput& input, const ShapeList& bodies) {
+  return target(input, bodies);
+}
+
 std::shared_ptr<geometry::Shape> extrude_feature(rust::Str feature, const Frame& frame,
                                                  rust::Slice<const Region> regions,
                                                  const ExtrudeFeatureInput& input,

@@ -31,6 +31,7 @@
 #include "../sketch/SketchController.hpp"
 #include "../sketch/SketchModel.hpp"
 #include "../sketch/SketchTool.hpp"
+#include "../sketch/TextCommands.hpp"
 #include "CommandSupport.hpp"
 #include "PatternOptions.hpp"
 #include "SketchConstraintKeys.hpp"
@@ -45,23 +46,14 @@ using cmd::oneDirection;
 using cmd::symmetricDirection;
 using sketch::SketchController;
 
-const QString kSketchTab = QStringLiteral("SKETCH");
-
-// `group` is the toolbar group, "CREATE/Circles" with its subgroup
-// (CommandDef::subgroup, mitcad#222).
-CommandDef sketchCommand(const char* id, const QString& name, const char* icon, const char* group,
-                         CommandDef::Kind kind) {
+// Its place on the toolbar is the layout's (mitcad#1951).
+CommandDef sketchCommand(const char* id, const QString& name, const char* icon, CommandDef::Kind kind) {
   CommandDef def;
   def.id = QString::fromLatin1(id);
   def.name = name;
   def.icon = QString::fromLatin1(icon);
   def.kind = kind;
   def.mode = CommandDef::Mode::Sketch;
-  def.tab = kSketchTab;
-  const QString path = QString::fromLatin1(group);
-  const qsizetype slash = path.indexOf(QLatin1Char('/'));
-  def.group = slash < 0 ? path : path.left(slash);
-  def.subgroup = slash < 0 ? QString() : path.mid(slash + 1);
   return def;
 }
 
@@ -116,11 +108,10 @@ InputDef offsetCornersInput() {
 }
 
 void addOffset(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.offset", QObject::tr("Offset"), "offset", "MODIFY",
+  CommandDef def = sketchCommand("sketch.offset", QObject::tr("Offset"), "offset",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.shortcut = QKeySequence(Qt::Key_O);
-  def.pinned = true;
   def.tooltip = QObject::tr("A copy of a chain of curves at a distance, which stays at it");
   def.keywords = {QStringLiteral("parallel copy")};
   def.inputs = {
@@ -159,7 +150,7 @@ void addOffset(CommandRegistry& registry, SketchController& c) {
 }
 
 void addMirror(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.mirror", QObject::tr("Mirror"), "mirror", "CREATE/Patterns",
+  CommandDef def = sketchCommand("sketch.mirror", QObject::tr("Mirror"), "mirror",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Mirrored copies about a line or a sketch axis, kept symmetric");
@@ -202,7 +193,7 @@ void addMirror(CommandRegistry& registry, SketchController& c) {
 
 void addCircularPattern(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.circular_pattern", QObject::tr("Circular Pattern"),
-                                 "circular-pattern", "CREATE/Patterns", CommandDef::Kind::Feature);
+                                 "circular-pattern", CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Copies around a center point (the origin when none is picked)");
   def.inputs = {
@@ -357,7 +348,7 @@ std::optional<SketchHandle> patternHandle(const CommandState& s, SketchControlle
 
 void addRectangularPattern(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.rectangular_pattern", QObject::tr("Rectangular Pattern"),
-                                 "rectangular-pattern", "CREATE/Patterns", CommandDef::Kind::Feature);
+                                 "rectangular-pattern", CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Copies in rows and columns along a line (the sketch x axis when none is picked)");
   def.inputs = {
@@ -498,7 +489,7 @@ QString projectedName(const SelectionItem& item) {
 }
 
 void addProject(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.project", QObject::tr("Project"), "project", "CREATE/References",
+  CommandDef def = sketchCommand("sketch.project", QObject::tr("Project"), "project",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.shortcut = QKeySequence(Qt::Key_P);
@@ -563,8 +554,7 @@ void addProject(CommandRegistry& registry, SketchController& c) {
 // mitcad#998), linked as well; they are pickable through the same
 // selection filter row as Project's, and the edited sketch's own never.
 void addIntersect(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.intersect", QObject::tr("Intersect"), "sketch-intersect",
-                                 "CREATE/References", CommandDef::Kind::Feature);
+  CommandDef def = sketchCommand("sketch.intersect", QObject::tr("Intersect"), "sketch-intersect", CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Where the sketch plane cuts bodies, faces, edges and other sketches' curves");
   def.keywords = {QStringLiteral("section"), QStringLiteral("cut"), QStringLiteral("reference"),
@@ -624,8 +614,7 @@ void addIntersect(CommandRegistry& registry, SketchController& c) {
 // moved to the kept curve. The preview lists what it removes and what
 // changes (the command's warnings); OK keeps it as one undo step.
 void addCleanUpProjections(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.clean_up_projections", QObject::tr("Clean Up Projections"), "project",
-                                 "CREATE/References", CommandDef::Kind::Feature);
+  CommandDef def = sketchCommand("sketch.clean_up_projections", QObject::tr("Clean Up Projections"), "project", CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Removes repeated projected curves and projected lines lying on another");
   def.keywords = {QStringLiteral("duplicate"), QStringLiteral("overlapping"), QStringLiteral("merge")};
@@ -654,7 +643,7 @@ void addCleanUpProjections(CommandRegistry& registry, SketchController& c) {
 // Palette offers it under a warning about such projections.
 void addCleanUpStaleProjections(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.clean_up_stale_projections", QObject::tr("Clean Up Stale Projections"),
-                                 "project", "CREATE/References", CommandDef::Kind::Feature);
+                                 "project", CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Removes, trims or unlinks projected curves that no longer match their source");
   def.keywords = {QStringLiteral("stale"), QStringLiteral("outdated"), QStringLiteral("unlink")};
@@ -708,8 +697,7 @@ QString successorRow(int index, const QJsonObject& row, const QString& unit) {
 // the edge painted while the pointer is over its row, the first chosen; the
 // chosen one becomes the projection's source (`successor`).
 void addProjectAgain(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.project_again", QObject::tr("Project Again"), "project",
-                                 "CREATE/References", CommandDef::Kind::Feature);
+  CommandDef def = sketchCommand("sketch.project_again", QObject::tr("Project Again"), "project", CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Projects again what no longer follows, keeping its constraints");
   def.keywords = {QStringLiteral("reproject"), QStringLiteral("repair"), QStringLiteral("stale"),
@@ -786,7 +774,7 @@ void addProjectAgain(CommandRegistry& registry, SketchController& c) {
 // context menu of projected geometry.
 void addConvertProjected(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.convert_projected", QObject::tr("Convert to Sketch Geometry"),
-                                 "convert-projected", "MODIFY", CommandDef::Kind::Action);
+                                 "convert-projected", CommandDef::Kind::Action);
   def.run = [&c] { c.convertProjected(); };
   def.enabled = [&c] { return c.selectionHasProjected(); };
   def.tooltip = QObject::tr("Turns the selected projected geometry into ordinary sketch geometry");
@@ -862,10 +850,9 @@ bool filletCorner(const sketch::SketchModel& model, const QString& point) {
 // radius dimension and the arcs Equal; one undo step. Circular arcs as lines
 // (mitcad#1192): a corner where an arc ends together with a line or an arc.
 void addFillet(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.fillet", QObject::tr("Sketch Fillet"), "sketch-fillet", "MODIFY",
+  CommandDef def = sketchCommand("sketch.fillet", QObject::tr("Sketch Fillet"), "sketch-fillet",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
-  def.pinned = true;
   def.tooltip = QObject::tr("Rounds corners of lines and arcs: two curves, a chain or corner points");
   def.keywords = {QStringLiteral("round corners"), QStringLiteral("rounded rectangle")};
   def.inputs = {
@@ -921,7 +908,7 @@ void addFillet(CommandRegistry& registry, SketchController& c) {
 }
 
 void addChamfer(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.chamfer", QObject::tr("Sketch Chamfer"), "sketch-chamfer", "MODIFY",
+  CommandDef def = sketchCommand("sketch.chamfer", QObject::tr("Sketch Chamfer"), "sketch-chamfer",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("Bevels the corner of two lines");
@@ -1009,7 +996,7 @@ QJsonValue snapPickInput(const SelectionItem& item) {
 // handle at the objects' middle that drags X and Y Distance, and Rotate
 // turns about that middle when no Pivot Point is picked.
 void addMove(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.move", QObject::tr("Move/Copy"), "move", "MODIFY",
+  CommandDef def = sketchCommand("sketch.move", QObject::tr("Move/Copy"), "move",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.shortcut = QKeySequence(Qt::Key_M);
@@ -1188,7 +1175,7 @@ InputDef textInputFor(InputDef input, SketchController& c) {
 }
 
 void addEditPattern(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.edit_pattern", QObject::tr("Edit Pattern"), "circular-pattern", "MODIFY",
+  CommandDef def = sketchCommand("sketch.edit_pattern", QObject::tr("Edit Pattern"), "circular-pattern",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("The quantity, angle or spacing of a sketch pattern, picked by one of its curves");
@@ -1343,7 +1330,7 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
 }
 
 void addEditOffset(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.edit_offset", QObject::tr("Edit Offset"), "offset", "MODIFY",
+  CommandDef def = sketchCommand("sketch.edit_offset", QObject::tr("Edit Offset"), "offset",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("The distance, side or corners of an offset, picked by one of the curves it made");
@@ -1450,7 +1437,7 @@ const QVector<QPair<QString, QString>> kCodeLevels = {
 // a size, its lower left corner at a point (`sketch.add_code`).
 void addQrCode(CommandRegistry& registry, SketchController& c) {
   CommandDef def =
-      sketchCommand("sketch.add_code", QObject::tr("QR Code"), "text", "CREATE/Text", CommandDef::Kind::Feature);
+      sketchCommand("sketch.add_code", QObject::tr("QR Code"), "text", CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("A QR code of a text or an address; its dark modules are profiles to extrude");
   def.keywords = {QStringLiteral("qr"), QStringLiteral("code"), QStringLiteral("barcode"), QStringLiteral("url")};
@@ -1514,7 +1501,7 @@ void insertChangedPosition(QJsonObject& cmd, const CommandState& s, const sketch
 // Edit QR Code (mitcad#473): a code's content, module size and error
 // correction (`sketch.edit_code`); a double-click on the code opens it.
 void addEditCode(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.edit_code", QObject::tr("Edit QR Code"), "text", "MODIFY",
+  CommandDef def = sketchCommand("sketch.edit_code", QObject::tr("Edit QR Code"), "text",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("A QR code's content, module size and error correction");
@@ -1572,7 +1559,7 @@ void addEditCode(CommandRegistry& registry, SketchController& c) {
 }
 
 void addEditText(CommandRegistry& registry, SketchController& c) {
-  CommandDef def = sketchCommand("sketch.edit_text", QObject::tr("Edit Text"), "text", "MODIFY",
+  CommandDef def = sketchCommand("sketch.edit_text", QObject::tr("Edit Text"), "text",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.tooltip = QObject::tr("A sketch text's content, size, font, style, alignment and path");
@@ -1587,11 +1574,20 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
     return s.items(QStringLiteral("path")).isEmpty() && (t == nullptr || t->frame.isEmpty());
   };
   const auto onPath = [](const CommandState& s) { return !s.items(QStringLiteral("path")).isEmpty(); };
+  // Wrap in Frame, for a text in a frame that is not on a path (mitcad#2029).
+  const auto wrapShown = [&c, onPath](const CommandState& s) {
+    const Selection& picked = s.items(QStringLiteral("text"));
+    const sketch::TextData* t = picked.isEmpty() ? nullptr : c.model().text(picked.first().name);
+    return t != nullptr && sketch::wrapInFrameShown(*t, onPath(s));
+  };
   def.inputs = {
       textInputFor(selectionInput(QStringLiteral("text"), QObject::tr("Text"), SelectKind::SketchCurve, 1, 1)
                        .withAccepts(editable(c, lookup)),
                    c),
-      textInput(QStringLiteral("content"), QObject::tr("Text")),
+      // A box of several lines: Enter starts a new line (mitcad#2029).
+      textInput(QStringLiteral("content"), QObject::tr("Text"))
+          .withMultiLine()
+          .withTooltip(QObject::tr("The text; Enter starts a new line, Ctrl+Enter is OK")),
       // The text from a text parameter or expression (mitcad#664).
       textInput(QStringLiteral("value"), QObject::tr("Text Parameter"))
           .withTooltip(QObject::tr(
@@ -1610,6 +1606,10 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
                    {QStringLiteral("center"), QObject::tr("Center")},
                    {QStringLiteral("right"), QObject::tr("Right")}},
                   QStringLiteral("left")),
+      checkInput(QStringLiteral("wrap"), QObject::tr("Wrap in Frame"))
+          .withTooltip(QObject::tr("Breaks the lines at spaces to fit the frame's width; a word wider than the "
+                                   "frame stays whole"))
+          .withVisible(wrapShown),
       choiceInput(QStringLiteral("valign"), QObject::tr("Vertical Alignment"),
                   {{QStringLiteral("baseline"), QObject::tr("Baseline")},
                    {QStringLiteral("top"), QObject::tr("Top")},
@@ -1653,6 +1653,11 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
     s.setChecked(QStringLiteral("bold"), t->bold);
     s.setChecked(QStringLiteral("italic"), t->italic);
     s.setChoice(QStringLiteral("align"), t->align);
+    s.setChecked(QStringLiteral("wrap"), t->wrap);
+    // The wrap it had when the command started: a preview changes the
+    // sketch's text, and `wrap` is sent only when it differs from this
+    // (mitcad#2029).
+    s.setText(QStringLiteral("wrap_was"), t->wrap ? QStringLiteral("on") : QStringLiteral("off"));
     s.setChoice(QStringLiteral("valign"), t->valign);
     s.setText(QStringLiteral("spacing"), QString::number(t->spacing));
     s.setChecked(QStringLiteral("flip_x"), t->flipX);
@@ -1668,7 +1673,8 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
     if (picked.isEmpty() || c.model().text(picked.first().name) == nullptr) {
       return Built::failure(QObject::tr("Pick a text."), QStringLiteral("text"));
     }
-    const QString content = s.text(QStringLiteral("content"));
+    // Its line breaks as the model's `\n` (mitcad#2029).
+    const QString content = sketch::textWithLineBreaks(s.text(QStringLiteral("content")));
     const QString value = s.text(QStringLiteral("value")).trimmed();
     if (content.trimmed().isEmpty() && value.isEmpty()) {
       return Built::failure(QObject::tr("The text is empty."), QStringLiteral("content"));
@@ -1701,6 +1707,20 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
     cmd.insert(QStringLiteral("bold"), s.checked(QStringLiteral("bold")));
     cmd.insert(QStringLiteral("italic"), s.checked(QStringLiteral("italic")));
     cmd.insert(QStringLiteral("align"), s.choice(QStringLiteral("align")));
+    // Wrap in Frame only when it was changed: an imported text keeps its
+    // own (mitcad#2029).
+    if (edited != nullptr) {
+      // Against the text as it was before the previews (which change the
+      // sketch's text), else as it is now.
+      sketch::TextData before = *edited;
+      if (const QString was = s.text(QStringLiteral("wrap_was")); !was.isEmpty()) {
+        before.wrap = was == QLatin1String("on");
+      }
+      if (const auto wrap = sketch::changedTextWrap(before, !s.items(QStringLiteral("path")).isEmpty(),
+                                                    s.checked(QStringLiteral("wrap")))) {
+        cmd.insert(QStringLiteral("wrap"), *wrap);
+      }
+    }
     if (s.items(QStringLiteral("path")).isEmpty()) {
       cmd.insert(QStringLiteral("valign"), s.choice(QStringLiteral("valign")));
     }
@@ -1721,9 +1741,13 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
     const Selection& picked = s.items(QStringLiteral("text"));
     const QString font = s.choice(QStringLiteral("font"));
     const QString file = sketch::fontFileOfChoice(font);
-    return QStringLiteral("Edited text %1: \"%2\", %3, %4")
-        .arg(picked.isEmpty() ? QString() : picked.first().name, s.text(QStringLiteral("content")),
-             file.isEmpty() ? font : sketch::fontFileLabel(file), s.choice(QStringLiteral("align")));
+    // One log line: its line breaks as \n.
+    const QString content =
+        sketch::textWithLineBreaks(s.text(QStringLiteral("content"))).replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+    return QStringLiteral("Edited text %1: \"%2\", %3, %4%5")
+        .arg(picked.isEmpty() ? QString() : picked.first().name, content,
+             file.isEmpty() ? font : sketch::fontFileLabel(file), s.choice(QStringLiteral("align")),
+             s.checked(QStringLiteral("wrap")) ? QStringLiteral(", wrapped") : QString());
   };
   registry.add(def);
 }
@@ -1747,19 +1771,16 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
     const char* id;
     QString name;
     const char* icon;
-    const char* group;
     std::function<void()> run;
     QKeySequence shortcut;
-    bool pinned;
     QString tooltip;
   };
   const auto add = [&registry, &c](const Spec& spec, CommandDef::Kind kind = CommandDef::Kind::Tool,
                                    const QList<QKeySequence>& alternates = {}) {
-    CommandDef def = sketchCommand(spec.id, spec.name, spec.icon, spec.group, kind);
+    CommandDef def = sketchCommand(spec.id, spec.name, spec.icon, kind);
     def.run = spec.run;
     def.shortcut = spec.shortcut;
     def.alternates = alternates;
-    def.pinned = spec.pinned;
     def.tooltip = spec.tooltip;
     if (kind == CommandDef::Kind::Tool) {
       c.setToolIcon(def.name, def.icon); // the tool's cursor shows it
@@ -1776,82 +1797,78 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   // own, mitcad#1545), Rectangles, Circles, Arcs, Other Geometry, Text,
   // Patterns, References; a pinned command is its submenu's split button
   // default. Offset is in MODIFY.
-  add({"sketch.line", QObject::tr("Line"), "line", "CREATE/Lines", [&c] { c.startTool(sketch::lineTool(c)); },
-       QKeySequence(Qt::Key_L), true,
+  add({"sketch.line", QObject::tr("Line"), "line", [&c] { c.startTool(sketch::lineTool(c)); },
+       QKeySequence(Qt::Key_L),
        QObject::tr("Lines end to end; drag from an end for an arc, tangent along the curve or normal across it")});
   // Lines is a split button with Line its default (mitcad#1393).
-  add({"sketch.line_midpoint", QObject::tr("Midpoint Line"), "line-midpoint", "CREATE/Lines",
-       [&c] { c.startTool(sketch::midpointLineTool(c)); }, none, false,
+  add({"sketch.line_midpoint", QObject::tr("Midpoint Line"), "line-midpoint",
+       [&c] { c.startTool(sketch::midpointLineTool(c)); }, none,
        QObject::tr("A line from its midpoint and an end, symmetric about the midpoint")});
   // Point on its own after Lines, in the menu and as a button (mitcad#1545:
   // users did not find it at the end of Other Geometry). No shortcut.
-  add({"sketch.point", QObject::tr("Point"), "point", "CREATE", [&c] { c.startTool(sketch::pointTool(c)); }, none,
-       true, QObject::tr("A sketch point")});
-  add({"sketch.rectangle", QObject::tr("2-Point Rectangle"), "rectangle", "CREATE/Rectangles",
-       draw(sketch::rectangleTool, "two_point"), QKeySequence(Qt::Key_R), true,
+  add({"sketch.point", QObject::tr("Point"), "point", [&c] { c.startTool(sketch::pointTool(c)); }, none, QObject::tr("A sketch point")});
+  add({"sketch.rectangle", QObject::tr("2-Point Rectangle"), "rectangle",
+       draw(sketch::rectangleTool, "two_point"), QKeySequence(Qt::Key_R),
        QObject::tr("A rectangle from two opposite corners")});
-  add({"sketch.rectangle_3pt", QObject::tr("3-Point Rectangle"), "rectangle-3pt", "CREATE/Rectangles",
-       draw(sketch::rectangleTool, "three_point"), none, false,
+  add({"sketch.rectangle_3pt", QObject::tr("3-Point Rectangle"), "rectangle-3pt",
+       draw(sketch::rectangleTool, "three_point"), none,
        QObject::tr("A rectangle at any angle: a side, then the opposite side")});
-  add({"sketch.rectangle_center", QObject::tr("Center Rectangle"), "rectangle-center", "CREATE/Rectangles",
-       draw(sketch::rectangleTool, "center"), none, false, QObject::tr("A rectangle from its center and a corner")});
+  add({"sketch.rectangle_center", QObject::tr("Center Rectangle"), "rectangle-center",
+       draw(sketch::rectangleTool, "center"), none, QObject::tr("A rectangle from its center and a corner")});
   // Rounded corners (mitcad#867): four tangent arcs, Equal, one radius.
-  add({"sketch.rectangle_rounded", QObject::tr("2-Point Rounded Rectangle"), "rectangle-rounded",
-       "CREATE/Rectangles", draw(sketch::roundedRectangleTool, "two_point"), none, false,
+  add({"sketch.rectangle_rounded", QObject::tr("2-Point Rounded Rectangle"), "rectangle-rounded", draw(sketch::roundedRectangleTool, "two_point"), none,
        QObject::tr("A rectangle with rounded corners from two opposite corners and a corner radius")});
-  add({"sketch.rectangle_rounded_center", QObject::tr("Center Rounded Rectangle"), "rectangle-rounded-center",
-       "CREATE/Rectangles", draw(sketch::roundedRectangleTool, "center"), none, false,
+  add({"sketch.rectangle_rounded_center", QObject::tr("Center Rounded Rectangle"), "rectangle-rounded-center", draw(sketch::roundedRectangleTool, "center"), none,
        QObject::tr("A rectangle with rounded corners from its center, a corner and a corner radius")});
-  add({"sketch.circle", QObject::tr("Center Diameter Circle"), "circle", "CREATE/Circles",
-       draw(sketch::circleTool, "center"), QKeySequence(Qt::Key_C), true,
+  add({"sketch.circle", QObject::tr("Center Diameter Circle"), "circle",
+       draw(sketch::circleTool, "center"), QKeySequence(Qt::Key_C),
        QObject::tr("A circle from its center and a point on it")});
-  add({"sketch.circle_2pt", QObject::tr("2-Point Circle"), "circle-2pt", "CREATE/Circles",
-       draw(sketch::circleTool, "two_point"), none, false, QObject::tr("A circle from the ends of a diameter")});
-  add({"sketch.circle_3pt", QObject::tr("3-Point Circle"), "circle-3pt", "CREATE/Circles",
-       draw(sketch::circleTool, "three_point"), none, false, QObject::tr("A circle through three points")});
-  add({"sketch.circle_2tangent", QObject::tr("2-Tangent Circle"), "circle-tangent", "CREATE/Circles",
-       draw(sketch::circleTool, "two_tangent"), none, false, QObject::tr("A circle tangent to two lines")});
-  add({"sketch.circle_3tangent", QObject::tr("3-Tangent Circle"), "circle-tangent", "CREATE/Circles",
-       draw(sketch::circleTool, "three_tangent"), none, false, QObject::tr("A circle tangent to three lines")});
-  add({"sketch.arc", QObject::tr("3-Point Arc"), "arc-3pt", "CREATE/Arcs", draw(sketch::arcTool, "three_point"),
-       none, true, QObject::tr("An arc from its start and end through a third point")});
-  add({"sketch.arc_center", QObject::tr("Center Point Arc"), "arc-center", "CREATE/Arcs",
-       draw(sketch::arcTool, "center"), none, false, QObject::tr("An arc around a center, from its start to its end")});
-  add({"sketch.arc_tangent", QObject::tr("Tangent Arc"), "arc-tangent", "CREATE/Arcs",
-       draw(sketch::arcTool, "tangent"), none, false, QObject::tr("An arc that continues a line or an arc smoothly")});
+  add({"sketch.circle_2pt", QObject::tr("2-Point Circle"), "circle-2pt",
+       draw(sketch::circleTool, "two_point"), none, QObject::tr("A circle from the ends of a diameter")});
+  add({"sketch.circle_3pt", QObject::tr("3-Point Circle"), "circle-3pt",
+       draw(sketch::circleTool, "three_point"), none, QObject::tr("A circle through three points")});
+  add({"sketch.circle_2tangent", QObject::tr("2-Tangent Circle"), "circle-tangent",
+       draw(sketch::circleTool, "two_tangent"), none, QObject::tr("A circle tangent to two lines")});
+  add({"sketch.circle_3tangent", QObject::tr("3-Tangent Circle"), "circle-tangent",
+       draw(sketch::circleTool, "three_tangent"), none, QObject::tr("A circle tangent to three lines")});
+  add({"sketch.arc", QObject::tr("3-Point Arc"), "arc-3pt", draw(sketch::arcTool, "three_point"),
+       none, QObject::tr("An arc from its start and end through a third point")});
+  add({"sketch.arc_center", QObject::tr("Center Point Arc"), "arc-center",
+       draw(sketch::arcTool, "center"), none, QObject::tr("An arc around a center, from its start to its end")});
+  add({"sketch.arc_tangent", QObject::tr("Tangent Arc"), "arc-tangent",
+       draw(sketch::arcTool, "tangent"), none, QObject::tr("An arc that continues a line or an arc smoothly")});
   // No natural default: the submenu has no button of its own.
-  add({"sketch.ellipse", QObject::tr("Ellipse"), "ellipse", "CREATE/Other Geometry",
-       [&c] { c.startTool(sketch::ellipseTool(c)); }, none, false,
+  add({"sketch.ellipse", QObject::tr("Ellipse"), "ellipse",
+       [&c] { c.startTool(sketch::ellipseTool(c)); }, none,
        QObject::tr("An ellipse: the center, the end of the major axis, a point on it")});
-  add({"sketch.polygon", QObject::tr("Circumscribed Polygon"), "polygon", "CREATE/Other Geometry",
-       draw(sketch::polygonTool, "circumscribed"), none, false,
+  add({"sketch.polygon", QObject::tr("Circumscribed Polygon"), "polygon",
+       draw(sketch::polygonTool, "circumscribed"), none,
        QObject::tr("A regular polygon around a circle: the center, then a side's middle")});
-  add({"sketch.polygon_inscribed", QObject::tr("Inscribed Polygon"), "polygon-inscribed", "CREATE/Other Geometry",
-       draw(sketch::polygonTool, "inscribed"), none, false,
+  add({"sketch.polygon_inscribed", QObject::tr("Inscribed Polygon"), "polygon-inscribed",
+       draw(sketch::polygonTool, "inscribed"), none,
        QObject::tr("A regular polygon in a circle: the center, then a corner")});
-  add({"sketch.polygon_edge", QObject::tr("Edge Polygon"), "polygon-edge", "CREATE/Other Geometry",
-       draw(sketch::polygonTool, "edge"), none, false, QObject::tr("A regular polygon from one of its sides")});
-  add({"sketch.slot", QObject::tr("Center to Center Slot"), "slot", "CREATE/Other Geometry",
-       draw(sketch::slotTool, "center_to_center"), none, false, QObject::tr("A slot between the centers of its ends")});
-  add({"sketch.slot_overall", QObject::tr("Overall Slot"), "slot", "CREATE/Other Geometry",
-       draw(sketch::slotTool, "overall"), none, false, QObject::tr("A slot from end to end")});
-  add({"sketch.slot_center", QObject::tr("Center Point Slot"), "slot", "CREATE/Other Geometry",
-       draw(sketch::slotTool, "center_point"), none, false,
+  add({"sketch.polygon_edge", QObject::tr("Edge Polygon"), "polygon-edge",
+       draw(sketch::polygonTool, "edge"), none, QObject::tr("A regular polygon from one of its sides")});
+  add({"sketch.slot", QObject::tr("Center to Center Slot"), "slot",
+       draw(sketch::slotTool, "center_to_center"), none, QObject::tr("A slot between the centers of its ends")});
+  add({"sketch.slot_overall", QObject::tr("Overall Slot"), "slot",
+       draw(sketch::slotTool, "overall"), none, QObject::tr("A slot from end to end")});
+  add({"sketch.slot_center", QObject::tr("Center Point Slot"), "slot",
+       draw(sketch::slotTool, "center_point"), none,
        QObject::tr("A slot from its center and the center of an end")});
-  add({"sketch.slot_arc", QObject::tr("Three Point Arc Slot"), "slot-arc", "CREATE/Other Geometry",
-       draw(sketch::slotTool, "three_point_arc"), none, false, QObject::tr("A curved slot along a 3-point arc")});
-  add({"sketch.slot_arc_center", QObject::tr("Center Point Arc Slot"), "slot-arc", "CREATE/Other Geometry",
-       draw(sketch::slotTool, "center_point_arc"), none, false,
+  add({"sketch.slot_arc", QObject::tr("Three Point Arc Slot"), "slot-arc",
+       draw(sketch::slotTool, "three_point_arc"), none, QObject::tr("A curved slot along a 3-point arc")});
+  add({"sketch.slot_arc_center", QObject::tr("Center Point Arc Slot"), "slot-arc",
+       draw(sketch::slotTool, "center_point_arc"), none,
        QObject::tr("A curved slot along an arc around a center")});
-  add({"sketch.spline", QObject::tr("Fit Point Spline"), "spline-fit", "CREATE/Other Geometry",
-       [&c] { c.startTool(sketch::splineTool(c, false)); }, none, false,
+  add({"sketch.spline", QObject::tr("Fit Point Spline"), "spline-fit",
+       [&c] { c.startTool(sketch::splineTool(c, false)); }, none,
        QObject::tr("A smooth curve through points; Enter or a double-click ends it, a click on its first "
                    "point closes it")});
-  add({"sketch.spline_control", QObject::tr("Control Point Spline"), "spline-control", "CREATE/Other Geometry",
-       [&c] { c.startTool(sketch::splineTool(c, true)); }, none, false,
+  add({"sketch.spline_control", QObject::tr("Control Point Spline"), "spline-control",
+       [&c] { c.startTool(sketch::splineTool(c, true)); }, none,
        QObject::tr("A smooth curve shaped by control points; Enter or a double-click ends it")});
-  add({"sketch.text", QObject::tr("Text"), "text", "CREATE/Text", [&c] { c.startTool(sketch::textTool(c)); }, none,
-       false, QObject::tr("Text: click where it starts, type it and its height")});
+  add({"sketch.text", QObject::tr("Text"), "text", [&c] { c.startTool(sketch::textTool(c)); }, none, QObject::tr("Text: click where it starts, type it and its height")});
   addRectangularPattern(registry, c);
   addCircularPattern(registry, c);
   addMirror(registry, c);
@@ -1860,7 +1877,7 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   addCleanUpProjections(registry, c);
   addCleanUpStaleProjections(registry, c);
   addProjectAgain(registry, c);
-  add({"sketch.dimension", QObject::tr("Sketch Dimension"), "dimension", "CREATE",
+  add({"sketch.dimension", QObject::tr("Sketch Dimension"), "dimension",
        [&c] {
          // A viewport click's queued pick must reach the selection before
          // the tool captures it (mitcad#660).
@@ -1870,16 +1887,16 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
            c.startTool(sketch::dimensionTool(c));
          }
        },
-       QKeySequence(Qt::Key_D), true,
+       QKeySequence(Qt::Key_D),
        QObject::tr("Dimensions what is picked: a length, distance, angle, radius or diameter")});
 
   // --- MODIFY
   addFillet(registry, c);
   addChamfer(registry, c);
-  add({"sketch.trim", QObject::tr("Trim"), "trim", "MODIFY", [&c] { c.startTool(sketch::trimTool(c)); },
-       QKeySequence(Qt::Key_T), true, QObject::tr("Removes the piece of a curve between the curves crossing it")});
-  add({"sketch.extend", QObject::tr("Extend"), "extend", "MODIFY", [&c] { c.startTool(sketch::extendTool(c)); },
-       none, false, QObject::tr("Extends a line or an arc to the next curve")});
+  add({"sketch.trim", QObject::tr("Trim"), "trim", [&c] { c.startTool(sketch::trimTool(c)); },
+       QKeySequence(Qt::Key_T), QObject::tr("Removes the piece of a curve between the curves crossing it")});
+  add({"sketch.extend", QObject::tr("Extend"), "extend", [&c] { c.startTool(sketch::extendTool(c)); },
+       none, QObject::tr("Extends a line or an arc to the next curve")});
   addOffset(registry, c);
   addMove(registry, c);
   addEditPattern(registry, c);
@@ -1888,17 +1905,16 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   // QR codes (mitcad#473).
   addQrCode(registry, c);
   addEditCode(registry, c);
-  add({"sketch.construction", QObject::tr("Construction"), "construction", "MODIFY",
-       [&c] { c.toggleConstruction(); }, QKeySequence(Qt::Key_X), false,
+  add({"sketch.construction", QObject::tr("Construction"), "construction",
+       [&c] { c.toggleConstruction(); }, QKeySequence(Qt::Key_X),
        QObject::tr("Turns the selected curves into construction geometry and back; with nothing selected, "
                    "new geometry is construction geometry")},
       CommandDef::Kind::Action);
-  add({"sketch.centerline", QObject::tr("Centerline"), "centerline", "MODIFY", [&c] { c.toggleCenterline(); }, none,
-       false, QObject::tr("Turns the selected lines into center lines and back")},
+  add({"sketch.centerline", QObject::tr("Centerline"), "centerline", [&c] { c.toggleCenterline(); }, none, QObject::tr("Turns the selected lines into center lines and back")},
       CommandDef::Kind::Action);
   addConvertProjected(registry, c);
-  add({"sketch.delete", QObject::tr("Delete"), "delete", "MODIFY", [&c] { c.deleteSelection(); },
-       QKeySequence(Qt::Key_Delete), false,
+  add({"sketch.delete", QObject::tr("Delete"), "delete", [&c] { c.deleteSelection(); },
+       QKeySequence(Qt::Key_Delete),
        QObject::tr("Deletes the selected sketch geometry, constraints and dimensions")},
       CommandDef::Kind::Action,
 #ifdef Q_OS_MACOS
@@ -1911,37 +1927,32 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   );
   // Copy, Cut and Paste of sketch geometry (mitcad#788, sketch/SketchClipboard.cpp):
   // the reserved keys, which are a text field's outside sketches.
-  add({"sketch.cut", QObject::tr("Cut"), "cut", "MODIFY", [&c] { c.cutSelection(); },
-       QKeySequence(QKeySequence::Cut), false,
+  add({"sketch.cut", QObject::tr("Cut"), "cut", [&c] { c.cutSelection(); },
+       QKeySequence(QKeySequence::Cut),
        QObject::tr("Copies the selected sketch geometry and its constraints, then deletes it")},
       CommandDef::Kind::Action);
-  add({"sketch.copy", QObject::tr("Copy"), "copy", "MODIFY", [&c] { c.copySelection(); },
-       QKeySequence(QKeySequence::Copy), false,
+  add({"sketch.copy", QObject::tr("Copy"), "copy", [&c] { c.copySelection(); },
+       QKeySequence(QKeySequence::Copy),
        QObject::tr("Copies the selected sketch geometry with the constraints among it")},
       CommandDef::Kind::Action);
-  add({"sketch.paste", QObject::tr("Paste"), "paste", "MODIFY", [&c] { c.paste(); },
-       QKeySequence(QKeySequence::Paste), false,
+  add({"sketch.paste", QObject::tr("Paste"), "paste", [&c] { c.paste(); },
+       QKeySequence(QKeySequence::Paste),
        QObject::tr("Places copied sketch geometry where you click, in this or another sketch")},
       CommandDef::Kind::Action);
   c.setToolIcon(QObject::tr("Paste"), QStringLiteral("paste")); // the Paste tool's cursor
 
   // --- CONSTRAINTS
-  const QStringList pinned = {QStringLiteral("horizontal_vertical"), QStringLiteral("coincident"),
-                              QStringLiteral("tangent"),             QStringLiteral("equal"),
-                              QStringLiteral("parallel"),            QStringLiteral("perpendicular"),
-                              QStringLiteral("fix")};
   for (const QString& id : sketchConstraintCommands()) {
     if (!id.startsWith(QStringLiteral("sketch.constraint."))) {
       continue; // Equal Spacing: registered below
     }
     const QString type = id.mid(static_cast<int>(QStringLiteral("sketch.constraint.").size()));
-    CommandDef def = sketchCommand("", sketch::constraintName(type), "", "CONSTRAINTS", CommandDef::Kind::Tool);
+    CommandDef def = sketchCommand("", sketch::constraintName(type), "", CommandDef::Kind::Tool);
     def.id = id;
     def.icon = type == QStringLiteral("horizontal_vertical") ? QStringLiteral("horizontal-vertical")
                : type == QStringLiteral("symmetric")         ? QStringLiteral("symmetry")
                : type == QStringLiteral("smooth")            ? QStringLiteral("curvature")
                                                               : type;
-    def.pinned = pinned.contains(type);
     // Shift and a letter, in sketches only (mitcad#1229): the same command
     // as the palette's and the toolbar's button, its key in their tooltips,
     // Keyboard Shortcuts (Sketch) and the Keyboard and Mouse Overview.
@@ -1967,6 +1978,8 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   }
   // Equal spacing (mitcad#221).
   registerEqualSpacingCommands(registry, c);
+  // Auto Constrain (mitcad#2019).
+  registerAutoConstrainCommands(registry, c);
 }
 
 } // namespace mitcad

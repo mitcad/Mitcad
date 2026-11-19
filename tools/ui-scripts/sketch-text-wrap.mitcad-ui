@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: MIT
+# A sketch text drawn in a frame wraps to the frame's width (mitcad#2029,
+# GitHub mitcad/Mitcad#453): a frame 40 mm wide dragged with the Text tool
+# and a long text typed, its lines within the frame; Edit Text's Height,
+# a frame corner dragged, Wrap in Frame off and on, and a line break typed
+# in Edit Text's Text box with Enter, committed with Ctrl+Enter. The
+# wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation on the fixture's Sketch1: two framing points at (-30, -22)
+# and (30, 22).
+#
+# The words are 9 or 10 letters of the bundled Droid Sans, each 23 to
+# 26 mm wide at 5 mm (the Text tool's default) and 14 to 16 mm at 3 mm:
+# one to a line of 40 mm at 5 mm, two at 3 mm, one again at 3 mm in a
+# frame about 22 mm wide. Run by tools/ui-sketch-text-wrap-test.sh (Linux),
+# tools/ui-windows-sketch-text-wrap-test.ps1 (Windows) and
+# tools/ui-macos-sketch-text-wrap-test.sh (macOS).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. A frame from (-20, 15) to (20, -5) dragged with the Text tool and a
+# long text typed: four lines, all within the frame's 40 mm.
+mark
+command sketch.text
+sketch-pointer press -20 15
+sketch-pointer move -10 10
+sketch-pointer move 10 0
+sketch-pointer move 20 -5
+sketch-pointer release 20 -5
+type parametric modelling component assemblies
+key Return
+wait-log '^Added text t[0-9]+ "parametric modelling component assemblies" in a frame from '
+expect-no-log 'not added: '
+key Escape
+key Escape
+wait-idle
+expect-sketch-text '^parametric modelling component assemblies$' 4
+
+# 2. Edit Text: Wrap in Frame shown for the framed text; the height 3 mm
+# rewraps it into two lines.
+mark
+sketch-click-text '^parametric'
+expect-selection 1 0
+mark
+command sketch.edit_text
+wait-log '^Command Edit Text started'
+wait-log '^Panel Edit Text input wrap at [0-9]+,[0-9]+$'
+expect-input-text content '^parametric modelling component assemblies$'
+mark
+type-in '^Panel Edit Text input height at ' '3'
+wait-log '^Preview Edit Text: ok'
+key Return
+wait-log '^Added Edit Text'
+wait-idle
+expect-sketch-text '^parametric modelling component assemblies$' 2
+
+# 3. The frame's lower right corner dragged from (20, -5) to (2, -5): the
+# text rewraps within the narrower frame, a word to a line.
+key Escape
+wait-idle
+mark
+sketch-drag 20 -5 2 -5
+wait-log '^Dragged p[0-9]+ to '
+wait-idle
+expect-sketch-text '^parametric modelling component assemblies$' 4
+
+# 4. Wrap in Frame off: one line, past the frame.
+mark
+sketch-click-text '^parametric'
+expect-selection 1 0
+mark
+command sketch.edit_text
+wait-log '^Command Edit Text started'
+wait-log '^Panel Edit Text input wrap at [0-9]+,[0-9]+$'
+mark
+click-logged '^Panel Edit Text input wrap at '
+wait-log '^Preview Edit Text: ok'
+button '^OK$'
+wait-log '^Added Edit Text'
+expect-log '^Edited text t[0-9]+: "parametric modelling component assemblies", Droid Sans, left$'
+wait-idle
+expect-sketch-text '^parametric modelling component assemblies$' 1
+
+# 5. Wrap in Frame on again and two lines typed in the Text box: Enter
+# starts the second line, Ctrl+Enter is OK.
+mark
+sketch-click-text '^parametric'
+expect-selection 1 0
+mark
+command sketch.edit_text
+wait-log '^Command Edit Text started'
+wait-log '^Panel Edit Text input wrap at [0-9]+,[0-9]+$'
+mark
+click-logged '^Panel Edit Text input wrap at '
+wait-log '^Preview Edit Text: ok'
+mark
+type-in '^Panel Edit Text input content at ' 'Two'
+key Return
+type lines
+expect-input-text content '^Two\nlines$'
+expect-no-log '^Added Edit Text'
+wait-log '^Preview Edit Text: ok'
+key Ctrl+Return
+wait-log '^Panel Edit Text: Ctrl\+Enter in a text box is OK'
+wait-log '^Added Edit Text'
+expect-log '^Edited text t[0-9]+: "Two\\nlines", Droid Sans, left, wrapped$'
+expect-no-log '^Sketch finished'
+wait-idle
+expect-sketch-text '^Two\nlines$' 2
+screenshot '${MITCAD_TEST_WORK}/sketch-text-wrap.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -17,6 +17,7 @@
 #include <QPalette>
 #include <QString>
 
+#include "framework/BoostButton.hpp"
 #include "framework/NoticeLevel.hpp"
 #include "framework/Theme.hpp"
 
@@ -61,7 +62,7 @@ void tableTests() {
     CHECK_ROLE(names.insert(name).second, roles[i]);
     CHECK_ROLE(themeColor(roles[i], false).isValid() && themeColor(roles[i], true).isValid(), roles[i]);
   }
-  CHECK(roles.back() == ColorRole::CamGouge);
+  CHECK(roles.back() == ColorRole::Support);
   // A palette's lightness picks the value; the 3D view's by its background.
   QPalette night;
   night.setColor(QPalette::Window, QColor(0x14, 0x15, 0x18));
@@ -145,6 +146,20 @@ QColor over(const QColor& top, const QColor& below) {
                           a * top.blueF() + (1.0f - a) * below.blueF());
 }
 
+// The Boost development pill (mitcad#1990): its label in the window's text
+// reads at least 4.5:1 also under the pointer's tint of Support, pressed
+// (the strongest), on every surface, light and dark.
+void boostTintTests() {
+  for (const bool dark : {false, true}) {
+    QColor tint = themeColor(ColorRole::Support, dark);
+    tint.setAlpha(kBoostPressedTint);
+    CHECK(kBoostHoverTint < kBoostPressedTint);
+    for (const QColor& surface : surfaces(dark)) {
+      CHECK(contrastRatio(themeColor(ColorRole::Text, dark), over(tint, surface)) >= 4.5);
+    }
+  }
+}
+
 // A hidden Browser row's name (mitcad#1101): TextHidden at least 4.5:1 on
 // every card a row is drawn on, Docked and Floating, light and dark, and
 // still dimmer than a shown row's name (Text): less contrast on each card,
@@ -215,6 +230,7 @@ void reservedHueTests() {
       ColorRole::PrintGap,
       ColorRole::SearchMatch, ColorRole::JointA,    ColorRole::JointB,     ColorRole::JointOrigin,
       ColorRole::CamStock,    ColorRole::CamLeftThin, ColorRole::CamLeftThick, ColorRole::CamGouge,
+      ColorRole::Support,
   };
   for (const ColorRole role : domain) {
     for (const bool dark : {false, true}) {
@@ -250,6 +266,7 @@ int colorRoleTests() {
   tableTests();
   contrastTests();
   hiddenRowTests();
+  boostTintTests();
   reservedHueTests();
   return failures;
 }

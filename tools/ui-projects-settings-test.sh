@@ -6,9 +6,9 @@
 # UI (mitcad#151, #152, #153, #173), without a network:
 #   1. A fresh profile without projects starts with the panel hidden; with
 #      projects configured (no choice made yet) it starts hidden too
-#      (mitcad#1020: File > Open from Project does its job); shown with
-#      View > Projects in the Floating card, it stays shown at the next
-#      start, in the Docked dock.
+#      (mitcad#1020: File > Open from Project does its job), in Floating
+#      and in Docked: each layout keeps a choice of its own (mitcad#1990).
+#      Shown with View > Projects, it stays shown at the next start.
 #   2. A flat tree: no row above a project, the projects sorted by the name
 #      shown. A Cloud project's row shows its repository's address
 #      (github.com/owner/repository), a Local one the folder's name. A
@@ -109,7 +109,8 @@ echo "ok   projects made"
 echo "--- Floating: hidden by default, shown in its card; a flat tree; a double-click opens the settings"
 ui_start_app --chrome=floating
 UI_MARK=0
-ui_expect_log "Projects panel at the start: hidden (no choice yet, projects configured)" \
+# The Floating top bar's layout keeps a choice of its own (mitcad#1990).
+ui_expect_log "Projects panel at the start: hidden (no choice yet in this layout)" \
   "hidden by default, also with projects configured"
 ui_mark
 ui_step "projects panel (search)"        ui_command "Projects"
@@ -158,10 +159,16 @@ grep -q '"Workshop (team)"' "$GRIPPER/.mitcad/local/name.json" || ui_fail "the d
 echo "ok   the folder, the repository and the versions are untouched"
 quit
 
-echo "--- Docked: shown as chosen; the display name stays; the settings button"
+echo "--- Docked: no choice of its own yet; the display name stays; the settings button"
 ui_start_app
 UI_MARK=0
-ui_expect_log "Projects panel at the start: shown (as chosen)" "shown at the next start, as the user chose"
+# Floating's choice is not Docked's (mitcad#1990): hidden with projects
+# configured until shown here.
+ui_expect_log "Projects panel at the start: hidden (no choice yet, projects configured)" \
+  "hidden in Docked, with projects configured"
+ui_mark
+ui_step "projects panel (search)"        ui_command "Projects"
+ui_expect_new "Projects panel: shown at the next start" "shown in Docked, the choice remembered"
 ui_expect_log "Projects names: Shop = Shop | gripper-work = Workshop (team) (set)" \
   "the display name after a restart" 20
 ui_expect_log "Projects top rows: Shop | gripper-work" "only the projects at the top" 20

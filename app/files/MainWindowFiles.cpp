@@ -320,8 +320,6 @@ void MainWindow::registerFileCommands() {
     d.tooltip = tooltip;
     d.kind = CommandDef::Kind::Action;
     d.mode = CommandDef::Mode::Model;
-    d.tab = QStringLiteral("SOLID");
-    d.group = QStringLiteral("INSERT");
     d.run = std::move(run);
     return d;
   };
@@ -332,22 +330,18 @@ void MainWindow::registerFileCommands() {
   newWindow.shortcut = QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N);
   newWindow.mode = CommandDef::Mode::Any;
   newWindow.duringCommands = true;
-  newWindow.tab.clear();
   m_registry->add(newWindow);
   CommandDef mesh = def("insert.mesh", tr("Insert Mesh"), "insert-mesh",
                         tr("Brings an STL or OBJ mesh in as a mesh body"), [this] { insertMesh(); });
-  mesh.pinned = true;
   mesh.keywords = {QStringLiteral("stl"), QStringLiteral("obj"), QStringLiteral("mesh")};
   m_registry->add(mesh);
   CommandDef dxf = def("insert.dxf", tr("Insert DXF"), "insert-dxf",
                        tr("Brings a DXF drawing into a new sketch on a plane"), [this] { insertDxf(); });
-  dxf.pinned = true;
   dxf.keywords = {QStringLiteral("dxf"), QStringLiteral("drawing"), QStringLiteral("2d")};
   m_registry->add(dxf);
   CommandDef dxfSketch = dxf;
   dxfSketch.id = QStringLiteral("sketch.insert_dxf");
   dxfSketch.tooltip = tr("Brings a DXF drawing into the sketch");
-  dxfSketch.tab = QStringLiteral("SKETCH");
   dxfSketch.mode = CommandDef::Mode::Sketch;
   m_registry->add(dxfSketch);
   // SVG drawings (mitcad#473).
@@ -360,16 +354,12 @@ void MainWindow::registerFileCommands() {
   CommandDef svgSketch = svg;
   svgSketch.id = QStringLiteral("sketch.insert_svg");
   svgSketch.tooltip = tr("Brings an SVG drawing into the sketch");
-  svgSketch.tab = QStringLiteral("SKETCH");
   svgSketch.mode = CommandDef::Mode::Sketch;
   m_registry->add(svgSketch);
   CommandDef component = def("insert.component", tr("Insert Component"), "insert-component",
                              tr("Places another MitCad design here, linked or as a copy"),
                              [this] { insertComponent(); });
-  component.group = QStringLiteral("ASSEMBLE");
   // The ASSEMBLE menu's last section, with Insert from Library (mitcad#1778).
-  component.section = QStringLiteral("insert");
-  component.pinned = true;
   component.keywords = {QStringLiteral("assembly"), QStringLiteral("external"), QStringLiteral("mitcad")};
   m_registry->add(component);
   CommandDef openDesign = def("insert.open_design", tr("From an Open Design…"), "insert-component",
@@ -394,7 +384,6 @@ void MainWindow::registerFileCommands() {
   CommandDef exportDef = def("file.export", tr("Export…"), "export",
                              tr("Bodies to STEP, IGES, STL, OBJ or BRep; a sketch to DXF"),
                              [this] { exportFile(); });
-  exportDef.tab.clear(); // the File menu
   exportDef.mode = CommandDef::Mode::Any;
   exportDef.keywords = {QStringLiteral("step"), QStringLiteral("stl"), QStringLiteral("dxf"),
                         QStringLiteral("save as"), QStringLiteral("3mf"), QStringLiteral("usdz"),
@@ -405,7 +394,6 @@ void MainWindow::registerFileCommands() {
   CommandDef drawingDef = def("file.export_drawing", tr("Export Drawing…"), "export",
                               tr("The bodies as a drawing with views, sizes and a hole table: PDF, SVG, DXF or DWG"),
                               [this] { exportDrawing(); });
-  drawingDef.tab.clear(); // the File menu
   drawingDef.mode = CommandDef::Mode::Any;
   drawingDef.keywords = {QStringLiteral("drawing"), QStringLiteral("pdf"), QStringLiteral("svg"),
                          QStringLiteral("dxf"), QStringLiteral("dwg"), QStringLiteral("print"),
@@ -419,7 +407,6 @@ void MainWindow::registerFileCommands() {
   CommandDef createDrawingDef = def("file.create_drawing", tr("Create Drawing…"), "drawing",
                                     tr("Adds a drawing of the design and opens its sheet"),
                                     [this] { createDrawing(QStringLiteral("C0")); });
-  createDrawingDef.tab.clear(); // the File menu
   createDrawingDef.keywords = {QStringLiteral("drawing"), QStringLiteral("sheet"), QStringLiteral("blueprint"),
                                QStringLiteral("2d"), QStringLiteral("views")};
   m_registry->add(createDrawingDef);
@@ -437,7 +424,6 @@ void MainWindow::registerFileCommands() {
   CommandDef recover = def("file.recover", tr("Recover Designs…"), "recover",
                            tr("Restores changes that were not saved when MitCad last ended without closing"),
                            [this] { recoverDocuments(false); });
-  recover.tab.clear(); // the File menu
   recover.mode = CommandDef::Mode::Any;
   recover.keywords = {QStringLiteral("autosave"), QStringLiteral("crash"), QStringLiteral("restore"),
                       QStringLiteral("unsaved"), QStringLiteral("backup")};
@@ -449,7 +435,6 @@ void MainWindow::registerFileCommands() {
       def("file.design_properties", tr("Design Properties…"), "properties",
           tr("Edits the design's summary and shows when and by whom it was saved"),
           [this] { m_controller->openDesignProperties(); });
-  designProperties.tab.clear(); // the File menu
   // Its statistics read in any window and mode (mitcad#1149): read-only,
   // during a command or a sketch the summary shows without editing.
   designProperties.mode = CommandDef::Mode::Any;
@@ -463,82 +448,111 @@ void MainWindow::registerFileCommands() {
                                QStringLiteral("document properties")};
   designProperties.enabled = [this] { return m_controller != nullptr; };
   m_registry->add(designProperties);
+  // Manage › Design and Manage › Rules (mitcad#1982). Recompute All: every
+  // feature evaluated again from the start, without the cached results
+  // (`recompute` with `all`), as a job with its progress and Cancel; what
+  // it measured anew is one undo step, a failed feature said in words as
+  // after every command (reportRecompute).
+  CommandDef recomputeAll =
+      def("manage.recompute_all", tr("Recompute All"), "recompute-all",
+          tr("Computes every feature of the design again from the start"), [this] {
+            QJsonObject result;
+            const bool ran = runCommand({{QStringLiteral("cmd"), QStringLiteral("recompute")},
+                                         {QStringLiteral("all"), true}},
+                                        &result);
+            refreshScene();
+            if (ran) {
+              qInfo().noquote() << QStringLiteral("Recompute All: %1 features, %2")
+                                       .arg(result.value(QStringLiteral("recomputed")).toInt())
+                                       .arg(result.value(QStringLiteral("changed")).toBool()
+                                                ? QStringLiteral("one undo step")
+                                                : QStringLiteral("no undo step"));
+            }
+          });
+  recomputeAll.keywords = {QStringLiteral("rebuild"), QStringLiteral("regenerate"), QStringLiteral("update"),
+                           QStringLiteral("refresh"), QStringLiteral("compute")};
+  recomputeAll.enabled = [this] { return m_controller != nullptr && !windowReadOnly(); };
+  m_registry->add(recomputeAll);
+  // Units…: the design's length unit, as the browser's Units row offers it
+  // (Change Active Units).
+  CommandDef units = def("manage.units", tr("Units…"), "units", tr("Sets the design's length unit"),
+                         [this] { m_controller->changeUnits(); });
+  units.keywords = {QStringLiteral("change active units"), QStringLiteral("length unit"),
+                    QStringLiteral("millimeters"), QStringLiteral("inches"), QStringLiteral("metric"),
+                    QStringLiteral("imperial")};
+  units.enabled = [this] { return m_controller != nullptr; };
+  m_registry->add(units);
+  // Plastic Rules: Plastic Feature opened on its Plastic Rule type.
+  CommandDef plasticRules =
+      def("manage.plastic_rules", tr("Plastic Rules"), "plastic-rules",
+          tr("Adds a plastic rule: the wall, draft and clearance plastic features use"), [this] {
+            startCommand(QStringLiteral("solid.plastic"), Selection(), nullptr);
+            if (chooseInCommand(QStringLiteral("solid.plastic"), QStringLiteral("type"),
+                                QStringLiteral("plastic_rule"))) {
+              qInfo().noquote() << QStringLiteral("Plastic Rules: Plastic Feature on its Plastic Rule type");
+            }
+          });
+  plasticRules.keywords = {QStringLiteral("plastic rule"), QStringLiteral("molded"), QStringLiteral("wall thickness"),
+                           QStringLiteral("draft"), QStringLiteral("clearance")};
+  plasticRules.enabled = [this] {
+    const CommandDef* plastic = m_registry->find(QStringLiteral("solid.plastic"));
+    return plastic != nullptr && isAvailable(*plastic);
+  };
+  m_registry->add(plasticRules);
 }
 
-void MainWindow::createFileMenu() {
+void MainWindow::prepareFileMenuActions() {
   // mitcad#175: the document commands, saving and versions, the Project
-  // submenu, import and export, Print (mitcad#1089), recovery, Exit. Send to Slicer and Insert
-  // Component are on the ribbon (the Make tab, ASSEMBLE), Render Image too
-  // (RENDER) and in View > Visual Style.
-  QMenu* file = menuBar()->addMenu(tr("&File"));
-  file->setObjectName(QStringLiteral("fileMenu"));
-  // Every entry but Open Recent is a registry command (Open, Close, Save,
-  // Save As and Exit since mitcad#1090, files/FileCommands.cpp): its id,
-  // key, tooltip and search, and the quick-access group can show it.
-  const auto command = [this](QMenu* menu, const char* id, const QString& text) {
-    QAction* action = m_registry->action(QString::fromLatin1(id));
-    action->setText(text);
-    menu->addAction(action);
-  };
-  // New and New Design are one command (Ctrl+N): a design of the current
-  // project, named in the Projects panel (mitcad#145), else an untitled
-  // one.
-  command(file, "file.new_design", tr("&New Design…"));
-  command(file, "file.open", tr("&Open…"));
-  // A design of a project, its folders browsed or its name searched
-  // (mitcad#530).
-  command(file, "file.open_from_project", tr("Open &from Project…"));
+  // submenu, import and export, Print (mitcad#1089), recovery, Exit; where
+  // each is, is the command layout's File menu (mitcad#1951). Their texts
+  // with the menu's underlined letters, set here on the shared actions.
+  const std::pair<const char*, QString> texts[] = {
+      {"file.new_design", tr("&New Design…")},
+      {"file.open", tr("&Open…")},
+      {"file.open_from_project", tr("Open &from Project…")},
+      {"file.open_read_only", tr("Open Rea&d-Only…")},
+      {"file.close", tr("&Close")},
+      {"file.save", tr("&Save")},
+      {"file.save_as", tr("Save &As…")},
+      {"file.save_to_project", tr("Save to Pro&ject…")},
+      {"file.save_version", tr("Save &with Description…")},
+      {"file.version_history", tr("Version &History…")},
+      {"file.design_properties", tr("Design Proper&ties…")},
+      {"file.new_project", tr("&New Project…")},
+      {"file.open_project", tr("&Open Project…")},
+      {"file.open_remote", tr("Open from C&loud…")},
+      {"file.sync", tr("&Sync")},
+      {"file.check_remote", tr("&Check for Newer Versions")},
+      {"file.remote_browser", tr("Open in &Browser")},
+      {"file.project_settings", tr("Project Se&ttings…")},
+      {"file.web_viewer", tr("&Web Viewer…")},
+      {"file.update_web_viewer", tr("&Update Web Viewer")},
+      {"file.import", tr("&Import…")},
+      {"file.export", tr("&Export…")},
+      {"file.create_drawing", tr("Create Dra&wing…")},
+      {"file.export_drawing", tr("Export &Drawing…")},
+      {"file.print", tr("Prin&t…")},
+      {"file.recover", tr("Recover Desi&gns…")},
+      {"file.exit", tr("E&xit")}};
+  for (const auto& [id, text] : texts) {
+    if (QAction* action = m_registry->action(QString::fromLatin1(id))) {
+      action->setText(text);
+    }
+  }
+  // QuitRole: "Quit MitCad" (Cmd+Q) in the application menu on macOS.
+  if (QAction* exit = m_registry->action(QStringLiteral("file.exit"))) {
+    exit->setMenuRole(QAction::QuitRole);
+  }
+}
+
+void MainWindow::addRecentMenu(QMenu* file) {
+  // Open Recent (the layout's extra "recent"): the recent designs.
   m_recentMenu = file->addMenu(tr("Open &Recent"));
   connect(m_recentMenu, &QMenu::aboutToShow, this, &MainWindow::updateRecentMenu);
   updateRecentMenu();
-  command(file, "file.open_read_only", tr("Open Rea&d-Only…"));
-  command(file, "file.close", tr("&Close"));
-  file->addSeparator();
-  command(file, "file.save", tr("&Save"));
-  command(file, "file.save_as", tr("Save &As…"));
-  // Save As into a project, a new one too (mitcad#503; File > Project >
-  // Move to a Project before).
-  command(file, "file.save_to_project", tr("Save to Pro&ject…"));
-  // Versions (P12d): Save records one in a project; Save with Description
-  // one with a description written; Version History (P12e) lists them.
-  command(file, "file.save_version", tr("Save &with Description…"));
-  command(file, "file.version_history", tr("Version &History…"));
-  // The design's summary and statistics (mitcad#1088).
-  command(file, "file.design_properties", tr("Design Proper&ties…"));
-  file->addSeparator();
-  // Local and Cloud projects (P12d, P12 remote, mitcad#89): made or opened;
-  // the current one's versions shared; its settings.
-  QMenu* project = file->addMenu(tr("&Project"));
-  project->setObjectName(QStringLiteral("fileProjectMenu"));
-  command(project, "file.new_project", tr("&New Project…"));
-  command(project, "file.open_project", tr("&Open Project…"));
-  command(project, "file.open_remote", tr("Open from C&loud…"));
-  project->addSeparator();
-  command(project, "file.sync", tr("&Sync"));
-  command(project, "file.check_remote", tr("&Check for Newer Versions"));
-  command(project, "file.remote_browser", tr("Open in &Browser"));
-  project->addSeparator();
-  command(project, "file.project_settings", tr("Project Se&ttings…"));
-  // The project's web viewer (mitcad#423).
-  project->addSeparator();
-  command(project, "file.web_viewer", tr("&Web Viewer…"));
-  command(project, "file.update_web_viewer", tr("&Update Web Viewer"));
-  file->addSeparator();
-  command(file, "file.import", tr("&Import…"));
-  command(file, "file.export", tr("&Export…"));
-  command(file, "file.create_drawing", tr("Create Dra&wing…"));
-  command(file, "file.export_drawing", tr("Export &Drawing…"));
-  file->addSeparator();
-  command(file, "file.print", tr("Prin&t…"));
-  file->addSeparator();
-  command(file, "file.recover", tr("Recover Desi&gns…"));
-#ifndef Q_OS_MACOS
-  // macOS moves Quit to the application menu.
-  file->addSeparator();
-#endif
-  // QuitRole: "Quit MitCad" (Cmd+Q) in the application menu on macOS.
-  command(file, "file.exit", tr("E&xit"));
-  m_registry->action(QStringLiteral("file.exit"))->setMenuRole(QAction::QuitRole);
+}
+
+void MainWindow::logFileMenu(QMenu* file) {
   // For the UI tests: the entries as the menu opens.
   connect(file, &QMenu::aboutToShow, this, [this, file] {
     qDebug().noquote() << QStringLiteral("File menu: %1").arg(menuEntries(file, m_recentMenu));

@@ -23,12 +23,12 @@ use mitcad_model::transform::Transform;
 use mitcad_model_tests_support::test_library::*;
 
 /// The leg's bottom face's centre of area.
-const CENTRE: [f64; 3] = [120.0, 230.0, 0.0];
+pub(crate) const CENTRE: [f64; 3] = [120.0, 230.0, 0.0];
 
 /// The leg: a box from (100, 200) on the XY plane, 40 along X, 60 along
 /// Y, 500 high; its bottom face as `at.geometry` takes it, with the
 /// face's plane (out of the material: -Z) and its four straight edges.
-fn leg(doc: &mut Document<MockKernel>) -> Value {
+pub(crate) fn leg(doc: &mut Document<MockKernel>) -> Value {
     doc.kernel().box_faces.set(true);
     let added = command(
         doc,

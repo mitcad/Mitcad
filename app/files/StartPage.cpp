@@ -66,13 +66,13 @@ namespace {
 // The settings key of the compact list's choice.
 const QString kCompactKey = QStringLiteral("start/compactList");
 
-constexpr int kRadius = 10;
+constexpr int kRadius = kCardRadius; // every card's (mitcad#1990)
 // The rounded backdrop (mitcad#1439): as far from the view's edges as the
 // floating cards keep, and as far from a band over the view's bottom as
 // they keep from each other; the content keeps kBackdropPadding inside it.
 constexpr int kBackdropInset = FloatingLayout::kMargin;
 constexpr int kBackdropGap = FloatingLayout::kGap;
-constexpr int kBackdropPadding = 8;
+constexpr int kBackdropPadding = start::kContentPadding;
 constexpr int kPreviewWidth = 168;
 constexpr int kPreviewHeight = 112;
 constexpr int kCompactPreviewWidth = 54;
@@ -141,7 +141,7 @@ protected:
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(QPen(roleColor(ColorRole::Line, this), 1));
     painter.setBrush(roleColor(ColorRole::Surface, this));
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), kRadius + 2, kRadius + 2);
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), kRadius, kRadius);
   }
 };
 
@@ -442,13 +442,13 @@ protected:
                                     : QRect(10, 10, kPreviewWidth, height() - 20);
     painter.setPen(Qt::NoPen);
     painter.setBrush(roleColor(ColorRole::Surface, this));
-    painter.drawRoundedRect(QRectF(picture), 6, 6);
+    painter.drawRoundedRect(QRectF(picture), kControlRadius, kControlRadius);
     if (!m_preview.isNull()) {
       const QPixmap scaled =
           m_preview.scaled(picture.size() * devicePixelRatioF(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
       const QSizeF drawn = QSizeF(scaled.size()) / devicePixelRatioF();
       QPainterPath clip;
-      clip.addRoundedRect(QRectF(picture), 6, 6);
+      clip.addRoundedRect(QRectF(picture), kControlRadius, kControlRadius);
       painter.save();
       painter.setClipPath(clip);
       painter.drawPixmap(QRectF(QPointF(picture.center().x() - drawn.width() / 2.0 + 0.5,
@@ -578,16 +578,16 @@ protected:
       QColor tint = accentColor(palette());
       tint.setAlpha(isDarkPalette(palette()) ? 80 : 46);
       painter.setBrush(tint);
-      painter.drawRoundedRect(box, 8, 8);
+      painter.drawRoundedRect(box, kControlRadius, kControlRadius);
     }
     if ((underMouse() && isEnabled()) || isDown()) {
       painter.setBrush(roleColor(ColorRole::HoverFill, this));
-      painter.drawRoundedRect(box, 8, 8);
+      painter.drawRoundedRect(box, kControlRadius, kControlRadius);
     }
     if (hasFocus()) {
       painter.setPen(QPen(accentColor(palette()), 1));
       painter.setBrush(Qt::NoBrush);
-      painter.drawRoundedRect(box, 8, 8);
+      painter.drawRoundedRect(box, kControlRadius, kControlRadius);
     }
     const int glyph = 18;
     const QRect iconBox(10, (height() - glyph) / 2, glyph, glyph);
@@ -660,11 +660,16 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   // A window narrower than the content scrolls sideways: no control is
   // cut off out of reach.
   m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  m_scroll->viewport()->setAutoFillBackground(false);
   auto* content = new QWidget;
   content->setObjectName(QStringLiteral("startPageContent"));
-  content->setAutoFillBackground(false);
   m_scroll->setWidget(content);
+  // The backdrop's rounded surface shows through the scroll area: no page
+  // of its own, whose square corners would show inside the backdrop's
+  // rounded ones (mitcad#1990). After setWidget, which fills the content's
+  // background.
+  m_scroll->setAutoFillBackground(false);
+  m_scroll->viewport()->setAutoFillBackground(false);
+  content->setAutoFillBackground(false);
   auto* centred = new QHBoxLayout(content);
   centred->setContentsMargins(0, 0, 0, 0);
   auto* body = new QWidget;
@@ -789,10 +794,9 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   rowColumn->addSpacing(12);
   auto* projectsHeading = new QLabel(tr("Projects"));
   projectsHeading->setObjectName(QStringLiteral("startPageProjectsTitle"));
-  QFont headingFont = scaledFont(projectsHeading, 0.85, true);
-  headingFont.setCapitalization(QFont::AllUppercase);
-  headingFont.setLetterSpacing(QFont::PercentageSpacing, 108);
-  projectsHeading->setFont(headingFont);
+  // A section heading in sentence case, its own text (UI conventions,
+  // Text style): small, DemiBold, dim; never forced into capitals.
+  projectsHeading->setFont(scaledFont(projectsHeading, 0.85, true));
   projectsHeading->setContentsMargins(10, 0, 0, 4);
   setRoleStyleSheet(projectsHeading, ColorRole::TextSecondary);
   rowColumn->addWidget(projectsHeading);
@@ -1639,16 +1643,18 @@ bool StartPage::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void StartPage::paintEvent(QPaintEvent*) {
-  // A rounded surface with the floating cards' radius (GlassCard's, not a
-  // capsule's) inset from the view's edges (mitcad#1439), the view's
+  // A rounded surface with every card's radius on all four corners
+  // (kCardRadius, mitcad#1990) inset from the view's edges (mitcad#1439), the view's
   // background around it: the page paints all of itself, so nothing the GL
   // view under it drew last shows at its corners, in either layout.
   QPainter painter(this);
   start::Backdrop backdrop;
-  backdrop.fill = roleColor(ColorRole::Window, this);
+  // The cards' surface (cardFillColor's, opaque): the panels and the
+  // content are painted on it (mitcad#1990).
+  backdrop.fill = palette().color(QPalette::Window);
   backdrop.border = roleColor(ColorRole::Line, this);
   m_viewer->backgroundColors(backdrop.viewTop, backdrop.viewBottom);
-  backdrop.radius = GlassCard::kRadius;
+  backdrop.radius = start::kBackdropRadius;
   start::paintBackdrop(painter, size(),
                        start::backdropRect(size(), kBackdropInset, m_backdropTop, m_backdropBelow, kBackdropGap),
                        backdrop);

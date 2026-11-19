@@ -1,0 +1,160 @@
+# SPDX-License-Identifier: MIT
+# Mesh tools for reverse engineering (mitcad#1871, app/COMMANDS.md "Mesh
+# tools") on the design mesh-tools.json makes: the mesh body cyl (F2.b0,
+# an STL file's cylinder 30 across, 12 high) and Plane1 (F4) 6 above XY.
+#   1. Mesh Section: cyl and Plane1, three sections 2 mm apart: the
+#      preview, OK; Sketch1 to Sketch3 (F5 to F7) in the timeline.
+#   2. Repair Mesh: cyl with the defaults: a new closed mesh body (F8.b0);
+#      undone.
+#   3. Decimate Mesh: cyl, keep 50 percent: a new closed mesh body; undone.
+#   4. Remove Region: seen from the front, a lasso of four clicks round a
+#      band across the middle of cyl: the side's triangles there that face
+#      the view go, a new mesh body with one hole; undone.
+#   5. Segment Mesh: cyl at 45 degrees: its side and its two ends, three
+#      mesh bodies (F8.b0 to F8.b2), an end an open disk (one hole).
+#   6. Fit Surface: the side region (F8.b0) picked in the view, Auto: a
+#      cylinder, a new surface body; FitSurface1 in the timeline.
+# Run by tools/ui-mesh-tools-test.sh (Linux),
+# tools/ui-windows-mesh-tools-test.ps1 (Windows) and
+# tools/ui-macos-mesh-tools-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle 30
+
+# 1. Mesh Section: three sketches of sections.
+mark
+command solid.mesh_section
+wait-log '^Command Mesh Section started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/cyl at '
+wait-log '^Mesh Section Mesh Body: 1 body [[]body F2[.]b0[]]' 30
+click-logged '^Panel Mesh Section input plane at '
+click-logged '^Datum F4 at '
+wait-log '^Mesh Section Plane: 1 plane [[]plane F4[]]' 30
+type-in '^Panel Mesh Section input count at ' '3'
+type-in '^Panel Mesh Section input spacing at ' '2 mm'
+wait-log '^Preview Mesh Section: ok' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/mesh-section-preview.png'
+mark
+key Return
+wait-log '^Added mesh section of F2[.]b0, 3 section' 60
+wait-idle 60
+expect-ever '^Timeline Sketch3 at ' 30
+
+# 2. Repair Mesh: a new closed mesh body.
+mark
+command solid.mesh_repair
+wait-log '^Command Repair Mesh started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/cyl at '
+wait-log '^Repair Mesh Mesh Body: 1 body [[]body F2[.]b0[]]' 30
+wait-log '^Preview Repair Mesh: ok' 60
+wait-idle 60
+mark
+key Return
+wait-log '^Added mesh repair of F2[.]b0' 60
+wait-idle 60
+capture-model-number repaired '{"query":"mesh_stats","body":"F8.b0"}' open_edges
+expect-near ${repaired} 0 0 0
+expect-ever '^Timeline Repair1 at ' 30
+mark
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-idle 30
+
+# 3. Decimate Mesh: half the triangles, still closed.
+mark
+command solid.mesh_decimate
+wait-log '^Command Decimate Mesh started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/cyl at '
+wait-log '^Decimate Mesh Mesh Body: 1 body [[]body F2[.]b0[]]' 30
+wait-log '^Preview Decimate Mesh: ok' 60
+wait-idle 60
+mark
+key Return
+wait-log '^Added mesh decimate of F2[.]b0, keep 50 percent' 60
+wait-idle 60
+capture-model-number decimated '{"query":"mesh_stats","body":"F8.b0"}' open_edges
+expect-near ${decimated} 0 0 0
+mark
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-idle 30
+
+# 4. Remove Region: a lasso round a band across the front of the mesh.
+command view.front
+wait-idle 30
+command view.fit
+wait-idle 30
+mark
+command solid.mesh_remove
+wait-log '^Command Remove Region started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/cyl at '
+wait-log '^Remove Region Mesh Body: 1 body [[]body F2[.]b0[]]' 30
+wait-idle 30
+view-pointer press 40 20 left
+view-pointer release 40 20 left
+wait-log '^Remove Region lasso: 1 points' 30
+view-pointer press 60 20 left
+view-pointer release 60 20 left
+wait-log '^Remove Region lasso: 2 points' 30
+view-pointer press 60 80 left
+view-pointer release 60 80 left
+wait-log '^Remove Region lasso: 3 points' 30
+view-pointer press 40 80 left
+view-pointer release 40 80 left
+wait-log '^Remove Region lasso: 4 points' 30
+wait-log '^Preview Remove Region: ok' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/mesh-remove-preview.png'
+mark
+key Return
+wait-log '^Added mesh remove of F2[.]b0 by a lasso of 4 points' 60
+wait-idle 60
+capture-model-number holes '{"query":"mesh_stats","body":"F8.b0"}' holes
+expect-near ${holes} 1 0 0
+mark
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-idle 30
+command view.fit
+wait-idle 30
+
+# 5. Segment Mesh: the side and the two ends.
+mark
+command solid.mesh_segment
+wait-log '^Command Segment Mesh started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/cyl at '
+wait-log '^Segment Mesh Mesh Body: 1 body [[]body F2[.]b0[]]' 30
+type-in '^Panel Segment Mesh input angle at ' '45 deg'
+wait-log '^Preview Segment Mesh: ok' 60
+wait-idle 60
+mark
+key Return
+wait-log '^Added mesh segment of F2[.]b0' 60
+wait-idle 60
+capture-model-number ends '{"query":"mesh_stats","body":"F8.b2"}' holes
+expect-near ${ends} 1 0 0
+expect-ever '^Timeline Segment1 at ' 30
+
+# 6. Fit Surface: the side region, a cylinder.
+mark
+command solid.mesh_fit_surface
+wait-log '^Command Fit Surface started' 30
+wait-idle
+click-pick 'face F8[.]b0/'
+wait-log '^Fit Surface Mesh Body: 1 body [[]body F8[.]b0[]]' 30
+wait-log '^Preview Fit Surface: ok' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/mesh-fit-preview.png'
+mark
+key Return
+wait-log '^Added mesh fit surface [(]Auto[)] of F8[.]b0' 60
+wait-idle 60
+expect-ever '^Timeline FitSurface1 at ' 30
+expect-never 'Recompute failed|The document was read while a job computes it|TestDriver: FAIL'

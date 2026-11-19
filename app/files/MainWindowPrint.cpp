@@ -492,9 +492,6 @@ CommandDef MainWindow::printersCommand() {
   // libraries.
   def.mode = CommandDef::Mode::Model;
   // The Make tab's 3D Print group (mitcad#1049).
-  def.tab = QStringLiteral("MAKE");
-  def.group = QStringLiteral("3D PRINT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("printer"), QStringLiteral("print"),   QStringLiteral("slicer"),
                   QStringLiteral("profile"), QStringLiteral("3mf"),     QStringLiteral("library"),
                   QStringLiteral("nozzle"),  QStringLiteral("my library")};
@@ -512,9 +509,6 @@ CommandDef MainWindow::processesCommand() {
   def.tooltip = tr("Creates, edits, imports and deletes print processes");
   def.kind = CommandDef::Kind::Action;
   def.mode = CommandDef::Mode::Model;
-  def.tab = QStringLiteral("MAKE");
-  def.group = QStringLiteral("3D PRINT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("process"), QStringLiteral("print"),        QStringLiteral("slicer"),
                   QStringLiteral("profile"), QStringLiteral("layer height"), QStringLiteral("infill"),
                   QStringLiteral("library"), QStringLiteral("my library")};
@@ -524,16 +518,15 @@ CommandDef MainWindow::processesCommand() {
 
 CommandDef MainWindow::print3dCommand() {
   CommandDef def;
-  // Send to Slicer (mitcad#1049: once 3D Print, the id kept) in the Make
-  // tab's 3D Print group.
+  // Send to Slicer (mitcad#1049: once 3D Print, the id kept), the 3D Print
+  // tab's first button, alone in its Slice group (the owner, 18.11.2026:
+  // the page's most important button).
   def.id = QStringLiteral("make.print3d");
   def.name = tr("Send to Slicer");
-  def.shortLabel = QCoreApplication::translate("RibbonLabel", "Slicer"); // under its button (mitcad#1936)
+  // Under its button (mitcad#1936): what it does, whole.
+  def.shortLabel = QCoreApplication::translate("RibbonLabel", "Send to Slicer");
   def.icon = QStringLiteral("print-3d");
   def.tooltip = tr("Sends bodies to a slicer as 3MF or STL"); // short, no rules (mitcad#655)
-  def.tab = QStringLiteral("MAKE");
-  def.group = QStringLiteral("3D PRINT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("print"),   QStringLiteral("slicer"),   QStringLiteral("3mf"),
                   QStringLiteral("stl"),     QStringLiteral("3d print"), QStringLiteral("make"),
                   QStringLiteral("printer"), QStringLiteral("process"),  QStringLiteral("profile"),

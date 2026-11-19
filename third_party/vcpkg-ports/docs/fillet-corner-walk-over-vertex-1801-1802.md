@@ -1,4 +1,4 @@
-# A corner's set-back walked over a vertex, a walk starting on an edge: 1801 and 1802
+# A corner's set-back walked over a vertex, a walk starting on an edge: 1801 to 1803
 
 mitcad#2018, a follow-up of mitcad#2009 (port patch 1800): the bent guide
 imported from a FreeCAD document, its pads' ends and its ribs rounded with
@@ -16,6 +16,10 @@ imported from a FreeCAD document, its pads' ends and its ribs rounded with
   guide's tolerance on that edge, as a walk ends there from any later
   point. Before, it ended at its first point on no edge, and ChFi3d took
   that for a walk that drags: the rounding failed.
+- **1803** lets the plate's border leave the point on the edge walked onto
+  at no set angle. Before, it left back along that edge over the crossing
+  of the tangent edge, a sliver narrower than the plate's tolerance with a
+  vertex in it, and the plate's face could not be triangulated.
 
 ## The case
 
@@ -106,6 +110,45 @@ face, and the next step found the edge.
   into the face it runs into (`geometry.suite.fillet_corners`) failed.
 - No catch is added.
 
+## 1803: the border from the point walked onto
+
+### 1803-chfi3d-border-from-a-point-walked-onto-leaves-it-at-no-set-angle
+
+With 1801 and 1802 the guide built at 24.5 and 25, but an STL export at a
+deviation of 0.01 and an angle of 10 degrees (25), or 0.05 (24.5), failed:
+"a face could not be triangulated", the plate of the corner whose set-back
+walks over the inner rim's end (the app would draw the body with a hole
+there). BRepMesh's triangulation of that face came out empty.
+
+The plate's border on the flat runs from the point on the pad's rim, 0.11
+past the rim's end vertex, to the point on the rib face's edge with the
+flat. It is a batten whose ends keep the angle of the sharp edges'
+directions there (`CalculBatten`), so that it left the point back along
+the pad's rim, over the vertex where the border on the tube's side crosses
+the bend's end edge: a sliver of the plate 0.01 wide and 0.1 long, that
+vertex in it. The plate fits its borders within 0.012 (the G1 border along
+the rim, where the rib's sloped side goes on into the tube, against the
+flat's G0 border; the corners' plates fit within 0.002 to 0.014 with or
+without the walk), so that its surface is approximated within 0.04, its
+edges' tolerances 0.05 and its vertices' 0.08: the mesher took the
+sliver's sides as one within those tolerances. With all its tolerances set
+to 0.03 the face meshed.
+
+- `PerformMoreThreeCorner`, in its connecting curves: where the corner
+  walked over a vertex, the batten from the point on the edge walked onto
+  towards the next sharp edge (not towards the tangent edge) has no angle
+  at that point (`CalculBatten`'s constraint there off, as for a free
+  border); its other end keeps its angle. The border leaves the point
+  towards its other end, and the sliver with the vertex in it is gone.
+- Elsewhere nothing changes. No catch is added.
+
+The walked corners' plates then mesh at every setting tried (deviations
+0.0005 to 0.05, angles 5 to 20 degrees) from 20 to 32. At 25.5 and below,
+the plates of the corners at the ribs' end faces on the outer rim (no walk)
+still fail at the finest settings (a deviation of 0.002 with an angle of 5
+degrees; from 23 down also 10 degrees), their own G1 border along the rim
+against the flat's border folding back along it at its point on the rim.
+
 ## Results
 
 The guide imported with its bend radius set from 20 to 45: every feature
@@ -130,12 +173,14 @@ that 45 noted before (the plates' approximation; mitcad#2009).
   `MITCAD_MITCAD_REPORTED`, never committed) imported with the bend radius
   set to 30, 25, 24 and 20 as well: every feature rebuilds, the body stays
   within its pads, its volume on the line through 32 and 45 within 0.1
-  mm3.
+  mm3; at 24.5 and 25 the body exports as STL at deviations of 0.0005,
+  0.002, 0.01 and 0.05 with an angle of 10 degrees (1803).
 - A DRAW reproduction: `restore` the case's body, `explode b e`, `blend r b
   0.5 b_28` (30) or `b_26` (24): without the patches `checkshape` finds the
   result invalid (30) and the blend fails (24); with them both are valid.
 - OCCT's own blend and chamfer groups (the private suite's `run.sh`, a DRAW
   build of the port with 1801 and 1802 against the same build without
-  them): 754 cases each, no case changed.
+  them, and with 1803 against the port without it): 754 cases each, no
+  case changed.
 - No body built from OCCT's primitives alone was tried for 1802: its walk
   starts within 6e-5 of the edge, a matter of the input's last bits.

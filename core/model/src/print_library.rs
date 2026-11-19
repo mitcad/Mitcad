@@ -549,6 +549,7 @@ mod tests {
     fn pla(version: u32) -> ItemData {
         ItemData::Material {
             material: Material {
+                sheet_process: None,
                 id: "pla".to_owned(),
                 name: "PLA".to_owned(),
                 density: 1.24,

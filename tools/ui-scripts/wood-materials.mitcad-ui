@@ -16,6 +16,8 @@
 #      Shift+Up twice) and created into This design: three Wood materials
 #      of the design, one undo step, the message line says 3 made; the
 #      first one selected, its Class Wood, its look the library's.
+#   4b. Its Sheet Process shows By Class (Laser Sheet); Board chosen, one
+#      undo step (mitcad#1939).
 #   5. The dataset again, "plywood", Select All, Create into This design:
 #      all four skipped (the built-in birch plywood, the three just made),
 #      nothing made, no undo step, the message line says so.
@@ -99,6 +101,16 @@ expect-log '^Materials appearances: Plywood - Eucalyptus \(default\)$'
 wait-idle
 screenshot-dialog '${MITCAD_TEST_WORK}/materials-wood-group.png'
 
+# 4b. Its Sheet Process (mitcad#1939): By Class, a Wood's laser sheet;
+# chosen Board, one undo step.
+expect-log '^Materials sheet process: By Class \(Laser Sheet\)$'
+mark
+qt-choice materialSheetProcess 'Board'
+wait-log '^Material Plywood - .* sheet process = board$' 30
+wait-idle
+expect-log '^Materials sheet process: Board$'
+expect-undo-depth ${start} 2
+
 # 5. Select All of "plywood": all four there already, skipped.
 mark
 button '^New'
@@ -118,7 +130,7 @@ button '^Create$'
 expect-log '^Materials dataset menu: This design'
 popup 'This design'
 expect-log '^Materials from the dataset into design: 0 made, 4 skipped \(Plywood - birch \| Plywood - eucalyptus \| Plywood - pine \| Plywood - spruce\) of '
-expect-undo-depth ${start} 1
+expect-undo-depth ${start} 2
 focus-dialog '^Materials$'
 wait-idle
 expect-log '^Materials message: 0 materials made from the dataset\. 4 skipped: a material of the same name is there already\.$'

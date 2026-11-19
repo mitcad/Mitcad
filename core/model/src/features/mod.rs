@@ -336,6 +336,25 @@ pub(crate) mod developed;
 // (mitcad#1850).
 pub mod press_pull;
 pub use press_pull::{Continuation, PressPullDef, TaperType};
+// Sheet parts by material and process (mitcad#1939): Finger Joint, T-Nut
+// Slot and Flat Pack of laser sheet.
+pub mod finger_joint;
+pub use finger_joint::FingerJointDef;
+pub mod t_nut_slot;
+pub use t_nut_slot::TNutSlotDef;
+pub mod flat_pack;
+pub use flat_pack::FlatPackDef;
+// Panelize: a body's faces split off as panels of one thickness, step by
+// step (mitcad#2005).
+pub mod panelize;
+pub use panelize::{PanelResult, PanelizeDef};
+// Mesh tools for reverse engineering: Decimate, Repair, Remove Region,
+// Segment and Fit Surface (mitcad#1871).
+pub mod mesh_tools;
+pub use mesh_tools::{
+    FitKind, MeshDecimateDef, MeshFitSurfaceDef, MeshLasso, MeshRemoveDef, MeshRepairDef,
+    MeshSegmentDef,
+};
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -526,6 +545,13 @@ feature_types! {
     FillCavity(FillCavityDef),
     // Press Pull continued Straight or Along the walls (mitcad#1850).
     PressPull(PressPullDef),
+    // Finger Joint, T-Nut Slot and Flat Pack of laser sheet (mitcad#1939).
+    FingerJoint(FingerJointDef), TNutSlot(TNutSlotDef), FlatPack(FlatPackDef),
+    // Panelize (mitcad#2005).
+    Panelize(PanelizeDef),
+    // Mesh tools for reverse engineering (mitcad#1871).
+    MeshDecimate(MeshDecimateDef), MeshRepair(MeshRepairDef), MeshRemove(MeshRemoveDef),
+    MeshSegment(MeshSegmentDef), MeshFitSurface(MeshFitSurfaceDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is

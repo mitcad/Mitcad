@@ -201,6 +201,15 @@ mod print_job;
 // New content in sight: a command that adds to a component only hidden
 // occurrences place shows them in its own undo step (mitcad#1995).
 mod hidden_parents;
+// Sheet parts by material and process: a flat pack on a cut sheet,
+// standard boxes and die lines (mitcad#1939).
+mod sheet_process;
+// Auto Constrain: a sketch's relations, then dimensions for what is left
+// free (mitcad#2019).
+mod sketch_auto_constrain;
+// Mesh tools for reverse engineering: mesh_section and mesh_stats
+// (mitcad#1871).
+mod mesh_tools;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -308,6 +317,8 @@ pub mod prelude {
     pub(crate) use super::convert_derived::ConvertDerivedOps;
     // Press Pull continued (mitcad#1850).
     pub(crate) use super::press_pull::PressPullOps;
+    // Mesh tools for reverse engineering (mitcad#1871).
+    pub(crate) use super::mesh_tools::MeshToolsOps;
 }
 
 use std::fmt;
@@ -501,7 +512,12 @@ named_enum! {
         },
         "undo" => Undo,
         "redo" => Redo,
-        "recompute" => Recompute,
+        "recompute" => Recompute {
+            /// Every feature evaluated again from the start, without the
+            /// cached or stored results (Recompute All, mitcad#1982).
+            #[serde(default)]
+            all: bool,
+        },
         // Body attributes (F5).
         "set_body_visible" => SetBodyVisible {
             uid: BodyUid,
@@ -642,8 +658,9 @@ named_enum! {
             sketches: Option<bool>,
         },
         // The eye of a component's Bodies, Sketches or Construction folder
-        // (mitcad#1771, `document/display.rs`): the component by id or
-        // name, the root's when left out.
+        // (mitcad#1771, `document/display.rs`), or of the root's
+        // Annotations folder (mitcad#2041): the component by id or name,
+        // the root's when left out.
         "set_folder_visible" => SetFolderVisible {
             #[serde(default)]
             component: Option<String>,
@@ -718,6 +735,12 @@ named_enum! {
         "delete_render_light" => DeleteRenderLight {
             id: String,
         },
+        // Shots of the Render workspace (mitcad#2013): the shot's fields.
+        "add_render_shot" => AddRenderShot(serde_json::Map<String, Value>),
+        "edit_render_shot" => EditRenderShot(serde_json::Map<String, Value>),
+        "delete_render_shot" => DeleteRenderShot {
+            id: String,
+        },
         // Sheet-metal Flat Patterns (mitcad#208, `document/flat_patterns.rs`).
         "set_flat_pattern" => SetFlatPattern {
             body: BodyUid,
@@ -757,6 +780,14 @@ named_enum! {
             #[serde(default)]
             folder: Option<String>,
         },
+        // Sheet parts by material and process (mitcad#1939,
+        // `sheet_process.rs`): a flat pack on a cut sheet, a standard box,
+        // a die line.
+        "add_flat_pack" => AddFlatPack(Box<sheet_process::AddFlatPackCommand>),
+        "add_standard_box" => AddStandardBox(Box<sheet_process::AddStandardBoxCommand>),
+        "export_die_line" => ExportDieLine(Box<sheet_process::ExportDieLineCommand>),
+        "edit_standard_box" => EditStandardBox(Box<sheet_process::EditStandardBoxCommand>),
+        "add_glue_flap" => AddGlueFlap(Box<sheet_process::AddGlueFlapCommand>),
     }
 }
 
@@ -861,6 +892,11 @@ named_enum! {
             // results tell where the bodies a command changed are).
             #[serde(default)]
             bbox: bool,
+            // The bodies whose boxes the caller has, by uid with their
+            // versions (mitcad#2021: MCP's snapshot after a command asks
+            // only for the boxes of the bodies it changed or added).
+            #[serde(default)]
+            bbox_known: std::collections::BTreeMap<String, String>,
             // Each body's last feature before the marker (mitcad#1704: the
             // timeline marks it while the body or a part of it is selected).
             #[serde(default)]
@@ -1350,6 +1386,14 @@ named_enum! {
         // The Sheet Metal list: each sheet-metal body with its developed
         // blank (mitcad#1980, `document/bom_kind.rs`).
         "sheet_metal_list" => SheetMetalList,
+        // A component's sheet process profile and the commands it offers
+        // (mitcad#1939, `document/flat_patterns.rs`).
+        "sheet_process" => SheetProcess {
+            #[serde(default)]
+            component: Option<String>,
+        },
+        // A mesh body's counts (mitcad#1871, `mesh_tools.rs`).
+        "mesh_stats" => MeshStats(mesh_tools::MeshStatsQuery),
         // What a print job sends to a slicer, before Send: geometry only or
         // a print project (mitcad#2008, `print_job.rs`).
         "print_job" => PrintJob(print_job::PrintJobQuery),
@@ -1475,19 +1519,21 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     });
                 }
                 // The folders the components' own eyes hide (mitcad#1771),
-                // while one does: by component, each folder shown or not.
+                // while one does: by component, each folder shown or not;
+                // the root's with its Annotations folder too (mitcad#2041).
                 let folders = &self.display().folders;
                 if !folders.is_empty() {
                     let mut shown = serde_json::Map::new();
                     for (component, hidden) in folders {
-                        shown.insert(
-                            component.to_string(),
-                            json!({
-                                "bodies": !hidden.bodies,
-                                "sketches": !hidden.sketches,
-                                "construction": !hidden.construction,
-                            }),
-                        );
+                        let mut entry = json!({
+                            "bodies": !hidden.bodies,
+                            "sketches": !hidden.sketches,
+                            "construction": !hidden.construction,
+                        });
+                        if *component == mitcad_model::ids::ComponentUid::ROOT {
+                            entry["annotations"] = json!(!hidden.annotations);
+                        }
+                        shown.insert(component.to_string(), entry);
                     }
                     value["display"]["folders"] = Value::Object(shown);
                 }
@@ -1566,6 +1612,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 volumes,
                 versions,
                 bbox,
+                bbox_known,
                 last_features,
             } => {
                 let mut bodies = self.bodies_json(properties, volumes)?;
@@ -1573,7 +1620,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     self.add_body_versions(&mut bodies);
                 }
                 if bbox && !properties {
-                    self.add_body_boxes(&mut bodies);
+                    self.add_body_boxes(&mut bodies, &bbox_known);
                 }
                 if last_features {
                     let last = self.body_last_features();
@@ -2104,6 +2151,15 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::AssemblyPath(query) => assembly_path::query(self, &query)?,
             // The Sheet Metal list (mitcad#1980).
             Query::SheetMetalList => self.sheet_metal_list_json(),
+            Query::SheetProcess { component } => {
+                let component = match component {
+                    Some(c) => Some(self.component_ref(&c)?),
+                    None => None,
+                };
+                self.sheet_process_json(component)
+            }
+            // A mesh body's counts (mitcad#1871).
+            Query::MeshStats(query) => self.mesh_stats_json(&query)?,
             // What a print job sends (mitcad#2008).
             Query::PrintJob(query) => print_job::query(self, &query)?,
         };
@@ -2190,7 +2246,11 @@ trait DocumentLocal<K: Kernel> {
     /// without the other properties (mitcad#714); none for an empty body
     /// or one the kernel cannot measure (MCP's snapshots must not fail on
     /// it).
-    fn add_body_boxes(&self, bodies: &mut Value);
+    fn add_body_boxes(
+        &self,
+        bodies: &mut Value,
+        known: &std::collections::BTreeMap<String, String>,
+    );
 
     fn add_face_with_rules_command(
         &mut self,
@@ -2616,8 +2676,15 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             // A cancelled computation (P7) rejects these too.
             Command::Undo => json!({"label": self.try_undo()?}),
             Command::Redo => json!({"label": self.try_redo()?}),
-            Command::Recompute => {
-                self.try_recompute()?;
+            Command::Recompute { all } => {
+                // Recompute All: one undo step when what it measured
+                // changed (mitcad#1982).
+                let changed = if all {
+                    Some(self.try_recompute_all()?.1)
+                } else {
+                    self.try_recompute()?;
+                    None
+                };
                 // The drawings of an older design file whose views now keep
                 // what they show (mitcad#1293), one information each.
                 let pinned: Vec<notice::Notice> = self
@@ -2625,11 +2692,15 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     .into_iter()
                     .map(|note| notice::Notice::new(NoticeLevel::Info, note))
                     .collect();
-                if pinned.is_empty() {
+                let mut answer = if pinned.is_empty() {
                     json!({})
                 } else {
                     json!({"notices": notice::to_json(&pinned)})
+                };
+                if let Some(changed) = changed {
+                    answer["changed"] = json!(changed);
                 }
+                answer
             }
             Command::SetBodyVisible {
                 uid,
@@ -2921,6 +2992,20 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 self.delete_render_light(&id)?;
                 json!({})
             }
+            // Shots of the Render workspace (mitcad#2013).
+            Command::AddRenderShot(fields) => {
+                json!({"id": self.add_render_shot(&fields)?})
+            }
+            Command::EditRenderShot(mut fields) => {
+                let Some(Value::String(id)) = fields.remove("id") else {
+                    return Err(ApiError("edit_render_shot needs the shot's id".to_owned()));
+                };
+                json!({"changed": self.edit_render_shot(&id, &fields)?})
+            }
+            Command::DeleteRenderShot { id } => {
+                self.delete_render_shot(&id)?;
+                json!({})
+            }
             // Sheet-metal Flat Patterns (mitcad#208).
             Command::SetFlatPattern {
                 body,
@@ -2976,6 +3061,11 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 self.set_body_folder(uid, folder.as_deref())?;
                 json!({})
             }
+            Command::AddFlatPack(c) => sheet_process::add_flat_pack(self, *c)?,
+            Command::AddStandardBox(c) => sheet_process::add_standard_box(self, *c)?,
+            Command::ExportDieLine(c) => sheet_process::export_die_line(self, *c)?,
+            Command::EditStandardBox(c) => sheet_process::edit_standard_box(self, *c)?,
+            Command::AddGlueFlap(c) => sheet_process::add_glue_flap(self, *c)?,
         })
     }
 
@@ -3272,13 +3362,42 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         }
     }
 
-    fn add_body_boxes(&self, bodies: &mut Value) {
-        for body in bodies.as_array_mut().into_iter().flatten() {
-            let bounds = body["uid"]
-                .as_str()
-                .and_then(|uid| uid.parse::<BodyUid>().ok())
-                .and_then(|uid| self.body_shape(uid))
-                .and_then(|shape| self.kernel().bounding_box(shape).ok().flatten());
+    fn add_body_boxes(
+        &self,
+        bodies: &mut Value,
+        known: &std::collections::BTreeMap<String, String>,
+    ) {
+        // The boxes of the bodies the caller does not have at their
+        // versions, measured beside each other where the kernel can, else
+        // body by body (mitcad#2021: the MCP server's snapshot before the
+        // first command after opening a design of 815 bodies measured them
+        // all, one after another, for 7 s; a box is kept on its shape once
+        // measured).
+        let shapes: Vec<Option<&K::Shape>> = bodies
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|body| {
+                let uid = body["uid"].as_str()?;
+                let uid_parsed = uid.parse::<BodyUid>().ok()?;
+                let version = self.body_version(uid_parsed);
+                if version.is_some_and(|v| known.get(uid) == Some(&format!("{v:032x}"))) {
+                    return None;
+                }
+                self.body_shape(uid_parsed)
+            })
+            .collect();
+        let present: Vec<&K::Shape> = shapes.iter().flatten().copied().collect();
+        let mut measured = match self.kernel().bounding_boxes(&present) {
+            Ok(boxes) if boxes.len() == present.len() => boxes.into_iter(),
+            _ => present
+                .iter()
+                .map(|shape| self.kernel().bounding_box(shape).ok().flatten())
+                .collect::<Vec<_>>()
+                .into_iter(),
+        };
+        for (body, shape) in bodies.as_array_mut().into_iter().flatten().zip(&shapes) {
+            let bounds = shape.and_then(|_| measured.next().flatten());
             if let Some(bounds) = bounds {
                 body["bbox"] = json!({"min": bounds.min, "max": bounds.max});
             }

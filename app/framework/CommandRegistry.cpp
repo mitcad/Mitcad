@@ -2,6 +2,7 @@
 #include "CommandRegistry.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include <QAction>
 #include <QJsonObject>
@@ -9,6 +10,7 @@
 #include <QWidget>
 #include <QtLogging>
 
+#include "CommandSearchRank.hpp"
 #include "Icons.hpp"
 
 namespace mitcad {
@@ -39,7 +41,10 @@ CommandRegistry::CommandRegistry(QObject* parent) : QObject(parent) {}
 CommandRegistry::~CommandRegistry() = default;
 
 void CommandRegistry::add(const CommandDef& def) {
-  m_commands.push_back(std::make_unique<CommandDef>(def));
+  auto added = std::make_unique<CommandDef>(def);
+  // The names users know its function by elsewhere (mitcad#1983).
+  added->keywords = search::withOtherNames(added->id, added->keywords);
+  m_commands.push_back(std::move(added));
 }
 
 const CommandDef* CommandRegistry::find(const QString& id) const {

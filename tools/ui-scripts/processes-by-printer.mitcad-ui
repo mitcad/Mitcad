@@ -90,8 +90,10 @@ wait-idle
 
 # 3. The body card's Process drop-down: the body's printer, Bench X, first.
 mark
-click-logged 'Ribbon tab MAKE at'
-expect-log 'Ribbon tab shown: MAKE'
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged 'Ribbon tab MAKE_PRINT at'
+expect-log 'Ribbon tab shown: MAKE_PRINT'
 # The Browser logged Body1's row when the design opened.
 mark
 click-logged '^Browser Root/Bodies/Body1 at '

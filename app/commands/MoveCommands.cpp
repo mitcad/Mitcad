@@ -992,8 +992,6 @@ CommandDef moveCommand(const CommandContext& context) {
   def.icon = QStringLiteral("move");
   def.tooltip = QObject::tr("Moves or copies bodies, or moves components");
   def.shortcut = QKeySequence(Qt::Key_M);
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = false;
   def.keywords = {QStringLiteral("translate"), QStringLiteral("rotate"), QStringLiteral("copy"),
                   QStringLiteral("transform")};
   def.featureType = QStringLiteral("move");
@@ -1193,7 +1191,6 @@ CommandDef moveFaceCommand(const CommandContext& context) {
   def.name = QObject::tr("Move Face");
   def.icon = QStringLiteral("move-face");
   def.tooltip = QObject::tr("Moves faces of a body rigidly; the faces around extend or shorten to follow");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("move face"), QStringLiteral("tilt face"), QStringLiteral("rotate face"),
                   QStringLiteral("push"), QStringLiteral("translate"), QStringLiteral("modify")};
   def.featureType = QStringLiteral("move_face");
@@ -1257,7 +1254,6 @@ CommandDef alignCommand(const CommandContext& context) {
   def.name = QObject::tr("Align");
   def.icon = QStringLiteral("align");
   def.tooltip = QObject::tr("Moves bodies so that a point, axis or plane of them meets another");
-  def.group = QStringLiteral("MODIFY");
   def.featureType = QStringLiteral("align");
   const SelectFilter kinds = kPointKinds | kAxisKinds | kPlaneKinds;
   const auto fits = [](const SelectionItem& item) { return isPointLike(item) || isAxial(item) || isPlanar(item); };
@@ -1314,7 +1310,6 @@ CommandDef scaleCommand(const CommandContext& context) {
   def.name = QObject::tr("Scale");
   def.icon = QStringLiteral("scale");
   def.tooltip = QObject::tr("Scales bodies about a point, evenly or along X, Y and Z");
-  def.group = QStringLiteral("MODIFY");
   def.keywords = {QStringLiteral("resize"), QStringLiteral("enlarge")};
   def.featureType = QStringLiteral("scale");
   const auto uniform = choiceIs(QStringLiteral("scale_type"), QStringLiteral("uniform"));
@@ -1385,8 +1380,6 @@ CommandDef combineCommand(const CommandContext& context) {
   def.name = QObject::tr("Combine");
   def.icon = QStringLiteral("combine");
   def.tooltip = QObject::tr("Joins, cuts or intersects bodies with a target body");
-  def.group = QStringLiteral("MODIFY");
-  def.pinned = true;
   def.keywords = {QStringLiteral("boolean"), QStringLiteral("union"), QStringLiteral("subtract")};
   def.featureType = QStringLiteral("combine");
   // A pick per occurrence: two screws of one part are two tools, listed by

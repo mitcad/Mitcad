@@ -975,8 +975,11 @@ int DrawingSheetView::viewAt(const QPointF& sheet) const {
   int best = 0;
   double area = 0.0;
   for (const SheetView& v : m_views) {
-    // A little room around thin views.
-    const QRectF box = v.box.adjusted(-2.0, -2.0, 2.0, 2.0);
+    // A little room around thin views: 2 mm, and at least 4 pixels on a
+    // sheet shown small (a narrow window beside a wide panel), where 2 mm
+    // is less than a pixel and a view a few mm thick could not be clicked.
+    const double room = std::max(2.0, 4.0 / std::max(m_zoom, 1e-6));
+    const QRectF box = v.box.adjusted(-room, -room, room, room);
     if (v.box.width() > 0.0 || v.box.height() > 0.0) {
       if (box.contains(sheet)) {
         const double a = box.width() * box.height();
@@ -1038,6 +1041,15 @@ void DrawingSheetView::logPlaces() {
   QStringList lines;
   lines << QStringLiteral("Drawing sheet view %1 %2 %3")
                .arg(inWindow({0.0, 0.0}), inWindow({100.0, 0.0}), inWindow({0.0, 100.0}));
+  // The same unrounded, for the test driver's drawing-sheet-click: on a
+  // sheet shown small the rounded points above are off by a few mm.
+  {
+    const QPointF origin = mapTo(window(), m_origin);
+    lines << QStringLiteral("Drawing sheet origin %1,%2 zoom %3")
+                 .arg(origin.x(), 0, 'f', 3)
+                 .arg(origin.y(), 0, 'f', 3)
+                 .arg(m_zoom, 0, 'f', 6);
+  }
   for (const SheetView& v : std::as_const(m_views)) {
     if (v.box.width() > 0.0 || v.box.height() > 0.0) {
       lines << QStringLiteral("Drawing view %1 at %2").arg(v.id).arg(inWindow(v.box.center()));

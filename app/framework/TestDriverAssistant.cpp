@@ -36,6 +36,12 @@
 namespace mitcad {
 
 namespace {
+
+// Waits on a separate client process (the isolated Claude Code stub, the
+// bundled bridge): it starts slowly while a release build compiles beside
+// the tests (0.67.0-rc2: 10 s was not enough under that load).
+constexpr double kClientWaitSeconds = 60.0;
+
 #ifndef Q_OS_WIN
 // How long the window-activate step waits for the window system to activate
 // the window before it records the activation itself (mitcad#1206).
@@ -377,7 +383,7 @@ void TestDriver::testAssistantSetup(const QString& mode) {
           setup->isEnabled() && (failure ? !result->text().isEmpty() && result->property("setupError").toBool() &&
                                                stateOf(status) == QStringLiteral("failed") && actionOf(setup) == QStringLiteral("retry")
           : stateOf(status) == QStringLiteral("waiting") && actionOf(setup).isEmpty() && !setup->isVisibleTo(dialog));
-    }, 10, QStringLiteral("Claude registration did not reach its verified state"), [this, dialog, failure, work] {
+    }, kClientWaitSeconds, QStringLiteral("Claude registration did not reach its verified state"), [this, dialog, failure, work] {
       if (!failure) {
         const auto backups = QDir(work).entryList({QStringLiteral("claude.json.mitcad-backup-*")}, QDir::Files);
         dialog->connectAssistant(); // what Connect did, once more
@@ -417,7 +423,7 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     whenReady([status, setup] {
       return stateOf(status) == QStringLiteral("connected") && actionOf(setup) == QStringLiteral("disconnect") &&
           status->text().contains(QStringLiteral("Claude Code"));
-    }, 10, QStringLiteral("the scripted Claude Code client did not connect"));
+    }, kClientWaitSeconds, QStringLiteral("the scripted Claude Code client did not connect"));
   } else if (mode == QStringLiteral("reconnect-disconnect") || mode == QStringLiteral("reconnect-eof")) {
     auto* bridge = dialog->findChild<QProcess*>(QStringLiteral("assistantReconnectClient"));
     if (!bridge || bridge->state() == QProcess::NotRunning || stateOf(status) != QStringLiteral("connected")) {
@@ -810,7 +816,7 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     whenReady([status, result, setup, failure, dialog] {
       return setup->isEnabled() && (failure ? result->property("setupError").toBool() && stateOf(status) == QStringLiteral("failed")
           : stateOf(status) == QStringLiteral("waiting") && !setup->isVisibleTo(dialog));
-    }, 10, QStringLiteral("assistant registration did not reach the expected setup state"),
+    }, kClientWaitSeconds, QStringLiteral("assistant registration did not reach the expected setup state"),
       [this, config, dialog, failure, original, expected] {
         QString content, error;
         if (!mcp::readAssistantConfiguration(config->text(), content, error)) { fail(m_line, error); return; }

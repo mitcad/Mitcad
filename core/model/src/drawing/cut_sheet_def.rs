@@ -52,6 +52,11 @@ pub struct CutSheet {
     /// many parts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<CutPart>,
+    /// The width the cutting beam takes away, mm (mitcad#1939): the export
+    /// moves each outer boundary out and each hole in by half of it. None:
+    /// no compensation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kerf: Option<f64>,
 }
 
 impl Default for CutSheet {
@@ -60,6 +65,7 @@ impl Default for CutSheet {
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
             parts: Vec::new(),
+            kerf: None,
         }
     }
 }
@@ -91,6 +97,32 @@ pub struct CutPart {
     /// unused).
     #[serde(default, skip_serializing_if = "is_false")]
     pub flat: bool,
+    /// Sketches whose curves are marked on the part (mitcad#1939): engraved
+    /// or scored, laid on it along the face it is seen along (on a Flat
+    /// Pattern part, in its developed panel's plane).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<CutMark>,
+}
+
+/// What a mark does to the part's surface (mitcad#1939).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkKind {
+    /// Burned into the surface (text, a logo, a picture's lines).
+    Engrave,
+    /// Cut part of the way through (a fold or tear line).
+    Score,
+    /// Cut through: a kerf bend's slits on a Flat Pattern part (not a
+    /// mark a sketch gives).
+    Cut,
+}
+
+/// A sketch whose curves mark a part (mitcad#1939).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CutMark {
+    pub sketch: crate::ids::FeatureUid,
+    pub kind: MarkKind,
 }
 
 impl CutSheet {

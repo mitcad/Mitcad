@@ -166,7 +166,7 @@ Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
 
 Write-Host '--- 2. Two points from one stud''s side to the next one''s (mitcad#509)'
 Ui-StartApp 'timber-between'
-Ui-Step 'the BUILD tab'                  { Ui-ClickLogged 'Ribbon tab BUILD' }
+Ui-Step 'the BUILD tab'                  { Ui-ClickTab 'BUILD' }
 Ui-Mark
 Ui-Step 'Wall (F7)'                      { Ui-Key 'F7' }
 Ui-ExpectNew 'Command Wall started' 'Wall started'

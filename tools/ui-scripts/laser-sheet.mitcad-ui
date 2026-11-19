@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+# Laser sheet's joints (mitcad#1939; app/COMMANDS.md "Sheet process
+# profiles"), on laser-sheet.json (two plates at a corner, Body1 and
+# Body2; a plate Body3 lying flat and its mate Body4 against the first
+# third of its end face, the face's middle in sight; 105600 mm3 in all):
+#   1. Finger Joint: Body1 and Body2 selected in the browser, Finger Width
+#      12: five fingers along the 60 mm edge, the plates 35136 and
+#      27489.6 mm3 (cli.sheet_laser_joints).
+#   2. T-Nut Slot: Body3's end face picked, the M3 defaults with Count 2
+#      (slots at y = 215 and 245; Count 1's slot at y = 230 misses Body4,
+#      so Count is set before the mating plate), then Body4 as the mating
+#      plate: the slots and pockets take 2 x 269.4 mm3 from Body3, the one
+#      screw's hole that meets Body4 48.255.
+# Run by tools/ui-laser-sheet-test.sh (Linux),
+# tools/ui-windows-laser-sheet-test.ps1 (Windows) and
+# tools/ui-macos-laser-sheet-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+
+# 1. A finger joint of the two plates at the corner.
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-idle
+click-logged '^Browser Root/Bodies/Body2 at ' ctrl
+wait-idle
+mark
+command sheet.finger_joint
+wait-log '^Command Finger Joint started' 30
+wait-idle
+type-in '^Panel Finger Joint input finger_width at ' '12'
+wait-log '^Preview Finger Joint: ok' 60
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added finger joint of 2 plates$' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 4 103425.6
+
+# 2. A T-nut slot from Body3's end face, the screw's hole in Body4.
+mark
+command sheet.t_nut_slot
+wait-log '^Command T-Nut Slot started' 30
+wait-log '^Pick places:' 30
+wait-idle
+mark
+click-pick 'face F3[.]b0/F3:side1 at'
+wait-log '^Preview T-Nut Slot: ok' 60
+wait-idle
+mark
+type-in '^Panel T-Nut Slot input count at ' '2'
+wait-log '^Preview T-Nut Slot: ok' 60
+wait-idle
+mark
+click-logged '^Panel T-Nut Slot input mating_body at '
+wait-idle
+click-logged '^Browser Root/Bodies/Body4 at '
+wait-log '^Preview T-Nut Slot: ok' 60
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added T-nut slot with the screw.s hole$' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 4 102838.54513684086

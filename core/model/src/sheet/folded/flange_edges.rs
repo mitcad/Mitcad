@@ -52,9 +52,9 @@ const ROOT: u32 = u32::MAX;
 /// A half-space `normal . p >= offset` that the material of one flange's
 /// bend or wall keeps to.
 #[derive(Debug, Clone, Copy)]
-struct Keep {
-    normal: V3,
-    offset: f64,
+pub(super) struct Keep {
+    pub(super) normal: V3,
+    pub(super) offset: f64,
 }
 
 impl Keep {
@@ -645,7 +645,7 @@ fn existing_walls(
 }
 
 /// Where a bend that keeps to `keep` may lie along its axis.
-enum Limit {
+pub(super) enum Limit {
     Lower(f64),
     Upper(f64),
     Free,
@@ -655,7 +655,7 @@ enum Limit {
 /// The axial limit of a bend on `c` (its axial coordinate from the centre)
 /// whose whole cross-section, radii `r` to `r + t` over its angle, keeps
 /// to `keep`.
-fn bend_limit(c: &CylinderEmbedding, thickness: f64, keep: &Keep) -> Limit {
+pub(super) fn bend_limit(c: &CylinderEmbedding, thickness: f64, keep: &Keep) -> Limit {
     let n = keep.normal;
     let (a, b) = (dot(n, c.radial_start), dot(n, c.angular_direction));
     // The least of a cos(theta) + b sin(theta) over the bend's angle.
@@ -1018,6 +1018,7 @@ fn mitred<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
+    let rules = rules.with_fold_allowance(d.allowance.as_ref());
     if d.profile.is_some()
         || d.hem.is_some()
         || d.corner.is_some()

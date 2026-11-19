@@ -19,8 +19,10 @@
 #include <QtLogging>
 
 #include "../framework/ChromeStyle.hpp"
+#include "../framework/Icons.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UiSizes.hpp"
 #include "AssistantSetup.hpp"
 #include "LocalEndpoint.hpp"
 
@@ -30,6 +32,10 @@ namespace {
 // The menu's arrow at the right end of the Floating capsule.
 constexpr int kArrowWidth = 28;
 constexpr qreal kDot = 8.0;
+// The compact button's parts (AgentIndicator::setCompact): the icon's room,
+// as wide as the top bar's other icon buttons, and the caret's after it.
+int compactIconRoom() { return uiIconSize(18) + 10; }
+constexpr int kCompactCaret = 12;
 
 // "14:02" today, else "2026-10-05 14:02".
 QString shortTime(const QDateTime& time) {
@@ -156,7 +162,20 @@ void AgentIndicator::openConnect() {
   }
 }
 
+void AgentIndicator::setCompact(bool compact) {
+  if (compact == m_compact) {
+    return;
+  }
+  m_compact = compact;
+  // Its own size: the top bar does not narrow it.
+  setSizePolicy(compact ? QSizePolicy::Fixed : QSizePolicy::Maximum, QSizePolicy::Fixed);
+  refresh();
+}
+
 QSize AgentIndicator::sizeHint() const {
+  if (m_compact) {
+    return QSize(compactIconRoom() + kCompactCaret, std::max(minimumHeight(), compactIconRoom()));
+  }
   if (chromeStyle() != ChromeStyle::Floating) {
     return QToolButton::sizeHint();
   }
@@ -164,6 +183,9 @@ QSize AgentIndicator::sizeHint() const {
 }
 
 QSize AgentIndicator::minimumSizeHint() const {
+  if (m_compact) {
+    return sizeHint();
+  }
   if (chromeStyle() != ChromeStyle::Floating) {
     return QToolButton::minimumSizeHint();
   }
@@ -196,6 +218,51 @@ void AgentIndicator::paintDot(QPainter& painter, const QRectF& box) const {
 }
 
 void AgentIndicator::paintEvent(QPaintEvent* event) {
+  if (m_compact) {
+    // Flat: a rounded highlight only under the mouse or pressed; the plug's
+    // icon with the state's dot on its lower right corner, the caret after
+    // it (a part of its own while the button connects an assistant).
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QPalette pal = palette();
+    QColor ink = pal.color(QPalette::WindowText);
+    if (isDown() || underMouse()) {
+      QColor fill = ink;
+      fill.setAlpha(isDown() ? 36 : 20);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(fill);
+      painter.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 8, 8);
+    }
+    const int side = uiIconSize(18);
+    const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
+    const QPixmap pixmap =
+        themeIcon(QStringLiteral("assistant-other")).pixmap(QSize(side, side), devicePixelRatioF(), mode);
+    const QSizeF size = pixmap.deviceIndependentSize();
+    const QPointF corner((compactIconRoom() - size.width()) / 2, (height() - size.height()) / 2);
+    painter.drawPixmap(corner, pixmap);
+    // The dot on a disc of the bar's colour, so that it reads over the icon.
+    const QRectF dotBox(corner.x() + size.width() - kDot + 1, corner.y() + size.height() - kDot + 1, kDot, kDot);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(pal.color(QPalette::Window));
+    painter.drawEllipse(dotBox.adjusted(-1.5, -1.5, 1.5, 1.5));
+    paintDot(painter, dotBox);
+    if (popupMode() == QToolButton::MenuButtonPopup && underMouse()) {
+      QColor divider = ink;
+      divider.setAlpha(50);
+      painter.setPen(QPen(divider, 1));
+      painter.drawLine(QPointF(compactIconRoom() + 0.5, 7), QPointF(compactIconRoom() + 0.5, height() - 7));
+    }
+    ink.setAlpha(190);
+    painter.setPen(QPen(ink, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    const QPointF center(compactIconRoom() + kCompactCaret / 2.0 - 1, height() / 2.0);
+    QPainterPath caret;
+    caret.moveTo(center + QPointF(-3, -1.5));
+    caret.lineTo(center + QPointF(0, 1.5));
+    caret.lineTo(center + QPointF(3, -1.5));
+    painter.drawPath(caret);
+    return;
+  }
   if (chromeStyle() != ChromeStyle::Floating) {
     QToolButton::paintEvent(event);
     return;
@@ -232,7 +299,7 @@ void AgentIndicator::paintEvent(QPaintEvent* event) {
 }
 
 bool AgentIndicator::arrowHit(const QPoint& point) const {
-  return point.x() >= width() - kArrowWidth;
+  return m_compact ? point.x() >= compactIconRoom() : point.x() >= width() - kArrowWidth;
 }
 
 void AgentIndicator::mousePressEvent(QMouseEvent* event) {
@@ -318,6 +385,10 @@ void AgentIndicator::refresh() {
   }
   setPopupMode(now == State::NoAgent ? QToolButton::MenuButtonPopup : QToolButton::InstantPopup);
   setText(shown);
+  // Compact, the text the button does not show leads its tooltip.
+  if (m_compact) {
+    tip.prepend(shown);
+  }
   setToolTip(tip.join(QLatin1Char('\n')));
   setAccessibleName(tr("AI assistant: %1").arg(shown));
   // The dot as the Docked status bar's icon; the Floating capsule paints it.
@@ -457,6 +528,15 @@ void AgentIndicator::fillMenu() {
     action->setEnabled(false);
     action->setMenuRole(QAction::NoRole);
   };
+  if (m_compact) {
+    // The text the compact button does not show, at the menu's top; not
+    // one of its entries (not logged).
+    QAction* header = m_menu->addAction(text());
+    header->setEnabled(false);
+    header->setProperty("indicatorText", true);
+    header->setMenuRole(QAction::NoRole);
+    m_menu->addSeparator();
+  }
   const auto add = [this](const QString& text, const QString& id, std::function<void()> run) {
     QAction* action = m_menu->addAction(text);
     action->setObjectName(id);
@@ -537,7 +617,7 @@ void AgentIndicator::fillMenu() {
   });
   QStringList entries;
   for (QAction* action : m_menu->actions()) {
-    if (!action->isSeparator()) {
+    if (!action->isSeparator() && !action->property("indicatorText").toBool()) {
       entries << loggedEntry(action);
     }
   }

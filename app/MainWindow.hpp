@@ -34,6 +34,7 @@
 #include "commands/MeasureHistory.hpp"
 #include "files/ProjectDialogs.hpp"
 #include "files/Projects.hpp"
+#include "framework/CommandLayout.hpp"
 #include "framework/CommandSession.hpp"
 #include "framework/DialogFolders.hpp"
 #include "framework/DocumentSession.hpp"
@@ -64,7 +65,23 @@ class QTimer;
 class QToolButton;
 
 namespace mitcad {
+class CommandRegistry;
 class WindowManager;
+
+// Whether a menu's or a submenu's key in the layout ("FILE", "STANDARD
+// VIEWS") has a title of its own to translate (mitcad#1951).
+bool hasMenuTitle(const QString& key);
+// A menu's or a submenu's title as the menu bar shows it, with its
+// mnemonic's "&" ("&Tools"); empty for a key without one (the command
+// search's place line, mitcad#1983).
+QString menuCaption(const QString& key);
+// The default layout's coverage (mitcad#1951, ctest app.layout_coverage):
+// every command of `registry` placed in it or listed as on no toolbar,
+// every command id in it registered (but its optional ones), every group,
+// submenu and menu key with a caption, every extra one the code provides,
+// every command's other names (mitcad#1983) for a registered command.
+// Each problem is logged; false when there is one.
+bool checkLayoutCoverage(const CommandRegistry& registry);
 
 class AutosaveManager;
 class AutoselectPanel;
@@ -104,9 +121,11 @@ class ReportCenter;
 class SectionWorker;
 class ViewController;
 class SpaceMouseController;
+class RepeatKeyFilter;
 class StartPage;
 class CamSimulateDialog;
 class FormCageOverlay; // a Form's cage over the view (mitcad#1757)
+class RenderWorkspace; // the Render tab's workspace (mitcad#2013)
 #ifdef MITCAD_MACOS_NATIVE_UI
 namespace mac {
 class NativeMacWindow;
@@ -149,7 +168,8 @@ class ChatPanel;
 
 namespace drawings {
 class DrawingWorkspace;
-}
+class DrawingsPanel;
+} // namespace drawings
 class VersionWatermark;
 
 // The model is driven with JSON commands and queries (see
@@ -259,6 +279,10 @@ public:
   // shown" or "Start page at launch: off (<why>)". Called by main() before
   // the window shows; the recovery question comes after it, over the page.
   void showStartPageAtLaunch(const QString& skip);
+  // The Start page left for the design (a click on its document tab in the
+  // Floating title row, mitcad#1990): Design's tab shown last; nothing
+  // while the page is not shown. Logs "Start page left by the design's tab".
+  void leaveStartPageForDesign();
 
   // Fetches the library sources with Auto-update in the background, one
   // after another, without a dialog (mitcad#576; MainWindowLibraries.cpp):
@@ -544,8 +568,10 @@ private:
   bool mcpSketchStep(const QJsonObject& request, QJsonObject* answer, QString& reason);
   // Undoes the steps after `depth` (a refused array entry); how many.
   int mcpUndoTo(int depth);
-  // The document as a command result compares it (mcp_snapshot_queries).
-  QJsonObject mcpSnapshot() const;
+  // The document as a command result compares it (mcp_snapshot_queries):
+  // before the command, or `after` it with the boxes of the bodies `before`
+  // (its compact JSON, or empty) does not have at their versions.
+  QJsonObject mcpSnapshot(bool after, const QByteArray& before) const;
   // model_export into a folder for designs (mitcad#689).
   QJsonObject mcpExport(const QJsonObject& arguments);
   // model_render: the headless server's picture of the design (mitcad#1487).
@@ -578,9 +604,24 @@ private:
   void fitView();
 
   void registerCommands();
+  // The menu bar from the command layout (mitcad#1951,
+  // MainWindow.cpp): built once, filled again when the layout
+  // changes; the code's entries (Open Recent, About, the Window menu, the
+  // View menu's panels) by their extras' keys.
   void createMenus();
+  void buildMenuBar();
+  void fillLayoutMenu(QMenu* menu, const std::vector<LayoutEntry>& entries, const QString& place);
+  // An extra of a menu (Open Recent, About, the Window menu); true when the
+  // separator before it stays although it added nothing yet (the View
+  // menu's panels, appended by their code).
+  bool addMenuExtra(QMenu* menu, const QString& key);
+  // View › Panels (mitcad#1975): a panel's show-and-hide entry, which its
+  // code makes (Projects, Browser, Timeline, Command, Chat), kept across the
+  // menu's refills and shown in the submenu in the order of `rank` (0
+  // Projects ... 4 Chat), before the layout's Comments….
+  void addPanelEntry(QAction* action, int rank);
 #ifdef MITCAD_MAC_UI
-  void createWindowMenu();
+  void fillWindowMenu(QMenu* window);
 #endif
   void createRibbon();
   void createPanels();
@@ -629,6 +670,11 @@ private:
   // mode, the last command and the focus.
   bool repeatableCommand() const;
   void updateConfirmEnabled();
+  // Starts the last command again (repeatCommand) and logs it, naming the
+  // key that did it (`Repeat Extrude (Enter)`; none from the command
+  // search or MCP), with `repeat <id>` among the error report's recent
+  // actions (mitcad#1620, the command Repeat's key mitcad#2052).
+  void repeatLastCommand(const QString& key);
   // Repeat (Enter, the view's context menu): starts command `id` again, its
   // panel from the settings of its last OK, the selections empty
   // (mitcad#1686).
@@ -1542,7 +1588,8 @@ private:
 
   // Component libraries (mitcad#64, mitcad#63, files/MainWindowLibraries.cpp).
   void registerLibraryCommands();
-  void createLibraryMenu(QMenu* tools);
+  void prepareLibraryMenuActions();
+  void logLibraryMenu(QMenu* menu);
   // Browse Components (mitcad#1283) on its Installed view, or (`community`)
   // on Community: Insert from Library and Community Library open it so.
   void browseComponents(bool community);
@@ -1554,7 +1601,9 @@ private:
   std::shared_ptr<MountPart> m_mountPart;
 
   // Files (U6, MainWindowFiles.cpp): the File menu, import and export.
-  void createFileMenu();
+  void prepareFileMenuActions();
+  void addRecentMenu(QMenu* file);
+  void logFileMenu(QMenu* file);
   void registerFileCommands();
   // Opens a file as the document after asking about unsaved changes
   // (recent files, drops).
@@ -1675,6 +1724,23 @@ private:
   drawings::DrawingWorkspace* drawingWorkspace();
   QString drawingTitle() const;
   bool drawingOpen() const;
+  // The toolbar panel's workspace selector (Ribbon::workspaceRequested,
+  // mitcad#1990): DRAWING opens the design's drawing (one of them from a
+  // menu when it has several, with Create Drawing… after them; Create
+  // Drawing's dialog when it has none); RENDER shows the Render tab with
+  // the rendered view on (setRenderWorkspace); DESIGN or MAKE closes the
+  // drawing open or leaves Render. Logs "Workspace MAKE: the drawing
+  // closed".
+  void requestWorkspace(const QString& workspace);
+  // The Render workspace on (its tab, the rendered view on) or off (Design's
+  // tabs, the view mode of before). Logs "Workspace RENDER: the rendered
+  // view on" (or "not available" without the render worker) and "Workspace
+  // RENDER left: the rendered view off".
+  void setRenderWorkspace(bool on);
+  bool m_renderedBeforeRender = false;
+  // File › Print… hidden while the File menu is open with nothing to print
+  // (buildMenuBar, mitcad#1990).
+  bool m_printHiddenInMenu = false;
   // The drawing tools and Close Drawing as commands (drawing.*), on the
   // ribbon's DRAWING tab (mitcad#1008).
   void registerDrawingCommands();
@@ -1683,7 +1749,8 @@ private:
   void addDrawingRibbonExtras();
   // A drawing opened or closed (mitcad#1008): the ribbon's DRAWING tab
   // alone while one is open, and in the Floating layout no card but the
-  // browser; the AppKit frontend keeps the drawing's own bar.
+  // Drawings card (mitcad#1990: the design's drawings and sheets in place
+  // of the Browser's); the AppKit frontend keeps the drawing's own bar.
   void updateDrawingChrome();
   // Whether a command is one of an open drawing's (the DRAWING and CUT
   // SHEET tabs'): it does not lead back to the 3D view.
@@ -1726,6 +1793,18 @@ private:
   void leaveDrawing();
   drawings::DrawingWorkspace* m_drawingWorkspace = nullptr;
   QString m_drawingDesign; // the design the open drawing is of (designId)
+  // The Drawing workspace's Drawings card (mitcad#1990,
+  // drawings/DrawingsPanel; Floating only): the design's drawings and their
+  // sheets in the left column in place of the Browser's card while a
+  // drawing is open (updateDrawingChrome), following the model
+  // (followDrawing) and the sheet shown.
+  void addDrawingsCard();
+  void refreshDrawingsCard();
+  // The cards an open drawing keeps (FloatingLayout::showOnlyCards): the
+  // Drawings card.
+  QStringList drawingCards() const;
+  GlassCard* m_drawingsCard = nullptr;
+  drawings::DrawingsPanel* m_drawingsPanel = nullptr;
   // 3D Print (mitcad#13, mitcad#234; files/MainWindowPrint.cpp): a panel of
   // the bodies to send, picked in the view, and the format, refinement and
   // slicer; OK writes the files and starts the slicer (sendToSlicer: false
@@ -1978,6 +2057,7 @@ private:
   LiveController* m_live = nullptr;
   bool& m_changeNoted = m_documentSession->state().changeNoted;
   QMenu* m_recentMenu = nullptr;
+  QList<QPair<int, QPointer<QAction>>> m_panelEntries; // addPanelEntry, by rank
   QPointer<F3dImport> m_import; // an .f3d import in progress
   // The deviating results of the .f3d design imported last (mitcad#379):
   // the items the user left as the file's stored geometry, and the first
@@ -2025,6 +2105,7 @@ private:
   QAction* m_confirmAction = nullptr;
   QAction* m_cancelAction = nullptr;
   QMetaObject::Connection m_focusRepeat; // focus changes update Enter's state (mitcad#1620)
+  RepeatKeyFilter* m_repeatKeys = nullptr; // the command Repeat's own key (mitcad#2052)
   QHash<int, QAction*> m_filterActions; // SELECT group, by SelectFilter
 
   BrowserController* m_controller = nullptr;
@@ -2204,6 +2285,11 @@ private:
   SelectionItem m_printBedShown;
   mutable QString m_loggedMoveFaceCard; // the Move Face card's line last logged (mitcad#531)
   bool m_originVisible = false; // Create Sketch asks for a plane (mitcad#844, mitcad#1030)
+  // keepOriginClearOfCards (mitcad#1990): armed for the pick, the view's own
+  // move to the planes running, the faces' pick places to log once it rests.
+  bool m_originClearArmed = false;
+  bool m_originClearMoving = false;
+  bool m_originClearLogPicks = false;
   bool m_constructionHidden = false; // an input hides it (mitcad#394)
   std::vector<SketchEntityDisplay> m_sketchDisplay;
   QString m_loggedSketches; // the sketches whose curves are shown (UI tests)
@@ -2332,7 +2418,6 @@ private:
   QJsonObject m_annotationPreview;     // the command previewed, without the view
   QJsonObject m_annotationPreviewView;  // the view's direction and up it was placed in
   QString m_loggedAnnotationPreview;    // "Annotation preview: …" as last logged
-  void assignMaterial();
   // Export Face as DXF… of a planar face (mitcad#1049): its body's outline
   // seen along it, to a DXF file the user names; false when cancelled or
   // refused (its panel then stays open, mitcad#1963).
@@ -2527,6 +2612,7 @@ private:
   QStringList m_measurementNames;           // the measurements' names at the last refresh
   bool m_measurementKept = false;           // a Keep waits for its measurement to be listed
   QString m_loggedMeasurements;             // "Annotations: …" as last logged
+  bool m_loggedAnnotationsShown = true;     // "Annotations folder: …" (mitcad#2041) as last logged
 
   // Annotations (mitcad#702, MainWindowAnnotations.cpp): the Annotations
   // window, the editor of one, Note… in the Measure panel, and what a
@@ -2729,6 +2815,10 @@ private:
   CommandDef camOperationCommand(const QString& type);
   bool acceptCamSetup(const CommandState& state);
   bool acceptCamOperation(const CommandState& state, const QString& type);
+  // Turning on a lathe setup (mitcad#1869, cam/MainWindowCamTurning.cpp).
+  void registerCamTurningCommands();
+  CommandDef camTurningCommand(const QString& type);
+  bool acceptCamTurning(const CommandState& state, const QString& type);
   QJsonObject camPanelData() const;
   int camDefaultSetup() const;
   // The Browser's CAM rows (DocumentHost).
@@ -2777,6 +2867,8 @@ private:
     bool remainingLogged = false;
   };
   std::optional<CamStockPlayback> m_camStock;
+  // A lathe setup's turned stock is drawn (mitcad#1869).
+  bool m_camTurnedStock = false;
   // Post Process…: the setup, its controller and units asked (its own by
   // default), cam_post written through the save dialog with the dialect's
   // extension ("CAM post written: <path>: grbl, millimetres, 40 lines").
@@ -2841,6 +2933,17 @@ private:
   double originDrawnSize() const;
   // The same in millimetres of the model as the view shows it now.
   double originModelSize() const;
+  // The box the origin planes take as the view draws them now, in
+  // millimetres: in the positive octant with Style Corner, about the
+  // origin with Style Centered.
+  Bnd_Box originPlanesBox() const;
+  // While Create Sketch waits for a plane in the Floating layout
+  // (mitcad#1990): the view moved sideways so that the origin planes are
+  // clear of the cards over it (OcctViewer::panClearOfCards, logged "View
+  // for the origin planes: moved …"), when its command card or the
+  // Browser's card covers part of them; armed as the pick starts and
+  // again on each layout of the cards, until the user moves the view.
+  void keepOriginClearOfCards();
   // An origin datum's shape as the view draws it (originDatumShape).
   TopoDS_Shape originShape(const QJsonObject& datum) const;
   // A construction datum's size from the datums query: its
@@ -2874,6 +2977,20 @@ private:
   QString m_formEditUid;
   QPointer<FormCageOverlay> m_formOverlay;
   QHash<QString, QString> m_loggedDrawn;
+  // The Render workspace (mitcad#2013; MainWindowRender.cpp): made with
+  // the ribbon (its stages are the Render tab's page), its panels placed as
+  // cards (Floating) or docks (Docked), shown while the Render tab is: the
+  // other cards and docks hidden meanwhile and back as they were after.
+  void createRenderWorkspace();
+  void addRenderPanels();
+  void updateRenderWorkspace(const QString& tab);
+  // The design's render settings and shots changed (after each change of
+  // the model).
+  void refreshRenderWorkspace();
+  RenderWorkspace* m_renderWorkspace = nullptr;
+  QList<GlassCard*> m_renderCards;
+  QList<QDockWidget*> m_renderDocks;
+  QStringList m_renderHiddenDocks; // the Docked layout's docks it hid
 };
 
 } // namespace mitcad

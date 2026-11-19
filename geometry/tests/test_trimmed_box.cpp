@@ -20,6 +20,15 @@
 // such a face took seconds (0.66.0-rc1); within 1e-6 of its corners'
 // extent and in well under a second.
 //
+// Faces of 120 edges that are not ruled (mitcad#2023), outlined by a gear
+// of 60 teeth in their parameters: on the cap above, around its top (z = 2
+// inside the face, every other extreme at the gear's corners); on a torus
+// (radii 20 and 5) turned about a slanted axis, around its top circle,
+// against a reference from dense samples of the boundary and of the
+// interior. Each boxed within 1e-6 (the torus within 1e-5, its reference's
+// own error) and in a quarter of a second at most: the search inside such
+// a face classified each point against every edge and took seconds.
+//
 // The case `fillet-corner-walk-over-vertex` of MITCAD_GEOMETRY_CASES (the
 // reported bent guide's body before its rounding at bend radii 24 and 30,
 // see test_fillet_corner_walk_over_vertex.cpp): the body itself and the
@@ -56,6 +65,8 @@
 #include <GeomAbs_Shape.hxx>
 #include <Geom2d_Line.hxx>
 #include <Geom_BezierSurface.hxx>
+#include <Geom_Surface.hxx>
+#include <Geom_ToroidalSurface.hxx>
 #include <NCollection_Array2.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Standard_ErrorHandler.hxx>
@@ -70,6 +81,7 @@
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -134,7 +146,7 @@ occ::handle<Geom_BezierSurface> surface(const std::array<double, 3>& a) {
 // The face of `s` within the polygon of parameter points `corners`
 // (counter-clockwise), its edges' curves in space built from their
 // parameter lines.
-TopoDS_Face polygon_face(const occ::handle<Geom_BezierSurface>& s, const std::vector<gp_Pnt2d>& corners) {
+TopoDS_Face polygon_face(const occ::handle<Geom_Surface>& s, const std::vector<gp_Pnt2d>& corners) {
   BRepBuilderAPI_MakeWire wire;
   for (std::size_t k = 0; k < corners.size(); ++k) {
     const gp_Pnt2d& a = corners[k];
@@ -147,8 +159,8 @@ TopoDS_Face polygon_face(const occ::handle<Geom_BezierSurface>& s, const std::ve
   return face;
 }
 
-// Every box of `face` within 1e-6 of `want`.
-void check_face(const char* name, const TopoDS_Face& face, const Sides& want) {
+// Every box of `face` within `tolerance` of `want`.
+void check_face(const char* name, const TopoDS_Face& face, const Sides& want, double tolerance = 1e-6) {
   std::printf("%s\n", name);
   Bnd_Box occt;
   BRepBndLib::AddOptimal(face, occt, false, false);
@@ -156,14 +168,14 @@ void check_face(const char* name, const TopoDS_Face& face, const Sides& want) {
   const Sides trimmed = sides_of(mitcad::geometry::trimmed_face_box(face));
   print_sides("the trimmed face's box", trimmed);
   print_sides("its extent", want);
-  check_near(trimmed, want, 1e-6, std::string(name) + ", trimmed_face_box");
-  check_near(sides_of(mitcad::geometry::trimmed_box(face)), want, 1e-6, std::string(name) + ", trimmed_box");
+  check_near(trimmed, want, tolerance, std::string(name) + ", trimmed_face_box");
+  check_near(sides_of(mitcad::geometry::trimmed_box(face)), want, tolerance, std::string(name) + ", trimmed_box");
   const Shape shape(face);
-  check_near(sides_of(mitcad::geometry::bounding_box(shape)), want, 1e-6, std::string(name) + ", bounding_box");
+  check_near(sides_of(mitcad::geometry::bounding_box(shape)), want, tolerance, std::string(name) + ", bounding_box");
   const std::vector<BoundingBox> boxes = mitcad::geometry::face_bounding_boxes(shape, {0});
   check(boxes.size() == 1 && !boxes[0].empty, std::string(name) + ": one face box");
   if (boxes.size() == 1 && !boxes[0].empty) {
-    check_near(sides_of(boxes[0]), want, 1e-6, std::string(name) + ", face_bounding_boxes");
+    check_near(sides_of(boxes[0]), want, tolerance, std::string(name) + ", face_bounding_boxes");
   }
 }
 
@@ -219,6 +231,140 @@ void test_ruled() {
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
   std::printf("  boxed four ways in %.3f s\n", seconds);
   check(seconds < 1.0, "the gear's outline boxed in under a second, not " + std::to_string(seconds) + " s");
+}
+
+// A gear of 60 teeth around `centre` in parameters: 120 corners
+// alternately at `inner` and `outer` from it, counter-clockwise.
+std::vector<gp_Pnt2d> gear(const gp_Pnt2d& centre, double inner, double outer) {
+  std::vector<gp_Pnt2d> corners;
+  for (int k = 0; k < 120; ++k) {
+    const double radius = k % 2 == 0 ? outer : inner;
+    const double angle = 2.0 * M_PI * k / 120.0;
+    corners.emplace_back(centre.X() + radius * std::cos(angle), centre.Y() + radius * std::sin(angle));
+  }
+  return corners;
+}
+
+// Whether the parameter point lies inside the polygon (even-odd).
+bool in_polygon(const std::vector<gp_Pnt2d>& corners, double u, double v) {
+  bool in = false;
+  for (std::size_t k = 0; k < corners.size(); ++k) {
+    const gp_Pnt2d& a = corners[k];
+    const gp_Pnt2d& b = corners[(k + 1) % corners.size()];
+    if ((a.Y() > v) != (b.Y() > v) && a.X() + (v - a.Y()) * (b.X() - a.X()) / (b.Y() - a.Y()) > u) {
+      in = !in;
+    }
+  }
+  return in;
+}
+
+void widen(Sides& sides, const gp_Pnt& p) {
+  for (std::size_t a = 0; a < 3; ++a) {
+    const double c = p.Coord(static_cast<int>(a) + 1);
+    sides[a] = std::min(sides[a], c);
+    sides[a + 3] = std::max(sides[a + 3], c);
+  }
+}
+
+// The extent of the face of `s` within the polygon `corners`, placed by
+// `place`, from samples: 400 along each side, a 200 x 200 grid over the
+// polygon's parameter box and, around the grid point best on each side, a
+// finer grid of 101 x 101 over three of its cells.
+Sides sampled_extent(const occ::handle<Geom_Surface>& s, const std::vector<gp_Pnt2d>& corners, const gp_Trsf& place) {
+  Sides want = {1e100, 1e100, 1e100, -1e100, -1e100, -1e100};
+  double u0 = 1e100;
+  double u1 = -1e100;
+  double v0 = 1e100;
+  double v1 = -1e100;
+  for (std::size_t k = 0; k < corners.size(); ++k) {
+    const gp_Pnt2d& a = corners[k];
+    const gp_Pnt2d& b = corners[(k + 1) % corners.size()];
+    for (int i = 0; i <= 400; ++i) {
+      const double t = i / 400.0;
+      widen(want, s->Value(a.X() + t * (b.X() - a.X()), a.Y() + t * (b.Y() - a.Y())).Transformed(place));
+    }
+    u0 = std::min(u0, a.X());
+    u1 = std::max(u1, a.X());
+    v0 = std::min(v0, a.Y());
+    v1 = std::max(v1, a.Y());
+  }
+  const int n = 200;
+  const double du = (u1 - u0) / n;
+  const double dv = (v1 - v0) / n;
+  std::array<gp_Pnt2d, 6> best;
+  Sides top = {1e100, 1e100, 1e100, -1e100, -1e100, -1e100};
+  for (int i = 0; i <= n; ++i) {
+    for (int j = 0; j <= n; ++j) {
+      const double u = u0 + i * du;
+      const double v = v0 + j * dv;
+      if (!in_polygon(corners, u, v)) {
+        continue;
+      }
+      const gp_Pnt p = s->Value(u, v).Transformed(place);
+      for (std::size_t a = 0; a < 3; ++a) {
+        const double c = p.Coord(static_cast<int>(a) + 1);
+        if (c < top[a]) {
+          top[a] = c;
+          best[a] = gp_Pnt2d(u, v);
+        }
+        if (c > top[a + 3]) {
+          top[a + 3] = c;
+          best[a + 3] = gp_Pnt2d(u, v);
+        }
+      }
+    }
+  }
+  for (std::size_t side = 0; side < 6; ++side) {
+    if (std::abs(top[side]) > 1e99) {
+      continue;
+    }
+    for (int i = 0; i <= 100; ++i) {
+      for (int j = 0; j <= 100; ++j) {
+        const double u = best[side].X() + (i / 100.0 - 0.5) * 3.0 * du;
+        const double v = best[side].Y() + (j / 100.0 - 0.5) * 3.0 * dv;
+        if (in_polygon(corners, u, v)) {
+          widen(want, s->Value(u, v).Transformed(place));
+        }
+      }
+    }
+  }
+  return want;
+}
+
+// trimmed_face_box on `face`, timed: at most a quarter of a second.
+void check_time(const char* name, const TopoDS_Face& face) {
+  const auto start = std::chrono::steady_clock::now();
+  const Bnd_Box box = mitcad::geometry::trimmed_face_box(face);
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  std::printf("  %s boxed in %.3f s\n", name, seconds);
+  check(!box.IsVoid(), std::string(name) + ": a box");
+  check(seconds < 0.25, std::string(name) + " boxed in a quarter of a second at most, not " + std::to_string(seconds) +
+                            " s");
+}
+
+void test_many_edges() {
+  // The cap z = 4u(1-u) + 4v(1-v) = 2 - 4 r^2 (r from the centre): its top
+  // 2 at the centre, inside the gear; its lowest at the outer corners.
+  const occ::handle<Geom_BezierSurface> cap = surface({0.0, 2.0, 0.0});
+  const std::vector<gp_Pnt2d> outline = gear(gp_Pnt2d(0.5, 0.5), 0.40, 0.44);
+  const TopoDS_Face capped = polygon_face(cap, outline);
+  Sides want = {1e100, 1e100, 1e100, -1e100, -1e100, -1e100};
+  for (const gp_Pnt2d& corner : outline) {
+    widen(want, cap->Value(corner.X(), corner.Y()));
+  }
+  want[5] = 2.0;
+  check_time("a gear of 120 edges on a cap", capped);
+  check_face("a gear of 120 edges on a cap", capped, want);
+
+  // A torus about z, its top circle (v = pi/2, z = 5) inside the gear,
+  // turned 30 degrees about a slanted axis by the face's location.
+  const occ::handle<Geom_Surface> torus = new Geom_ToroidalSurface(gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 20.0, 5.0);
+  const std::vector<gp_Pnt2d> ring = gear(gp_Pnt2d(0.1, 0.5 * M_PI), 0.30, 0.33);
+  gp_Trsf turn;
+  turn.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 2, 3)), 30.0 * M_PI / 180.0);
+  const TopoDS_Face turned = TopoDS::Face(polygon_face(torus, ring).Moved(TopLoc_Location(turn)));
+  check_time("a gear of 120 edges on a turned torus", turned);
+  check_face("a gear of 120 edges on a turned torus", turned, sampled_extent(torus, ring, turn), 1e-5);
 }
 
 std::string cases_dir() {
@@ -354,6 +500,7 @@ void test_case(const char* file, const gp_Pnt& foot) {
 int main() {
   test_synthetic();
   test_ruled();
+  test_many_edges();
   test_case("bend-24.brep", gp_Pnt(-25.901310, 0.452109, 1.1));
   test_case("bend-30.brep", gp_Pnt(-28.090465, 0.490321, 1.1));
   if (failures != 0) {

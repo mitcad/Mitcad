@@ -7,7 +7,8 @@
 #     the first one in front again: each time the design in front shows its
 #     ribbon, its Browser and its navigation bar, the Docked view's top
 #     below the ribbon (expect-design-chrome);
-#   - a right-click on the ribbon's tab row: the window's menu of its
+#   - a right-click on a tab: the tabs' menu (mitcad#1975); one on the
+#     free end of the ribbon's tab row: the window's menu of its
 #     panels has no Toolbar, whose entry had hidden the whole Docked ribbon
 #     of that design (its menu is logged in the Docked layout only: the
 #     Floating window has no docks to offer).
@@ -19,9 +20,17 @@ window-resize 1280 800
 wait-idle
 expect-design-chrome
 
-# The window's own menu from the ribbon's tab row: its panels, no Toolbar.
+# A right-click on a tab: the tabs' menu (mitcad#1975), closed again.
 mark
 context-menu-logged '^Ribbon tab BUILD at ' cancel
+wait-log '^Ribbon tabs menu BUILD: '
+wait-idle
+expect-no-log '^Window context menu: '
+
+# The window's own menu from the free end of the ribbon's tab row: its
+# panels, no Toolbar.
+mark
+context-menu-logged '^Ribbon free at ' cancel
 wait-idle
 expect-no-log '^Window context menu: (.* \| )?Toolbar( \| |$)'
 expect-design-chrome

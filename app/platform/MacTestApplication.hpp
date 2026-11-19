@@ -3,6 +3,11 @@
 
 #include <QString>
 #include <QtGlobal>
+#ifdef Q_OS_MACOS
+#include <QStringList>
+
+class QMenuBar;
+#endif
 
 namespace mitcad::mac {
 
@@ -12,6 +17,9 @@ namespace mitcad::mac {
 #ifdef Q_OS_MACOS
 bool prepareHeadlessTestApplication(QString& error);
 bool headlessTestApplicationIsolated(QString& error);
+
+// Observe the actual, usable AppKit menus of the active document frame.
+bool systemMenuBarMatches(QMenuBar& bar, const QStringList& expected, QString& error);
 #else
 inline bool prepareHeadlessTestApplication(QString&) { return true; }
 inline bool headlessTestApplicationIsolated(QString&) { return true; }

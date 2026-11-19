@@ -118,7 +118,6 @@ void UpdateController::registerCommands(CommandRegistry& registry) {
   check.icon = QStringLiteral("update");
   check.kind = CommandDef::Kind::Action;
   check.mode = CommandDef::Mode::Any;
-  check.tab.clear();
   check.tooltip = tr("Asks whether a newer MitCad is out (Tools › Preferences: automatic checks)");
   check.keywords = {QStringLiteral("update"), QStringLiteral("new version"), QStringLiteral("release"),
                     QStringLiteral("upgrade")};

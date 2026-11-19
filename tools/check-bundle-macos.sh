@@ -39,6 +39,7 @@ fail() {
 # --- The bundle's own files ---------------------------------------------------
 plist="$contents/Info.plist"
 exe=""
+preview=0
 if [ ! -f "$plist" ]; then
   fail "$plist" "Info.plist is missing"
 elif ! plutil -lint "$plist" >/dev/null; then
@@ -58,6 +59,17 @@ else
   fi
   if [ -z "$(plist_value CFBundleIdentifier)" ]; then
     fail "$plist" "CFBundleIdentifier is empty"
+  fi
+  if [ "$(plist_value CFBundleIdentifier)" = org.mitcad.3dxware-test ]; then
+    preview=1
+    for key in CFBundleDocumentTypes UTExportedTypeDeclarations UTImportedTypeDeclarations; do
+      if /usr/libexec/PlistBuddy -c "Print :$key" "$plist" >/dev/null 2>&1; then
+        fail "$plist" "the 3DxWare test application must omit $key"
+      fi
+    done
+    if [ "$(plist_value LSEnvironment:MITCAD_NO_UPDATE_CHECK)" != 1 ]; then
+      fail "$plist" "the 3DxWare test application must disable updates"
+    fi
   fi
   # Keep Finder/Open With and Dock drops aligned with the actual opener.
   # Every document type lists extensions explicitly, including the native
@@ -108,7 +120,7 @@ $extension"
   supported_extensions=$(sed -n '/^FileKind fileKind(/,/^}/p' "$SCRIPT_DIR/../app/files/FileFormats.cpp" |
     grep -oE 'QStringLiteral\("[a-z0-9]+"\)' | sed 's/QStringLiteral("//; s/")//' | sort -u)
   declared_extensions=$(printf '%s\n' "$document_extensions" | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | sort -u)
-  if [ "$declared_extensions" != "$supported_extensions" ]; then
+  if [ "$preview" -eq 0 ] && [ "$declared_extensions" != "$supported_extensions" ]; then
     fail "$plist" "document extensions differ from FileFormats.cpp (expected: $(echo "$supported_extensions" | tr '\n' ' '); declared: $(echo "$declared_extensions" | tr '\n' ' '))"
   fi
 fi
@@ -177,20 +189,26 @@ fi
 # for the .mitcad type the application exports.
 quicklook="$contents/PlugIns/MitCadThumbnails.appex"
 quicklook_plist="$quicklook/Contents/Info.plist"
-if [ ! -x "$quicklook/Contents/MacOS/MitCadThumbnails" ]; then
-  fail "$quicklook" "the Quick Look thumbnail extension is missing"
-elif ! codesign --verify --strict "$quicklook" 2>/dev/null; then
-  fail "$quicklook" "the Quick Look thumbnail extension has no valid code signature"
-elif ! codesign --display --entitlements - --xml "$quicklook" 2>/dev/null | grep -q com.apple.security.app-sandbox; then
-  fail "$quicklook" "the Quick Look thumbnail extension is not signed with the App Sandbox"
-fi
-if [ ! -f "$quicklook_plist" ] || ! plutil -lint "$quicklook_plist" >/dev/null; then
-  fail "$quicklook" "the Quick Look extension's Info.plist is missing or invalid"
-elif [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$quicklook_plist")" != \
-       com.apple.quicklook.thumbnail ] || \
-     [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:QLSupportedContentTypes:0' "$quicklook_plist")" != \
-       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist").project" ]; then
-  fail "$quicklook" "the Quick Look extension is not a thumbnail extension for the application's .mitcad type"
+if [ "$preview" -eq 1 ]; then
+  if [ -e "$quicklook" ]; then
+    fail "$quicklook" "the 3DxWare test application must omit Quick Look registration"
+  fi
+else
+  if [ ! -x "$quicklook/Contents/MacOS/MitCadThumbnails" ]; then
+    fail "$quicklook" "the Quick Look thumbnail extension is missing"
+  elif ! codesign --verify --strict "$quicklook" 2>/dev/null; then
+    fail "$quicklook" "the Quick Look thumbnail extension has no valid code signature"
+  elif ! codesign --display --entitlements - --xml "$quicklook" 2>/dev/null | grep -q com.apple.security.app-sandbox; then
+    fail "$quicklook" "the Quick Look thumbnail extension is not signed with the App Sandbox"
+  fi
+  if [ ! -f "$quicklook_plist" ] || ! plutil -lint "$quicklook_plist" >/dev/null; then
+    fail "$quicklook" "the Quick Look extension's Info.plist is missing or invalid"
+  elif [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$quicklook_plist")" != \
+         com.apple.quicklook.thumbnail ] || \
+       [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:QLSupportedContentTypes:0' "$quicklook_plist")" != \
+         "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist").project" ]; then
+    fail "$quicklook" "the Quick Look extension is not a thumbnail extension for the application's .mitcad type"
+  fi
 fi
 for license in cycles/LICENSE openimagedenoise/LICENSE.txt openimagedenoise/third-party-programs.txt \
                embree-copyright.txt tbb-copyright.txt openimageio-copyright.txt \

@@ -41,7 +41,8 @@ void MainWindow::updateSelectionCreate() {
   QVector<SelectionCreatePanel::Entry> entries;
   QStringList names;
   // None on the Make tab: the Make section is the card's there (mitcad#1178).
-  const bool makeTab = m_ribbon != nullptr && m_ribbon->currentTab() == QLatin1String("MAKE");
+  const bool makeTab =
+      m_ribbon != nullptr && Ribbon::workspaceOfTab(m_ribbon->currentTab()) == QLatin1String("MAKE");
   if (m_mode == Mode::Idle && !m_selection.isEmpty() && !makeTab) {
     const Selection selection = m_selection;
     // Enabled as the ribbon shows it (updateActions, isAvailable): no query

@@ -16,4 +16,5 @@ mod material_tests;
 mod mesh_export_tests;
 mod properties_tests;
 mod render_settings_tests;
+mod render_shots_tests;
 mod texture_map_tests;

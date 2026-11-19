@@ -3,12 +3,14 @@
 # check-all sources: app/framework/QuickAccessGroup.cpp app/framework/QuickAccessGroup.hpp
 # check-all sources: app/framework/TitleBar.cpp app/framework/TitleBar.hpp app/files/FileCommands.cpp
 # check-all sources: app/files/MainWindowFiles.cpp app/MainWindow.cpp app/view/ViewController.cpp tools/cli
+# check-all sources: app/framework/Ribbon.cpp app/framework/CommandSearch.cpp
 # Input-driven Windows UI test of the quick-access group (mitcad#1090) in
 # the build VM (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-quick-access-test.sh does on Linux, on a saved plate that
 # mitcad-cli makes, in the Docked layout (after the tabs in the toolbar's
-# tab row) and the Floating one (after the workspace tabs in the title
-# row). The group's menu is a context menu here (a right-click on the
+# tab row) and the Floating one (in the title row at the free part's right
+# end, before the indicators and the search field, where the title box was:
+# mitcad#1989; session 0's 1028 px window may fold it). The group's menu is a context menu here (a right-click on the
 # group), which stays open in session 0 and takes the keys (as in
 # tools/ui-windows-timber-fasteners-test.ps1).
 #   1. Docked, fresh settings: the group shows the default commands this
@@ -23,10 +25,17 @@
 #      group's menu hides it, the choice of commands kept in the settings.
 #   2. Floating: the group hidden at the start (the setting read back), the
 #      title row without its part; Preferences shows it again with the
-#      choice read back and the title row's part; Reset to Default in the
-#      group's menu brings back the default set; Save disabled, enabled
-#      after an edit, disabled once saved; Look At checked again: the
-#      seventh button; Preferences hides it, the title row's part gone.
+#      choice of Docked read back, which wins over the top bar's empty
+#      default (mitcad#1990), and the title row's part (no title box, the
+#      group's right end just left of the next part). Reset to Default in
+#      the group's menu: the top bar's default, no commands, so the group is
+#      not shown, its menu neither (the title row without its part); Save
+#      (the bar's own) disabled, enabled after an edit, disabled once saved;
+#      Add to Quick Access, last in the menu of Measure's row in the SOLID >
+#      INSPECT menu (the Menu key; Up from Pin to Navigation Bar skips the
+#      unavailable Pin to Toolbar and goes round to the last entry): the
+#      group shown with Measure; Look At checked in its menu: a button
+#      before Measure; Preferences hides it, the title row's part gone.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-quick-access-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -64,8 +73,9 @@ $ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
 $defaults = @('file.new_design', 'file.open', 'file.save', 'file.design_properties', 'file.print', 'tools.preferences')
 
 # Expect-Group "description" extra...: the last "Quick access: " line shows
-# the default commands this build has, in order, with the extra ids before
-# tools.preferences (the menus' order). $script:Shown holds their count.
+# the default commands this build has ($defaults), in order, with the extra
+# ids before tools.preferences (the menus' order), or after them without
+# it. $script:Shown holds their count.
 function Expect-Group([string]$Description, [string[]]$Extra = @()) {
   $line = $null
   for ($i = 0; $i -lt 30; $i++) {
@@ -82,10 +92,12 @@ function Expect-Group([string]$Description, [string[]]$Extra = @()) {
     $missing = @($line.Substring($cut + 21).TrimEnd(')') -split ', ')
   }
   $expected = @()
+  $inserted = $false
   foreach ($id in $defaults) {
-    if ($id -eq 'tools.preferences') { $expected += $Extra }
+    if ($id -eq 'tools.preferences') { $expected += $Extra; $inserted = $true }
     if ($missing -notcontains $id) { $expected += $id }
   }
+  if (-not $inserted) { $expected += $Extra }
   $want = $expected -join ', '
   if ($shown -ne $want) { Ui-Fail "${Description}: the group shows '$shown', expected '$want'" }
   $script:Shown = $expected.Count
@@ -141,7 +153,8 @@ function Open-Menu {
   Ui-Step 'right-click the group'          { Ui-Click ($dots[0] - 12) $dots[1] 3 }
   Ui-ExpectNew 'Context menu: ' "the group's menu opened"
   $script:Top = @("$(Ui-LastMatch '^Context menu: (.*)$')" -split ' \| ')
-  if (($script:Top -join ' | ') -notmatch 'File \| Edit \| View \| Tools \| Reset to Default \| Hide Quick-Access Toolbar$') {
+  # The commands no menu has (added from the toolbar) as checks after Tools.
+  if (($script:Top -join ' | ') -notmatch 'File \| Edit \| View \| Tools( \| [^|]+)* \| Reset to Default \| Hide Quick-Access Toolbar$') {
     Ui-Fail "the group's menu: $($script:Top -join ' | ')"
   }
 }
@@ -166,10 +179,11 @@ function Choose-Top([string]$Entry) {
   }
 }
 
-# Add-LookAt "layout": View > Look At checked in the group's menu (View by
-# Up-To, Right opens its submenu with its first entry active, Down to Look At,
-# Return): a seventh button, kept in the settings.
-function Add-LookAt([string]$Layout) {
+# Add-LookAt "layout" ids: View > Look At checked in the group's menu
+# (View by Up-To, Right opens its submenu with its first entry active, Down
+# to Look At, Return): a button more, kept in the settings; the group then
+# shows the defaults with the ids (Expect-Group).
+function Add-LookAt([string]$Layout, [string[]]$Ids = @('view.look_at')) {
   $before = $script:Shown
   Open-Menu
   $view = @("$(Ui-LastMatch '^Context menu View: (.*)$')" -split ' \| ')
@@ -184,7 +198,7 @@ function Add-LookAt([string]$Layout) {
   }
   Ui-ExpectNew 'Quick access added view.look_at' "${Layout}: Look At checked"
   Ui-ExpectNew 'Quick access: ' "${Layout}: the group made again"
-  Expect-Group "${Layout}: Look At added" @('view.look_at')
+  Expect-Group "${Layout}: Look At added" $Ids
   if ($script:Shown -ne $before + 1) { Ui-Fail "${Layout}: $($script:Shown) buttons, expected $($before + 1)" }
   if (-not (Select-String -Path $ini -Pattern 'view.look_at' -SimpleMatch -Quiet)) {
     Ui-Fail "${Layout}: Look At is not in the settings ($ini)"
@@ -208,7 +222,9 @@ function Toggle-Preference([string]$Layout, [string]$State) {
 }
 
 # Expect-TitlePart with|without: the last "Floating cards" line, waited
-# for, has the title row's quick-access part (titleQuickAccess) or has not.
+# for, has the title row's quick-access part (titleQuickAccess) or has not;
+# a title box never (mitcad#1989), and the group's right end lies just left
+# of the indicators or the search field (Ui-QuickAccessPlace).
 function Expect-TitlePart([string]$Want) {
   $line = $null
   for ($i = 0; $i -lt 30; $i++) {
@@ -222,6 +238,25 @@ function Expect-TitlePart([string]$Want) {
   if ($Want -eq 'with' -and -not $has) { Ui-Fail "the title row has no quick-access part: '$line'" }
   if ($Want -eq 'without' -and $has) { Ui-Fail "the title row still has its quick-access part: '$line'" }
   Write-Host "ok   the title row's quick-access part $(if ($has) { 'is there' } else { 'is gone' })"
+  Ui-QuickAccessPlace 'the title row' $line
+}
+
+# Add-Measure "layout": Add to Quick Access, the last entry of the menu of
+# Measure's row (the first) in the SOLID > INSPECT menu, opened by the Menu
+# key with Pin to Navigation Bar active (Pin to Toolbar is unavailable:
+# Measure has its button); Up skips Pin to Toolbar and goes round to the
+# last entry (mitcad#1990).
+function Add-Measure([string]$Layout) {
+  Ui-Step 'the SOLID tab'                  { Ui-ClickTab 'SOLID' }
+  Ui-Mark
+  Ui-Step 'the INSPECT menu'               { Ui-ClickLogged 'Ribbon SOLID/INSPECT' }
+  Ui-ExpectNew 'Ribbon menu SOLID/INSPECT: Measure' "${Layout}: the INSPECT menu opened, Measure first"
+  Ui-Step 'Measure''s row, the Menu key'    { Ui-Key 'Down', 'Menu' }
+  Ui-ExpectNew 'Toolbar menu SOLID/INSPECT inspect.measure: Pin to Toolbar | Pin to Navigation Bar | ' "${Layout}: Measure's row menu"
+  $line = "$(Ui-LastMatch '^Toolbar menu SOLID/INSPECT inspect\.measure: (.*)$')"
+  if (-not $line.EndsWith(' | - | Add to Quick Access')) { Ui-Fail "${Layout}: Measure's row menu does not end with Add to Quick Access: $line" }
+  Ui-Step 'Add to Quick Access (Up, Enter)' { Ui-Key 'Up', 'Return' }
+  Ui-ExpectNew 'Quick access added inspect.measure' "${Layout}: Measure added from its row menu"
 }
 
 # Expect-HiddenSetting "description": the settings say hidden, and the
@@ -258,7 +293,7 @@ Ui-ExpectNew 'Quick access toolbar hidden' 'docked: the group hidden from its me
 Expect-HiddenSetting "docked, from the group's menu"
 Ui-StopApp
 
-Write-Host '--- 2. Floating: hidden at the start, shown, Reset to Default, Save, Look At, hidden'
+Write-Host '--- 2. Floating: hidden at the start, the saved choice, Reset to Default (empty), Save, Measure, Look At, hidden'
 $floating = Join-Path $work 'floating.mitcad'
 Copy-Item $plate $floating
 Ui-StartApp 'quick-access-floating' @('--chrome=floating', '--open', $floating)
@@ -267,15 +302,29 @@ Ui-ExpectLog 'Quick access toolbar hidden' 'floating: the group hidden at the st
 Expect-TitlePart 'without'
 Toggle-Preference 'floating' 'shown'
 Expect-TitlePart 'with'
-Expect-Group 'floating: the choice read back from the settings' @('view.look_at')
+# The saved choice wins over the top bar's empty default (mitcad#1990).
+Expect-Group 'floating: the choice of Docked read back from the settings' @('view.look_at')
 Open-Menu
 Ui-Mark
 Choose-Top 'Reset to Default'
 Ui-ExpectNew 'Quick access reset to the default' 'floating: Reset to Default'
-Ui-ExpectNew 'Quick access: ' 'floating: the group made again'
-Expect-Group 'floating: the default group'
+# The Floating top bar's default: no commands (mitcad#1990), so no group.
+$defaults = @()
+Ui-ExpectNew 'Quick access: none' 'floating: no commands by default'
+Ui-ExpectNew 'Quick access group hidden: no commands' 'floating: the empty group hidden'
+Expect-TitlePart 'without'
+Write-Host 'ok   floating: no quick-access group in the top bar by default'
 Save-Steps 'floating'
-Add-LookAt 'floating'
+Ui-Mark
+Add-Measure 'floating'
+Ui-ExpectNew 'Quick access group shown: it has commands' 'floating: the group shown'
+Ui-ExpectNew 'Quick access: ' 'floating: the group made again'
+Expect-Group 'floating: Measure added' @('inspect.measure')
+Expect-TitlePart 'with'
+if (-not (Select-String -Path $ini -Pattern 'inspect.measure' -SimpleMatch -Quiet)) {
+  Ui-Fail "floating: Measure is not in the settings ($ini)"
+}
+Add-LookAt 'floating' @('view.look_at', 'inspect.measure')
 Toggle-Preference 'floating' 'hidden'
 Expect-TitlePart 'without'
 Expect-HiddenSetting 'floating, from Preferences'

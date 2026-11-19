@@ -33,7 +33,9 @@ CONF=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
 
 ui_start_display
 mkdir -p "$(dirname "$CONF")"
-printf '[appearance]\ntextSize=200\niconSize=200\n' > "$CONF"
+# Icons only: the toolbar panel without its labels (mitcad#1990), as the
+# script's steps were laid out.
+printf '[appearance]\ntextSize=200\niconSize=200\nribbonLabels=icons\n' > "$CONF"
 
 echo "--- Floating, text and icons 200%"
 ui_start_app --ui=qt --no-mcp --chrome=floating

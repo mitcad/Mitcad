@@ -284,6 +284,10 @@ impl<K: Kernel> SwapBuild<K> for Document<K> {
                     let name = state.free_component_name(&swap.name);
                     if let Some(c) = state.assembly.component_mut(swap.component) {
                         c.name = name;
+                        // An automatic name from now on (mitcad#2030).
+                        if let Some(record) = c.build.as_mut() {
+                            record.named_after = Some(swap.name.clone());
+                        }
                     }
                 }
             }

@@ -24,6 +24,9 @@ pub(super) const COMMANDS: &[&str] = &[
     "add_render_light",
     "edit_render_light",
     "delete_render_light",
+    "add_render_shot",
+    "edit_render_shot",
+    "delete_render_shot",
     "create_material",
     "edit_material",
     "delete_material",
@@ -153,6 +156,20 @@ fn light_fields(id_description: &str) -> Value {
     })
 }
 
+/// The fields of a render shot (mitcad#2013).
+fn shot_fields(id_description: &str) -> Value {
+    let point = |description: &str| json!({"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": description});
+    json!({
+        "id": text(id_description),
+        "name": text("Its name, unique among the shots (Shot<n> when left out)"),
+        "eye": point("Where the camera is, mm"),
+        "target": point("The point it looks at, mm"),
+        "up": point("Upwards in the image, a vector not along the line of sight"),
+        "perspective": flag(true, "A perspective projection; orthographic when false"),
+        "height": number("How much of the design the image shows: its height at the target, mm")
+    })
+}
+
 /// The fields of `create_material` and `edit_material`.
 fn material_fields() -> Value {
     json!({
@@ -164,6 +181,7 @@ fn material_fields() -> Value {
         "filament": object("Print Filament values by key in the key map's JSON form (model_reference {\"query\": \"print_keys\"}); in edit_material a key's null removes it"),
         "based_on": based_on("create_material only: the material whose fields it starts from"),
         "class": class("Its class"),
+        "sheet_process": {"type": ["string", "null"], "enum": ["metal", "board", "laser_sheet", null], "description": "The sheet process its sheet parts default to (mitcad#1939); null: its class's"},
         "version": {"type": ["integer", "null"], "minimum": 0, "description": "The library version it was copied at (null: none)"},
         "origin": {"type": ["object", "null"], "description": "The library item it was copied from, {library, id, version, declined} (null: none)"},
         "library": choice(WRITTEN, "user or project: the command works on that library's item instead of the design's material (base is read-only)"),
@@ -305,6 +323,24 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "properties": {"id": id("The light (light1)")},
             "required": ["id"],
             "examples": [{"cmd": "delete_render_light", "id": "light1"}]
+        }),
+        "add_render_shot" => json!({
+            "description": "Adds a shot of the Render workspace: a named camera an image is rendered through. Result: id.",
+            "properties": shot_fields("Its id (the next free shot<n> when left out)"),
+            "required": [],
+            "examples": [{"cmd": "add_render_shot", "name": "Hero", "eye": [300, -300, 200], "target": [0, 0, 0], "up": [0, 0, 1], "perspective": true, "height": 120}]
+        }),
+        "edit_render_shot" => json!({
+            "description": "Changes the given fields of a shot: name renames it, the camera's fields move it (null: the field's default). Result: changed.",
+            "properties": shot_fields("The shot (shot1); needed"),
+            "required": ["id"],
+            "examples": [{"cmd": "edit_render_shot", "id": "shot1", "name": "Front"}]
+        }),
+        "delete_render_shot" => json!({
+            "description": "Deletes a shot of the Render workspace.",
+            "properties": {"id": id("The shot (shot1)")},
+            "required": ["id"],
+            "examples": [{"cmd": "delete_render_shot", "id": "shot1"}]
         }),
         "create_material" => json!({
             "description": "Adds a material to the design (or, with library, to that library). Result: id (with library also library, version, path, warnings).",

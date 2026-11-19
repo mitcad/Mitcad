@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The Boost development button (mitcad#1990), tools/ui-boost-button-test.sh: a 60 x 40 x 10 box, so that the window shows a design."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 60, "width": 40, "height": 10, "operation": "new_body"}}
+]

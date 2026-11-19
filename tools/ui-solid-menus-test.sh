@@ -8,13 +8,18 @@
 # check-all sources: app/commands/MaterialCommands.cpp app/commands/DogboneCommands.cpp
 # check-all sources: app/commands/MortiseTenonCommands.cpp app/commands/ConvertMeshCommands.cpp
 # check-all sources: app/MainWindow.cpp app/files/MainWindowFiles.cpp app/files/MainWindowLibraries.cpp
-# The SOLID tab's menus in their sections (mitcad#1778), through the real
-# UI, in the Docked and the Floating layout: MODIFY, SHEET METAL, SURFACE,
-# ASSEMBLE and CONSTRUCT as they open, every entry in its place and a
-# separator between two sections (app/COMMANDS.md, "Sections"), so that a
-# command registered out of its section's place fails here; and each
-# group's own buttons in the menu's order, as the ribbon logs them when it
-# makes the group ("Ribbon group SOLID/MODIFY buttons: ...").
+# check-all sources: app/resources/layout/default.json app/framework/CommandLayout.cpp app/commands/InspectCommands.cpp
+# The modelling tabs' menus in their sections (mitcad#1778, mitcad#1975),
+# through the real UI, in the Docked and the Floating layout: SOLID's
+# MODIFY, ASSEMBLE, CONSTRUCT, INSPECT and INSERT, SURFACE's CREATE,
+# MODIFY and CONSTRUCT, SHEET METAL's CREATE, MODIFY and RULES and
+# MANAGE's MATERIALS, RULES and DESIGN as they open, every entry in its
+# place and a separator between two sections (app/COMMANDS.md,
+# "Sections"), so that a command registered out of its section's place
+# fails here; and each group's own buttons in the menu's order, as the
+# ribbon logs them when it makes the group ("Ribbon group SOLID/MODIFY
+# buttons: ..."). Surface and Sheet Metal show SOLID's CONSTRUCT group too
+# (a second place, mitcad#1975).
 # The Windows counterpart: tools/ui-windows-solid-menus-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -24,25 +29,14 @@ source "$(dirname "$0")/ui-test-lib.sh"
 
 MODIFY="Press Pull | Fillet | Chamfer | Shell | Draft"
 MODIFY="$MODIFY | - | Offset Face | Move Face | Replace Face | Fill Cavity | Split Face | Delete Face"
-MODIFY="$MODIFY | - | Combine | Split Body | Scale | Convert Mesh"
+MODIFY="$MODIFY | - | Combine | Split Body | Panelize | Scale | Convert Mesh"
+MODIFY="$MODIFY | Mesh > [Mesh Section | Repair Mesh | Decimate Mesh | Remove Region | Segment Mesh | Fit Surface]"
 MODIFY="$MODIFY | - | Move/Copy | Align"
-MODIFY="$MODIFY | - | Dogbone | Mortise and Tenon"
-MODIFY="$MODIFY | - | Material | Appearance | Edit Appearances…"
-MODIFY="$MODIFY | - | Edit Parameters… | Configurations…"
-SHEET="Sheet Rules | Edit Sheet Rules"
-SHEET="$SHEET | - | Face | Flange"
-SHEET="$SHEET | - | Bend | Fold | Corner Relief"
-SHEET="$SHEET | - | Corner Round | Corner Chamfer | Sheet Cut"
-SHEET="$SHEET | - | Unfold | Refold | Flat Pattern | Show Flat Pattern"
-SURFACE="Surface Extrude | Surface Revolve | Surface Sweep | Surface Loft | Surface Helix"
-SURFACE="$SURFACE | - | Patch | Ruled Surface | Boundary Surface | Blend Surface"
-SURFACE="$SURFACE | - | Extend | Trim | Untrim | Offset Surface"
-SURFACE="$SURFACE | - | Match Surface | Fair Surface | Reverse Normal"
-SURFACE="$SURFACE | - | Stitch | Unstitch | Thicken"
+MODIFY="$MODIFY | - | Joinery > [Dogbone | Mortise and Tenon]"
+MODIFY="$MODIFY | - | Material | Appearance"
 ASSEMBLE="New Component"
 ASSEMBLE="$ASSEMBLE | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Assembly Constraint"
 ASSEMBLE="$ASSEMBLE | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study…"
-ASSEMBLE="$ASSEMBLE | - | Insert Component | Insert from Library"
 CONSTRUCT="Offset Plane | Plane at Angle | Tangent Plane | Midplane | Plane Through Two Edges"
 CONSTRUCT="$CONSTRUCT | Plane Through Three Points | Plane Tangent to Face at Point | Plane Along Path"
 CONSTRUCT="$CONSTRUCT | Plane Through Edge and Point | Plane Normal to Path at Point | Offset Plane Through Point"
@@ -52,6 +46,21 @@ CONSTRUCT="$CONSTRUCT | Axis Perpendicular to Face at Point"
 CONSTRUCT="$CONSTRUCT | - | Point at Vertex | Point Through Two Edges | Point Through Three Planes"
 CONSTRUCT="$CONSTRUCT | Point at Center of Circle/Sphere/Torus | Point at Edge and Plane | Point Along Path"
 CONSTRUCT="$CONSTRUCT | - | Coordinate System"
+INSPECT="Measure | Interference | Section Analysis | Print Analysis | Physical Properties | Center of Mass | Add Comment"
+INSERT="Insert Component | Insert from Library"
+INSERT="$INSERT | - | Insert Mesh | Insert DXF | Insert SVG | From an Open Design… | Component from Web… | Import…"
+INSERT="$INSERT | Image Reference"
+SURFACE_CREATE="Create Sketch | - | Surface Extrude | Surface Revolve | Surface Sweep | Surface Loft | Surface Helix"
+SURFACE_CREATE="$SURFACE_CREATE | - | Patch | Ruled Surface | Boundary Surface | Blend Surface | - | Offset Surface"
+SURFACE_MODIFY="Trim | Untrim | Extend | - | Stitch | Unstitch | Reverse Normal | - | Match Surface | Fair Surface"
+SURFACE_MODIFY="$SURFACE_MODIFY | - | Thicken"
+SHEET_CREATE="Create Sketch | - | Face | Flange | Convert to Sheet Metal | - | Bend | Fold | - | Sheet Cut"
+SHEET_MODIFY="Corner Relief | Corner Round | Corner Chamfer | - | Unfold | Refold | Flat Pattern | Show Flat Pattern"
+SHEET_MODIFY="$SHEET_MODIFY | - | Export Flat Pattern…"
+RULES="Sheet Rules | Edit Sheet Rules"
+MANAGE_RULES="$RULES | - | Plastic Rules"
+DESIGN="Recompute All | Units… | - | Design Properties…"
+MATERIALS="Edit Materials… | Edit Appearances…"
 
 # last_line "prefix": the last log line containing the prefix, without the
 # prefix and what is before it.
@@ -59,41 +68,74 @@ last_line() {
   grep -F -- "$1" "$UI_LOG" | tail -1 | awk -v p="$1" '{ print substr($0, index($0, p) + length(p)) }'
 }
 
-# check_menu layout GROUP "entries": the group's menu as it opens is the
-# entries ("-" a separator), exactly.
-check_menu() {
-  local layout=$1 group=$2 expected=$3 menu
+# show_tab layout TAB: the tab shown, unless it is already (the last one
+# shown since the app started).
+show_tab() {
+  local layout=$1 tab=$2 shown
+  # SOLID at the start, before a tab was chosen.
+  shown=$(last_line "Ribbon tab shown: ")
+  [ "${shown:-SOLID}" = "$tab" ] && return
   ui_mark
-  ui_step "open the $group menu"           ui_click_logged "Ribbon SOLID/$group"
-  ui_expect_new "Ribbon menu SOLID/$group: " "$layout: the $group menu opened"
-  ui_step "close it (Esc)"                 ui_key Escape
-  menu=$(last_line "Ribbon menu SOLID/$group: ")
-  [ "$menu" = "$expected" ] || ui_fail "$layout: the $group menu is '$menu', not '$expected'"
-  echo "ok   $layout: the $group menu in its sections"
+  ui_step "the $tab tab"                   ui_click_tab "$tab"
+  ui_expect_new "Ribbon tab shown: $tab" "$layout: the $tab tab shown"
 }
 
-# check_buttons layout GROUP "ids": the group's own buttons, in order.
+# check_menu layout TAB/GROUP "entries": the group's menu as it opens is
+# the entries ("-" a separator, "Name > [...]" a submenu), exactly.
+check_menu() {
+  local layout=$1 place=$2 expected=$3 menu
+  show_tab "$layout" "${place%%/*}"
+  ui_mark
+  ui_step "open the $place menu"           ui_click_logged "Ribbon $place"
+  ui_expect_new "Ribbon menu $place: " "$layout: the $place menu opened"
+  ui_step "close it (Esc)"                 ui_key Escape
+  menu=$(last_line "Ribbon menu $place: ")
+  [ "$menu" = "$expected" ] || ui_fail "$layout: the $place menu is '$menu', not '$expected'"
+  echo "ok   $layout: the $place menu in its sections"
+}
+
+# check_buttons layout TAB/GROUP "ids": the group's own buttons, in order.
 check_buttons() {
-  local layout=$1 group=$2 expected=$3 buttons
-  ui_expect_log "Ribbon group SOLID/$group buttons: " "$layout: the $group group's buttons logged"
-  buttons=$(last_line "Ribbon group SOLID/$group buttons: ")
-  [ "$buttons" = "$expected" ] || ui_fail "$layout: the $group buttons are '$buttons', not '$expected'"
-  echo "ok   $layout: the $group buttons $expected"
+  local layout=$1 place=$2 expected=$3 buttons
+  ui_expect_log "Ribbon group $place buttons: " "$layout: the $place group's buttons logged"
+  buttons=$(last_line "Ribbon group $place buttons: ")
+  [ "$buttons" = "$expected" ] || ui_fail "$layout: the $place buttons are '$buttons', not '$expected'"
+  echo "ok   $layout: the $place buttons $expected"
 }
 
 check_layout() {
   local layout=$1
   echo "=== $layout"
-  check_buttons "$layout" MODIFY "solid.press_pull, solid.fillet, solid.chamfer, solid.shell, solid.combine"
-  check_buttons "$layout" "SHEET METAL" "sheet.face, sheet.flange, sheet.bend, sheet.unfold, sheet.flat_pattern"
-  check_buttons "$layout" SURFACE "surface.extrude, surface.patch, surface.trim, surface.thicken"
-  check_buttons "$layout" ASSEMBLE "solid.new_component, assemble.joint, assemble.constraint, insert.component"
-  check_buttons "$layout" CONSTRUCT "construct.offset_plane, construct.plane_angle, construct.midplane"
-  check_menu "$layout" MODIFY "$MODIFY"
-  check_menu "$layout" "SHEET METAL" "$SHEET"
-  check_menu "$layout" SURFACE "$SURFACE"
-  check_menu "$layout" ASSEMBLE "$ASSEMBLE"
-  check_menu "$layout" CONSTRUCT "$CONSTRUCT"
+  check_buttons "$layout" SOLID/MODIFY "solid.press_pull, solid.fillet, solid.chamfer, solid.shell"
+  check_buttons "$layout" SOLID/ASSEMBLE "solid.new_component, assemble.joint, assemble.constraint"
+  check_buttons "$layout" SOLID/CONSTRUCT "construct.offset_plane, construct.plane_angle, construct.midplane"
+  check_buttons "$layout" SOLID/INSPECT "inspect.measure, inspect.section"
+  check_buttons "$layout" SOLID/INSERT "insert.component, insert.mesh, insert.dxf"
+  check_buttons "$layout" SURFACE/CREATE "sketch.create, surface.extrude, surface.patch"
+  check_buttons "$layout" SURFACE/MODIFY "surface.trim, surface.thicken"
+  check_buttons "$layout" SURFACE/CONSTRUCT "construct.offset_plane, construct.plane_angle, construct.midplane"
+  check_buttons "$layout" "SHEET METAL/CREATE" "sketch.create, sheet.face, sheet.flange, sheet.bend"
+  check_buttons "$layout" "SHEET METAL/MODIFY" "sheet.unfold, sheet.flat_pattern"
+  check_buttons "$layout" "SHEET METAL/RULES" "sheet.rules"
+  check_buttons "$layout" MANAGE/PARAMETERS "solid.parameters"
+  check_buttons "$layout" MANAGE/CONFIGURATIONS "solid.configurations"
+  check_buttons "$layout" MANAGE/MATERIALS "solid.materials, solid.appearances"
+  check_buttons "$layout" MANAGE/RULES "sheet.rules, manage.plastic_rules"
+  check_buttons "$layout" MANAGE/DESIGN "manage.recompute_all, manage.units, file.design_properties"
+  check_menu "$layout" SOLID/MODIFY "$MODIFY"
+  check_menu "$layout" SOLID/ASSEMBLE "$ASSEMBLE"
+  check_menu "$layout" SOLID/CONSTRUCT "$CONSTRUCT"
+  check_menu "$layout" SOLID/INSPECT "$INSPECT"
+  check_menu "$layout" SOLID/INSERT "$INSERT"
+  check_menu "$layout" SURFACE/CREATE "$SURFACE_CREATE"
+  check_menu "$layout" SURFACE/MODIFY "$SURFACE_MODIFY"
+  check_menu "$layout" SURFACE/CONSTRUCT "$CONSTRUCT"
+  check_menu "$layout" "SHEET METAL/CREATE" "$SHEET_CREATE"
+  check_menu "$layout" "SHEET METAL/MODIFY" "$SHEET_MODIFY"
+  check_menu "$layout" "SHEET METAL/RULES" "$RULES"
+  check_menu "$layout" MANAGE/MATERIALS "$MATERIALS"
+  check_menu "$layout" MANAGE/RULES "$MANAGE_RULES"
+  check_menu "$layout" MANAGE/DESIGN "$DESIGN"
 }
 
 ui_start_display

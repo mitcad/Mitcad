@@ -67,8 +67,6 @@ void MainWindow::registerParameterEditCommands() {
   def.icon = QStringLiteral("parameters");
   def.kind = CommandDef::Kind::Action;
   def.mode = CommandDef::Mode::Sketch;
-  def.tab = QStringLiteral("SKETCH");
-  def.group = QStringLiteral("MODIFY");
   def.tooltip = tr("User and model parameters; the sketch stays open and follows them");
   def.keywords = {QStringLiteral("parameters"), QStringLiteral("user parameter"), QStringLiteral("expression"),
                   QStringLiteral("fx")};

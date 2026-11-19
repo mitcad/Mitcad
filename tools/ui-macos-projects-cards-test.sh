@@ -33,7 +33,7 @@ cat >> "$UI_OUT/docked.mitcad-ui" <<'DRIVER'
 # titlebar margins, without changing the physical display resolution.
 fit-main-frame 916 394
 expect-main-frame 916 394
-expect-ribbon-labels Start Solid Build Make
+expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 focus-widget projectsTree
 key Home Right
@@ -44,26 +44,26 @@ expect-widget-property ribbonScrollLeft enabled false
 focus-widget ribbonScrollRight
 key Space
 expect-widget-property ribbonScrollLeft enabled true
-expect-ribbon-labels Start Solid Build Make
+expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
 focus-widget ribbonScrollLeft
 key Space
 expect-widget-property ribbonScrollLeft enabled false
-expect-ribbon-labels Start Solid Build Make
+expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
 screenshot ${MITCAD_TEST_SHOTS}/short-frame.png
 # Below the width of all group captions, overflow must work through ordinary
 # keyboard input and leave every complete group menu reachable.
 fit-main-frame 500 394
 expect-main-frame 500 394
-expect-ribbon-labels Start Solid Build Make
+expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
 expect-widget-property ribbonScrollLeft enabled false
 focus-widget ribbonScrollRight
 key Space
 expect-widget-property ribbonScrollLeft enabled true
-expect-ribbon-labels Start Solid Build Make
+expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
 focus-widget ribbonScrollLeft
 key Space
 expect-widget-property ribbonScrollLeft enabled false
-expect-ribbon-labels Start Solid Build Make
+expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
 screenshot ${MITCAD_TEST_SHOTS}/ribbon-overflow.png
 DRIVER
 for chrome in floating docked; do

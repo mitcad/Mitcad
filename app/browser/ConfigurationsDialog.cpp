@@ -1197,11 +1197,20 @@ void ConfigurationsDialog::showEvent(QShowEvent* event) {
     m_placed = true;
     if (!m_restored) {
       widenToRows();
+      // At its size hint, which has the Rules palette's every entry in
+      // sight, as wide as the rows' columns made it, within the screen; on
+      // a lower screen what it gives, and the palette scrolls (mitcad#2036).
+      fitWindowToContents(this, FitMode::Fit, size());
     }
     qDebug().noquote() << QStringLiteral("Configurations window size %1x%2 (%3)")
                               .arg(width())
                               .arg(height())
                               .arg(m_restored ? QStringLiteral("kept") : QStringLiteral("for the rows' columns"));
+    // Its minimum on every tab, which must leave it room on a low screen
+    // (mitcad#2036: 1280 x 720 logical px with the frame), for UI tests.
+    const QSize minimum = minimumSize().expandedTo(minimumSizeHint());
+    qDebug().noquote()
+        << QStringLiteral("Configurations window minimum size %1x%2").arg(minimum.width()).arg(minimum.height());
   }
   // On a connected screen at every opening, and while it is shown, with its
   // real frame (known once the window is on the screen).

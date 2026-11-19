@@ -173,6 +173,8 @@ qt_add_executable(mitcad
   commands/BearingCommands.cpp
   # Equal spacing in sketches (mitcad#221).
   commands/EqualSpacingCommands.cpp
+  # Auto Constrain in sketches (mitcad#2019).
+  commands/AutoConstrainCommands.cpp
   # Surface modelling: the SURFACE group (mitcad#455).
   commands/SurfaceCommands.cpp
   # Sketch mode (U2).
@@ -866,6 +868,13 @@ if(BUILD_TESTING)
   set_tests_properties(app.default_shortcuts PROPERTIES TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;MITCAD_TEST_DEFAULT_SHORTCUTS=1;MITCAD_SETTINGS_DIR=${CMAKE_CURRENT_BINARY_DIR}/default-shortcuts-settings;MITCAD_AUTOSAVE_DIR=${CMAKE_CURRENT_BINARY_DIR}/default-shortcuts-autosave;MITCAD_RESULT_STORE=off"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  # The command layout's coverage (mitcad#1951): every registered command
+  # placed in app/resources/layout/default.json or listed as on no toolbar,
+  # every id there a command, every key a caption.
+  add_test(NAME app.layout_coverage COMMAND ${default_shortcuts_prefix} $<TARGET_FILE:mitcad> --ui=qt --no-recovery --no-mcp)
+  set_tests_properties(app.layout_coverage PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;MITCAD_TEST_LAYOUT_COVERAGE=1;MITCAD_SETTINGS_DIR=${CMAKE_CURRENT_BINARY_DIR}/layout-coverage-settings;MITCAD_AUTOSAVE_DIR=${CMAKE_CURRENT_BINARY_DIR}/layout-coverage-autosave;MITCAD_RESULT_STORE=off"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   # Verify the shared Rust/GUI cache path against the platform's actual Qt path.
   add_executable(test_library_paths tests/library_paths.cpp files/LibraryPaths.cpp)
   target_include_directories(test_library_paths PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -959,6 +968,18 @@ target_sources(mitcad PRIVATE
   render/RenderBatch.hpp
   render/RenderImageDialog.cpp
   render/RenderImageDialog.hpp)
+# The Render workspace (mitcad#2013): the stages of the Render tab, Render
+# Environment's and Render Image's contents as panels, Ready to Render.
+target_sources(mitcad PRIVATE
+  MainWindowRender.cpp
+  render/RenderEnvironmentPanel.cpp
+  render/RenderEnvironmentPanel.hpp
+  render/RenderImagePanel.cpp
+  render/RenderImagePanel.hpp
+  render/RenderReadyCheck.cpp
+  render/RenderReadyCheck.hpp
+  render/RenderWorkspace.cpp
+  render/RenderWorkspace.hpp)
 # The browser's light bulbs in every mode, outside a command's undo range
 # (mitcad#295), and Create Sketch's origin planes (mitcad#844).
 target_sources(mitcad PRIVATE
@@ -1310,10 +1331,13 @@ endif()
 if(APPLE)
   # Configure the bundle after its render worker exists, so its
   # install rules include the worker, denoiser module and their libraries.
+  option(MITCAD_3DXWARE_PREVIEW "Build a separately identified 3DxWare test application" OFF)
   include(packaging/macos/Bundle.cmake)
   # Finder's thumbnails of designs (mitcad#1696): the Quick Look extension
   # MitCadThumbnails.appex in the bundle's PlugIns.
-  include("${PROJECT_SOURCE_DIR}/cmake/MacQuickLook.cmake")
+  if(NOT MITCAD_3DXWARE_PREVIEW)
+    include("${PROJECT_SOURCE_DIR}/cmake/MacQuickLook.cmake")
+  endif()
 endif()
 
 # The browser's and the timeline's places logged again when they move (mitcad#262).
@@ -1955,11 +1979,11 @@ endif()
 target_sources(mitcad PRIVATE sketch/SketchPreferences.cpp sketch/SketchPreferences.hpp)
 
 # 3D mice (mitcad#951, docs/rendering.md "Navigation"): the view's mapping
-# and the controller, the camera's side in OcctViewer, and one backend per
-# platform without a vendor SDK (Raw Input on Windows, spacenavd's socket
-# on Linux and the BSDs, IOKit's HID Manager on macOS).
+# and the controller, the camera's side in OcctViewer, and the platform
+# backends, including optional routes through an installed 3DxWare driver.
 target_sources(mitcad PRIVATE
   platform/SpaceMouseDevice.hpp
+  platform/SpaceMouseDriverReports.hpp
   view/SpaceMouseCamera.hpp
   view/SpaceMouseController.cpp
   view/SpaceMouseController.hpp
@@ -1967,14 +1991,28 @@ target_sources(mitcad PRIVATE
   view/SpaceMouseTiming.hpp
   view/SpaceMouseView.cpp)
 if(WIN32)
-  target_sources(mitcad PRIVATE platform/windows/SpaceMouseWindows.cpp)
-  # HidD_GetProductString for the device's name in the log: hid.dll is in every Windows.
-  target_link_libraries(mitcad PRIVATE hid)
+  target_sources(mitcad PRIVATE
+    platform/windows/SpaceMouseWindows.cpp
+    platform/windows/SpaceMouse3DxWare.cpp
+    platform/windows/SpaceMouse3DxWare.hpp)
+  # HID device names and the system Program Files path for the optional driver.
+  target_link_libraries(mitcad PRIVATE hid shell32)
 elseif(APPLE)
-  target_sources(mitcad PRIVATE platform/macos/SpaceMouseMac.cpp)
+  target_sources(mitcad PRIVATE
+    platform/macos/SpaceMouseMac.cpp
+    platform/macos/SpaceMouse3DxWare.cpp
+    platform/macos/SpaceMouse3DxWare.hpp)
+  if(MITCAD_3DXWARE_PREVIEW)
+    target_compile_definitions(mitcad PRIVATE MITCAD_3DXWARE_PREVIEW)
+  endif()
   target_link_libraries(mitcad PRIVATE "-framework IOKit" "-framework CoreFoundation")
 else()
   target_sources(mitcad PRIVATE platform/unix/SpaceMouseSpnav.cpp)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(mitcad PRIVATE
+      platform/unix/SpaceMouseMagellan.cpp
+      platform/unix/SpaceMouseMagellan.hpp)
+  endif()
 endif()
 # The AI chat panel (mitcad#947, docs/ai-chat.md): the user's own agent
 # through its own interface (agent/ChatAgent.hpp; Claude Code, Codex), the
@@ -2114,7 +2152,7 @@ target_sources(mitcad PRIVATE browser/MainWindowConfigurationPanel.cpp)
 # and More…; a pick assigns as the Materials window's Assign does.
 target_sources(mitcad PRIVATE browser/BrowserMaterialMenu.cpp print/MaterialMenuChoices.cpp
                print/MaterialMenuChoices.hpp)
-# The Make tab (mitcad#1049, app/COMMANDS.md "The Make tab"): the Annotate
+# The Make tab (mitcad#1049, app/COMMANDS.md "The Make tabs"): the Annotate
 # group's panels, Assign Material…, Export Face as DXF…, the selected
 # body's card with its material and print settings, and the Browser's
 # markers of the bodies that differ from their component.
@@ -2158,6 +2196,8 @@ endif()
 # Convert Mesh's panel in the SOLID tab's MODIFY group (mitcad#1082): a mesh
 # body made a faceted or an analytic solid.
 target_sources(mitcad PRIVATE commands/ConvertMeshCommands.cpp)
+# Mesh tools for reverse engineering (mitcad#1871).
+target_sources(mitcad PRIVATE commands/MeshToolsCommands.cpp)
 
 # File › Print… (mitcad#1089, app/COMMANDS.md "Print"): a drawing's sheets
 # each on a page of its size, a sketch or a cut sheet at 1:1 tiled over
@@ -2528,6 +2568,7 @@ target_sources(mitcad PRIVATE
   cam/CamStock.cpp
   cam/CamStock.hpp
   cam/MainWindowCamStock.cpp
+  cam/MainWindowCamTurning.cpp
   view/CamStockOverlay.cpp)
 # Live MCP's input tools (mitcad#1735, docs/mcp.md "Clicks, keys and
 # dialogs"): ui_click and ui_type post mouse and key events to the window,
@@ -2638,10 +2679,36 @@ target_sources(mitcad PRIVATE framework/ParameterUnits.cpp framework/ParameterUn
 # icon, the setting and its notifier.
 target_sources(mitcad PRIVATE framework/RibbonLabels.cpp framework/RibbonLabels.hpp)
 
+# The command layout (mitcad#1951, app/COMMANDS.md "The layout file"): the
+# toolbar's tabs and groups and the menu bar's menus as one JSON file, read
+# once at the start, with the user's layer over it; plain Qt Core.
+target_sources(mitcad PRIVATE framework/CommandLayout.cpp framework/CommandLayout.hpp)
+qt_add_resources(mitcad command_layout PREFIX /layout BASE resources/layout FILES resources/layout/default.json)
+
 # Sketch curves picked in the Browser (mitcad#1978): a sketch's curves as
 # rows under its row while a command's active input takes sketch curves,
 # named in words, the pointer over one painting it in the view.
 target_sources(mitcad PRIVATE MainWindowBrowserCurves.cpp browser/SketchCurveRows.cpp browser/SketchCurveRows.hpp)
+
+# The Boost development button (mitcad#1990, app/COMMANDS.md "Boost
+# development"): a pill in the Floating top bar and the Docked tabs' row
+# that opens the project's Ko-fi page, its × and Preferences' setting.
+target_sources(mitcad PRIVATE framework/BoostButton.cpp framework/BoostButton.hpp)
+
+# The Drawing workspace's Drawings card (mitcad#1990, app/COMMANDS.md "The
+# Drawings card"): the design's drawings and their sheets in place of the
+# Browser's card while a drawing is open (Floating).
+target_sources(mitcad PRIVATE drawings/DrawingsPanel.cpp drawings/DrawingsPanel.hpp)
+
+# Sheet parts by material and process (mitcad#1939): the process profile's
+# command filter, Finger Joint, T-Nut Slot, Kerf Bend, Flat Pack, Glue Flap
+# and Standard Box.
+target_sources(mitcad PRIVATE commands/SheetProcessCommands.cpp commands/SheetProcess.hpp)
+
+# A sketch text wrapped in its frame and typed in lines (mitcad#2029,
+# GitHub mitcad/Mitcad#453): the Text tool's frame, Edit Text's Wrap in
+# Frame and the line breaks of its Text box.
+target_sources(mitcad PRIVATE sketch/TextCommands.cpp sketch/TextCommands.hpp)
 
 # app.unit's test files (mitcad#1925): each tests/<file>.cpp registers its
 # entry point (tests/UnitTests.hpp) and its sources in tests/unit/<file>.cmake,
@@ -2654,3 +2721,7 @@ if(BUILD_TESTING)
     include("${mitcad_unit_test_file}")
   endforeach()
 endif()
+
+# Panelize in the SOLID tab's MODIFY group (mitcad#2005, app/COMMANDS.md
+# "Panelize"): a body's planar faces split off as panels of one thickness.
+target_sources(mitcad PRIVATE commands/PanelizeCommands.cpp)

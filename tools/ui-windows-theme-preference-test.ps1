@@ -33,7 +33,9 @@ $baseIni = @(Get-Content $ini)
 # One start of MitCad with the Theme preference Dark stored and the shared
 # steps; the app ends with them.
 function Run-Theme([string]$Name, [string[]]$Arguments) {
-  Set-Content -Encoding ascii $ini ($baseIni + @('[appearance]', 'theme=dark'))
+  # The Browser on its own card (not Rows, through which the view's light
+  # gradient shows): the check measures the Browser's own background.
+  Set-Content -Encoding ascii $ini ($baseIni + @('[appearance]', 'theme=dark', 'browserBackground=card'))
   Ui-StartApp $Name (@('--ui=qt', '--no-mcp') + $Arguments)
   $null = $script:UiProcess.Handle
   if (-not $script:UiProcess.WaitForExit(180000)) { Ui-Fail "${Name}: the driver timed out" }

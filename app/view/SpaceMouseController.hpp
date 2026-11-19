@@ -54,6 +54,9 @@ public:
     // changed it (a toggle, a sketch begun or ended, new settings): Lock
     // Rotation's check mark follows.
     std::function<void(bool locked)> rotationLock;
+    // Whether the associated window is active.
+    std::function<bool()> acceptsInput;
+    std::function<std::uintptr_t()> nativeWindow;
   };
   using Factory = std::function<std::unique_ptr<SpaceMouseBackend>()>;
 

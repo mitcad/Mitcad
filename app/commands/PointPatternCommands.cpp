@@ -63,9 +63,6 @@ CommandDef pointPatternCommand(const CommandContext& context) {
   def.name = QObject::tr("Pattern at Points");
   def.icon = QStringLiteral("pattern-at-points");
   def.tooltip = QObject::tr("Copies features, bodies or components to selected points");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("patterns");
-  def.subgroup = QStringLiteral("Pattern");
   def.keywords = {QStringLiteral("array"), QStringLiteral("irregular"), QStringLiteral("copy"), QStringLiteral("anchor")};
   def.featureType = QStringLiteral("pattern_at_points");
   def.inputs = {

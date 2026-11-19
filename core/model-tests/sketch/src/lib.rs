@@ -115,3 +115,6 @@ mod sketch_tangent_midpoint_2006_tests;
 // A sketch pattern's deleted copy left out, and the pattern freed by Trim,
 // Extend, Sketch Fillet, Chamfer or Free Pattern (mitcad#2007).
 mod sketch_pattern_free_2007_tests;
+// Auto Constrain: a sketch's relations, then dimensions for what is left
+// free (mitcad#2019).
+mod sketch_auto_constrain_2019_tests;

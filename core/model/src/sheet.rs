@@ -26,6 +26,8 @@ pub mod flat;
 // Its DXF drawing and picks resolved to semantic references (mitcad#210).
 pub mod flat_dxf;
 pub mod pick;
+// Process profiles of sheet parts: metal, board, laser sheet (mitcad#1939).
+pub mod process;
 // The material charts the kernel's sheet operations take and give, below
 // the model (mitcad#777).
 pub use mitcad_model_base::sheet_charts::*;

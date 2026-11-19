@@ -75,6 +75,11 @@ public:
   // The palette entry's item, for tests.
   QTreeWidgetItem* entry(const QString& id) const;
   void logPlaces();
+  // As tall as all of its rows (every entry in sight, mitcad#808); its
+  // minimum is a few rows, and below the hint it scrolls (mitcad#2036: the
+  // full height as the minimum kept the Configurations window taller than
+  // a low screen).
+  QSize sizeHint() const override;
 
 protected:
   void mousePressEvent(QMouseEvent* event) override;
@@ -92,6 +97,7 @@ private:
   QPoint m_pressAt;
   bool m_dragging = false;
   QString m_logged;
+  int m_fullHeight = 0; // the height of every row, for sizeHint
 };
 
 // The block canvas of one rule (mitcad#808): a native QGraphicsView that

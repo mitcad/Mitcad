@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Sheet process profiles (mitcad#1939): a sketch of a 60 x 40 rectangle (F1) for tools/ui-scripts/sheet-process.mitcad-ui."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [0, 0]},
+    {"id": "p2", "type": "point", "at": [60, 0]},
+    {"id": "p3", "type": "point", "at": [60, 40]},
+    {"id": "p4", "type": "point", "at": [0, 40]},
+    {"id": "c5", "type": "line", "start": "p1", "end": "p2"},
+    {"id": "c6", "type": "line", "start": "p2", "end": "p3"},
+    {"id": "c7", "type": "line", "start": "p3", "end": "p4"},
+    {"id": "c8", "type": "line", "start": "p4", "end": "p1"}]}}
+]

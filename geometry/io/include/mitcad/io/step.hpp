@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include <Message_ProgressRange.hxx>
+
 #include "mitcad/io/body.hpp"
 
 namespace mitcad::io {
@@ -41,7 +43,12 @@ void write_step(const std::string& path, const std::vector<Body>& bodies,
 // them all (else the one that decodes the most); names in UTF-8 and STEP's
 // escapes are read as they are. The choice goes to stderr
 // ("STEP names: GBK (12 of 40 names not ASCII)") when a name is not ASCII.
-std::vector<Body> read_step(const std::string& path);
+// The read parses the file, which nothing can stop (OCCT gives the parsing
+// no progress range), then transfers it into shapes within `range`
+// (mitcad#2032): a user break of the range before the transfer, during it
+// or by its end throws Cancelled.
+std::vector<Body> read_step(const std::string& path,
+                            const Message_ProgressRange& range = Message_ProgressRange());
 
 // The assembly structure of a STEP file (mitcad#1274): each distinct part
 // and assembly of the file once, as a node, and the instances that place
@@ -79,8 +86,10 @@ struct StepRead {
 // Reads a STEP file once: with `keep_assembly` and a file whose top shapes
 // include an assembly, its structure; otherwise the bodies of read_step.
 // An instance whose location is not a rigid motion (a mirror or a scale)
-// gets a node of its own holding the part's bodies moved there.
-StepRead read_step_structured(const std::string& path, bool keep_assembly);
+// gets a node of its own holding the part's bodies moved there. Its
+// transfer stops within `range` as read_step's does.
+StepRead read_step_structured(const std::string& path, bool keep_assembly,
+                              const Message_ProgressRange& range = Message_ProgressRange());
 
 // A design's component tree to write (mitcad#1915): each component once,
 // as a definition with its bodies and the instances of the definitions it

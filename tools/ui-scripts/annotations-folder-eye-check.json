@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Saved by the UI with the Annotations folder hidden by its eye (mitcad#2041): the design keeps the folder hidden as display state, and every annotation's own light bulb as it was (Offset2 hidden)."},
+  {"expect": {"query": {"query": "document"},
+    "result": {"display": {"folders": {"C0": {"annotations": false, "bodies": true, "sketches": true}}}}}},
+  {"expect": {"query": {"query": "annotations"},
+    "result": [{"name": "Offset1", "visible": true}, {"name": "Offset2", "visible": false},
+               {"name": "Offset3", "visible": true}]}}
+]

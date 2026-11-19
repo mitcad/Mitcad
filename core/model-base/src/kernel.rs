@@ -2285,6 +2285,20 @@ pub trait Kernel: Send {
     ) -> Result<Vec<Option<BoundingBox>>, KernelError> {
         Err(KernelError::Unsupported("boxes of many shapes"))
     }
+
+    // Many shapes placed at once (mitcad#2021).
+
+    /// [`Kernel::transform_shape`] of each shape by its transform, without
+    /// renaming, in their order: the copies a kernel can make beside each
+    /// other (a drawing view of hundreds of bodies placed by their
+    /// occurrences), each the one made alone. Unsupported where the caller
+    /// transforms shape by shape.
+    fn transform_shapes(
+        &self,
+        _shapes: &[(&Self::Shape, &Transform)],
+    ) -> Result<Vec<Self::Shape>, KernelError> {
+        Err(KernelError::Unsupported("transforms of many shapes"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -3440,15 +3454,20 @@ pub struct GearConeSpec<'a> {
 /// Input of [`Kernel::extrude_face`]: the planar face `face` of `body`, its
 /// bounded area with its holes, swept along its outward normal (against it
 /// with `reversed`) by `side1` from the face moved `start` along its
-/// outward normal, and with `side2` against that direction by `side2` too
-/// (both > 0, or one of two negative with `side1 + side2 > 0` as a
-/// [`SideEnd::Distance`] of two sides may be, mitcad#765). Faces are named
-/// after `feature` as an extrusion's:
+/// outward normal, and with `side2` against that direction by `side2` too.
+/// Distances are > 0, or one of two negative with `side1 + side2 > 0` as a
+/// [`SideEnd::Distance`] of two sides may be (mitcad#765). A side may run up
+/// to a target instead ([`SideEnd::Target`], mitcad#2033: a plane, a face or
+/// a body, of the same body or another, moved by its offset), as a side of
+/// [`Kernel::extrude_feature`] does; it takes a taper only along the face's
+/// normal. Faces are named after `feature` as an extrusion's:
 /// `side(<edge>)` from each edge of the face, by the edge's name in the
 /// body (an edge without one, a surface body's free edge, by its index
 /// among the face's edges), and the caps `start(<key>)` and `end(<key>)`:
 /// with one side the cap at the start and the far one, with two sides the
-/// far caps of side one and of side two.
+/// far caps of side one and of side two (the faces of a target where a side
+/// ends named as its far cap); two sides built apart (a taper or a target)
+/// keep what is left of the face between them as `mid(<key>)`.
 #[derive(Debug, Clone)]
 pub struct FaceExtrudeSpec<'a, S> {
     pub feature: FeatureUid,
@@ -3459,8 +3478,8 @@ pub struct FaceExtrudeSpec<'a, S> {
     pub key: &'a FaceName,
     pub reversed: bool,
     pub start: f64,
-    pub side1: f64,
-    pub side2: Option<f64>,
+    pub side1: SideEnd<S>,
+    pub side2: Option<SideEnd<S>>,
     /// A direction of its own (mitcad#541), not in the face's plane: the
     /// sweep goes along it (against it with `reversed`) instead of the
     /// normal, the distances measured along it. A face that is not planar

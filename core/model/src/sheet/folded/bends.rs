@@ -4,7 +4,7 @@
 use mitcad_vec3::{add, distance, scale, sub};
 
 use super::*;
-use crate::features::sheet::{Allowance, Relief, ReliefKind};
+use crate::features::sheet::{Relief, ReliefKind};
 use crate::features::sheet_folded::*;
 use crate::sketch::geometry as g2;
 use crate::transform::Transform;
@@ -22,6 +22,8 @@ pub(super) struct BendMetrics {
     /// tangent line, along the panel and against the wall's direction:
     /// `(r+t) sin(min(|angle|, 90 degrees))` (mitcad#242).
     pub(super) extent: f64,
+    /// A kerf bend's slit lattice (mitcad#1939).
+    pub(super) lattice: Option<SlitLattice>,
 }
 impl BendMetrics {
     /// A bend of up to 180 degrees (a hem, mitcad#242). The virtual sharps
@@ -57,12 +59,14 @@ impl BendMetrics {
         Self::sized(angle, radius, rules)
     }
     fn sized(angle: f64, radius: Option<f64>, rules: &SheetRulesDef<f64>) -> Result<Self, String> {
-        let radius = radius.unwrap_or(rules.bend_radius);
+        // The fold's allowance by the rules' method (mitcad#1939): its
+        // effective K-factor, and a kerf bend's radius and lattice.
+        let fold = rules.fold_allowance(angle, radius)?;
+        let radius = fold.radius;
         if !radius.is_finite() || radius <= TOLERANCE {
             return Err("sheet inside radius must be positive".into());
         }
-        let Allowance::KFactor { k } = &rules.allowance;
-        let k = *k;
+        let k = fold.k;
         let setback = (angle.abs() / 2.0).tan();
         Ok(Self {
             angle,
@@ -73,6 +77,7 @@ impl BendMetrics {
             inner: radius * setback,
             outer: (radius + rules.thickness) * setback,
             extent: (radius + rules.thickness) * angle.abs().min(std::f64::consts::FRAC_PI_2).sin(),
+            lattice: fold.lattice,
         })
     }
     /// The inner or outer setback, refused where the virtual sharp does
@@ -719,6 +724,7 @@ fn bend_strip<K: Kernel>(
         axial_interval,
         rules: state.rules,
         rules_version: state.rules_version.clone(),
+        lattice: metrics.lattice,
     });
     pair_all(state, id, "stationary", &strip, stationary, left)?;
     let free = match moving_side {
@@ -1046,6 +1052,7 @@ pub(crate) fn warn_moved_profile<K: Kernel>(
     let Ok((state, rules)) = read(ctx, d.body) else {
         return Ok(());
     };
+    let rules = rules.with_fold_allowance(d.allowance.as_ref());
     let Ok((expected, _)) = flange_profile_frame(&state, &rules, d) else {
         return Ok(());
     };
@@ -1298,6 +1305,8 @@ pub(crate) fn flange<K: Kernel>(
         return super::flange_edges::flange_edges(d, ctx);
     }
     let (mut state, rules) = read(ctx, d.body)?;
+    // The fold's own allowance in place of the rules' (mitcad#1939).
+    let rules = rules.with_fold_allowance(d.allowance.as_ref());
     free(&state, &d.boundary)?;
     let frame = port_frame(&state, &d.boundary)?;
     // A wall drawn by a profile sketch (mitcad#1648): one bend, its span
@@ -1822,6 +1831,8 @@ pub(crate) fn bend<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
+    // The fold's own allowance in place of the rules' (mitcad#1939).
+    let rules = rules.with_fold_allowance(d.allowance.as_ref());
     // A bend moves material the straight cuts it keeps were made through.
     super::overlay_refusal(ctx, &state, "sheet Bend")?;
     if d.resolved_mode() == BendPortMode::Double {
@@ -1861,6 +1872,8 @@ pub(crate) fn fold<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
+    // The fold's own allowance in place of the rules' (mitcad#1939).
+    let rules = rules.with_fold_allowance(d.allowance.as_ref());
     super::overlay_refusal(ctx, &state, "sheet Fold")?;
     let metrics = BendMetrics::new(d.angle, d.radius, &rules)?;
     let sketch = ctx.sketch(d.line.sketch)?;
@@ -3195,6 +3208,7 @@ mod tests {
                 inner: 3.0,
                 outer: 5.0,
                 extent: 5.0,
+                lattice: None,
             };
             let result = construction(&frame, 0.0, 0.0, &metrics);
             assert_eq!(result.cylinder.centre, centre);

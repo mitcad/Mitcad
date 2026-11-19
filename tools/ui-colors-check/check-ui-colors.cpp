@@ -63,7 +63,7 @@ const Allowed kAllowed[] = {
      "the generated list of the model's message templates (mitcad#1284): a message text, not a color"},
     {"render/RenderWorker.cpp", 21, "the rendered view's lights, sky, ground and studio: physical colors of a scene"},
     {"render/RenderLights.cpp", 6, "the rendered view's light markers, drawn as the lights they stand for"},
-    {"render/RenderImageDialog.cpp", 1, "the dimming outside the image's frame"},
+    {"render/RenderImagePanel.cpp", 1, "the dimming outside the image's frame"},
     {"web/ProjectWeb.cpp", 14, "the exported project web page's own style sheet, not the app's UI"},
     {"web/WebGlb.cpp", 1, "packs texture channels into an image, not a color"},
     {"view/Snapshot.cpp", 3, "a snapshot's transparent, black or white background, as the user chose it"},

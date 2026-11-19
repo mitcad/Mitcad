@@ -150,6 +150,15 @@ pub struct Occurrence {
 /// (mitcad#1793), which the component's design does not have: per joint,
 /// the motions driven for this occurrence (`position`) and where its free
 /// motions are (`start`, kept by a drag), mm and radians.
+///
+/// With `free_parts` (mitcad#2016) the occurrences placed in its component
+/// that the component's own joints, rigid groups and grounding do not
+/// place are free in the parent: the parent's joints place each one alone
+/// (with those a rigid group of the component ties to it), and
+/// `placements` keeps where drags left them, for this occurrence alone.
+/// Without it (a flexible occurrence saved before, by 0.63.0 and earlier)
+/// a joint of the parent on such a part moves the whole occurrence, as it
+/// did then, so that older designs open with the same positions.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Flex {
@@ -157,13 +166,46 @@ pub struct Flex {
     pub position: BTreeMap<FeatureUid, BTreeMap<crate::joints::Motion, f64>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub start: BTreeMap<FeatureUid, BTreeMap<crate::joints::Motion, f64>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free_parts: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<FlexPlacement>,
+}
+
+/// Where a drag left a free part of a flexible occurrence (mitcad#2016):
+/// `path` leads from the flexible occurrence through the flexible
+/// occurrences nested in it (none, or more) to the part, and `transform`
+/// places the part in the component of the one before it in the path
+/// (the flexible occurrence's own component for a path of one), for this
+/// flexible occurrence alone. It is where the part is before the Move
+/// features of that component that move it (mitcad#2025): they move it
+/// from there, as they move the component's own placement of it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlexPlacement {
+    pub path: Vec<OccurrenceUid>,
+    pub transform: Transform,
 }
 
 impl Flex {
-    /// The values with their joints renamed by `map` (a copy of the
-    /// component with new feature uids, mitcad#1805); those of joints
-    /// `map` has no copy of are left out.
-    pub fn remapped(&self, map: &dyn Fn(FeatureUid) -> Option<FeatureUid>) -> Flex {
+    /// A new flexible occurrence's values (mitcad#2016): its free parts
+    /// free in its parent, nothing else yet.
+    pub fn new() -> Flex {
+        Flex {
+            free_parts: true,
+            ..Flex::default()
+        }
+    }
+
+    /// The values with their joints renamed by `map` and the occurrences
+    /// of the kept placements by `occurrences` (a copy of the component
+    /// with new feature and occurrence uids, mitcad#1805, mitcad#2016);
+    /// those `map` or `occurrences` has no copy of are left out.
+    pub fn remapped(
+        &self,
+        map: &dyn Fn(FeatureUid) -> Option<FeatureUid>,
+        occurrences: &dyn Fn(OccurrenceUid) -> Option<OccurrenceUid>,
+    ) -> Flex {
         type Values = BTreeMap<FeatureUid, BTreeMap<crate::joints::Motion, f64>>;
         let keyed = |values: &Values| -> Values {
             values
@@ -174,6 +216,38 @@ impl Flex {
         Flex {
             position: keyed(&self.position),
             start: keyed(&self.start),
+            free_parts: self.free_parts,
+            placements: self
+                .placements
+                .iter()
+                .filter_map(|p| {
+                    Some(FlexPlacement {
+                        path: p
+                            .path
+                            .iter()
+                            .map(|o| occurrences(*o))
+                            .collect::<Option<Vec<_>>>()?,
+                        transform: p.transform,
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    /// The kept placement of a part `path` leads to, when there is one.
+    pub fn placement(&self, path: &[OccurrenceUid]) -> Option<Transform> {
+        self.placements
+            .iter()
+            .find(|p| p.path == path)
+            .map(|p| p.transform)
+    }
+
+    /// Keeps `transform` as where the part `path` leads to is, in place of
+    /// one kept before.
+    pub fn keep_placement(&mut self, path: Vec<OccurrenceUid>, transform: Transform) {
+        match self.placements.iter_mut().find(|p| p.path == path) {
+            Some(kept) => kept.transform = transform,
+            None => self.placements.push(FlexPlacement { path, transform }),
         }
     }
 }
@@ -265,6 +339,40 @@ impl Assembly {
             || uid.to_string(),
             |o| format!("{}:{}", self.name(o.component), o.number),
         )
+    }
+
+    /// Whether a kept placement of a free part of the flexible occurrence
+    /// `flexible` still applies (mitcad#2016): `path` leads through
+    /// flexible occurrences, each placed in the component of the one
+    /// before, to an occurrence placed in the last one's component that
+    /// is not grounded there. One whose part was deleted (or a linked
+    /// design's part that is gone) no longer does, and is left out
+    /// without an error.
+    pub fn flex_path_holds(&self, flexible: OccurrenceUid, path: &[OccurrenceUid]) -> bool {
+        let Some((part, through)) = path.split_last() else {
+            return false;
+        };
+        let mut at = match self.occurrence(flexible) {
+            Some(o) if o.flexible.is_some() => o.component,
+            _ => return false,
+        };
+        for o in through {
+            match self.occurrence(*o) {
+                Some(o) if o.parent == at && o.flexible.is_some() => at = o.component,
+                _ => return false,
+            }
+        }
+        self.occurrence(*part)
+            .is_some_and(|p| p.parent == at && !p.grounded)
+    }
+
+    /// A flexible occurrence's values as a design file keeps them: the
+    /// kept placements that no longer apply left out (mitcad#2016).
+    pub fn saved_flex(&self, uid: OccurrenceUid) -> Option<Flex> {
+        let mut flex = self.occurrence(uid)?.flexible.clone()?;
+        flex.placements
+            .retain(|p| self.flex_path_holds(uid, &p.path));
+        Some(flex)
     }
 
     /// The occurrences placed directly in a component.

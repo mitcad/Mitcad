@@ -14,6 +14,9 @@
 # RELEASE (the default is a placeholder under the maintainer's domain).
 set(MITCAD_BUNDLE_ID "fi.nocodo.mitcad" CACHE STRING
   "macOS bundle identifier (CFBundleIdentifier); fix before the first release")
+if(MITCAD_3DXWARE_PREVIEW)
+  set(MITCAD_BUNDLE_ID "org.mitcad.3dxware-test")
+endif()
 if(NOT MITCAD_BUNDLE_ID MATCHES "^[A-Za-z0-9.-]+$")
   message(FATAL_ERROR "MITCAD_BUNDLE_ID must be a reverse-DNS name of letters, digits, '.' and '-'")
 endif()
@@ -42,6 +45,18 @@ endif()
 # pass over MACOSX_BUNDLE_INFO_PLIST, so that the result does not depend on
 # which variables are set when the generator runs.
 configure_file(packaging/macos/Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" @ONLY)
+if(MITCAD_3DXWARE_PREVIEW)
+  # The test bundle must not register file associations alongside MitCad.
+  execute_process(COMMAND /usr/libexec/PlistBuddy
+    -c "Set :CFBundleName MitCad 3DxWare Test"
+    -c "Set :CFBundleDisplayName MitCad 3DxWare Test"
+    -c "Delete :CFBundleDocumentTypes"
+    -c "Delete :UTExportedTypeDeclarations"
+    -c "Delete :UTImportedTypeDeclarations"
+    -c "Add :LSEnvironment dict"
+    -c "Add :LSEnvironment:MITCAD_NO_UPDATE_CHECK string 1"
+    "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" COMMAND_ERROR_IS_FATAL ANY)
+endif()
 
 # --- Application icon: mitcad.svg -> Mitcad.icns, at build time ---------------
 # mitcad-iconset (Qt Gui and Svg) renders the SVG to the PNG sizes of an

@@ -802,6 +802,9 @@ bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
   case BrowserNode::Type::CamSetup:
   // mitcad#1802: a folder of a Bodies folder, its bodies' light bulbs.
   case BrowserNode::Type::BodyFolder:
+  // mitcad#2041: the Annotations folder's eye, display state as the other
+  // folders'.
+  case BrowserNode::Type::Measurements:
     return true;
   default:
     return false;
@@ -879,6 +882,9 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   case BrowserNode::Type::Bodies:
   case BrowserNode::Type::Sketches:
   case BrowserNode::Type::Construction:
+  // The root's Annotations folder (mitcad#2041): its eye hides or shows
+  // every annotation in the view, their own light bulbs as they are.
+  case BrowserNode::Type::Measurements:
     // The folder's eye is its own (mitcad#1771): it hides or shows the
     // folder, display state the design keeps, and changes no light bulb in
     // it (nor a body's Show When, mitcad#863); one undo step, `Hide
@@ -943,6 +949,8 @@ QJsonObject BrowserController::folderCommand(const BrowserNode& node, bool visib
   const DocumentSnapshot::Folder folder = node.type == BrowserNode::Type::Bodies ? DocumentSnapshot::Folder::Bodies
                                           : node.type == BrowserNode::Type::Sketches
                                               ? DocumentSnapshot::Folder::Sketches
+                                          : node.type == BrowserNode::Type::Measurements
+                                              ? DocumentSnapshot::Folder::Annotations
                                               : DocumentSnapshot::Folder::Construction;
   return cmd("set_folder_visible", {{QStringLiteral("component"), node.component},
                                     {QStringLiteral("folder"), DocumentSnapshot::folderKey(folder)},
@@ -1838,6 +1846,40 @@ Selection BrowserController::menuMoveItems(const BrowserNode& node) const {
   return items;
 }
 
+void BrowserController::drawingMenu(const QString& drawing, const QString& component, const QString& name,
+                                    const QPoint& at, const std::function<void()>& startRename) {
+  BrowserNode node;
+  node.type = BrowserNode::Type::Drawing;
+  node.uid = drawing;
+  node.component = component;
+  node.name = name;
+  Menu menu(m_window);
+  menu.add(QStringLiteral("drawing"), tr("Open"), [this, drawing] { m_host.openDrawing(drawing); });
+  menu.separator();
+  menu.add(QStringLiteral("edit"), tr("Rename"), [this, startRename] {
+    if (canChange() && startRename) {
+      startRename();
+    }
+  });
+  menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNodes({node}); });
+  menu.separator();
+  menu.add(QStringLiteral("drawing"), tr("Create Drawing…"), [this, component] { m_host.createDrawing(component); });
+  menu.exec(at);
+}
+
+void BrowserController::renameDrawing(const QString& drawing, const QString& name) {
+  BrowserNode node;
+  node.type = BrowserNode::Type::Drawing;
+  node.uid = drawing;
+  // As the snapshot names it, for the log's "Renamed <old> to <new>".
+  for (const QJsonValue& value : m_snapshot.drawings) {
+    if (value.toObject().value(QStringLiteral("drawing")).toString() == drawing) {
+      node.name = value.toObject().value(QStringLiteral("name")).toString();
+    }
+  }
+  rename(node, name);
+}
+
 void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   Menu menu(m_window);
   const SelectionItem item = node.item();
@@ -2002,8 +2044,11 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       menu.add(QStringLiteral("eye"), tr("Show When…"), [this, node] { showOccurrenceWhen(node.occurrence); });
       transparentEntry();
       // Flexible (mitcad#1793): an occurrence of a component with joints
-      // of its own moves them in its parent, for it alone.
-      if (placed != nullptr && (placed->flexible || hasOwnJoints(placed->component))) {
+      // of its own moves them in its parent, for it alone; one of a
+      // component with components in it, joints of its own or not, lets
+      // the parent's joints place its free parts alone (mitcad#2016).
+      if (placed != nullptr &&
+          (placed->flexible || !placed->children.isEmpty() || hasOwnJoints(placed->component))) {
         const bool flexible = placed->flexible;
         menu.addCheckable(tr("Flexible", "assembly: an occurrence whose own joints move in its parent"), flexible,
                           [this, node, flexible] {
@@ -2445,6 +2490,21 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("edit"),
              node.featureType == QStringLiteral("print") ? tr("Edit Print Analysis") : tr("Edit Section Analysis"),
              [this, node] { m_host.editAnalysis(node.uid); });
+    // A section's other side (mitcad#1975: here, no longer in the
+    // toolbar's Inspect menu; its Hide is Remove Section Analysis).
+    if (node.featureType != QStringLiteral("print")) {
+      menu.add(QStringLiteral("flip"), tr("Flip Section Analysis"), [this, node] {
+        QJsonObject def = m_snapshot.analysis(node.uid);
+        if (def.isEmpty() || !canChange()) {
+          return;
+        }
+        for (const char* key : {"name", "visible", "section", "error"}) {
+          def.remove(QLatin1String(key));
+        }
+        def.insert(QStringLiteral("flip"), !def.value(QStringLiteral("flip")).toBool());
+        m_host.runModelCommand(cmd("edit_analysis", {{QStringLiteral("name"), node.uid}, {QStringLiteral("def"), def}}));
+      });
+    }
     menu.separator();
     visibility();
     renameEntry();
@@ -2515,7 +2575,8 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
   // Annotations (mitcad#702): the window where they are listed and
-  // edited, and Measure, which keeps new ones.
+  // edited, and Measure, which keeps new ones; Hide or Show as its eye
+  // (mitcad#2041).
   case BrowserNode::Type::Measurements:
     menu.add(QStringLiteral("measure"), tr("Annotations…"), [this] { m_host.openAnnotations(); });
     menu.add(QStringLiteral("measure"), tr("Measure"), [this] {
@@ -2523,6 +2584,8 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         m_host.startCommand(QStringLiteral("inspect.measure"), {}, nullptr);
       }
     });
+    menu.separator();
+    visibility();
     break;
   // Drawings kept in the design (mitcad#707): a new one in the folder's
   // component; a drawing opened over the view.

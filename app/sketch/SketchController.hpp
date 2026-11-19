@@ -342,6 +342,12 @@ public:
   // Commands on the selection.
   void deleteSelection();
   void toggleConstruction();
+  // What X converts (mitcad#2040): the selected curves of this sketch,
+  // axes left out, while no tool runs, and their construction state.
+  // NoCurves when there are none: X and the palette's Construction (X) box
+  // then set the mode for new geometry instead.
+  enum class SelectedConstruction { NoCurves, None, All, Mixed };
+  SelectedConstruction selectedConstruction() const;
   void toggleCenterline();
   // Convert to Sketch Geometry (mitcad#257): the selected projected curves
   // and points into ordinary free sketch geometry; whether the selection

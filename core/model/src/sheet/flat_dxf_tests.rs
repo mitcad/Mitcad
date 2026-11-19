@@ -85,6 +85,7 @@ fn developed(direction: &'static str) -> (Vec<MaterialRegion>, Vec<FlatBend>) {
             start: [ba / 2.0, 20.0],
             end: [ba / 2.0, 0.0],
         }],
+        slits: Vec::new(),
         tangents: vec![
             FlatLine {
                 start: [0.0, 20.0],
@@ -164,6 +165,7 @@ fn direction_layers_tangents_and_units() {
     let options = FlatDxfOptions {
         unit: LengthUnit::Inch,
         tangents: true,
+        ..FlatDxfOptions::default()
     };
     let back = round_trip(&drawing(&regions, &bends, &options).unwrap());
     assert_eq!(back.units, Units::Inches);
@@ -231,4 +233,55 @@ fn only_pieces_of_one_line_or_circle_are_joined() {
 
 fn joined_pair(a: SegmentGeometry, b: SegmentGeometry) -> usize {
     join(&a, &b).map_or(2, |_| 1)
+}
+
+/// A board's die line (mitcad#1939): its contours on one cut layer and
+/// its folds on the crease layers, a reverse crease on its own; a kerf
+/// bend's slits on the inner cut layer in place of its centre line.
+#[test]
+fn process_profiles_name_the_layers() {
+    let board = FlatDxfOptions {
+        process: SheetProcess::Board,
+        ..FlatDxfOptions::default()
+    };
+    let (regions, bends) = developed("up");
+    let back = round_trip(&drawing(&regions, &bends, &board).unwrap());
+    // (The reader adds DXF's own layer 0.)
+    let names: Vec<&str> = back
+        .layers
+        .iter()
+        .map(|l| l.name.as_str())
+        .filter(|n| *n != "0")
+        .collect();
+    assert_eq!(names, ["CUT", "CREASE", "CREASE_REVERSE"]);
+    assert!(on(&back, CUT_OUTER).is_empty());
+    assert!(!on(&back, "CUT").is_empty());
+    assert_eq!(on(&back, "CREASE").len(), 1);
+    let (regions, bends) = developed("down");
+    let back = round_trip(&drawing(&regions, &bends, &board).unwrap());
+    assert_eq!(on(&back, "CREASE_REVERSE").len(), 1);
+
+    let laser = FlatDxfOptions {
+        process: SheetProcess::LaserSheet,
+        ..FlatDxfOptions::default()
+    };
+    let (regions, mut bends) = developed("up");
+    let inner = on(
+        &round_trip(&drawing(&regions, &bends, &laser).unwrap()),
+        CUT_INNER,
+    )
+    .len();
+    bends[0].slits = vec![
+        FlatLine {
+            start: [1.0, 2.0],
+            end: [1.0, 8.0],
+        },
+        FlatLine {
+            start: [2.0, 12.0],
+            end: [2.0, 18.0],
+        },
+    ];
+    let back = round_trip(&drawing(&regions, &bends, &laser).unwrap());
+    assert_eq!(on(&back, CUT_INNER).len(), inner + 2);
+    assert!(on(&back, "SCORE").is_empty());
 }

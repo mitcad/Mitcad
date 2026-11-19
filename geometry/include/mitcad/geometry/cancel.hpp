@@ -10,7 +10,10 @@
 // a scope nothing stops early, and nothing changes.
 
 #include <atomic>
+#include <memory>
 #include <stdexcept>
+
+#include <Message_ProgressRange.hxx>
 
 namespace mitcad::geometry {
 
@@ -74,5 +77,25 @@ const CancelSource* cancel_source() noexcept;
 
 // Throws Cancelled when this thread's operations were asked to stop.
 void throw_if_cancelled();
+
+// A progress range for an OCCT call made outside the geometry's own
+// operations (the data exchange's reads in the bridge, mitcad#2032): its
+// user break is this thread's cancel request and its progress the
+// source's (CancelSource::progressed), as inside the operations; without a
+// CancelScope an empty range, which stops nothing. One range per
+// CancelRange, which must live while the call runs.
+class CancelRange {
+public:
+  CancelRange();
+  ~CancelRange();
+  CancelRange(const CancelRange&) = delete;
+  CancelRange& operator=(const CancelRange&) = delete;
+
+  Message_ProgressRange range();
+
+private:
+  struct State;
+  std::unique_ptr<State> m_state;
+};
 
 } // namespace mitcad::geometry

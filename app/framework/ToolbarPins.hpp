@@ -9,14 +9,17 @@
 
 namespace mitcad {
 
+class CommandLayoutStore;
+
 // The commands the user pinned to the toolbar (mitcad#1001): per tab
 // (SOLID, BUILD, SKETCH), in the order pinned or as dragged since. The
 // Ribbon shows each as a button in its own group, after the group's own
-// buttons (mitcad#1084). They are a preference of the user's, kept in the
-// settings: "toolbarPins/<TAB>", the command ids joined by commas
-// ("solid.sweep,solid.loft"); a tab without pins has no key. A command is
-// kept under its own tab, the one its group is on. Every change is saved at
-// once. Plain Qt Core.
+// buttons (mitcad#1084). A view over the command layout's user layer
+// (mitcad#1951, LayoutUserLayer::pins, CommandLayoutStore::setPins), the
+// one store of the user's layout; an earlier version's "toolbarPins/<TAB>"
+// settings moved into it at the start. A command is kept under its own
+// tab, the one its group is on. Every change is saved at once. Plain Qt
+// Core.
 class ToolbarPins {
 public:
   // A command as the toolbar places it: its id, its tab and its group
@@ -36,12 +39,11 @@ public:
   // once and a command kept under another tab than its own (one an
   // earlier version moved, mitcad#1049) goes to its own tab's pins, at
   // their end ("Toolbar pins: moved <id> from SOLID to MAKE");
-  // the settings are written again without what was dropped or moved.
+  // the layer is saved again without what was dropped or moved.
   // `resolve` is kept for the groups' pins (pins(tab, group), moveInGroup).
-  static ToolbarPins load(const Resolve& resolve);
-
-  // The settings' key of a tab's pins.
-  static QString settingsKey(const QString& tab);
+  // `store`: the application's (CommandLayoutStore::instance()) unless a
+  // test gives its own.
+  static ToolbarPins load(const Resolve& resolve, CommandLayoutStore* store = nullptr);
 
   // A tab's pinned commands, in order.
   QStringList pins(const QString& tab) const { return m_pins.value(tab); }
@@ -67,6 +69,7 @@ private:
 
   QMap<QString, QStringList> m_pins; // by tab; no empty lists
   Resolve m_resolve;                 // load()'s
+  CommandLayoutStore* m_store = nullptr; // load()'s; none: nothing is saved
 };
 
 } // namespace mitcad

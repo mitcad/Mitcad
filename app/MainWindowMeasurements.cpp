@@ -10,8 +10,9 @@
 // placed by the model as Add will place it (add_annotation with "preview",
 // mitcad#1097) and drawn dimmed (OcctViewer::setMeasurementPreview). The
 // shown ones are drawn in their planes in the view after every refresh
-// (OcctViewer::setMeasurements) and listed in the Annotations window
-// (MainWindowAnnotations.cpp).
+// (OcctViewer::setMeasurements), none while the Browser's Annotations
+// folder is hidden by its eye (mitcad#2041), and listed in the Annotations
+// window (MainWindowAnnotations.cpp).
 #include "MainWindow.hpp"
 
 #include <cmath>
@@ -279,10 +280,22 @@ void MainWindow::followMeasurements() {
   }
   const QString unit = m_snapshot.lengthUnit;
   const double millimetres = lengthUnitMillimetres(unit);
-  m_viewer->setMeasurements(measurementDisplays(
-      m_snapshot.measurements, [unit, millimetres](const QString& kind, double value) {
-        return measurementValueText(kind, value, unit, millimetres);
-      }));
+  // The Browser's Annotations folder hidden by its eye (mitcad#2041): none
+  // drawn, so none can be picked or dragged in the view; their own light
+  // bulbs stay as they are and decide again when the folder is shown.
+  const bool folderShown = m_snapshot.annotationsShown();
+  std::vector<MeasurementDisplay> drawn;
+  if (folderShown) {
+    drawn = measurementDisplays(m_snapshot.measurements, [unit, millimetres](const QString& kind, double value) {
+      return measurementValueText(kind, value, unit, millimetres);
+    });
+  }
+  m_viewer->setMeasurements(drawn);
+  if (folderShown != m_loggedAnnotationsShown) {
+    m_loggedAnnotationsShown = folderShown;
+    qDebug().noquote() << QStringLiteral("Annotations folder: %1")
+                              .arg(m_loggedAnnotationsShown ? QStringLiteral("shown") : QStringLiteral("hidden"));
+  }
   // For UI tests: each one's state when they change, and one just kept.
   QStringList names;
   QStringList states;

@@ -189,6 +189,12 @@ pub struct MockKernel {
     /// stopped inside.
     pub interrupt: RefCell<Option<Arc<RecomputeMonitor>>>,
     pub stop_on_cancel: Cell<bool>,
+    /// A file's read (`read_file`, `read_file_structure`) runs until the
+    /// monitor of `interruptible` is cancelled (30 s at most) and then
+    /// fails as one stopped inside: a long STEP transfer that the memory
+    /// guard or the user stops (mitcad#2032). Without such a monitor the
+    /// read is as usual.
+    pub read_waits_for_cancel: Cell<bool>,
     /// 3MF export (mitcad#13): the tolerances `triangle_mesh` was asked for.
     pub mesh_tolerances: RefCell<Vec<mitcad_model_base::exchange::MeshTolerance>>,
     /// Joints (mitcad#55): what `edge_geometry` returns by edge name
@@ -439,6 +445,14 @@ pub struct MockKernel {
     /// for the face whatever the direction, on a shape that has the face;
     /// `face_silhouettes` of another face is unsupported.
     pub silhouettes: RefCell<BTreeMap<String, Vec<mitcad_model_base::kernel::Curve3>>>,
+    /// Booleans of boxes (mitcad#2005: Panelize's slabs): an intersection
+    /// is one piece whose bounds are those the target's and the tool's
+    /// share (none when they share no volume); a cut by a tool that spans
+    /// the target across two axes and reaches past one end of the third
+    /// leaves the target's bounds short of the tool, nothing when it spans
+    /// the third too; other cuts keep the target's bounds. Faces and edges
+    /// as without this.
+    pub box_booleans: Cell<bool>,
 }
 
 /// A definition of a tree `write_step_tree` wrote ([`MockKernel::step_trees`],
@@ -688,6 +702,65 @@ fn emptied(shape: &MockShape) -> MockShape {
     }
 }
 
+/// A cut or an intersection of boxes ([`MockKernel::box_booleans`]).
+fn box_boolean(
+    op: BooleanOp,
+    targets: &[&MockShape],
+    tool: &MockShape,
+    lost: &[FaceName],
+) -> BooleanOutput<MockShape> {
+    const EPS: f64 = 1e-9;
+    let verb = if op == BooleanOp::Cut {
+        "cut"
+    } else {
+        "common"
+    };
+    let mut pieces = Vec::new();
+    let mut touched = Vec::with_capacity(targets.len());
+    for (i, target) in targets.iter().enumerate() {
+        let (Some(t), Some(b)) = (target.bounds, tool.bounds) else {
+            touched.push(false);
+            continue;
+        };
+        let min: [f64; 3] = std::array::from_fn(|k| t.min[k].max(b.min[k]));
+        let max: [f64; 3] = std::array::from_fn(|k| t.max[k].min(b.max[k]));
+        let shared = (0..3).all(|k| max[k] - min[k] > EPS);
+        touched.push(shared);
+        if !shared {
+            continue;
+        }
+        let bounds = if op == BooleanOp::Intersect {
+            Some(BoundingBox { min, max })
+        } else {
+            let spans = |k: usize| b.min[k] <= t.min[k] + EPS && b.max[k] >= t.max[k] - EPS;
+            match (0..3).filter(|k| !spans(*k)).collect::<Vec<_>>()[..] {
+                [] => None,
+                [k] => {
+                    let mut left = t;
+                    if b.min[k] <= t.min[k] + EPS {
+                        left.min[k] = b.max[k];
+                    } else if b.max[k] >= t.max[k] - EPS {
+                        left.max[k] = b.min[k];
+                    }
+                    Some(left)
+                }
+                _ => Some(t),
+            }
+        };
+        let Some(bounds) = bounds else {
+            continue;
+        };
+        let history = format!("{verb}({},{})", target.history, tool.history);
+        let mut shape = MockShape::merged(history, &[target, tool], lost);
+        shape.bounds = Some(bounds);
+        pieces.push(BooleanPiece {
+            shape,
+            sources: vec![i],
+        });
+    }
+    BooleanOutput { pieces, touched }
+}
+
 /// The bounds of what of `b` lies on or below the plane through `point`
 /// with the normal `normal` (the corners kept and where the box's edges
 /// cross the plane); None when nothing is left.
@@ -784,6 +857,26 @@ impl MockKernel {
 
     pub fn count(&self, op: &str) -> usize {
         self.calls.borrow().get(op).copied().unwrap_or(0)
+    }
+
+    /// The transfer of a file's read ([`MockKernel::read_waits_for_cancel`]):
+    /// waits for the cancel, and fails once there is one.
+    fn read_transfer(&self) -> Result<(), KernelError> {
+        if !self.read_waits_for_cancel.get() {
+            return Ok(());
+        }
+        let Some(monitor) = self.interrupt.borrow().clone() else {
+            return Ok(());
+        };
+        let start = std::time::Instant::now();
+        while !monitor.is_cancelled() && start.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if monitor.is_cancelled() {
+            Err(KernelError::failed("read: the operation was cancelled"))
+        } else {
+            Ok(())
+        }
     }
 
     /// The recompute's workers (mitcad#842, `workers`): an extrusion of
@@ -1359,6 +1452,9 @@ impl Kernel for MockKernel {
             }
         }
         let lost = self.lose.borrow().clone();
+        if op != BooleanOp::Join && self.box_booleans.get() {
+            return Ok(box_boolean(op, targets, tool, &lost));
+        }
         let mut pieces = Vec::new();
         if op == BooleanOp::Join {
             let sources: Vec<usize> = (0..targets.len()).filter(|i| touched[*i]).collect();
@@ -2005,6 +2101,7 @@ impl Kernel for MockKernel {
         options: &ReadOptions,
     ) -> Result<Vec<ImportBody<MockShape>>, KernelError> {
         self.read_units.borrow_mut().push(options.unit_mm);
+        self.read_transfer()?;
         self.files
             .borrow()
             .get(path)
@@ -3824,6 +3921,7 @@ impl Kernel for MockKernel {
             box_edges: self.box_edges.clone(),
             cavities: self.cavities.clone(),
             silhouettes: self.silhouettes.clone(),
+            box_booleans: self.box_booleans.clone(),
             ..MockKernel::default()
         })
     }
@@ -5496,7 +5594,9 @@ impl Kernel for MockKernel {
 
     /// A prism of the face, `face_prism(<feature>:<face>:<low>..<high>)`
     /// along the outward normal (`-` reversed), its sides named after the
-    /// body's edges of the face and its caps after the key. A face with a
+    /// body's edges of the face and its caps after the key; a side up to a
+    /// target (mitcad#2033) is 10 long, as an extrusion's in
+    /// `extrude_feature`, and the spec names its target. A face with a
     /// surface other than a plane in `surfaces` is not planar; a mesh body's
     /// face has no surface.
     fn extrude_face(
@@ -5532,9 +5632,22 @@ impl Kernel for MockKernel {
                 "face {face} is not planar: an extrusion takes a planar face"
             )));
         }
-        let (low, high) = match spec.side2 {
-            Some(two) => (-two, spec.side1),
-            None => (0.0, spec.side1),
+        // A side's length, 10 up to a target (mitcad#2033), and its text.
+        let length = |side: &SideEnd<MockShape>| match side {
+            SideEnd::Distance(d) => *d,
+            SideEnd::Target(_) => 10.0,
+        };
+        let text = |side: &SideEnd<MockShape>| match side {
+            SideEnd::Distance(d) => number(*d),
+            SideEnd::Target(bound) => format!(
+                "to {} offset {}",
+                describe_target(&bound.target),
+                number(bound.offset)
+            ),
+        };
+        let (low, high) = match &spec.side2 {
+            Some(two) => (-length(two), length(&spec.side1)),
+            None => (0.0, length(&spec.side1)),
         };
         self.specs.borrow_mut().push(format!(
             "extrude_face {} {face} key {} {}from {}: {}{}{}{}",
@@ -5542,9 +5655,10 @@ impl Kernel for MockKernel {
             spec.key,
             if spec.reversed { "reversed " } else { "" },
             number(spec.start),
-            number(spec.side1),
+            text(&spec.side1),
             spec.side2
-                .map(|d| format!("; {}", number(d)))
+                .as_ref()
+                .map(|side| format!("; {}", text(side)))
                 .unwrap_or_default(),
             spec.direction
                 .map(|d| format!(" along [{}]", d.map(|v| number(round(v))).join(", ")))
@@ -6128,6 +6242,7 @@ impl Kernel for MockKernel {
         use mitcad_model_base::exchange::FileRead;
         if keep_assembly && let Some(assembly) = self.assemblies.borrow().get(path) {
             self.read_units.borrow_mut().push(options.unit_mm);
+            self.read_transfer()?;
             return Ok(FileRead::Assembly(assembly.clone()));
         }
         self.read_file(path, options).map(FileRead::Bodies)

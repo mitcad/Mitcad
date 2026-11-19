@@ -403,6 +403,18 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/trimmed_box.cpp
   include/mitcad/geometry/trimmed_box.hpp)
+
+# Pieces of a face a dressup takes away, left between its own faces, closed
+# by a patch at each place (mitcad#1858).
+target_sources(mitcad_geometry PRIVATE
+  src/remnant_patch.cpp
+  src/remnant_patch.hpp)
+
+# Fillets and chamfers with Tangent Chain off on a chain that runs on: kept
+# over the selected edges, running out over the next edge (mitcad#2037).
+target_sources(mitcad_geometry PRIVATE
+  src/runout_dressup.cpp
+  src/runout_dressup.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1491,4 +1503,16 @@ if(BUILD_TESTING)
   target_link_libraries(test_trimmed_box PRIVATE mitcad_geometry TKMesh mitcad_warnings)
   add_test(NAME geometry.trimmed_box COMMAND test_trimmed_box)
   set_tests_properties(geometry.trimmed_box PROPERTIES TIMEOUT 300)
+
+  # Pieces of a face a fillet takes away, left between two of its own blend
+  # faces, closed by a patch at each place (mitcad#1858): the patch on a
+  # block's rounded corner (one valid closed solid, the names kept, the
+  # volume within 1 %), and two bodies like a reported design's places (a
+  # slot's rim on an earlier rounding, over rounded corners; a cut face's
+  # rim passing from a rounding onto the faces beside it) rounded with 5:
+  # one valid closed solid, no warning, no piece left, within 20 s.
+  add_executable(test_dressup_blend_remnants tests/test_dressup_blend_remnants.cpp)
+  target_link_libraries(test_dressup_blend_remnants PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.dressup_blend_remnants COMMAND test_dressup_blend_remnants)
+  set_tests_properties(geometry.dressup_blend_remnants PROPERTIES TIMEOUT 300)
 endif()

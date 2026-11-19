@@ -11,41 +11,44 @@ namespace mitcad {
 
 void registerModifyCommands(CommandRegistry& registry, const CommandContext& context) {
   using namespace cmd;
-  // Registration order is the menu's order: each section's commands
-  // together, the sections in their order (CommandDef::section).
-  const auto add = [&registry](CommandDef def, const char* section) {
-    def.section = QString::fromLatin1(section);
-    registry.add(def);
-  };
+  // Their places on the toolbar are the layout's (mitcad#1951).
   // What changes the shape of a body.
-  add(pressPullCommand(context), "shape");
-  add(filletCommand(context), "shape");
-  add(chamferCommand(context), "shape");
-  add(shellCommand(context), "shape");
-  add(draftCommand(context), "shape");
+  registry.add(pressPullCommand(context));
+  registry.add(filletCommand(context));
+  registry.add(chamferCommand(context));
+  registry.add(shellCommand(context));
+  registry.add(draftCommand(context));
   // Its faces.
-  add(offsetFaceCommand(context), "faces");
-  add(moveFaceCommand(context), "faces"); // mitcad#531
-  add(replaceFaceCommand(context), "faces");
-  add(fillCavityCommand(context), "faces"); // mitcad#1818
-  add(splitFaceCommand(context), "faces");
-  add(deleteFaceCommand(context), "faces");
+  registry.add(offsetFaceCommand(context));
+  registry.add(moveFaceCommand(context)); // mitcad#531
+  registry.add(replaceFaceCommand(context));
+  registry.add(fillCavityCommand(context)); // mitcad#1818
+  registry.add(splitFaceCommand(context));
+  registry.add(deleteFaceCommand(context));
   // Whole bodies.
-  add(combineCommand(context), "bodies");
-  add(splitBodyCommand(context), "bodies");
-  add(scaleCommand(context), "bodies");
-  add(convertMeshCommand(context), "bodies"); // mitcad#1082
+  registry.add(combineCommand(context));
+  registry.add(splitBodyCommand(context));
+  registry.add(panelizeCommand(context)); // mitcad#2005
+  registry.add(scaleCommand(context));
+  registry.add(convertMeshCommand(context)); // mitcad#1082
+  // Mesh tools for reverse engineering (mitcad#1871).
+  registry.add(meshSectionCommand(context));
+  registry.add(meshRepairCommand(context));
+  registry.add(meshDecimateCommand(context));
+  registry.add(meshRemoveCommand(context));
+  registry.add(meshSegmentCommand(context));
+  registry.add(meshFitSurfaceCommand(context));
   // Moving bodies and components.
-  add(moveCommand(context), "move");
-  add(alignCommand(context), "move");
+  registry.add(moveCommand(context));
+  registry.add(alignCommand(context));
   // Joinery.
-  add(dogboneCommand(context), "joinery");      // mitcad#1011
-  add(mortiseTenonCommand(context), "joinery"); // mitcad#1012
+  registry.add(dogboneCommand(context));      // mitcad#1011
+  registry.add(mortiseTenonCommand(context)); // mitcad#1012
   // The look: the Material tool (mitcad#1059), Appearance, then the main
   // window's Edit Appearances; its Edit Parameters and Configurations are
   // the last section, "parameters".
-  add(materialCommand(context), "look");
-  add(appearanceCommand(context), "look");
+  registry.add(materialCommand(context));
+  registry.add(appearanceCommand(context));
 }
 
 } // namespace mitcad

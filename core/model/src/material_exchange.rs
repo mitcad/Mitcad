@@ -231,6 +231,7 @@ impl MaterialRow {
     /// density), with `id`.
     pub fn material(&self, id: &str) -> Material {
         let mut material = Material {
+            sheet_process: None,
             id: id.to_owned(),
             name: self.name.clone(),
             density: self.density.unwrap_or(1.0),

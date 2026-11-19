@@ -1498,19 +1498,40 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
     }
 
     fn placed_shapes(&self, shown: &[Shown]) -> Result<Vec<K::Shape>, String> {
-        shown
+        let shapes: Vec<&K::Shape> = shown
             .iter()
             .map(|s| {
-                let shape = self
-                    .body_shape(s.body)
-                    .ok_or_else(|| format!("the body {} is gone", s.body))?;
+                self.body_shape(s.body)
+                    .ok_or_else(|| format!("the body {} is gone", s.body))
+            })
+            .collect::<Result<_, _>>()?;
+        // The bodies an occurrence moves are transformed beside each other
+        // where the kernel can (mitcad#2021: 884 bodies one after another
+        // took 3 s), each the copy made alone; else, and to name the body
+        // that failed, one after another.
+        let moved: Vec<(&K::Shape, &Transform)> = shown
+            .iter()
+            .zip(&shapes)
+            .filter(|(s, _)| !s.transform.is_identity())
+            .map(|(s, shape)| (*shape, &s.transform))
+            .collect();
+        let mut together = match self.kernel().transform_shapes(&moved) {
+            Ok(placed) if placed.len() == moved.len() => Some(placed.into_iter()),
+            _ => None,
+        };
+        shown
+            .iter()
+            .zip(shapes)
+            .map(|(s, shape)| {
                 if s.transform.is_identity() {
-                    Ok(shape.clone())
-                } else {
-                    self.kernel()
-                        .transform_shape(shape, &s.transform, None)
-                        .map_err(|e| format!("{}: {e}", s.name))
+                    return Ok(shape.clone());
                 }
+                if let Some(placed) = together.as_mut().and_then(Iterator::next) {
+                    return Ok(placed);
+                }
+                self.kernel()
+                    .transform_shape(shape, &s.transform, None)
+                    .map_err(|e| format!("{}: {e}", s.name))
             })
             .collect()
     }

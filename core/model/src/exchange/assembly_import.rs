@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BaseInput, BodyKind, FileRead, ImportAssembly, ImportBody, ImportPart, Imported, ReadOptions,
-    check_unit, file_name, invalid, kernel_error,
+    check_unit, file_name, invalid,
 };
 use crate::document::{Document, ModelError};
 use crate::ids::{ComponentUid, OccurrenceUid};
@@ -299,15 +299,17 @@ impl<K: Kernel> Document<K> {
             return self.import_serp(path, name, wrap);
         }
         let keep = structure == ImportStructure::Components;
-        let read = match self.kernel().read_file_structure(path, options, keep) {
-            Ok(read) => read,
-            Err(KernelError::Unsupported(_)) => FileRead::Bodies(
-                self.kernel()
-                    .read_file(path, options)
-                    .map_err(kernel_error)?,
-            ),
-            Err(e) => return Err(kernel_error(e)),
-        };
+        // Stopped inside by the command's monitor (mitcad#2032): a STEP
+        // file's transfer stops once the memory guard or the user cancels.
+        let read =
+            self.read_stoppable(
+                |kernel| match kernel.read_file_structure(path, options, keep) {
+                    Err(KernelError::Unsupported(_)) => {
+                        kernel.read_file(path, options).map(FileRead::Bodies)
+                    }
+                    read => read,
+                },
+            )?;
         match read {
             FileRead::Bodies(bodies) => self
                 .import_read_bodies(path, bodies, name, wrap)

@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design of tools/ui-scripts/mesh-tools.mitcad-ui (mitcad#1871): a cylinder 30 across and 12 high (F1) written to cyl.stl in the working directory and read back as the mesh body cyl (Base1, F2.b0), the solid removed (RemoveBody1, F3), and Plane1 (F4) 6 above XY. The wrappers run this in their work folder."},
+  {"cmd":"add_feature","def":{"type":"cylinder","plane":"xy","diameter":30,"height":12,"operation":"new_body"}},
+  {"cmd":"export","path":"cyl.stl","bodies":["F1.b0"]},
+  {"cmd":"import_file","path":"cyl.stl"},
+  {"cmd":"add_feature","def":{"type":"remove_body","bodies":["F1.b0"]}},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":6}}},
+  {"expect":{"feature":"Base1","status":"ok","body":"cyl","faces":1,"edges":0}},
+  {"expect":{"query":{"query":"mesh_stats","body":"F2.b0"},"result":{"closed":true,"holes":0}}},
+  {"expect":{"feature":"F4","status":"ok"}}
+]

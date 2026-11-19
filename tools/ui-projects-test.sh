@@ -28,7 +28,7 @@
 #      same amount, mitcad#393.)
 #   7. Open Project (the project picker) opens the design opened last;
 #      the panel stays shown at the next start. The Floating layout has
-#      the panel in a card.
+#      the panel in a card, hidden until shown there (mitcad#1990).
 #
 # git's configuration and HOME are the test's own. Runs headless on Xvfb
 # (see ui-test-lib.sh); Qt's own file dialogs (--no-native-dialogs), so
@@ -364,6 +364,13 @@ expect_exit "exited"
 echo "--- Floating: the Projects card"
 ui_start_app --no-native-dialogs --chrome=floating
 UI_MARK=0 # a new log
+# The Floating top bar's layout keeps a choice of its own (mitcad#1990):
+# hidden until shown there.
+ui_expect_log "Projects panel at the start: hidden (no choice yet in this layout)" \
+  "hidden in Floating until shown there"
+ui_mark
+ui_step "projects panel (search)"        ui_command "Projects"
+ui_expect_new "Projects panel: shown at the next start" "shown in the card, remembered"
 row "Shop"
 ui_expect_log "Projects panel: 1 project: Shop" "the projects listed in the card"
 # Not the current project: collapsed until opened.

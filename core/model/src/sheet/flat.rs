@@ -70,6 +70,10 @@ pub struct FlatBend {
     pub centerlines: Vec<FlatLine>,
     /// Lines at `u = 0` and `u = BA`, clipped likewise.
     pub tangents: Vec<FlatLine>,
+    /// A kerf bend's slit lattice (mitcad#1939): the slits across its
+    /// developed strip, clipped to its material; empty for other bends.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub slits: Vec<FlatLine>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -474,6 +478,22 @@ pub(crate) fn evaluate<K: Kernel>(
             },
             centerlines: lines(ba / 2.0, ba / 2.0)?,
             tangents,
+            slits: match &b.lattice {
+                Some(lattice) => {
+                    let mut slits = Vec::new();
+                    for (row, u) in lattice.rows(ba).into_iter().enumerate() {
+                        let intervals = chord(&patch.regions, u).map_err(invalid)?;
+                        slits.extend(
+                            lattice
+                                .row(row, &intervals)
+                                .into_iter()
+                                .map(|i| line(map, u, i)),
+                        );
+                    }
+                    slits
+                }
+                None => Vec::new(),
+            },
         });
     }
     let geometry = kernel

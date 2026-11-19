@@ -14,8 +14,10 @@ key F6
 wait-idle
 
 mark
-click-logged '^Ribbon tab MAKE at '
-wait-log '^Ribbon tab shown: MAKE$'
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged '^Ribbon tab MAKE_PRINT at '
+wait-log '^Ribbon tab shown: MAKE_PRINT$'
 
 # A face of Body2 (its top, at a point the view picks it: a body's logged
 # centre can fall on a corner): the card of Body2, its Send to Slicer

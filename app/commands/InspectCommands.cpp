@@ -678,8 +678,6 @@ CommandDef measureCommand() {
   def.icon = QStringLiteral("measure");
   def.tooltip = QObject::tr("Distances, angles, lengths, areas and positions of what is picked");
   def.shortcut = QKeySequence(Qt::Key_I);
-  def.group = QStringLiteral("INSPECT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("distance"), QStringLiteral("angle"), QStringLiteral("dimension")};
   // Faces, edges and vertices, which Measure picks by default, or
   // whole bodies (the Selection Filter; a body would win over its faces
@@ -903,7 +901,6 @@ CommandDef interferenceCommand(const CommandContext& context) {
   def.name = QObject::tr("Interference");
   def.icon = QStringLiteral("interference");
   def.tooltip = QObject::tr("Where bodies overlap, and by how much");
-  def.group = QStringLiteral("INSPECT");
   def.keywords = {QStringLiteral("clash"), QStringLiteral("overlap"), QStringLiteral("collision")};
   def.inputs = {
       selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 0, 0)
@@ -1090,8 +1087,6 @@ CommandDef sectionCommand() {
   def.shortLabel = QCoreApplication::translate("RibbonLabel", "Section"); // under its button (mitcad#1936)
   def.icon = QStringLiteral("section-analysis");
   def.tooltip = QObject::tr("Shows the bodies cut at a plane, with the cut's area");
-  def.group = QStringLiteral("INSPECT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("cut"), QStringLiteral("clip"), QStringLiteral("cross section")};
   def.keepsSection = true;
   def.inputs = {
@@ -1482,9 +1477,6 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
   def.icon = QStringLiteral("print-analysis");
   def.tooltip = QObject::tr("Overhangs, thin walls, narrow gaps and an estimate of weight, filament and cost");
   // The Make tab's 3D Print group (mitcad#1049).
-  def.tab = QStringLiteral("MAKE");
-  def.group = QStringLiteral("3D PRINT");
-  def.pinned = true;
   def.keywords = {QStringLiteral("3d print"), QStringLiteral("overhang"), QStringLiteral("thin wall"),
                   QStringLiteral("filament"), QStringLiteral("weight"), QStringLiteral("support"),
                   QStringLiteral("print estimate"), QStringLiteral("gap"), QStringLiteral("print in place")};
@@ -2064,7 +2056,6 @@ void registerInspectCommands(CommandRegistry& registry, const CommandContext& co
   properties.name = QObject::tr("Physical Properties");
   properties.icon = QStringLiteral("properties");
   properties.tooltip = QObject::tr("Mass, volume, size and counts of the selected bodies or components");
-  properties.group = QStringLiteral("INSPECT");
   properties.kind = CommandDef::Kind::Action;
   properties.keywords = {QStringLiteral("mass"), QStringLiteral("weight"), QStringLiteral("center of mass"),
                          QStringLiteral("inertia")};

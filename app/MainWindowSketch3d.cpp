@@ -208,6 +208,32 @@ void MainWindow::setUpSketch3d() {
     }
   });
 
+  // The origin planes kept clear of the cards while Create Sketch waits for
+  // a plane (mitcad#1990, keepOriginClearOfCards): again when a card moves
+  // (the command card laid out later), until the user moves the view; the
+  // view's own move to them leaves it armed.
+  connect(
+      m_viewer, &OcctViewer::coveredChanged, this,
+      [this] {
+        if (m_originClearArmed && m_mode == Mode::PickPlane) {
+          keepOriginClearOfCards();
+        }
+      },
+      Qt::QueuedConnection);
+  connect(m_viewer, &OcctViewer::navigationFinished, this, [this] {
+    if (m_originClearMoving) {
+      m_originClearMoving = false;
+    } else {
+      m_originClearArmed = false;
+    }
+  });
+  connect(m_viewer, &OcctViewer::cameraRested, this, [this] {
+    if (m_originClearLogPicks && m_mode == Mode::PickPlane) {
+      m_originClearLogPicks = false;
+      logSketchPicks(); // the faces' places where the move put them
+    }
+  });
+
   // Create Sketch's kind, on the command card while it waits for the
   // plane: 2D or 3D.
   QWidget* page = m_idlePage;
@@ -270,6 +296,9 @@ void MainWindow::showSketchKindRow(bool shown) {
   }
   m_sketchKindRow->setVisible(shown);
   updateCommandCard();
+  m_originClearArmed = shown;
+  m_originClearMoving = false;
+  m_originClearLogPicks = false;
   if (!shown) {
     return;
   }
@@ -278,6 +307,9 @@ void MainWindow::showSketchKindRow(bool shown) {
   if (m_floating != nullptr) {
     m_floating->layoutNow();
   }
+  // And the origin planes clear of it and of the Browser's card, so that
+  // a plane can be clicked in the view (mitcad#1990).
+  keepOriginClearOfCards();
   // Where the choices are, for UI tests, once the card is laid out.
   TestSync::singleShot(200, this, [this] {
     if (m_sketchKindRow == nullptr || !m_sketchKindRow->isVisible()) {
@@ -580,7 +612,6 @@ void MainWindow::registerSketch3dKeys() {
     def.icon = QString::fromLatin1(icon);
     def.kind = CommandDef::Kind::Action;
     def.mode = CommandDef::Mode::Sketch;
-    def.tab.clear(); // no tab: its key, Keyboard Shortcuts and the command search
     def.shortcut = key;
     // Its keys live in the 3D drawing tools' context, which wins over the
     // others' while a tool is active (Up is Turn View Up's elsewhere).

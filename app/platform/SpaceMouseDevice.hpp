@@ -4,11 +4,9 @@
 // 3D mice (6-DOF devices, mitcad#951): the small interface the view's
 // SpaceMouseController reads them through, one backend per platform, and
 // the pure parsing of the devices' reports, here so that the unit tests
-// check it on every platform. No vendor SDK: Windows reads the device's
-// HID reports through Raw Input (platform/windows/SpaceMouseWindows.cpp),
-// Linux and the BSDs the spacenavd daemon's socket
-// (platform/unix/SpaceMouseSpnav.cpp), macOS the HID values through
-// IOKit's HID Manager (platform/macos/SpaceMouseMac.cpp).
+// check it on every platform. Windows has Raw Input and optional SiApp,
+// macOS has IOKit and an optional 3DxWare client, and Linux has the
+// spacenavd socket and X11 Magellan. The BSDs use the spacenavd socket.
 //
 // The axes come in the view's frame, normalized to about ±1 at full
 // deflection: x to the right, y up and z toward the user (out of the
@@ -340,6 +338,11 @@ public:
   // Starts listening. True when a device (or spacenavd) is there now, with
   // its name in `device`.
   virtual bool start(QString& device) = 0;
+  virtual QString unavailableStatus() const { return {}; }
+
+  // The active view and native window used by application-aware drivers.
+  std::function<bool()> acceptsInput;
+  std::function<std::uintptr_t()> nativeWindow;
 
   // The axes moved (the view's frame, see above).
   std::function<void(const SpaceMouseAxes&)> motion;

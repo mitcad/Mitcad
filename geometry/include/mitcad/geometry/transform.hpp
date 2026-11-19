@@ -7,6 +7,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 #include "mitcad/geometry/shape.hpp"
 
@@ -34,5 +35,12 @@ ShapePtr transform_shape(const Shape& shape, const Affine& map, const std::strin
 // without surfaces (a mesh body), are moved as transform_shape moves them.
 // Face names and errors as transform_shape's.
 ShapePtr move_shape(const Shape& shape, const Affine& map, const std::string& rename = {});
+
+// transform_shape of each shape by its map (`maps` as many as `shapes`),
+// without renaming, in their order: made beside each other on OCCT's
+// threads, each as it is made alone (mitcad#2021: a drawing view placed
+// 884 bodies one after another for 3 s). The first failure in the order of
+// the shapes is thrown as transform_shape throws it.
+std::vector<ShapePtr> transform_shapes(const std::vector<ShapePtr>& shapes, const std::vector<Affine>& maps);
 
 } // namespace mitcad::geometry

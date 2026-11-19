@@ -2,6 +2,7 @@
 #include "QuickAccess.hpp"
 
 #include <QChar>
+#include <QDebug>
 #include <QMetaType>
 #include <QSettings>
 #include <QVariant>
@@ -11,6 +12,9 @@ namespace {
 
 // The longest tooltip a command's control may have (repo.tooltips).
 constexpr int kTooltipLimit = 80;
+
+// QuickAccessSettings::setTopBarDefaults.
+bool g_topBarDefaults = false;
 
 // The ids of a settings value: a string of ids joined by commas, or a list
 // (an INI file's unquoted "a,b" reads back as a list).
@@ -32,12 +36,22 @@ QStringList idsOf(const QVariant& value) {
 } // namespace
 
 QStringList QuickAccessSettings::defaults() {
+  if (g_topBarDefaults) {
+    // The top bar has buttons of its own for New, Save and Preferences, and
+    // the File menu for the rest (the owner, 18.11.2026): the group starts
+    // empty there, as a place for the commands the user adds (mitcad#1990).
+    return {};
+  }
   // Print comes with mitcad#1089, Design Properties with mitcad#1088: a
   // build without them shows the other four.
   return {QStringLiteral("file.new_design"),       QStringLiteral("file.open"),
           QStringLiteral("file.save"),             QStringLiteral("file.print"),
           QStringLiteral("file.design_properties"), QStringLiteral("tools.preferences")};
 }
+
+void QuickAccessSettings::setTopBarDefaults(bool topBar) { g_topBarDefaults = topBar; }
+
+bool QuickAccessSettings::topBarDefaults() { return g_topBarDefaults; }
 
 QString QuickAccessSettings::settingsKey() { return QStringLiteral("quickAccess/commands"); }
 
@@ -67,6 +81,20 @@ bool QuickAccessSettings::setChosen(const QString& id, bool on) {
   } else {
     chosen.removeAll(id);
   }
+  return true;
+}
+
+bool QuickAccessSettings::isChosen(const QString& id) { return load().chosen.contains(id); }
+
+bool QuickAccessSettings::choose(const QString& id, bool on) {
+  QuickAccessSettings settings = load();
+  if (!settings.setChosen(id, on)) {
+    return false;
+  }
+  settings.save();
+  qDebug().noquote()
+      << QStringLiteral("Quick access %1 %2").arg(on ? QStringLiteral("added") : QStringLiteral("removed"), id);
+  emit QuickAccessNotifier::instance().commandsChanged();
   return true;
 }
 

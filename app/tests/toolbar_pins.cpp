@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: MIT
 // The commands pinned to the toolbar (mitcad#1001): pin, reorder and unpin
-// update the preference (toolbarPins/<TAB>) at once, per tab; the pins are
+// update the preference (the command layout's user layer, mitcad#1951) at
+// once, per tab; the pins are
 // read back as saved; an unknown command id in the preference is dropped
 // with a log line, an alias becomes its command and a repeated id is kept
-// once, and the settings are written again without them. Each pin is in its
+// once, and the layer is saved again without them. Each pin is in its
 // own group (mitcad#1084): a Modify command pinned on the Solid tab is one
 // of the MODIFY group's pins, not CREATE's; a group's pins reorder among
 // themselves; an old per-tab pin list is read into the groups, a command
 // kept under another tab than its own going to its own; unpinned, it is
 // gone from its group.
 #include "UnitTests.hpp"
+#include "framework/CommandLayout.hpp"
 #include "framework/ToolbarPins.hpp"
 
 #include <cstdio>
@@ -74,14 +76,21 @@ mitcad::ToolbarPins::Command resolve(const QString& id) {
   return {};
 }
 
-// The saved value of a tab's pins, as text ("" none).
-QString saved(const QString& tab) {
-  const QVariant value = QSettings().value(mitcad::ToolbarPins::settingsKey(tab));
-  return value.metaType().id() == QMetaType::QStringList ? value.toStringList().join(QLatin1Char(','))
-                                                          : value.toString();
-}
+// The user layer the pins are kept in (mitcad#1951), made once the
+// settings are the test's.
+mitcad::CommandLayoutStore* store = nullptr;
 
-bool hasKey(const QString& tab) { return QSettings().contains(mitcad::ToolbarPins::settingsKey(tab)); }
+// The saved pins of a tab, as text ("" none).
+QString saved(const QString& tab) { return store->pins(tab).join(QLatin1Char(',')); }
+
+bool hasKey(const QString& tab) { return store->pinTabs().contains(tab); }
+
+// An earlier version's setting of a tab's pins; read into the layer when
+// the layout is read again (the start).
+QString oldKey(const QString& tab) { return QStringLiteral("toolbarPins/") + tab; }
+
+// No pins left.
+void clearPins() { store->setUserLayer(mitcad::LayoutUserLayer()); }
 
 // The log lines while the pins are read (the dropped ids).
 QStringList logged;
@@ -89,7 +98,7 @@ void collect(QtMsgType, const QMessageLogContext&, const QString& message) { log
 
 void pinReorderUnpinTests() {
   using namespace mitcad;
-  ToolbarPins pins = ToolbarPins::load(resolve);
+  ToolbarPins pins = ToolbarPins::load(resolve, store);
   CHECK(pins.pins(kSolid).isEmpty());
   CHECK(pins.tabs().isEmpty());
 
@@ -125,7 +134,7 @@ void pinReorderUnpinTests() {
   CHECK(saved(kSolid) == QStringLiteral("solid.extrude,solid.sweep,solid.loft"));
 
   // Kept across sessions: read back as saved.
-  const ToolbarPins again = ToolbarPins::load(resolve);
+  const ToolbarPins again = ToolbarPins::load(resolve, store);
   CHECK(again.pins(kSolid) == (QStringList{kExtrude, kSweep, kLoft}));
   CHECK(again.pins(kBuild) == QStringList{kProfile});
 
@@ -141,24 +150,25 @@ void pinReorderUnpinTests() {
   CHECK(pins.tabs() == QStringList{kBuild});
   CHECK(pins.unpin(kBuild, kProfile));
   CHECK(!hasKey(kBuild));
-  CHECK(ToolbarPins::load(resolve).tabs().isEmpty());
+  CHECK(ToolbarPins::load(resolve, store).tabs().isEmpty());
 }
 
 void unknownCommandTests() {
   using namespace mitcad;
   // A command that no longer exists, an alias, a repeated id and spaces.
-  QSettings().setValue(ToolbarPins::settingsKey(kSolid),
+  QSettings().setValue(oldKey(kSolid),
                        QStringLiteral("solid.sweep, solid.gone,solid.old_loft,solid.sweep"));
   // A list, as an INI file's unquoted "a,b" is read; only unknown ids.
   QStringList build;
   build.append(QStringLiteral("build.profile"));
   build.append(QStringLiteral("build.gone"));
-  QSettings().setValue(ToolbarPins::settingsKey(kBuild), build);
-  QSettings().setValue(ToolbarPins::settingsKey(QStringLiteral("SKETCH")), QStringLiteral("sketch.gone"));
+  QSettings().setValue(oldKey(kBuild), build);
+  QSettings().setValue(oldKey(QStringLiteral("SKETCH")), QStringLiteral("sketch.gone"));
+  store->reload();
 
   logged.clear();
   const QtMessageHandler previous = qInstallMessageHandler(collect);
-  const ToolbarPins pins = ToolbarPins::load(resolve);
+  const ToolbarPins pins = ToolbarPins::load(resolve, store);
   qInstallMessageHandler(previous);
 
   CHECK(pins.pins(kSolid) == (QStringList{kSweep, kLoft}));
@@ -174,16 +184,16 @@ void unknownCommandTests() {
   // Read again: nothing more to drop.
   logged.clear();
   const QtMessageHandler before = qInstallMessageHandler(collect);
-  const ToolbarPins again = ToolbarPins::load(resolve);
+  const ToolbarPins again = ToolbarPins::load(resolve, store);
   qInstallMessageHandler(before);
   CHECK(logged.isEmpty());
   CHECK(again.pins(kSolid) == (QStringList{kSweep, kLoft}));
-  QSettings().remove(QStringLiteral("toolbarPins"));
+  clearPins();
 }
 
 void groupTests() {
   using namespace mitcad;
-  ToolbarPins pins = ToolbarPins::load(resolve);
+  ToolbarPins pins = ToolbarPins::load(resolve, store);
   // A Modify command pinned on the Solid tab: one of MODIFY's pins, the
   // button the Ribbon adds after the group's own; none in CREATE.
   CHECK(pins.pin(kSolid, kDraft));
@@ -228,19 +238,20 @@ void groupTests() {
   CHECK(unplaced.pin(kSolid, kDraft));
   CHECK(unplaced.pins(kSolid, kModify).isEmpty());
   CHECK(unplaced.unpin(kSolid, kDraft));
-  QSettings().remove(QStringLiteral("toolbarPins"));
+  clearPins();
 }
 
 void oldPinsTests() {
   using namespace mitcad;
   // A per-tab list of an earlier version (the Pinned group's, mitcad#1001):
   // CREATE's, MODIFY's and a command whose group is on the Make tab now.
-  QSettings().setValue(ToolbarPins::settingsKey(kSolid),
+  QSettings().setValue(oldKey(kSolid),
                        QStringLiteral("solid.sweep,solid.draft,make.material,solid.loft"));
+  store->reload();
 
   logged.clear();
   const QtMessageHandler previous = qInstallMessageHandler(collect);
-  ToolbarPins pins = ToolbarPins::load(resolve);
+  ToolbarPins pins = ToolbarPins::load(resolve, store);
   qInstallMessageHandler(previous);
 
   // Each in its command's group.
@@ -257,7 +268,7 @@ void oldPinsTests() {
   // Read again: nothing more to move.
   logged.clear();
   const QtMessageHandler before = qInstallMessageHandler(collect);
-  const ToolbarPins again = ToolbarPins::load(resolve);
+  const ToolbarPins again = ToolbarPins::load(resolve, store);
   qInstallMessageHandler(before);
   CHECK(logged.isEmpty());
   CHECK(again.pins(kSolid, kModify) == QStringList{kDraft});
@@ -266,12 +277,14 @@ void oldPinsTests() {
   // A moved command its own tab has already is kept there once; one moved
   // to a tab whose own pins were all dropped is that tab's pin; the tab it
   // was kept under loses its key.
-  QSettings().setValue(ToolbarPins::settingsKey(kSolid), QStringLiteral("make.material,build.profile"));
-  QSettings().setValue(ToolbarPins::settingsKey(kMake), QStringLiteral("make.material"));
-  QSettings().setValue(ToolbarPins::settingsKey(kBuild), QStringLiteral("build.gone"));
+  QSettings().setValue(oldKey(kSolid), QStringLiteral("make.material,build.profile"));
+  QSettings().setValue(oldKey(kMake), QStringLiteral("make.material"));
+  QSettings().setValue(oldKey(kBuild), QStringLiteral("build.gone"));
+  clearPins();
+  store->reload();
   logged.clear();
   const QtMessageHandler third = qInstallMessageHandler(collect);
-  const ToolbarPins moved = ToolbarPins::load(resolve);
+  const ToolbarPins moved = ToolbarPins::load(resolve, store);
   qInstallMessageHandler(third);
   CHECK(moved.pins(kMake) == QStringList{kMaterial});
   CHECK(moved.pins(kBuild) == QStringList{QStringLiteral("build.profile")});
@@ -283,7 +296,7 @@ void oldPinsTests() {
   // Unpinned: gone from its group and the settings.
   CHECK(pins.unpin(kSolid, kDraft));
   CHECK(pins.pins(kSolid, kModify).isEmpty());
-  QSettings().remove(QStringLiteral("toolbarPins"));
+  clearPins();
 }
 
 } // namespace
@@ -300,10 +313,15 @@ int toolbarPinsTests() {
   QSettings::setDefaultFormat(QSettings::IniFormat);
   QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory.path());
   CHECK(QSettings().fileName().startsWith(directory.path()));
+  // The layout's store over these settings (no default layout file: the
+  // pins need none).
+  mitcad::CommandLayoutStore layoutStore(directory.filePath(QStringLiteral("no-layout.json")));
+  store = &layoutStore;
   pinReorderUnpinTests();
   unknownCommandTests();
   groupTests();
   oldPinsTests();
+  store = nullptr;
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

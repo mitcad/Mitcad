@@ -105,7 +105,7 @@ protected:
     if (hot) {
       painter.setPen(Qt::NoPen);
       painter.setBrush(withAlpha(colors.text, isDown() ? 46 : 26));
-      painter.drawRoundedRect(QRectF(rect()), 5, 5);
+      painter.drawRoundedRect(QRectF(rect()), kControlRadius, kControlRadius);
     }
     QPen pen(hot ? colors.text : colors.secondaryText, 1.2);
     pen.setCapStyle(Qt::RoundCap);

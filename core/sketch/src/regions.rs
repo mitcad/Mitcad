@@ -136,6 +136,10 @@ struct Arrangement<'a> {
     tol: f64,
     vertices: Vec<P2>,
     edges: Vec<Edge>,
+    /// Pieces of a supporting face's edge left out for a stored curve on
+    /// them: (the face edge's curve, the stored curve), by curve index
+    /// ([`Layout::aliases`]).
+    replaced: Vec<(usize, usize)>,
 }
 
 /// Computes the regions of the curves (in any order; the result is sorted
@@ -447,6 +451,7 @@ impl<'a> Arrangement<'a> {
             tol,
             vertices,
             edges,
+            replaced: Vec::new(),
         };
         arrangement.drop_degenerate();
         arrangement
@@ -547,9 +552,11 @@ impl<'a> Arrangement<'a> {
                     self.edges[e].face_boundary = face_boundary;
                     self.edges[f].face_boundary = face_boundary;
                     if drop_e {
+                        self.replace(e, f);
                         self.edges[e].alive = false;
                         break;
                     }
+                    self.replace(f, e);
                     self.edges[f].alive = false;
                 }
             }
@@ -584,8 +591,10 @@ impl<'a> Arrangement<'a> {
                 self.edges[e].face_boundary = face_boundary;
                 self.edges[f].face_boundary = face_boundary;
                 if drop_e {
+                    self.replace(e, f);
                     self.edges[e].alive = false;
                 } else {
+                    self.replace(f, e);
                     self.edges[f].alive = false;
                 }
             }
@@ -673,10 +682,41 @@ impl<'a> Arrangement<'a> {
                 continue;
             }
             for e in chain {
+                self.replace(e, f);
                 self.edges[e].alive = false;
             }
             self.edges[f].face_boundary = true;
         }
+    }
+
+    /// Notes that the piece `dropped` is left out for `kept` when it is a
+    /// piece of a supporting face's edge and `kept` one of a stored curve.
+    fn replace(&mut self, dropped: usize, kept: usize) {
+        let (from, to) = (self.edges[dropped].curve, self.edges[kept].curve);
+        if self.curves[from].uid.is_face_edge() && !self.curves[to].uid.is_face_edge() {
+            self.replaced.push((from, to));
+        }
+    }
+
+    /// The supporting face's edges that only a stored curve on them stands
+    /// for now, each with that curve: every piece of the edge was left out
+    /// for pieces of the one curve (a projection of the edge, or its
+    /// projection converted to sketch geometry), and none is left.
+    fn aliases(&self) -> Vec<(CurveId, CurveId)> {
+        let mut by_edge: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+        for &(from, to) in &self.replaced {
+            by_edge.entry(from).or_default().insert(to);
+        }
+        by_edge
+            .into_iter()
+            .filter(|(from, to)| {
+                to.len() == 1 && !self.edges.iter().any(|e| e.alive && e.curve == *from)
+            })
+            .filter_map(|(from, to)| {
+                let to = *to.iter().next()?;
+                Some((self.curves[from].uid.clone(), self.curves[to].uid.clone()))
+            })
+            .collect()
     }
 
     /// Whether two pieces with the same ends run along each other: points
@@ -1511,7 +1551,11 @@ impl<'a> Arrangement<'a> {
                 }
             })
             .collect();
-        Layout { curves_at, edges }
+        Layout {
+            curves_at,
+            edges,
+            aliases: self.aliases(),
+        }
     }
 }
 
@@ -1524,6 +1568,10 @@ pub struct Layout {
     /// The curves that meet at each vertex.
     curves_at: Vec<Vec<CurveId>>,
     edges: Vec<LayoutEdge>,
+    /// Supporting face edges a stored curve on them stands for, with that
+    /// curve (mitcad#2051): a key that names such an edge means the curve
+    /// ([`Layout::aliased`]).
+    aliases: Vec<(CurveId, CurveId)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1565,6 +1613,43 @@ struct Run {
 const LOOP_SEARCH_LIMIT: usize = 20_000;
 
 impl Layout {
+    /// `key` with each supporting face edge that a stored curve on it
+    /// stands for now ([`Layout::aliases`]) named as that curve, at the
+    /// segments' ends too: the key of the same region when the face's
+    /// edges were projected into the sketch, or their projections converted
+    /// to sketch geometry, after the key was taken (mitcad#2051). None when
+    /// it names no such edge.
+    pub fn aliased(&self, key: &RegionKey) -> Option<RegionKey> {
+        let alias = |c: &CurveId| {
+            self.aliases
+                .iter()
+                .find(|(from, _)| from == c)
+                .map(|(_, to)| to.clone())
+        };
+        if !key
+            .segments()
+            .flat_map(SegmentKey::curves)
+            .any(|c| alias(&c).is_some())
+        {
+            return None;
+        }
+        let named = |c: &CurveId| alias(c).unwrap_or_else(|| c.clone());
+        RegionKey::new(key.segments().map(|s| {
+            let curve = named(&s.curve);
+            let mut out = match &s.ends {
+                Some(ends) => {
+                    let end = |list: &[CurveId]| -> Vec<CurveId> {
+                        list.iter().map(named).filter(|c| *c != curve).collect()
+                    };
+                    SegmentKey::with_ends(curve.clone(), end(&ends.0[..]), end(&ends.1[..]))
+                }
+                None => SegmentKey::closed(curve),
+            };
+            out.occurrence = s.occurrence;
+            out
+        }))
+    }
+
     /// The regions (indices into the sorted regions) that make up the area
     /// a region key outlines (mitcad#407): each of its segments `c[a,b]`
     /// is traced as the edges of curve `c` from where it meets the curves

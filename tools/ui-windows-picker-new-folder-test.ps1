@@ -26,7 +26,7 @@ param(
 
 # The Projects panel shown at the start, as for a user who turned it on
 # (mitcad#1020: hidden until then).
-Ui-Init $App $Out $QtBin @{ 'projects/panel' = 'true' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'projects/panel' = 'true'; 'projects/panelTopBar' = 'true' } -StepPause 0
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if (-not $git) { Ui-Fail 'git is required: the folders are versions' }

@@ -152,6 +152,7 @@ const SettingsRule kRules[] = {
     {"sketch/clickAddsToSelection", "preferences", PathKind::None},
     {"sketch/escLeavesUnchangedSketch", "preferences", PathKind::None},
     {"sketch/showProfilesOnOpen", "preferences", PathKind::None},
+    {"sketch/projectFaceOnCreate", "preferences", PathKind::None},
     {"suppliers/region", "preferences", PathKind::None},
     {"suppliers/shops", "preferences", PathKind::None},
     {"assembly/jointComponent", "preferences", PathKind::None},
@@ -163,7 +164,12 @@ const SettingsRule kRules[] = {
     // Pins: the navigation bar's, the toolbar's and the quick-access
     // group's commands.
     {"navigationBarPins", "pins", PathKind::None},
+    // An earlier version's toolbar pins (read from its files; moved into
+    // the command layout's user layer once imported, mitcad#1951).
     {"toolbarPins/", "pins", PathKind::None},
+    // The user's layer of the command layout (mitcad#1951): where the
+    // commands sit, as a difference from the default.
+    {"commandLayout/user", "pins", PathKind::None},
     {"quickAccess/commands", "pins", PathKind::None},
 
     // The ribbon's and panels' layout: the left column's split, the panels'

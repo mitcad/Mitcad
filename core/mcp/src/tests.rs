@@ -1720,18 +1720,30 @@ fn changes_list_added_changed_recomputed_failed_and_removed_items() {
 
 #[test]
 fn changes_give_the_boxes_of_the_bodies_a_split_left() {
-    // mitcad#714: the snapshot reads every body's box, and the changed and
-    // added bodies carry it, so a split's pieces show their sides.
-    let (_, bodies_query) = SNAPSHOT_QUERIES
-        .iter()
-        .find(|(key, _)| *key == "bodies")
-        .unwrap();
-    let bodies_query: Value = serde_json::from_str(bodies_query).unwrap();
-    assert_eq!(bodies_query["bbox"], true);
-    assert_eq!(bodies_query["versions"], true);
+    // mitcad#714: the snapshot after the command reads the boxes of the
+    // bodies it changed or added, which carry them, so a split's pieces show
+    // their sides; the snapshot before it reads no boxes, and the one after
+    // none of the bodies the one before has at the same version
+    // (mitcad#2021).
+    let bodies_query = |after: bool, before: Option<&Value>| -> Value {
+        let queries = snapshot_queries(after, before);
+        let (_, query) = queries.iter().find(|(key, _)| *key == "bodies").unwrap();
+        serde_json::from_str(query).unwrap()
+    };
+    let first = bodies_query(false, None);
+    assert_eq!(first["versions"], true);
+    assert!(first.get("bbox").is_none());
 
-    let mut before = snapshot(1, 1);
-    before["bodies"][0]["bbox"] = json!({"min": [0, 0, 0], "max": [2012, 600, 18]});
+    let before = snapshot(1, 1);
+    let then = bodies_query(true, Some(&before));
+    assert_eq!(then["versions"], true);
+    assert_eq!(then["bbox"], true);
+    assert_eq!(then["bbox_known"], json!({"F1.b0": format!("{:032x}", 1)}));
+    // Without a snapshot before (`"timeline": "full"`), every body's box.
+    let all = bodies_query(true, None);
+    assert_eq!(all["bbox"], true);
+    assert!(all.get("bbox_known").is_none());
+
     let mut after = snapshot(2, 1);
     after["bodies"][0]["version"] = json!("ff");
     after["bodies"][0]["bbox"] = json!({"min": [0, 0, 0], "max": [1000, 600, 18]});
