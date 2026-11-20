@@ -54,6 +54,11 @@ if command -v launchctl > /dev/null; then
   fi
 fi
 
+# This fixture measures the solid's rendered colours against its background.
+# Keep layout-grid lines out of that image comparison.
+mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+printf '[view]\ngrid=false\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
+
 echo '--- Demo block'
 ui_run_app demo --ui=qt --demo --screenshot "$UI_OUT/demo.png"
 renderer=$(ui_log_value 'OpenGL renderer: *\(.*\)')

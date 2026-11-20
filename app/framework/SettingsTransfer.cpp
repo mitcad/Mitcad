@@ -173,10 +173,12 @@ const SettingsRule kRules[] = {
     {"quickAccess/commands", "pins", PathKind::None},
 
     // The ribbon's and panels' layout: the left column's split, the panels'
-    // and cards' widths, the Configuration card's disclosure.
+    // and cards' widths, the command panels' lists of picks (mitcad#2064),
+    // the Configuration card's disclosure.
     {"floating/leftSplit", "layout", PathKind::None},
     {"native/leftSplit", "layout", PathKind::None},
     {"commandPanel/dockWidth", "layout", PathKind::None},
+    {"commandPanel/picksShown", "layout", PathKind::None},
     {"browser/cardWidth", "layout", PathKind::None},
     {"inspector/cardWidth", "layout", PathKind::None},
     {"projects/cardWidth", "layout", PathKind::None},
@@ -184,6 +186,10 @@ const SettingsRule kRules[] = {
     {"projects/panel", "layout", PathKind::None},
     {"drawings/panelWidth", "layout", PathKind::None},
     {"configuration/panelCollapsed", "layout", PathKind::None},
+    // Not here: the window's place (mainWindow/, mitcad#1710) and the Docked
+    // layout's kept dock arrangement (dockState/, mitcad#2070). They name
+    // this machine's screens, and Qt warns against restoreState with data
+    // of unknown origin.
 
     // Library sources (their folders checked on import).
     {"libraries/sources", "libraries", PathKind::LibrarySources},

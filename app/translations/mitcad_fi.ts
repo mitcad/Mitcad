@@ -24107,6 +24107,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Tyhjennä valinta</translation>
     </message>
     <message>
+        <source>List the picks</source>
+        <translation>Näytä poiminnat</translation>
+    </message>
+    <message>
         <source>Move up</source>
         <translation>Siirrä ylös</translation>
     </message>
@@ -24147,6 +24151,13 @@ Napsautus: %2</translation>
     <message>
         <source>Type name = value to rename it; a click on a dimension or a value in the view inserts its name</source>
         <translation>Nimeä uudelleen kirjoittamalla nimi = arvo; mitan tai arvon napsauttaminen näkymässä lisää sen nimen</translation>
+    </message>
+    <message numerus="yes">
+        <source>and %n more</source>
+        <translation>
+            <numerusform>ja %n muu</numerusform>
+            <numerusform>ja %n muuta</numerusform>
+        </translation>
     </message>
 </context>
 <context>
@@ -35012,6 +35023,21 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     </message>
 </context>
 <context>
+    <name>mitcad::PreferencesSearchField</name>
+    <message>
+        <source>Search settings</source>
+        <translation>Hae asetuksista</translation>
+    </message>
+    <message>
+        <source>No setting matches</source>
+        <translation>Mikään asetus ei vastaa hakua</translation>
+    </message>
+    <message>
+        <source>%1 (%2)</source>
+        <translation>%1 (%2)</translation>
+    </message>
+</context>
+<context>
     <name>mitcad::PrintValuePicker</name>
     <message>
         <source>Add Print Value</source>
@@ -37366,6 +37392,10 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
         <translation>Hae ulkoasuja</translation>
     </message>
     <message>
+        <source>Which appearances the list shows</source>
+        <translation>Mitkä ulkoasut lista näyttää</translation>
+    </message>
+    <message>
         <source>In Design</source>
         <translation>Mallissa</translation>
     </message>
@@ -37436,6 +37466,10 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>%1 (a favorite)</source>
         <translation>%1 (suosikki)</translation>
+    </message>
+    <message>
+        <source>No favorites yet. Right-click an appearance to add it to Favorites.</source>
+        <translation>Ei vielä suosikkeja. Lisää ulkoasu suosikkeihin napsauttamalla sitä hiiren oikealla painikkeella.</translation>
     </message>
     <message>
         <source>Pick a body, a face or a component in the view first.</source>
@@ -37885,6 +37919,14 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>Start: new and recent designs, resources</source>
         <translation>Aloitus: uudet ja viimeisimmät mallit, resurssit</translation>
+    </message>
+    <message>
+        <source>More tabs that do not fit</source>
+        <translation>Lisää välilehtiä, jotka eivät mahdu</translation>
+    </message>
+    <message>
+        <source>More tabs</source>
+        <translation>Lisää välilehtiä</translation>
     </message>
     <message>
         <source>Workspace: switches the toolbar between Design, Make, Render and Drawing</source>
@@ -40738,8 +40780,8 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
         <translation>Palauta oletusasettelu</translation>
     </message>
     <message>
-        <source>Puts every toolbar and menu command back where MitCad has it</source>
-        <translation>Palauttaa jokaisen työkalurivin ja valikon komennon MitCadin oletuspaikalle</translation>
+        <source>Puts the toolbar, the menus and the Docked layout&apos;s panels back in their default places</source>
+        <translation>Palauttaa työkalunauhan, valikot ja Docked-asettelun paneelit oletuspaikoilleen</translation>
     </message>
     <message>
         <source>Show the Boost development button</source>

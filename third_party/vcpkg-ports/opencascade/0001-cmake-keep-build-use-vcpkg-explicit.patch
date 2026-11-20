@@ -1,3 +1,9 @@
+Test: none, because this is one of vcpkg's own build changes of the port
+(patches 0001 to 0005 come from vcpkg's opencascade port, otherwise
+unchanged): it changes only which third-party libraries OCCT's build takes
+from vcpkg, not what OCCT computes, so no geometry test can fail without
+it; the port's build is its check (mitcad#1986).
+
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 9b21fedd66..25f31712c7 100644
 --- a/CMakeLists.txt

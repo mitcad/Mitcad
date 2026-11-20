@@ -22,6 +22,12 @@ two faces makes no corner, but OCCT counted it.
   the three known ones, which with the edge above can be one not on that
   face. The end of the opposite face's contact was then oriented from an
   edge not on it, and the face came out inconsistently oriented.
+
+Test: geometry/tests/test_fillet_overflow.cpp (ctest
+geometry.suite.fillet_overflow),
+test_corner_where_the_end_face_is_split_in_one_plane: Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 4aea6e8..0abaa2c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

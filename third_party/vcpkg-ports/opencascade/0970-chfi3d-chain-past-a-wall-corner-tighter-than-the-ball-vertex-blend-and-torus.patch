@@ -58,31 +58,40 @@ four corners rounded: valid, the vertex blends exact, the torus where the
 wall leans, the material taken within 1e-6 mm3 of the integral where the
 walls are square.
 
+Failures (mitcad#1986): the test of an arc as tight (ChFi3d_TightArc)
+fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the corner is not such a
+corner: that arc is not taken as tight (0700's ChFi3d_Computed), and the
+contour is split at the others; any other failure (a broken invariant, a
+signal) is rethrown. SplitAtTightCorners builds the new contours aside and
+puts them in place at its end, so it has no handler of its own in
+Compute. The handler round PerformTightCorners fails the fillet
+(Failure_Corner): a boundary that reports the failure.
+
+Test: geometry/tests/test_fillet_tight_corner.cpp (ctest
+geometry.fillet_tight_corner): a block's bottom outline rounded with a
+radius larger than its vertical corners' rounding, the front wall square
+to the bottom or leaning: valid, the vertex blend and torus at each
+corner. Fails without the patch, passes with it (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 03047af2..ff5a998e 100644
+index 2c7eb504..ef2d4179 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2338,6 +2338,18 @@ void ChFi3d_Builder::Compute()
+@@ -2352,6 +2352,11 @@ void ChFi3d_Builder::Compute()
      }
    };
  
 +  // Contours whose chain runs round a wall's corner rounded with less than
 +  // their radius: split there (PerformTightCorners builds the corners).
-+  try
-+  {
-+    OCC_CATCH_SIGNALS
-+    SplitAtTightCorners();
-+  }
-+  catch (Standard_Failure const&)
-+  {
-+    // (The contours as they are.)
-+  }
++  // (Each arc taken as tight, or not, on its own: mitcad#1986.)
++  SplitAtTightCorners();
 +
    // filling of myVDatatMap
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
  
-@@ -2779,6 +2791,23 @@ void ChFi3d_Builder::Compute()
+@@ -2822,6 +2827,23 @@ void ChFi3d_Builder::Compute()
    {
      // Blends of two ends meeting over a notch of their face's rim.
      ChFi3d_JoinAcrossNotches(DStr, myListStripe, myEFMap, tolapp3d, tol2d);
@@ -134,10 +143,10 @@ index 2b9dbf4a..11c026d7 100644
    //! whose balls are one ball rolling over a narrow face C between them (a
    //! strip that breaks the edge chain, its edges with the common face under
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index a06cce0e..a2f403ef 100644
+index befe10e6..36450106 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -3971,6 +3971,974 @@ bool ChFi3d_Builder::PerformPivotAtStepEnd(const int Index)
+@@ -4071,6 +4071,977 @@ bool ChFi3d_Builder::PerformPivotAtStepEnd(const int Index)
    return false;
  }
  
@@ -342,7 +351,10 @@ index a06cce0e..a2f403ef 100644
 +        continue;
 +      }
 +      ChFi3d_TightArcData D;
-+      if (ChFi3d_TightArc(sp->Edges(i), sp->Edges(ia), sp->Edges(ib), myEFMap, R, tol, D))
++      // (Not tight where that cannot be computed, mitcad#1986.)
++      if (ChFi3d_Computed(
++            [&]() { return ChFi3d_TightArc(sp->Edges(i), sp->Edges(ia), sp->Edges(ib), myEFMap, R, tol, D); },
++            false))
 +      {
 +        aTight(i) = true;
 +        nTight++;

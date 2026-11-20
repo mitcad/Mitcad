@@ -28,9 +28,27 @@ B's edge with N up to the contact on N, as for an ordinary OnSame end. The
 stripe is left as it was where the walk does not reach that edge. Analytic
 blends (not walked) are not changed.
 
+Failures (mitcad#1986): the walk of the last SurfData again from its
+other end fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the blend cannot be carried on
+to the edge of the face at the end: the builder's state is restored and
+the stripe is left as it was, its corner OCCT's. Any other failure (a
+broken invariant, a signal) is rethrown.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_corners.cpp,
+test_rounding_cut_along_its_side_by_the_face_at_an_onsame_end (ctest
+geometry.suite.fillet_corners): a plate with an overhanging tongue, the
+tongue's edge rounded with 1 so that its contact runs off it: the OnSame end
+cut along its side by the face beyond, against a tongue wide enough for the
+contact; and
+test_rounding_walked_again_past_an_onsame_end_generated_by_its_edge, the
+same rounding with 0.3. Its failure without the patch is still to be shown
+in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 085bb4e..2d690e9 100644
+index 085bb4e6..2d690e92 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -1116,6 +1116,15 @@ private:
@@ -50,10 +68,10 @@ index 085bb4e..2d690e9 100644
    //! of the spine to the other, whose walk stopped on the seam of the other
    //! side's face short of where the ball comes tangent to the edge's face at
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 8e8e15a..26d16b7 100644
+index 92caefb7..2766be7a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -12350,6 +12350,271 @@ bool ChFi3d_Builder::RolledEndToEndAcrossSeam(const occ::handle<ChFiDS_Stripe>&
+@@ -12449,6 +12449,276 @@ bool ChFi3d_Builder::RolledEndToEndAcrossSeam(const occ::handle<ChFiDS_Stripe>&
    return true;
  }
  
@@ -282,8 +300,13 @@ index 8e8e15a..26d16b7 100644
 +    walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First, Last,
 +                         false, false, !isFirst, false, false, Soldep, intf, intl);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = doneSave;
@@ -325,7 +348,7 @@ index 8e8e15a..26d16b7 100644
  // The face holding vertices V and A other than the faces given, or null.
  static TopoDS_Face ChFi3d_FaceAtBoth(const ChFiDS_Map&    VFMap,
                                       const TopoDS_Vertex& V,
-@@ -14892,7 +15157,8 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -15006,7 +15276,8 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
      {
        // (A try that fails leaves the stripe as it was.)
        const bool aDone = done;

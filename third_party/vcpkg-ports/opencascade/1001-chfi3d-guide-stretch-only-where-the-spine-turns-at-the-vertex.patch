@@ -29,6 +29,13 @@ the change of volume -2.2689 mm3 on the stored body (as with 0961 alone);
 the fin's top edges of 0980's case keep their stretch and build as before.
 
 Upstream: new.
+
+Test: none yet, because the stretch this patch drops needs the next edge's
+analytic piece to start a hair past a vertex of tangent edges, as the
+design's faces split it, and no synthetic body reproduced that; the patch
+is verified on the design's replayed and stored bodies only, where the
+rounding fails with 0980 and without 1001. Left: a synthetic test
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index bfc749d9..865a08f3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

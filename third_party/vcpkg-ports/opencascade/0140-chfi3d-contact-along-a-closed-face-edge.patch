@@ -44,6 +44,11 @@ Still open: a whole closed contact along a closed edge whose stripe
 starts away from the edge's vertex and away from the seam of the face
 beyond gave an unorientable face; 0144 builds it.
 
+Test: geometry/tests/test_chamfer_overflow.cpp (ctest
+geometry.suite.chamfer_overflow), test_chamfer_as_wide_as_a_step_ring,
+test_chamfer_as_wide_as_a_lug_in_a_bore: Its failure without the patch is
+still to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index d867df2..e97ac50 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

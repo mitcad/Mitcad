@@ -17,6 +17,14 @@ tangentially at that point (within a hundredth of a radian), their
 crossings within a hundredth of the cap's length from it are added to the
 box the point's tolerance is made from (ChFi3d_TangentCapCrossings).
 
+Test: geometry/tests/test_fillet_crest_corners.cpp,
+test_groove_crest_rounded_up_to_its_floors (ctest
+geometry.fillet_crest_corners): a shaft with a thread cut as a groove whose
+floor's and ceiling's rims are circles 2 micrometres inside the shaft, a
+crest edge rounded with 0.3 up to them: valid, the volume of the section
+along the edge. Its failure without the patch, stated in its documentation,
+is still to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 66780ac..0ef8e8a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

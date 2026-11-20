@@ -61,7 +61,9 @@ void paintSurface(QWidget* widget, const QRect& rect) {
 // panels' gap and show the window behind them (they still resize the docks).
 // Its children keep the application's style. Like the application's style,
 // it multiplies the style's icon sizes by Icon size (IconSizeStyle,
-// mitcad#1561): a child with a style sheet takes it as its base.
+// mitcad#1561), paints a pop-up list's highlighted row as the band
+// (mitcad#2084) and draws the popups' border over Qt's portable style
+// (mitcad#2081): a child with a style sheet takes it as its base.
 class GapStyle : public IconSizeStyle {
 public:
   explicit GapStyle(QStyle* base) : IconSizeStyle(base) {}
@@ -78,7 +80,7 @@ public:
     if (element == PE_IndicatorDockWidgetResizeHandle) {
       return;
     }
-    QProxyStyle::drawPrimitive(element, option, painter, widget);
+    IconSizeStyle::drawPrimitive(element, option, painter, widget);
   }
 };
 
@@ -173,13 +175,21 @@ void paintPanelRowBand(QPainter* painter, const QStyleOptionViewItem& option, co
   }
   const QRectF band(panel::kRowInset, option.rect.top() + 1, std::max(0, width - 2 * panel::kRowInset),
                     option.rect.height() - 2);
+  paintRowBand(painter, band, option.state.testFlag(QStyle::State_Active));
+}
+
+void paintRowBand(QPainter* painter, const QRectF& band, bool active) {
+  if (band.width() <= 0 || band.height() <= 0) {
+    return;
+  }
   // The action blue (mitcad#230) from the application palette's theme, not
-  // from the tree's Highlight and Accent (transparent, stylePanelTree). It
-  // stays translucent so that the branch's arrow, painted before, shows
+  // from a view's Highlight and Accent (transparent in a panel's tree,
+  // stylePanelTree; the system's colour in a pop-up list). It stays
+  // translucent so that a tree branch's arrow, painted before, shows
   // through; strong enough to read as blue over the Windows 11 style's faint
   // grey there, also in an inactive window.
   QColor fill = actionColor();
-  fill.setAlphaF(option.state.testFlag(QStyle::State_Active) ? 0.30f : 0.24f);
+  fill.setAlphaF(active ? 0.30f : 0.24f);
   painter->save();
   painter->setRenderHint(QPainter::Antialiasing);
   painter->setPen(Qt::NoPen);
@@ -421,14 +431,11 @@ void WindowStyle::install(QMainWindow* window) {
 
 WindowStyle::WindowStyle(QMainWindow* window) : QObject(window), m_window(window) {
   setObjectName(QStringLiteral("windowStyle"));
-  // Segoe UI Variable on Windows 11; elsewhere the platform's font stays.
-  // A family chosen in Preferences (Font, mitcad#1556) stays instead.
-  m_font = ui_sizes_detail::fontChosen ? QApplication::font().family() : win::uiFontFamily();
-  if (!m_font.isEmpty() && !ui_sizes_detail::fontChosen) {
-    QFont font = QApplication::font();
-    font.setFamilies({m_font});
-    QApplication::setFont(font);
-  }
+  // The application font as the Floating layout has it (mitcad#2082: the
+  // Docked layout once set Segoe UI Variable of its own, so the two layouts
+  // read differently): the platform's, or the family chosen in
+  // Preferences (Font, mitcad#1556).
+  m_font = ui_sizes_detail::fontChosen ? QApplication::font().family() : QString();
   // The gap to the window's sides; the menu bar's and the status bar's
   // colour is the window's, so they read as before.
   window->setContentsMargins(panel::kGap, 0, panel::kGap, 0);
@@ -477,7 +484,11 @@ void WindowStyle::watchHost() {
 
 void WindowStyle::styleDock(QDockWidget* dock) {
   // The timeline is low: its title is a strip at its left, without text.
-  const bool strip = dock->objectName() == QLatin1String("timelineDock");
+  // So is the Render workspace's Shots bar, the bottom bar in its place
+  // with its own Shots label (docs/ui-conventions.md, the bottom bar;
+  // mitcad#2077: a second "Shots" over it).
+  const bool strip = dock->objectName() == QLatin1String("timelineDock") ||
+                     dock->objectName() == QLatin1String("renderBarPanel");
   if (strip) {
     dock->setFeatures(dock->features() | QDockWidget::DockWidgetVerticalTitleBar);
   }
@@ -498,6 +509,12 @@ void WindowStyle::styleToolBar(QToolBar* bar) {
   bar->setAutoFillBackground(false);
   bar->setContentsMargins(0, 0, 0, panel::kGap);
   bar->installEventFilter(this);
+  // The top bar of Windows and Linux (mitcad#2082): its title row and the
+  // toolbar panel's cards paint themselves on the window, as in the
+  // Floating layout; no surface behind them.
+  // By the row's object name, so that this file needs no TitleBar (the
+  // unit tests link WindowStyle without it).
+  m_toolBarSurface = bar->findChild<QWidget*>(QStringLiteral("titleRow")) == nullptr;
 }
 
 bool WindowStyle::eventFilter(QObject* watched, QEvent* event) {
@@ -506,8 +523,11 @@ bool WindowStyle::eventFilter(QObject* watched, QEvent* event) {
     if (auto* dock = qobject_cast<QDockWidget*>(watched)) {
       paintSurface(dock, dock->rect());
     } else if (watched == m_toolBar.data()) {
-      // The surface instead of the style's tool bar panel and handle.
-      paintSurface(m_toolBar, m_toolBar->rect().adjusted(0, 0, 0, -panel::kGap));
+      // The surface instead of the style's tool bar panel and handle (the
+      // top bar: the window alone).
+      if (m_toolBarSurface) {
+        paintSurface(m_toolBar, m_toolBar->rect().adjusted(0, 0, 0, -panel::kGap));
+      }
       return true;
     }
     break;

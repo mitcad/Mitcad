@@ -31,7 +31,30 @@ the corners failed.
   sections of almost no width; the corner moves that end to the vertex
   (ChFi3d_ShrinkVanishingEnd), the blend ending in a point.
 
+The conditions (mitcad#1986) are geometric, not the case's: a walk whose
+first step ends with obstacles on both sides goes back with that step's
+faces and edges; a blend rolling on two edges where one of them ends at a
+vertex short of the spine's end and another edge of the reference face,
+not G1 across, holds that vertex goes on rolling; a constant-radius,
+non-periodic line rolling on two edges whose end sections lie within a
+hundredth of the radius of the spine's end vertex is cut before its
+sections narrower than 5e-4 of the radius (at least four points kept).
+Any two edges meeting at a point (any lens, any key or shaft) meet them.
+Only the sizes come from the case: the hundredth of the radius and the
+5e-4 width are margins on the case's vanishing sections, not derived.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_lens_overflow.cpp,
+test_lens_end_rolling_on_both_edges (ctest geometry.fillet_lens_overflow): a
+key on a shaft whose side is split near the key's other end, that end's
+convex arc rounded with 2, the split at two heights: valid, the contacts'
+ends within 1e-3, no face left on the lens's plane, a face past each split
+ending in a point at the lens's end, the material removed alike on both
+sides within 1e-3 mm3. Its failure without the patch, stated in its
+documentation, is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 7608be10..54ea22c1 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

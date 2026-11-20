@@ -19,6 +19,7 @@
 
 class QAction;
 class QButtonGroup;
+class QComboBox;
 class QHBoxLayout;
 class QLabel;
 class QLineEdit;
@@ -252,7 +253,7 @@ private:
   // Look: the library and its settings.
   QWidget* m_library = nullptr;
   QLineEdit* m_search = nullptr;
-  QTabBar* m_scope = nullptr; // In Design, Library, Recent, Favorites
+  QComboBox* m_scope = nullptr; // In Design, Library, Recent, Favorites
   QButtonGroup* m_filters = nullptr;
   QListWidget* m_swatches = nullptr;
   QWidget* m_lookSettings = nullptr;

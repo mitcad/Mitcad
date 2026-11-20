@@ -32,7 +32,7 @@ def scenario(work="${MITCAD_TEST_WORK}", mode="full"):
             "wait-idle", "capture-document-window first", "expect-document-frame-tabs 1", menus,
             "model-command '{\"cmd\":\"add_parameter\",\"name\":\"firstOnly\",\"unit\":\"mm\",\"expression\":\"10 mm\"}'",
             "expect-model-parameter firstOnly 10 user",
-            "click-logged '^Quick access file[.]new_design at '", "wait-idle",
+            "key ctrl+n", "wait-idle",
             "capture-document-window created", "expect-document-frame-order first created",
             "expect-model-parameter firstOnly absent", menus,
             "document-tab-click 0", "expect-model-parameter firstOnly 10 user", menus,

@@ -9,6 +9,12 @@ pair: a face with thousands of edges paired with many faces took seconds to
 minutes. The adaptor of each face is built once and the context of each
 pair gets a shallow copy of it (the new IntTools_Context::SetSurfaceAdaptor);
 the copies are what the contexts built before, so the result is unchanged.
+
+Test: none, because the patch changes only the time the booleans take:
+each pair's context gets a shallow copy of the adaptor it built for itself
+before, so every intersection is stock OCCT's and no result can fail
+without it; the booleans of geometry.suite.boolean run through it
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
 index ac522f5..8611aaa 100644
 --- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx

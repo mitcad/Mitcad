@@ -6,6 +6,8 @@
 // tab is; the other cards and docks hidden meanwhile and back after.
 #include "MainWindow.hpp"
 
+#include <cstdlib>
+
 #include <QAction>
 #include <QDockWidget>
 #include <QFileInfo>
@@ -139,6 +141,9 @@ void MainWindow::addRenderPanels() {
     dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
     addDockWidget(areas[i], dock);
     dock->hide();
+    // Not in the window's menu of its panels outside the workspace
+    // (mitcad#2082): shown there only while the workspace is open.
+    dock->toggleViewAction()->setVisible(false);
     m_renderDocks << dock;
   }
 }
@@ -177,15 +182,33 @@ void MainWindow::updateRenderWorkspace(const QString& tab) {
       });
     } else if (!m_nativeUi) {
       m_renderHiddenDocks.clear();
+      m_renderHiddenSizes.clear();
+      m_renderAreaPlaces.clear();
       for (QDockWidget* dock : findChildren<QDockWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
         if (!dock->isHidden() && !m_renderDocks.contains(dock)) {
           m_renderHiddenDocks << dock->objectName();
+          m_renderHiddenSizes.insert(dock->objectName(), dock->size());
+          const int area = dockWidgetArea(dock);
+          if (!dock->isFloating() && !m_renderAreaPlaces.contains(area)) {
+            m_renderAreaPlaces.insert(area, {dock->objectName(), dock->size()});
+          }
           dock->hide();
         }
       }
       for (QDockWidget* dock : std::as_const(m_renderDocks)) {
         dock->show();
+        dock->toggleViewAction()->setVisible(true);
       }
+      // In the hidden docks' places, not at their own size hints: the
+      // view and the bottom bar stay where they were (conventions 15 and
+      // 18). Again once the window has laid the shown docks out.
+      placeRenderDocks();
+      TestSync::singleShot(0, this, [this] {
+        if (m_renderWorkspace != nullptr && m_renderWorkspace->isOpen()) {
+          placeRenderDocks();
+        }
+      });
+      TestSync::singleShot(100, this, [this] { logRenderDockPlaces(true); });
     }
     m_renderWorkspace->setOpen(true);
     qDebug().noquote() << QStringLiteral("Render workspace panels: %1")
@@ -204,19 +227,127 @@ void MainWindow::updateRenderWorkspace(const QString& tab) {
     } else if (!m_nativeUi) {
       for (QDockWidget* dock : std::as_const(m_renderDocks)) {
         dock->hide();
+        dock->toggleViewAction()->setVisible(false);
       }
-      for (const QString& name : std::as_const(m_renderHiddenDocks)) {
-        if (auto* dock = findChild<QDockWidget*>(name, Qt::FindDirectChildrenOnly)) {
-          dock->show();
+      // A drawing that opened meanwhile keeps the model's docks hidden
+      // (showDocksAgain, mitcad#2082).
+      QStringList hidden;
+      hidden.swap(m_renderHiddenDocks);
+      showDocksAgain(hidden);
+      // At the sizes they had before the workspace (mitcad#2077).
+      giveBackRenderDockSizes();
+      TestSync::singleShot(0, this, [this] {
+        if (m_renderWorkspace != nullptr && !m_renderWorkspace->isOpen()) {
+          giveBackRenderDockSizes();
         }
-      }
-      m_renderHiddenDocks.clear();
+      });
+      TestSync::singleShot(100, this, [this] { logRenderDockPlaces(false); });
     }
     if (m_mode == Mode::Idle) {
       updateIdleView(); // the idle pick filter again
     }
   }
   TestSync::singleShot(100, m_renderWorkspace, [workspace = m_renderWorkspace] { workspace->logLayout(); });
+}
+
+namespace {
+bool acrossArea(Qt::DockWidgetArea area) { return area == Qt::LeftDockWidgetArea || area == Qt::RightDockWidgetArea; }
+} // namespace
+
+void MainWindow::placeRenderDocks() {
+  QList<QDockWidget*> across;
+  QList<QDockWidget*> down;
+  QList<int> widths;
+  QList<int> heights;
+  for (QDockWidget* dock : std::as_const(m_renderDocks)) {
+    const Qt::DockWidgetArea area = dockWidgetArea(dock);
+    const auto place = m_renderAreaPlaces.constFind(area);
+    if (dock->isHidden() || dock->isFloating() || place == m_renderAreaPlaces.cend()) {
+      continue; // no dock hidden there: its own size
+    }
+    if (acrossArea(area)) {
+      across << dock;
+      widths << place->size.width();
+    } else {
+      down << dock;
+      heights << place->size.height();
+    }
+  }
+  if (!across.isEmpty()) {
+    resizeDocks(across, widths, Qt::Horizontal);
+  }
+  if (!down.isEmpty()) {
+    resizeDocks(down, heights, Qt::Vertical);
+  }
+}
+
+void MainWindow::giveBackRenderDockSizes() {
+  QList<QDockWidget*> across;
+  QList<QDockWidget*> down;
+  QList<int> widths;
+  QList<int> heights;
+  for (auto it = m_renderHiddenSizes.cbegin(); it != m_renderHiddenSizes.cend(); ++it) {
+    auto* dock = findChild<QDockWidget*>(it.key(), Qt::FindDirectChildrenOnly);
+    if (dock == nullptr || dock->isHidden() || dock->isFloating()) {
+      continue;
+    }
+    if (acrossArea(dockWidgetArea(dock))) {
+      across << dock;
+      widths << it.value().width();
+    } else {
+      down << dock;
+      heights << it.value().height();
+    }
+  }
+  if (!across.isEmpty()) {
+    resizeDocks(across, widths, Qt::Horizontal);
+  }
+  if (!down.isEmpty()) {
+    resizeDocks(down, heights, Qt::Vertical);
+  }
+}
+
+void MainWindow::logRenderDockPlaces(bool open) {
+  if (m_renderWorkspace == nullptr || m_renderWorkspace->isOpen() != open) {
+    return; // left or opened again meanwhile
+  }
+  QStringList parts;
+  bool kept = true;
+  const auto side = [this](QDockWidget* dock, const QSize& size) {
+    return acrossArea(dockWidgetArea(dock)) ? size.width() : size.height();
+  };
+  if (open) {
+    for (QDockWidget* dock : std::as_const(m_renderDocks)) {
+      const auto place = m_renderAreaPlaces.constFind(dockWidgetArea(dock));
+      if (dock->isHidden() || dock->isFloating() || place == m_renderAreaPlaces.cend()) {
+        continue;
+      }
+      const int have = side(dock, dock->size());
+      const int want = side(dock, place->size);
+      kept = kept && std::abs(have - want) <= 1;
+      parts << QStringLiteral("%1 %2 (%3 %4)").arg(dock->objectName()).arg(have).arg(place->name).arg(want);
+    }
+    qInfo().noquote() << QStringLiteral("Render docks %1 the places of the docks they hide: %2")
+                             .arg(kept ? QStringLiteral("in") : QStringLiteral("not in"),
+                                  parts.join(QStringLiteral(", ")));
+    return;
+  }
+  for (auto it = m_renderHiddenSizes.cbegin(); it != m_renderHiddenSizes.cend(); ++it) {
+    auto* dock = findChild<QDockWidget*>(it.key(), Qt::FindDirectChildrenOnly);
+    if (dock == nullptr || dock->isHidden() || dock->isFloating()) {
+      continue;
+    }
+    const int have = side(dock, dock->size());
+    const int want = side(dock, it.value());
+    const bool same = std::abs(have - want) <= 1;
+    kept = kept && same;
+    parts << (same ? QStringLiteral("%1 %2").arg(it.key()).arg(have)
+                   : QStringLiteral("%1 %2 (was %3)").arg(it.key()).arg(have).arg(want));
+  }
+  parts.sort();
+  qInfo().noquote() << QStringLiteral("Docks %1 at their sizes: %2")
+                           .arg(kept ? QStringLiteral("given back") : QStringLiteral("not given back"),
+                                parts.join(QStringLiteral(", ")));
 }
 
 void MainWindow::refreshRenderWorkspace() {

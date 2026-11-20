@@ -18,6 +18,11 @@ interferences with index 0 (Standard_ProgramError
 parsing now also matches the last end of a stripe whose last edge ends at
 the vertex, and the indices of the surface data come from the end recorded
 for each edge.
+
+Test: geometry/tests/test_fillet_kernel.cpp (ctest
+geometry.suite.fillet_kernel), test_contour_closed_at_a_sharp_corner: Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx

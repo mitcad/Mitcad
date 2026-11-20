@@ -44,48 +44,75 @@ which failed ("Failed to find edge").
   under the blend, the curve is a hole of the blend's face and the edge of
   C's part outside the blend; C's edges are cut at their vertices.
 
+Failures (mitcad#1986): the test of a stripe under the ball
+(edgesUnderBlend, also through ChFi3d_Computed), the join over the narrow
+face, its walk, its cut by the narrow face's neighbour (cutBetween) and
+the closed cuts of a face that pokes through a blend (closedCuts) fail
+with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the case does not hold; any
+other failure (a broken invariant, a signal) is rethrown. Each candidate
+is taken or left on its own, so the passes JoinOverNarrowFaces and
+PierceBlends have no handler of their own in Compute: a join that fails
+part of the way, after it changed the two stripes, puts them back as they
+were (ChFi3d_StripesState, added here to ChFi3d_Builder_0.hxx with
+ChFi3d_Computed), and a hole is added to the data structure only once all
+its computations are done.
+
+The conditions (mitcad#1986) are topological and geometric, not the
+case's: two walked, non-periodic stripe ends of one constant radius
+(within tolesp) on the same two faces N and Fo, an end's contact on N
+ending inside an edge of N with a face C that is neither N nor Fo and not
+tangent to N there, both ends' vertices on C, and no stripe at them but
+ones whose edges all lie between Fo and C. The face C is "narrow" only in
+that sense: nothing measures its width, and any surfaces (not only a torus,
+a cylinder and a plane) qualify. Dropped stripes: every edge between Fo and
+a face C, under another stripe's blend of a constant radius on Fo (its
+contact along those edges within a piece). A hole: a closed cut of a piece
+by C's surface inside the piece, with every edge of C under the blend.
+Only the sizes come from the case: ends at most 8 radii apart, the walk
+restarted 4 or 12 radii before the end (else from the stripe's start),
+a ball's centre within a hundredth of the radius, a search box 4 radii
+round the blend.
+
+Test: geometry/tests/test_fillet_pierced.cpp,
+test_rounding_over_a_cap_notched_by_it,
+test_rounding_over_a_cap_notched_by_it_with_the_caps_edges and
+test_rounding_pierced_by_a_cap (ctest geometry.suite.fillet_pierced): a
+corner rounded over a cap of a ball standing out of it, the cap notching the
+rounding (with and without the cap's edges with the wall rounded too) and
+poking through it: the volume and the cap's area left against the plain
+corner's rounding with the ball fused to it. Its failure without the patch,
+stated in its documentation, is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 89a8621..0c5245f 100644
+index c71b17bd..5850ba3a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2267,6 +2267,18 @@ void ChFi3d_Builder::Compute()
+@@ -2285,6 +2285,11 @@ void ChFi3d_Builder::Compute()
    if (done)
    {
      RemoveCoincidentStripes();
 +    // Stripes whose balls are one ball rolling over a narrow face between
 +    // them, joined (before their contacts, run on to the ends of their
 +    // faces, are taken for one below); stripes under such a ball dropped.
-+    try
-+    {
-+      OCC_CATCH_SIGNALS
-+      JoinOverNarrowFaces();
-+    }
-+    catch (Standard_Failure const&)
-+    {
-+      // (The stripes as they are.)
-+    }
++    // (Each pair is joined, or left as it was, on its own: mitcad#1986.)
++    JoinOverNarrowFaces();
      // Two stripes whose contact lines on a face between their edges are
      // one line (the face exactly as wide as the two roundings together):
      // the blends meet on that line and the face vanishes, as where the
-@@ -2531,6 +2543,16 @@ void ChFi3d_Builder::Compute()
+@@ -2583,6 +2588,9 @@ void ChFi3d_Builder::Compute()
        // Contacts along whole edges of their faces, once the corners are done.
        ChFi3d_ContactsAlongFaceEdges(DStr, st, myEFMap, tolapp3d);
        ChFi3d_FilDS(solidindex, st, DStr, myRegul, tolapp3d, tol2d);
-+      // Blends a face of the solid pokes through.
-+      try
-+      {
-+        OCC_CATCH_SIGNALS
-+        PierceBlends(st);
-+      }
-+      catch (Standard_Failure const&)
-+      {
-+        // (The blend as it is.)
-+      }
++      // Blends a face of the solid pokes through (each hole made, or not,
++      // on its own: mitcad#1986).
++      PierceBlends(st);
        // Narrow faces consumed by blends on their edges (edge overflow).
        ChFi3d_CutConsumedFaces(DStr, st, myEFMap);
        if (!done)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 2d690e9..6c5162d 100644
+index 2d690e92..6c5162d6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -1143,6 +1143,62 @@ private:
@@ -151,12 +178,147 @@ index 2d690e9..6c5162d 100644
    Standard_EXPORT void ConexFaces(const occ::handle<ChFiDS_Spine>&  Sp,
                                    const int                         IEdge,
                                    occ::handle<BRepAdaptor_Surface>& HS1,
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+index 454d514b..dc9d49b9 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -28,6 +28,7 @@
+ #include <ChFiDS_CommonPoint.hxx>
+ #include <ChFiDS_Regul.hxx>
+ #include <NCollection_List.hxx>
++#include <NCollection_Sequence.hxx>
+ #include <ChFiDS_FaceInterference.hxx>
+ #include <ChFiDS_Map.hxx>
+ #include <TopoDS_Face.hxx>
+@@ -51,6 +52,7 @@
+ #include <gp_Pnt.hxx>
+ #include <NCollection_Array1.hxx>
+ #include <Standard_ConstructionError.hxx>
++#include <Standard_ErrorHandler.hxx>
+ #include <Standard_Failure.hxx>
+ #include <Standard_NotImplemented.hxx>
+ #include <StdFail_NotDone.hxx>
+@@ -74,6 +76,114 @@ inline bool ChFi3d_IsComputationFailure(const Standard_Failure& theFailure)
+          || dynamic_cast<const Standard_NotImplemented*>(&theFailure) != nullptr;
+ }
+ 
++//! The value of theComputation, or theOtherwise where OCCT reports that it
++//! cannot be computed (ChFi3d_IsComputationFailure); any other failure (a
++//! broken invariant, a signal) is rethrown. For one candidate of a pass
++//! whose other candidates go on (mitcad#1986).
++template <typename Computation, typename T>
++T ChFi3d_Computed(Computation&& theComputation, const T& theOtherwise)
++{
++  try
++  {
++    OCC_CATCH_SIGNALS
++    return theComputation();
++  }
++  catch (Standard_Failure const& anException)
++  {
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
++    return theOtherwise;
++  }
++}
++
++//! The state of some stripes before a step that changes them in place (their
++//! own fields, their SurfData and those SurfData's contents, their spines'
++//! states at the ends and error status), so that a step
++//! that fails part of the way through puts them back as they were
++//! (mitcad#1986). The data structure's curves and points the step added are
++//! left: no interference refers to them.
++class ChFi3d_StripesState
++{
++public:
++  void Save(const occ::handle<ChFiDS_Stripe>& theStripe)
++  {
++    if (theStripe.IsNull())
++    {
++      return;
++    }
++    Entry anEntry;
++    anEntry.Stripe = theStripe;
++    anEntry.Copy   = new ChFiDS_Stripe();
++    *anEntry.Copy  = *theStripe;
++    if (!theStripe->Spine().IsNull())
++    {
++      anEntry.FirstState = theStripe->Spine()->FirstStatus();
++      anEntry.LastState  = theStripe->Spine()->LastStatus();
++      anEntry.Error      = theStripe->Spine()->ErrorStatus();
++    }
++    if (!theStripe->SetOfSurfData().IsNull())
++    {
++      for (int i = 1; i <= theStripe->SetOfSurfData()->Length(); i++)
++      {
++        const occ::handle<ChFiDS_SurfData>& aData = theStripe->SetOfSurfData()->Value(i);
++        occ::handle<ChFiDS_SurfData>        aCopy = new ChFiDS_SurfData();
++        *aCopy                                    = *aData;
++        anEntry.Data.Append(aData);
++        anEntry.DataCopies.Append(aCopy);
++      }
++    }
++    myEntries.Append(anEntry);
++  }
++
++  void Restore() const
++  {
++    for (NCollection_List<Entry>::Iterator it(myEntries); it.More(); it.Next())
++    {
++      const Entry& anEntry = it.Value();
++      // (The stripe's own fields, its sequence object the one it had, which
++      // holds its own SurfData again.)
++      *anEntry.Stripe = *anEntry.Copy;
++      if (!anEntry.Stripe->Spine().IsNull())
++      {
++        anEntry.Stripe->Spine()->SetFirstStatus(anEntry.FirstState);
++        anEntry.Stripe->Spine()->SetLastStatus(anEntry.LastState);
++        anEntry.Stripe->Spine()->SetErrorStatus(anEntry.Error);
++      }
++      const occ::handle<NCollection_HSequence<occ::handle<ChFiDS_SurfData>>>& aSeq =
++        anEntry.Copy->SetOfSurfData();
++      if (aSeq.IsNull())
++      {
++        continue;
++      }
++      NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aData = aSeq->ChangeSequence();
++      aData.Clear();
++      NCollection_Sequence<occ::handle<ChFiDS_SurfData>>::Iterator itC(anEntry.DataCopies);
++      for (NCollection_Sequence<occ::handle<ChFiDS_SurfData>>::Iterator itD(anEntry.Data); itD.More();
++           itD.Next(), itC.Next())
++      {
++        *itD.Value() = *itC.Value();
++        aData.Append(itD.Value());
++      }
++    }
++  }
++
++private:
++  struct Entry
++  {
++    occ::handle<ChFiDS_Stripe>                         Stripe;
++    occ::handle<ChFiDS_Stripe>                         Copy;
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>> Data;
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>> DataCopies;
++    ChFiDS_State                                       FirstState = ChFiDS_OnSame;
++    ChFiDS_State                                       LastState  = ChFiDS_OnSame;
++    ChFiDS_ErrorStatus                                 Error      = ChFiDS_Ok;
++  };
++
++  NCollection_List<Entry> myEntries;
++};
++
+ double ChFi3d_InPeriod(const double U, const double UFirst, const double ULast, const double Eps);
+ 
+ void ChFi3d_Boite(const gp_Pnt2d& p1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 new file mode 100644
-index 0000000..8373031
+index 00000000..4c64e0c6
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
-@@ -0,0 +1,2078 @@
+@@ -0,0 +1,2113 @@
 +// This file is part of Open CASCADE Technology software library.
 +//
 +// This library is free software; you can redistribute it and/or modify it under
@@ -1094,8 +1256,13 @@ index 0000000..8373031
 +          OCC_CATCH_SIGNALS
 +          under = edgesUnderBlend(DStr, SA, Fo, C, aEdges, RU, aPieces);
 +        }
-+        catch (Standard_Failure const&)
++        catch (Standard_Failure const& anException)
 +        {
++          // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++          if (!ChFi3d_IsComputationFailure(anException))
++          {
++            throw;
++          }
 +          under = false;
 +        }
 +      }
@@ -1231,14 +1398,27 @@ index 0000000..8373031
 +            {
 +              continue;
 +            }
++            // (SA and SB as they were where the join fails part of the way.)
++            ChFi3d_StripesState aBefore;
++            aBefore.Save(SA);
++            aBefore.Save(SB);
 +            try
 +            {
 +              OCC_CATCH_SIGNALS
 +              joined = JoinOverNarrowFace(SA, aFirst, ons, SB, bFirst, onsB, N, Fo, C);
 +            }
-+            catch (Standard_Failure const&)
++            catch (Standard_Failure const& anException)
 +            {
++              // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++              if (!ChFi3d_IsComputationFailure(anException))
++              {
++                throw;
++              }
 +              joined = false;
++            }
++            if (!joined)
++            {
++              aBefore.Restore();
 +            }
 +            if (joined)
 +            {
@@ -1557,8 +1737,13 @@ index 0000000..8373031
 +    walked = PerformSurf(SeqSD, HG, spA, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First, Last, false,
 +                         false, Forward, false, false, Soldep, intf, intl);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = aDone;
@@ -1688,8 +1873,13 @@ index 0000000..8373031
 +    OCC_CATCH_SIGNALS
 +    aCut = cutBetween(SX, C, P1, P2, tolapp3d, Cc, Ps, Pc, tolCut);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    aCut = false;
 +  }
 +  if (!aCut)
@@ -2045,7 +2235,9 @@ index 0000000..8373031
 +        NCollection_List<TopoDS_Shape> aEdges;
 +        aEdges.Append(E);
 +        NCollection_Map<int> aPieces;
-+        const bool aUnderE = edgesUnderBlend(DStr, St, Fo, C, aEdges, R, aPieces);
++        // (Not under the blend where that cannot be computed.)
++        const bool aUnderE = ChFi3d_Computed(
++          [&]() { return edgesUnderBlend(DStr, St, Fo, C, aEdges, R, aPieces); }, false);
 +        if (!aUnderE)
 +        {
 +          continue;
@@ -2068,8 +2260,13 @@ index 0000000..8373031
 +            OCC_CATCH_SIGNALS
 +            closedCuts(S, C, tolapp3d, aLoops);
 +          }
-+          catch (Standard_Failure const&)
++          catch (Standard_Failure const& anException)
 +          {
++            // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++            if (!ChFi3d_IsComputationFailure(anException))
++            {
++              throw;
++            }
 +            aLoops.Clear();
 +          }
 +          // The pieces on that surface (one face): the loop inside them.
@@ -2236,7 +2433,7 @@ index 0000000..8373031
 +  }
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
-index af0b0e1..08213a9 100644
+index af0b0e1a..08213a95 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
 @@ -16,6 +16,7 @@ set(OCCT_ChFi3d_FILES

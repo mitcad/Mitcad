@@ -4,7 +4,7 @@
 #   1. In Sketch1 a Center to Center Slot from the origin, 85 long and
 #      50 wide; Extrude 15 (the plate, F2.b0: 93202.431 mm3).
 #   2. Sketch1 again: a circle centred on the slot's end centre (85, 0)
-#      through the end of its side (85, 25), the clicks snapped to those
+#      through the end of its side (85, -25), the clicks snapped to those
 #      points; Extrude its region 30, joined (the boss: 122654.862 mm3).
 #      The plate's end and the boss are one cylinder, its seam where MitCad
 #      puts it.
@@ -61,7 +61,7 @@ key F6
 wait-idle
 command sketch.circle
 sketch-click 85 0
-sketch-click 85 25
+sketch-click 85 -25
 wait-log '^Added circle, diameter 50 mm at [(]85, 0[)]'
 key Escape
 command sketch.finish

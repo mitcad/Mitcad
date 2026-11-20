@@ -130,6 +130,12 @@ public:
   // The command search field out of the row, for the toolbar panel
   // (Ribbon::setPanel, mitcad#1990); null when it was taken already.
   QWidget* takeSearchField();
+  // A command search field as the title row's, `height` high (the Docked
+  // toolbar's tab row, mitcad#2082): an outline with the glass and "Search
+  // commands" that runs `search`, in the body font (docs/ui-conventions.md
+  // §10). As wide as the title row's, narrower down to 140 px where the
+  // row has no room.
+  static QWidget* createSearchField(QAction* search, int height, QWidget* parent = nullptr);
   // setFloatingRow: the controls shown, named ("titleMenu", "titleFile",
   // "titleHistory", "titleTabs", "titleQuickAccess", "titleBoost",
   // "titleIndicator", "titleAgent", "titleChat", "titleSettings",

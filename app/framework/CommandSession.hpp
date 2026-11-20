@@ -936,6 +936,14 @@ private:
   QString m_hoveredNote;
   Selection m_noteHighlights;
   void hoverNote(const QString& key, bool on);
+  // The pick of an input's list of picks the pointer is over, and its
+  // input's key (mitcad#2064, GitHub mitcad/Mitcad#473): highlighted in the
+  // hover's look over the input's colour while it is still picked; none
+  // when the key is empty.
+  QString m_hoveredPickKey;
+  SelectionItem m_hoveredPick;
+  QString m_loggedHoveredPick; // logged "<command> pick highlighted: <pick>"
+  void hoverPick(const QString& key, int index);
   // The row of a choice shown as rows the pointer is over, "<key>=<value>",
   // that paints what its option is about (InputDef::choicePlaces,
   // mitcad#1794); empty: none.

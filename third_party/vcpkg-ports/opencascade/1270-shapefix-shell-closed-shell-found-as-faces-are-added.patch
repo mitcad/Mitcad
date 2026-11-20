@@ -13,6 +13,13 @@ bodies, one shell of 8 800 faces, it took 12 of the merge's 14 s
 faces are added (each face's edges toggled in a map, as IsClosed toggles
 them): the shell is closed when it has an edge that counts and none is left
 over, as before. The results are unchanged.
+
+Test: none, because its only effect is speed: the shell is found closed at
+the same face as before (the same test of the edges used an odd number of
+times, kept as the faces are added), and no test bounds the time. Its
+results are those of the face merge's tests and of
+geometry.join_many_bodies (the union of a reported design's 257 bodies,
+MITCAD_MITCAD_REPORTED), whose results are OCCT's without the patch.
 diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_Shell.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_Shell.cxx
 index 0a97fb36c..14e747ac5 100644
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_Shell.cxx

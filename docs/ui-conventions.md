@@ -268,7 +268,7 @@ platform requires it (a system menu item such as *Show Sidebar*).
 | **Timeline marker** | The rollback position on the timeline; the features after it are **rolled back**. Not "History marker". UI: *Roll Timeline Marker Here*. | `rollback`, `TimelineWidget` |
 | **Command panel** | The panel of a running command: its inputs, OK and Cancel. Not "Inspector". | `CommandPanel`, `NativeForms` |
 | **Toolbar**, **tab**, **group** | The strip of tabs (the Solid tab) and their groups (the Assemble group) of commands. Not "ribbon" in user-facing text; *Ribbon* stays the class name. | `Ribbon` |
-| **Make tabs** (**3D Print tab**, **Laser tab**, **CNC tab**) | The tabs of everything about making a design, one per manufacturing method (mitcad#1049; one Make tab until the owner's split of 18.11.2026): in the Floating toolbar panel the tabs of the **Make** workspace (mitcad#1990), in the Docked layout after the Build tab. Each starts with its method's groups (3D Print: **Slice**, with *Send to Slicer*, the page's most important button, first on the tab (the owner, 18.11.2026), **Printers**, **Prepare**; Laser: **Export**; CNC: **Setup**, **2D Milling**, **3D Milling**, **Turning**, **Toolpath**), then the same **Materials**, **Annotate** and the Solid tab's **Inspect** group (mitcad#1975). A group without commands is not shown. *Send to Slicer* is the command once called *3D Print*; *3D Print* is the tab's name. | `MAKE_PRINT`, `MAKE_LASER`, `MAKE_CNC` in `app/resources/layout/default.json`, `MainWindowMake.cpp` |
+| **Make tabs** (**3D Print tab**, **Laser tab**, **CNC tab**) | The tabs of everything about making a design, one per manufacturing method (mitcad#1049; one Make tab until the owner's split of 18.11.2026): the tabs of the **Make** workspace, in the Floating toolbar panel (mitcad#1990) and in the Docked tab row with its selector (mitcad#2082). Each starts with its method's groups (3D Print: **Slice**, with *Send to Slicer*, the page's most important button, first on the tab (the owner, 18.11.2026), **Printers**, **Prepare**; Laser: **Export**; CNC: **Setup**, **2D Milling**, **3D Milling**, **Turning**, **Toolpath**), then the same **Materials**, **Annotate** and the Solid tab's **Inspect** group (mitcad#1975). A group without commands is not shown. *Send to Slicer* is the command once called *3D Print*; *3D Print* is the tab's name. | `MAKE_PRINT`, `MAKE_LASER`, `MAKE_CNC` in `app/resources/layout/default.json`, `MainWindowMake.cpp` |
 | **Surface tab**, **Sheet Metal tab** | The tabs of surface and sheet metal modeling, after the Solid tab (mitcad#1975; groups of the Solid tab before). Each starts with Create Sketch and ends with the Solid tab's **Construct** and **Select** groups. | `SURFACE`, `SHEET METAL` in `app/resources/layout/default.json` |
 | **Manage tab** | The tab of what belongs to the whole design rather than to its shapes, after the Make tabs (mitcad#1975): **Parameters**, **Configurations**, **Materials**, **Rules**, **Design**. A command that edits the design's parameters, configurations, materials, appearances, rules or settings has its home here and may also show where it is used. | `MANAGE` in `app/resources/layout/default.json` |
 | **Second place** | A command shown in more than one place on the toolbar (mitcad#1975: Create Sketch on Solid, Surface and Sheet Metal; Material on Solid › Modify and the three Make tabs). One command, one shortcut; its first place that is not marked a repeat is its home (`CommandLayout::home`). No two commands share a label on one tab. | `"repeat"` in the layout file |
@@ -792,6 +792,7 @@ dynamic value.
 | | `DropAllowed`, `DropRefused` | success's green, the error's ring | where a dragged item would go | |
 | Neutral | `Window`, `Surface`, `Raised`, `Text`, `TextSecondary`, `TextHidden`, `TitleText`, `Line`, `AccentText` | the chrome's tokens (`WindowColors`) | Docked and Floating | label, secondaryLabel, separator |
 | | `TimelineMarker`, `GroupBand`, `ViewInk` | | the timeline marker, an open group's band, the ink in the boxes over the view | |
+| | `PopupBorder` | #7c828b / #707580 | the 1 px frame of every popup (drop-down lists, menus, completers) under Qt's portable style, at least 3:1 on the chrome's surfaces (mitcad#2081) | |
 | States | `BoundText`, `BoundFill` | #174ea6 / #d6e4ff on #dce8fb / #1e3a66 | a value bound to a formula or a configuration: one fx style | |
 | Command feedback | `Input1`–`Input4` | #1f7aff, #ff8c00, #2ca02c, #9b30ff | the command panel's selection inputs, one table for Qt and AppKit | |
 | | `PreviewAdd`, `PreviewRemove` | blue, red | material added; material a cut removes (red: recorded exception) | |
@@ -941,6 +942,14 @@ were what left the arrows far from the names. A flat list has no arrows.
    `indentation()` or from `PanelTree.hpp` (the Browser's
    `kTreeIndentation`), never a number of its own.
 
+**An empty list says how to fill it** where the way is not in sight
+(mitcad#2083): one short line, "No … yet." and the action, in the
+placeholder text color at the view's top left (the Configurations
+window's Options and Rows, the Render Appearances panel's Favorites:
+*No favorites yet. Right-click an appearance to add it to Favorites.*).
+A list that is empty only because a search or a filter matches nothing
+needs no text.
+
 The ctest `repo.tree-indentation` (`tools/tree-indentation-check`) reads
 the sources of `app/` (comments and strings left out) and fails on a
 `QTreeView` or `QTreeWidget` made without the helper, counted per file
@@ -1077,10 +1086,24 @@ project and assistant indicators (compact icon buttons with a ˅, their
 text in the tooltip), the chat, Preferences, ? (Help) and the version.
 The quick-access group comes after Redo only while it has commands.
 
+The Docked layout has the same top bar on Windows and Linux (mitcad#2082):
+the same class (`TitleBar`), controls, order, flatness and fonts, at the
+window's top above the toolbar panel and the docks, with the window's
+own title bar as in the Floating layout. Neither layout has a menu bar
+row there: ☰ holds the menus, File and ? drop from the bar, and the
+menus' keys open them from it. The two layouts differ only in cards
+(Floating) against docks (Docked) and in the toolbar panel spanning the
+window (Docked) instead of floating between the view's margins. Where
+the system shows the menu bar (macOS) the Docked layout keeps its own
+toolbar without this bar: Undo, Redo, the quick-access group, Boost
+development and the command search at its tab row's right end.
+
 ## 13. The toolbar panel
 
-Under the top bar, across the view between the view margins, the same
-height in every workspace (logged `Ribbon panel height DESIGN: N`, equal
+Under the top bar, across the view between the view margins (the
+Docked layout: across the window, above the docks, as far from the
+window's sides and from the bar as the Floating layout has it from the
+view's), the same height in every workspace (logged `Ribbon panel height DESIGN: N`, equal
 for Design, Make, Render and Drawing). The workspaces: **Design** (the
 Solid, Surface, Sheet Metal, Build and Manage tabs), **Make** (a tab per
 manufacturing method: 3D Print, Laser and CNC; its entry in the list
@@ -1091,7 +1114,12 @@ shown last in it, at first on its first tab.
 - **The workspace block** at its left: a block of its own (card material,
   card radius, no accent line), about 84 px wide: the workspace's icon,
   its name, "Workspace ˅" under it; one line where the panel is only its
-  tab row. 8 px to the card beside it.
+  tab row. 8 px to the card beside it. Over the Start page (Home) the
+  panel is hidden in either layout, the top bar's design tab leading
+  back. The macOS Docked toolbar (no top bar) has the same block at its
+  left, as high as the tab row and the groups' row together; its tab row
+  starts with the Start tab (it has no Home button) and over the Start
+  page shows the tab row alone, or nothing while the designs' tabs show.
 - **The card** beside it: its first row the workspace's tabs as plain
   names (the shown one on a filled accent rectangle of the control
   radius), the + of the tabs' menu, and at the row's right end the
@@ -1099,8 +1127,8 @@ shown last in it, at first on its first tab.
 - **The groups' row** under it: the shown tab's groups side by side,
   divided by a one-pixel line in the groups' spacing; each group
   its buttons with a short label under each icon (Preferences › Display ›
-  Toolbar labels: Icons only turns the labels off; the Floating layout
-  shows them by default) and its caption with ˅ under them, which opens
+  Toolbar labels: Icons only turns the labels off; the toolbar panel
+  shows them by default in both layouts) and its caption with ˅ under them, which opens
   the group's menu of all its commands.
 - **A tab's own content is groups too.** A workspace whose page is its
   own (the Render workspace's stage actions, mitcad#2013) builds it of
@@ -1129,6 +1157,32 @@ shown last in it, at first on its first tab.
   Make tabs' Materials, Annotate and Inspect) puts each tab's own groups
   first, the shared ones after them in the same order on every tab.
 
+**Render in the Docked layout** opens from the workspace selector, as in
+the Floating layout (mitcad#2082): the toolbar panel's on Windows and
+Linux, the block at the macOS Docked toolbar's left. There is no Render
+tab among Design's tabs in either layout (mitcad#2077 had one in the
+Docked tab row before the selector came there).
+
+- **The macOS Docked tabs in a narrow window** (mitcad#2079: the pill
+  tabs of its tab row; the toolbar panel's narrow windows are above):
+  each tab is its name with 8 px each side, as the title row's tabs. The
+  row gives up room in this order:
+  1. **Boost development shortens first**: when the tabs would not all fit
+     beside its whole pill, it takes its compact form: the rocket and the
+     × close together in its outlined pill (8 px before the rocket, 4
+     between the rocket and the ×), its name and where it leads in the
+     tooltip; the × still hides it. Its name is never cut, and the pill is
+     never wider than the rocket and the × need. It takes its whole form
+     back once every tab fits beside it.
+  2. **Then the tabs fold**: the tabs at the row's right end go into a »
+     right after the last tab in sight, and the + of the tabs' menu
+     follows the » at the row's spacing, as it follows the last tab of a
+     wide row (the tabs take only the room of the tabs in sight and the
+     »; the rest is the row's free end). The »'s menu lists the folded
+     tabs by name; the one chosen there is shown and comes into sight
+     (another may fold for it). Start and the shown tab never fold, and
+     the row never scrolls: every tab is in sight or in the »'s menu.
+
 ## 14. Cards
 
 A card (`GlassCard`) floats over the view: card material, card radius,
@@ -1148,6 +1202,19 @@ right.
   headings).
 - **No horizontal scroll**: a card's content is as wide as the card; long
   names elide.
+- **Tabs in a narrow card** (mitcad#2083): a row of tabs in a card or
+  panel (the pages it shows, or what its list lists) stays tabs only
+  when every tab shows its whole name at the card's narrowest width (the
+  Render cards' 240 px, a Docked panel's least width; Floating's cards
+  are wider). Otherwise the choice is a drop-down as wide as the card,
+  its entries the whole names (the Appearances panel's In Design,
+  Library, Recent and Favorites): not chips (chapter 16), so that it
+  stays apart from the filter chips under it and needs one row at any
+  width. Filters that narrow the list are chips in rows that wrap at
+  the card's width (the Appearances panel's Metal, Plastic, …). No tab
+  is elided and no symbol stands for a name (★ for Favorites once did);
+  the Render cards' check logs a cut tab as a cut field (Light's
+  Environment | Lights is the list's choice there, not a tab row).
 - **The Drawings card** stands in a column of its own: the drawing's bar
   and sheet start one card gap right of it, its top level with the
   drawing's bar (logged `Drawing column at x,y beside card x,y WxH`).
@@ -1187,10 +1254,20 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
 | Disabled | the palette's disabled text color (further from `Text` than `TextSecondary`) and the icon's disabled form; no fill |
 | Checked / chosen | the accent: a filled rectangle (the shown tab), an outline (a toggle) |
 | Selected row | a band of the accent (`Action`, translucent) across the row's whole width, of the control radius, inset 2 px |
+| Highlighted row of a pop-up list | the selected row's band, the row's text in its usual colour: every drop-down's list (a combo box's, editable or not), a completer's and a list in a pop-up window (Command Search), in both themes and layouts; never the system's highlight colour as a square band (mitcad#2084) |
 | Selected object | `Select` in the 3D view, the sketch, the drawings, the pickers and the Timeline |
 | Focus | an accent ring on fields; none on flat buttons (they take no focus) |
 | Error, warning | the level's border, fill, icon and word ([Messages and severity](#3-messages-and-severity)), never the color alone |
 | Suppressed, rolled back | the object at one opacity (`kStateDimOpacity`, 0.35), not another hue |
+
+The selected row's band is painted by one function,
+`paintRowBand` (`app/framework/WindowStyle.hpp`): the panels' trees call
+it from their delegates, and the application's style (`IconSizeStyle`,
+which wraps the platform's style at every Icon size) calls it for a
+pop-up list's highlighted row, so no drop-down or completer needs a
+delegate of its own. The unit test `popup_list_rows` (app.unit) paints
+such rows with the palette's highlight set to pure red and fails on any
+red pixel, an edge the band reaches or a square corner.
 
 ## 18. Alignment
 
@@ -1225,3 +1302,5 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
   says it in place.
 - A row of text chips, a drop-down list or loose text in the toolbar
   panel (chapter 13).
+- Tabs cut to fit a narrow card ("Libr…"): a drop-down choice instead
+  (chapter 14, Tabs in a narrow card).

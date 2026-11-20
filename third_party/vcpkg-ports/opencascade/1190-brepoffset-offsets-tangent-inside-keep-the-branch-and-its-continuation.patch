@@ -82,6 +82,20 @@ also when the main branch does not reach the end; its near piece may use
 the same 20 % neighbourhood as the continuation. The existing validity,
 wall-distance, rim, volume and closed-offset checks remain unchanged.
 
+Test: geometry/tests/test_shell_loft_to_circle.cpp, test_occt_lean_in
+(ctests geometry.shell_loft_to_circle.lean_in_8, lean_in_10 and
+lean_in_14_1): a square to circles of radii 8, 10 and 14.1 shelled 0.5 to
+3 mm with both ends removed, the volume against the one-end shells and the
+closed offset; and geometry/tests/test_offset_loft_circle_seam.cpp,
+test_lean_in_seam_on_a_side (ctest
+geometry.offset_loft_circle_seam_lean_in): walls leaning in towards the
+circle, closed inward offsets with OCCT alone, invalid with 1130 and 1160
+alone, valid single solids of the seam-on-a-corner loft's volume with this
+patch. The vertex tolerance:
+test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
 +++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx

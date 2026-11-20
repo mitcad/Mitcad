@@ -54,11 +54,21 @@ A ride whose end corner the small rounding reaches past the ride's point
 the larger one's: a corner of three blends) is not made so: the corner
 fails as before.
 
+Test: geometry/tests/test_fillet_tangent_ride.cpp, test_wall_end_corners
+(ctest geometry.fillet_tangent_ride): the wall 2.5 wide with an end's edge
+rounded too (0.5 or 1, either side, one or both ends), a prism and a box,
+both orders: valid, the volume within a millionth; and
+geometry.fillet_top_chains, test_tower_top on the stored case
+`fillet-wall-run-on`. Its failure without the patch is still to be shown
+in the port's before/after run (mitcad#1986).
+
+Failures (mitcad#1986): the handler round the two stripes' computation
+again fails the fillet (done false): a boundary that reports the failure.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index b225371a..8993987a 100644
+index 5ae05404..af1e17fc 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2050,6 +2050,119 @@ static bool outwardNormalAt(const TopoDS_Face& F, const gp_Pnt& P, gp_Dir& N)
+@@ -2057,6 +2057,119 @@ static bool outwardNormalAt(const TopoDS_Face& F, const gp_Pnt& P, gp_Dir& N)
    return true;
  }
  
@@ -178,7 +188,7 @@ index b225371a..8993987a 100644
  bool ChFi3d_Builder::RideOnBlend(const occ::handle<ChFiDS_Stripe>& A,
                                   const occ::handle<ChFiDS_Stripe>& B,
                                   const TopoDS_Face&                F)
-@@ -2085,9 +2198,12 @@ bool ChFi3d_Builder::RideOnBlend(const occ::handle<ChFiDS_Stripe>& A,
+@@ -2092,9 +2205,12 @@ bool ChFi3d_Builder::RideOnBlend(const occ::handle<ChFiDS_Stripe>& A,
    {
      return false;
    }
@@ -194,7 +204,7 @@ index b225371a..8993987a 100644
    for (const occ::handle<ChFiDS_Stripe>& S : {A, B})
    {
      const occ::handle<ChFiDS_Spine>& Sp = S->Spine();
-@@ -2097,12 +2213,7 @@ bool ChFi3d_Builder::RideOnBlend(const occ::handle<ChFiDS_Stripe>& A,
+@@ -2104,12 +2220,7 @@ bool ChFi3d_Builder::RideOnBlend(const occ::handle<ChFiDS_Stripe>& A,
      }
      for (const TopoDS_Vertex& V : {Sp->FirstVertex(), Sp->LastVertex()})
      {
@@ -208,7 +218,7 @@ index b225371a..8993987a 100644
        {
          return false;
        }
-@@ -2352,6 +2463,10 @@ bool ChFi3d_Builder::RideOnBlend(const occ::handle<ChFiDS_Stripe>& A,
+@@ -2369,6 +2480,10 @@ bool ChFi3d_Builder::RideOnBlend(const occ::handle<ChFiDS_Stripe>& A,
      CP.SetParameter(t);
    }
    ChFiDS_FaceInterference& FIA = SA->ChangeInterference(onA);
@@ -219,7 +229,7 @@ index b225371a..8993987a 100644
    FIA.SetInterference(iCA, FIA.Transition(), PCFA, PCAA);
    FIA.SetFirstParameter(a1);
    FIA.SetLastParameter(a2);
-@@ -2937,6 +3052,79 @@ static TopoDS_Face rideSupport(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -2959,6 +3074,79 @@ static TopoDS_Face rideSupport(const TopOpeBRepDS_DataStructure&   DStr,
    return Support;
  }
  
@@ -299,7 +309,7 @@ index b225371a..8993987a 100644
  bool ChFi3d_Builder::RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
                                       const occ::handle<ChFiDS_Stripe>& B,
                                       const TopoDS_Face&                F)
-@@ -3348,6 +3536,8 @@ bool ChFi3d_Builder::RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
+@@ -3370,6 +3558,8 @@ bool ChFi3d_Builder::RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
      CP.SetParameter(t);
    }
    ChFiDS_FaceInterference& FIA = aARide->ChangeInterference(onA);
@@ -308,7 +318,7 @@ index b225371a..8993987a 100644
    FIA.SetInterference(iCA, FIA.Transition(), PCFA, PCAA);
    FIA.SetFirstParameter(a1);
    FIA.SetLastParameter(a2);
-@@ -5981,11 +6171,48 @@ void ChFi3d_Builder::Compute()
+@@ -6068,11 +6258,48 @@ void ChFi3d_Builder::Compute()
          const bool aOne = aF2->Radius() <= aF1->Radius();
          const occ::handle<ChFiDS_Stripe> aOn    = aOne ? S1 : S2;
          const occ::handle<ChFiDS_Stripe> aRider = aOne ? S2 : S1;
@@ -756,7 +766,7 @@ index 300d1b5c..77646563 100644
  // function : UpdateTolesp
  // purpose  : Update tolesp field to fit it to range of parameter of spine curve
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx
-index 6ce76e5c..d23e979b 100644
+index da82d205..b18d52f9 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx
 @@ -175,6 +175,13 @@ void ChFi3d_FilBuilder::PerformTwoCorner(const int Index)

@@ -1,4 +1,4 @@
-# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050, 1270, 1280–1284, 1680, 1690, 1691
+# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050, 1270, 1280–1284, 1680, 1690, 1691, 1696
 
 These patches change no result. Each removes repeated work that made an
 OCCT algorithm quadratic (or worse) in the edges or wires of a face or a
@@ -40,6 +40,10 @@ The same kind of bound for booleans on faces that run many turns is in
 - **1691** keeps the polyhedra of a face's surface for all the edges a
   boolean or an offset intersects with the face, instead of sampling the
   surface again for every edge (mitcad#1823).
+- **1696** walks no guide past the spine's ends in a rounding's try over a
+  narrow face's surface unbounded where its analytic pieces already refuse
+  it, instead of walking and approximating those guides first and throwing
+  them away (mitcad#1824, mitcad#2065).
 
 ## 0006 to 0009: booleans and the checker
 
@@ -302,6 +306,49 @@ the face/face intersections and, for the edge merged across a tangent end
 (patch 1190), its curves projected on both faces and their tolerance
 found by a global search (`GeomLib_CheckCurveOnSurface`).
 
+## 1696: a rounding's try over a narrow face
+
+### 1696-chfi3d-narrow-face-try-refused-by-its-analytic-pieces-walks-no-guide-past-the-spine
+
+A rounding whose contact leaves a narrow face B across a concave crease
+is tried again over B's surface unbounded (`ChamferOverNarrowFace`,
+patches 0531 and 0940) and then cut by the faces beyond B
+(`ChamferCutByFacesBeyond`); where the cut is refused, the stripe is
+computed again as before. The try made its analytic pieces
+(`PerformSetOfKPart`), walked the rest (`PerformSetOfKGen`) and only then
+asked the cut, whose first step refuses any piece within the spine that is
+not walked and whose contact on B leaves B or comes back into it. The walk
+leaves the analytic pieces as they are, so that refusal was known before
+the walk.
+
+Rounding the window sills of a ring wall away
+(`geometry.fillet_consumed_strip`) tries each of its ten roundings so: the
+analytic torus's contact on the floor reaches the pillars' half-round ends,
+and the walk past the spine's ends runs on over the unbounded plane until
+the guide's normal plane grazes the wall, where the sections slide along
+the wall while the guide barely moves. The approximation of those pieces
+cut each into up to 5000 segments and still missed its tolerance, about
+90 % of the fillet's time in stack samples, all of it thrown away. Where
+the analytic pieces refuse the try
+(`ChFi3d_NarrowCutRefusedByAnalyticPieces`, with the same samples and the
+same test of a walked piece as the cut's first step), its guides past the
+spine's ends are not walked (`ChFi3d_NarrowNotPast`, read by
+`PerformSetOfKGen`): such a guide leaves the builder done, walked or
+failed, and so does the guide left out. The fillet takes about 3 s instead
+of 21 to 34 s, its result written as BRep the same byte for byte; OCCT's
+blend and chamfer DRAW cases (754) give the same status and results.
+
+The guides within the spine are still walked. What they leave goes on to
+the stripe computed again: on a reported design (`ui-fillet-chain-remark`)
+each try's walk from the spine's start failed at once, and the builder's
+done flag that failure left false was not set again by the stripe
+computed again from analytic pieces alone, so that stripe counted as
+failed and the rounding was made otherwise, the end face it meets in five
+pieces that later features name. The first version of this patch (of
+18.11.2026, dropped for 0.67.0-rc4) did not walk the try at all, left the
+flag set and the end face whole, and the design's features after the
+rounding failed (mitcad#2065).
+
 ## Reports and tests
 
 - 0006 to 0009: the reports mitcad#84 (0006), mitcad#90 (0007), mitcad#91
@@ -327,3 +374,9 @@ found by a global search (`GeomLib_CheckCurveOnSurface`).
   ctests `geometry.fillet_consumed_strip` and
   `geometry.offset_loft_circle_seam_lean_in`, whose results are OCCT's
   without them.
+- 1696: mitcad#1824, mitcad#2065,
+  `geometry/tests/test_fillet_consumed_strip.cpp` (the same result, the
+  fillet within 15 s), `tools/ui-fillet-chain-remark-test.sh` (the reported
+  design's faces named as without the patch), and the dressup, fillet,
+  chamfer and port ctests of `geometry`, whose results are OCCT's without
+  it.

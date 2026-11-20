@@ -15,6 +15,12 @@ namespace mitcad {
 class CommandRegistry;
 struct CommandDef;
 
+// The text the command `commandId` was just chosen with in the command
+// search, once: empty for another command, a command run another way or a
+// second call (mitcad#2074: a Preferences page's command passes the words
+// on to Preferences' search).
+QString takeCommandSearchText(const QString& commandId);
+
 // The command search (S): type a few letters of a
 // command, Enter runs the first match or the chosen one. The ranking is
 // CommandSearchRank's. Each result says where the command sits: its

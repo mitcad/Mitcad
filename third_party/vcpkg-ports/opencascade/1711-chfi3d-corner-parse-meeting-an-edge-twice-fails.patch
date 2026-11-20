@@ -20,6 +20,12 @@ not return (no result within 15 minutes).
   parse's construction error, so that the corner fails at its vertex
   (Failure_Corner, the vertex a faulty one) at once.
 
+Test: geometry/tests/test_fillet_top_chains.cpp, test_reported_body (ctest
+geometry.fillet_top_chains): on the stored case `fillet-wall-run-on`, the
+top's chains with the foot's rounding of 3 as well: the fillet returns,
+valid (without the patch it does not return). Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 index cadeacc3..4308830a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx

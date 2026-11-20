@@ -19,6 +19,15 @@ times the degree (NbUIntervals and NbVIntervals at CN, which count the
 spans between the range's knots): the same as before for an adaptor of the
 whole surface, as dense as before within a part of it.
 
+Test: geometry/tests/test_multi_turn_faces.cpp,
+test_face_on_a_part_of_a_multi_turn_surface_sampled_within_it (ctest
+geometry.multi_turn_faces): the bound it checks: the samples of a face on a
+third of a turn of a 32-turn flank are the knot spans within the face's
+range, those of the whole face its knots times its degree as before (without
+the patch the part had the whole surface's samples). Its failure without the
+patch, stated in its documentation, is still to be shown in the port's
+before/after run (mitcad#1986).
+
 --- a/src/ModelingData/TKG3d/Adaptor3d/Adaptor3d_HSurfaceTool.cxx
 +++ b/src/ModelingData/TKG3d/Adaptor3d/Adaptor3d_HSurfaceTool.cxx
 @@ -33,7 +33,9 @@

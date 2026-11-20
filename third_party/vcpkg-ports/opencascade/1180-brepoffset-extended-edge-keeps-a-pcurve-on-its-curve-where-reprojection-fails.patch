@@ -29,6 +29,15 @@ otherwise SameParameter runs as before. Where the projection succeeds,
 and for every other curve, nothing changes. The offsets' edges stay within
 0.001 mm, and the volume is that of the same loft with the seam on a
 corner within 1e-5.
+
+Test: geometry/tests/test_offset_loft_circle_seam.cpp,
+test_square_to_a_circle_of_radius_20_seam_on_a_side (ctest
+geometry.offset_loft_circle_seam): a square to a circle of radius 20
+offset 0.5, 1 and 2 mm, the seam on a side: valid, edges within 0.001 mm,
+the volume that of the seam-on-a-corner loft's offset within 1e-5; the
+port's notes record all three failing without the patch on the edges, at
+0.5 and 1 mm on the volume. Its failure without the patch is still to be
+shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
 index e1e74f8b..e0af368f 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx

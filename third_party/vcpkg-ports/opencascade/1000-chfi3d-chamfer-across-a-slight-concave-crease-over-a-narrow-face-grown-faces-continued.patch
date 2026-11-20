@@ -5,6 +5,11 @@ Chamfers: a chamfer over a narrow face whose chain runs on across a slight
 concave crease of its other face, and the faces beyond a narrow face grown
 past the bounds of their B-spline surfaces (mitcad#343).
 
+Failures (mitcad#1986): a face's parameter bounds (BRepTools::UVBounds)
+fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): that face is not continued. Any other
+failure (a broken invariant, a signal) is rethrown.
+
 The case: a fin 1 mm thick whose top edges, an arc and a profile's spline
 stretch in turn, meet at vertices where the top faces kink by 1.4 and 2.2
 degrees (concave creases); both top chains are chamfered by 0.263 at 45
@@ -55,7 +60,7 @@ Upstream: new.
 Test: pending (mitcad#2003): the port test written for this patch does not
 reach its case yet.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 0290514b..ae1a9008 100644
+index 97a119c9..ec8985a5 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -21,6 +21,9 @@
@@ -68,7 +73,7 @@ index 0290514b..ae1a9008 100644
  #include <Geom_Surface.hxx>
  #include <Geom_TrimmedCurve.hxx>
  #include <Geom_BSplineCurve.hxx>
-@@ -2240,6 +2243,153 @@ void ChFi3d_Builder::ApplyRides()
+@@ -2253,6 +2256,158 @@ void ChFi3d_Builder::ApplyRides()
    }
  }
  
@@ -107,8 +112,13 @@ index 0290514b..ae1a9008 100644
 +      OCC_CATCH_SIGNALS
 +      BRepTools::UVBounds(F, u0, u1, v0, v1);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      continue;
 +    }
 +    occ::handle<Geom_BSplineSurface> W;
@@ -222,7 +232,7 @@ index 0290514b..ae1a9008 100644
  //=================================================================================================
  
  void ChFi3d_Builder::Compute()
-@@ -3274,6 +3424,12 @@ void ChFi3d_Builder::Compute()
+@@ -3317,6 +3472,12 @@ void ChFi3d_Builder::Compute()
        ChFi3d_InitChron(cl_setregul);
  #endif
  
@@ -236,7 +246,7 @@ index 0290514b..ae1a9008 100644
        SetRegul();
  
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 10784f11..a13e06fd 100644
+index b781c305..a2efe5ec 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -3158,10 +3158,13 @@ bool ChFi3d_Builder::StartSol(
@@ -254,7 +264,7 @@ index 10784f11..a13e06fd 100644
          && ChFi3d_ConcaveCreaseBeyond(anArcEdge, F, Fv, angular))
      {
        aTangentNext = false;
-@@ -10804,6 +10807,26 @@ static bool ChFi3d_IsolineOfEdge(const TopoDS_Edge&       E,
+@@ -10827,6 +10830,26 @@ static bool ChFi3d_IsolineOfEdge(const TopoDS_Edge&       E,
    return false;
  }
  
@@ -281,7 +291,7 @@ index 10784f11..a13e06fd 100644
  //=======================================================================
  // function : ChFi3d_KPartCutChainToEnd
  // purpose  : As ChFi3d_KPartCutToEnd where the contact of an analytic blend
-@@ -10920,6 +10943,13 @@ static bool ChFi3d_KPartCutChainToEnd(
+@@ -10943,6 +10966,13 @@ static bool ChFi3d_KPartCutChainToEnd(
    const TopoDS_Face              Fo  = TopoDS::Face(DStr.Shape(P->Index(opp)));
    const TopoDS_Face              B0  = otherFace(EFMap, E, N);
    double                         tP = 0., tEnd = 0.;

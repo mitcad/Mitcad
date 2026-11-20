@@ -35,6 +35,22 @@ failing before), and the second rounding below the step after the first
 above it, its cylinder run on to the first's torus with no torus of its
 own.
 
+The conditions (mitcad#1986): the torus's u reversal is general (any end
+of 0951's where the wall is on the blend's first side, by the blend's
+normal, no size). The choice between the pivot and the run-on is partly
+the case's: the pivot is taken only where, at the far end of the
+stepped-back face's edge with the other face, a plane face parallel to
+the strip (within 1e-6) closes the recess, a stand-in for "the run-on
+across the step meets no other face before the recess ends"; a general
+condition would test that run-on itself (left, mitcad#1986).
+Test: geometry/tests/test_fillet_step_end.cpp (ctest
+geometry.fillet_step_end): test_rounding_ends_at_a_step_back_of_its_wall
+with the body's faces in the reverse order (the shape invalid or the
+fillet failing before), and test_second_rounding_runs_on_across_the_step
+(the cylinder run on to the first rounding's torus, no torus of its own).
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index a06cce0e..0ffaca3c 100644

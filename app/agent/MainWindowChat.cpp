@@ -26,8 +26,8 @@
 #include <QScrollBar>
 #include <QSize>
 #include <QStringList>
+#include <QTabBar>
 #include <QTimer>
-#include <QToolBar>
 #include <QUrl>
 #include <QtLogging>
 
@@ -293,12 +293,17 @@ void MainWindow::createChat() {
         chatAction->setChecked(on);
       }
     });
-    if (auto* bar = findChild<QToolBar*>(QStringLiteral("ribbonToolbar"))) {
-      bar->addAction(action);
+    if (m_ribbon != nullptr && action != nullptr && m_titleRow == nullptr) {
+      // The macOS Docked toolbar: in the tabs' row, before the quick-access
+      // group at its right end (mitcad#2082: no column of its own beside the
+      // toolbar), its icon as the group's (QuickAccessGroup::setCompact).
+      // The top bar of Windows and Linux has its own at its right, as in
+      // the Floating layout (below).
+      const int icon = qBound(uiIconSize(12), m_ribbon->tabBar()->sizeHint().height() - 12, uiIconSize(18));
+      auto* button = new RibbonButton(action, icon);
       // Named for the tests of the bar's colours (mitcad#1245).
-      if (QWidget* button = action != nullptr ? bar->widgetForAction(action) : nullptr) {
-        button->setObjectName(QStringLiteral("ribbonToolbarChat"));
-      }
+      button->setObjectName(QStringLiteral("ribbonToolbarChat"));
+      m_ribbon->addTabRowEndWidget(button, true);
     }
   }
   // The AppKit frontend's View menu and toolbar button come with its window

@@ -39,7 +39,10 @@
 #      Sketch box turns it into a 3D sketch in place, fully constrained
 #      with its relations in plane, the 3D Sketch Palette's box checked
 #      and disabled with why; Undo is one step back to the 2D editor;
-#      Finish.
+#      Finish. Sketch1 edited again and converted by the box, Finish; Helix
+#      (Shift+F7, the test's key) and Extrude (E) then open with a 3D
+#      sketch's region in Profiles, Esc cancels each, and the application
+#      keeps running (mitcad#2087, GitHub mitcad/Mitcad#487).
 #   7. Fillet (mitcad#1548, F7 the test's key): 3DSketch1 again, Radius 3
 #      typed, a click on the triangle's corner p12 rounds it at once as one
 #      sketch3d.fillet; Esc ends the tool (after the field's value when
@@ -54,10 +57,12 @@
 #      offered, OK; Pipe1 edited shows its route as picked; Esc.
 #  10. A closed path (mitcad#1550): one pick of a line of the triangle takes
 #      it whole, listed closed from p11, Pipe2 round it.
-#  11. Plane-bound tools (mitcad#1550) in a new 3D sketch on XZ: the SKETCH
-#      tab's 2-Point Rectangle (R) from the origin with Width 30 and Height
-#      20 typed is one sketch3d.add_rectangle with the origin's attachment,
-#      fully constrained, one undo step (undone, redone); Center Diameter
+#  11. Plane-bound tools (mitcad#1550) in a new 3D sketch on XZ (picked in
+#      the Browser's Origin folder: the pipes lie in front of it in the
+#      view, here and in 12): the SKETCH tab's 2-Point Rectangle (R) from
+#      the origin with Width 30 and Height 20 typed is one
+#      sketch3d.add_rectangle with the origin's attachment, fully
+#      constrained, one undo step (undone, redone); Center Diameter
 #      Circle (C) on the YZ plane around that corner with Radius 8; Finish.
 #  12. Plane-bound tools in another 3D sketch on XZ (keys of the test's own):
 #      Ellipse (F3) from the origin with Major Radius 10 and Minor Radius 5
@@ -76,11 +81,11 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-# Keys of the test's own for the tools without one (Pipe, Rib: the command
-# search's popup closes at once in session 0).
+# Keys of the test's own for the tools without one (Pipe, Rib, Helix: the
+# command search's popup closes at once in session 0).
 Ui-Init $App $Out $QtBin @{ 'sketch.arc_center' = 'F8'; 'sketch.fillet' = 'F7'; 'solid.pipe' = 'F9';
                             'sketch.ellipse' = 'F3'; 'sketch.polygon' = 'F5'; 'sketch.text' = 'F11';
-                            'solid.rib' = 'Shift+F8' } -StepPause 0
+                            'solid.rib' = 'Shift+F8'; 'solid.helix' = 'Shift+F7' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -297,6 +302,19 @@ Ui-ExpectNew 'Selected: 1 sketch point [sketch point p2 of F2]' 'a point is pick
 Ui-Step 'Esc (clear the selection)'      { Ui-Key 'Escape' }
 Ui-ExpectNew 'Selected: nothing' 'Esc cleared the selection'
 Ui-Sync # the card laid out again without the selection
+# The drag buttons out of the card's sight under the Docked top bar
+# (mitcad#2082): the card scrolled to them first, up (the selection's
+# rows had it scrolled down), then down, as to the list below.
+Ui-Step 'scroll the card to the drag buttons (wheel)' {
+  foreach ($step in @(1, -1)) {
+    for ($i = 0; $i -lt 16; $i++) {
+      if ("$(Ui-LastLineWith '3D sketch edit control drag axis X ')" -match ' at \d+,\d+') { break }
+      Ui-WheelLogged '3D Sketch Palette 3D Sketch' $step
+      Start-Sleep -Milliseconds 400
+      Ui-Sync
+    }
+  }
+}
 Ui-Mark
 Ui-Step 'drag along X'                   { Ui-ClickLogged '3D sketch edit control drag axis X' }
 Ui-ExpectNew '3D sketch drag on: along X' 'drags go along X'
@@ -374,6 +392,41 @@ Ui-ExpectNew 'Sketch editor follows the history: Sketch1 is a 2D sketch' 'the 2D
 Ui-Mark
 Ui-Step 'finish (Ctrl+Enter)'            { Ui-Key 'ctrl+Return' }
 Ui-ExpectNew 'Sketch finished' 'finished'
+
+Write-Host '--- Helix and Extrude start on a converted sketch''s region (mitcad#2087, GitHub mitcad/Mitcad#487)'
+# Sketch1 converted while it is edited, then finished: every sketch of the
+# design is a 3D sketch, and the profile the commands take by themselves as
+# they start is a 3D sketch's region, for which the planar sketch query is
+# refused (Helix threw out of its start there and the application ended).
+Ui-Mark
+Ui-Step 'edit Sketch1 (double-click)'    { Ui-DoubleClickLogged 'Timeline Sketch1' }
+Ui-ExpectNew 'Editing sketch F3 (Sketch1)' 'Sketch1 is edited'
+Ui-ExpectNew 'Palette palette3dSketch at' 'the Sketch Palette''s 3D Sketch box'
+Ui-Mark
+Ui-Step 'check 3D Sketch'                { Ui-ClickLogged 'Palette palette3dSketch' }
+Ui-ExpectNew 'Converted Sketch1 (F3) to a 3D sketch: dof 0' 'converted while it is edited'
+Ui-Mark
+Ui-Step 'finish (Ctrl+Enter)'            { Ui-Key 'ctrl+Return' }
+Ui-ExpectNew 'Sketch finished' 'finished as a 3D sketch'
+Ui-Mark
+Ui-Step 'Helix (Shift+F7)'               { Ui-Key 'shift+F7' }
+Ui-ExpectNew 'Command Helix started' 'Helix started'
+Ui-ExpectNew 'Helix Profiles: 1 profile [profile ' 'the converted sketch''s region taken'
+Ui-FocusMain
+Ui-Mark
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Helix cancelled' 'nothing added'
+if (Ui-Crashed) { Ui-Fail 'the application ended after Helix' }
+Ui-Mark
+Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
+Ui-ExpectNew 'Command Extrude started' 'Extrude started'
+Ui-ExpectNew 'Extrude Profiles: 1 profile [profile ' 'the converted sketch''s region taken'
+Ui-FocusMain
+Ui-Mark
+Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Extrude cancelled' 'nothing added'
+if (Ui-Crashed) { Ui-Fail 'the application ended after Extrude' }
+Write-Host 'ok   the application keeps running'
 
 Write-Host '--- Fillet (mitcad#1548): a corner of the triangle with a typed radius'
 Ui-Mark
@@ -480,13 +533,29 @@ Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Added pipe' 'Pipe2 added round the triangle'
 
 Write-Host '--- Plane-bound tools (mitcad#1550): a rectangle from the origin, a circle on YZ'
+# The isometric view first: a sketch converted to 3D while it was edited
+# is left with the 2D editor's top view (mitcad#1592), where XZ is seen
+# edge-on and the 3D sketch's XY plane on it gives the pointer no place.
+Ui-Mark
+Ui-Step 'Isometric View (7)'             { Ui-Key '7' }
+Ui-ExpectNew 'View iso' 'the Isometric View'
+# The camera's line only when the direction changed: the last one counts.
+for ($i = 0; $i -lt 20 -and -not "$(Ui-LastLineWith 'Camera direction ')".StartsWith('Camera direction -0.577 0.577 -0.577 '); $i++) {
+  Start-Sleep -Milliseconds 250
+}
+if (-not "$(Ui-LastLineWith 'Camera direction ')".StartsWith('Camera direction -0.577 0.577 -0.577 ')) {
+  Ui-Fail "the view does not look from the isometric corner: $(Ui-LastLineWith 'Camera direction ')"
+}
+Write-Host 'ok   the view looks from the isometric corner'
 Ui-Mark
 Ui-Step 'create sketch (Alt+S)'          { Ui-Key 'alt+s' }
 Ui-ExpectNew 'Create Sketch kind 3D at' 'the 3D choice is on the card'
 Ui-Step 'choose 3D'                      { Ui-ClickLogged 'Create Sketch kind 3D' }
 Ui-ExpectNew 'Create Sketch kind: 3D' '3D chosen'
 Ui-SyncOr 500
-Ui-Step 'pick XZ'                        { Ui-ClickLogged 'Datum xz' }
+# XZ from the browser's Origin folder: the pipes made above may lie in front
+# of the plane's place in the view, where a click picks their faces.
+Ui-PickOriginRow 'XZ'
 Ui-ExpectNew '3D sketch started on xz' 'a new 3D sketch on XZ'
 Ui-ExpectNew '3D sketch frame at ' 'its frame is drawn'
 Ui-Mark
@@ -580,7 +649,8 @@ Ui-ExpectNew 'Create Sketch kind 3D at' 'the 3D choice is on the card'
 Ui-Step 'choose 3D'                      { Ui-ClickLogged 'Create Sketch kind 3D' }
 Ui-ExpectNew 'Create Sketch kind: 3D' '3D chosen'
 Ui-SyncOr 500
-Ui-Step 'pick XZ'                        { Ui-ClickLogged 'Datum xz' }
+# From the browser too, clear of the pipes in the view.
+Ui-PickOriginRow 'XZ'
 Ui-ExpectNew '3D sketch started on xz' 'another 3D sketch on XZ'
 Ui-ExpectNew '3D sketch frame at ' 'its frame is drawn'
 

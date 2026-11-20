@@ -37,6 +37,7 @@ class BusyMark;
 class CommandMessage;
 class CutTargetsPanel;
 class NoteRow;
+class PickHoverWatch;
 class ResultRows;
 
 // The panel of a feature command, generated from its inputs: a title, one
@@ -160,6 +161,11 @@ private:
     QToolButton* clear = nullptr;
     QListWidget* order = nullptr; // an ordered selection's items, or any of several while one is gone
     QWidget* picks = nullptr;     // `order` with its buttons (mitcad#1780)
+    // The button that opens and closes the list of picks of an input of
+    // several picks that is not ordered, and the row of the list under
+    // the pointer (mitcad#2064).
+    QToolButton* picksToggle = nullptr;
+    PickHoverWatch* pickHover = nullptr;
     bool missingShown = false;    // the chip shows gone picks in the error colour
     QLineEdit* edit = nullptr;
     QPlainTextEdit* lines = nullptr; // a text of several lines (InputDef::multiLine)
@@ -213,6 +219,12 @@ private:
   void rebuildList(Row& list, const CommandState& state);
   void refreshRow(Row& row, const CommandState& scope, const CommandState& state);
   void updateNote(Row& row);
+  // Shows or hides the list of picks of an input that is not ordered
+  // (mitcad#2064): shown while it has picks and the lists are open
+  // (inputPicksShown) or a pick is gone (mitcad#1780); logged "Panel
+  // <command> picks <key> shown: 1. <words>; 2. …" (again when its rows
+  // change) and "… hidden". `changed`: its rows were filled again.
+  void updatePicksShown(Row& row, bool changed);
   // The rows in the order the panel shows them.
   std::vector<const Row*> orderedRows() const;
   // The widget whose place is a row's (logLayout, inputPlace), and that

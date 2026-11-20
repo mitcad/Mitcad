@@ -202,6 +202,23 @@ public:
   // are ("Window layout: ..."), which every UI test's clicks and
   // screenshots depend on (tools/ui-layout.sh, mitcad#412).
   void logLayout() const;
+  // The Docked layout's docks kept between starts (mitcad#2070, GitHub
+  // mitcad/Mitcad#451, framework/DockState.hpp, MainWindowDocks.cpp);
+  // nothing in the Floating layout or the AppKit frontend. Saved at quit
+  // and when the last window closes (WindowManager), with the docks the
+  // Start page or the Render workspace hid kept as shown; logs "Dock state
+  // saved: ...".
+  void saveDockArrangement();
+  // Once the window's docks exist, before it shows: the first window of a
+  // start (`first`) takes the arrangement kept at the last quit, its
+  // floating docks at their kept frames where these are wholly on their
+  // connected screens; another window the arrangement of the window it
+  // opens from (`from`), its floating docks docked. Logs "Dock state
+  // restored: ..." (", <dock> docked: screen gone"), "Dock state ignored:
+  // ..." or "Dock state: none saved, ...".
+  void restoreDockArrangement(bool first, MainWindow* from);
+  // Restore Default Layout: the docks as the window made them, at once.
+  void restoreDefaultDocks();
   // Settle the camera and refresh the active input's diagnostic pick places.
   // False only while the places cannot be read yet; true when they were
   // logged again or the ones logged last stand (no active pick input, or
@@ -280,9 +297,24 @@ public:
   // the window shows; the recovery question comes after it, over the page.
   void showStartPageAtLaunch(const QString& skip);
   // The Start page left for the design (a click on its document tab in the
-  // Floating title row, mitcad#1990): Design's tab shown last; nothing
-  // while the page is not shown. Logs "Start page left by the design's tab".
+  // top bar's title row, mitcad#1990, both layouts on Windows and Linux,
+  // mitcad#2082, or in the macOS Docked designs' tab row): Design's tab
+  // shown last; nothing while the page is not shown. Logs "Start page left
+  // by the design's tab".
   void leaveStartPageForDesign();
+  // The Docked toolbar as the Start page has it (mitcad#2082). With the top
+  // bar of Windows and Linux (createDockedTopBar) the title row stays and
+  // the toolbar panel under it is hidden over the page, as the Floating
+  // layout hides it: "Docked toolbar panel hidden (Start)", "Docked toolbar
+  // panel shown". In the macOS Docked toolbar (no Home): over the page
+  // hidden whole while the window's frame shows the designs' tabs (two
+  // designs or more: the shown design's tab leads back), else its tab row
+  // alone (Ribbon::setTabRowOnly); off the page whole again. Logs "Docked
+  // toolbar on the Start page: hidden (the designs' tabs lead back)",
+  // "Docked toolbar on the Start page: tab row only" and "Docked toolbar
+  // back: workspace block, tab row and groups". The document frame calls it
+  // as its tabs show or hide; nothing in the Floating layout.
+  void updateStartToolbar();
 
   // Fetches the library sources with Auto-update in the background, one
   // after another, without a dialog (mitcad#576; MainWindowLibraries.cpp):
@@ -624,6 +656,18 @@ private:
   void fillWindowMenu(QMenu* window);
 #endif
   void createRibbon();
+  // The Docked layout's top (mitcad#2082, Windows and Linux): the top bar
+  // (`titleBar`, the Floating layout's title row) at the window's top and
+  // under it the toolbar panel (the ribbon, Ribbon::setPanel) across the
+  // window, both in the "ribbonToolbar" tool bar above the docks.
+  void createDockedTopBar(TitleBar* titleBar);
+  // The Docked top bar's parts in the window's coordinates, for UI tests,
+  // when they changed: "Docked top bar: window 1280x800, view top 180;
+  // titleRow 6,0 1268x36; titleMenu 14,3 30x30; titleFile ...; ribbon
+  // 12,44 1256x128; ribbonWorkspace ...; ribbonTabs ...; ribbonSearch ...;
+  // ribbonGroup_SOLID/CREATE ..." (the title row's and the panel's part
+  // names, as the Floating layout's "Floating cards: ..." has them).
+  void logDockedTopBar();
   void createPanels();
   void createIdlePage();
   // Floating chrome: the panels as cards over the view.
@@ -1737,7 +1781,12 @@ private:
   // view on" (or "not available" without the render worker) and "Workspace
   // RENDER left: the rendered view off".
   void setRenderWorkspace(bool on);
+  // The rendered view turned on while the Render workspace is open and the
+  // view mode of before back when it closes (setRenderWorkspace: the
+  // workspace selector's Render in both layouts, mitcad#2082).
+  void holdRenderedView(bool on);
   bool m_renderedBeforeRender = false;
+  bool m_renderedViewHeld = false;
   // File › Print… hidden while the File menu is open with nothing to print
   // (buildMenuBar, mitcad#1990).
   bool m_printHiddenInMenu = false;
@@ -2071,9 +2120,15 @@ private:
   Ribbon* m_ribbon = nullptr;
   // Floating chrome on macOS: the title bar and ribbon above the view; placed by createPanels().
   QWidget* m_header = nullptr;
-  // Floating chrome elsewhere (floatingTopCards(), mitcad#425, mitcad#429): the title bar row over the
-  // view without a card; it and the ribbon's group cards are rows of createFloatingPanels().
+  // The top bar of Windows and Linux (floatingTopCards(), mitcad#425, mitcad#429, mitcad#1990), in
+  // both layouts (mitcad#2082): in the Floating layout the title bar row over the view without a card,
+  // it and the toolbar panel rows of createFloatingPanels(); in the Docked layout at the window's top
+  // with the panel under it (createDockedTopBar).
   TitleBar* m_titleRow = nullptr;
+  // The Docked top bar (createDockedTopBar): the toolbar panel's holder under the title row, hidden
+  // over the Start page as the Floating layout hides the panel; the parts as last logged.
+  QWidget* m_dockedPanel = nullptr;
+  QString m_loggedDockedTopBar;
   CommandSearch* m_search = nullptr;
   ViewController* m_viewController = nullptr;
   SpaceMouseController* m_spaceMouse = nullptr; // 3D mice (mitcad#951)
@@ -2802,6 +2857,8 @@ private:
   void openDropped(const QStringList& paths, std::optional<QPointF> onView = std::nullopt);
   StartPage* m_startPage = nullptr;
   QStringList m_startHiddenDocks; // the Docked layout's docks it hid
+  enum class StartToolbar { Whole, TabRow, Hidden };
+  StartToolbar m_startToolbar = StartToolbar::Whole; // updateStartToolbar, as logged
 
   // CAM (mitcad#1013; cam/MainWindowCam.cpp, app/COMMANDS.md "The CNC
   // group"): the Make tab's CNC group. New Setup and the operations'
@@ -2991,6 +3048,57 @@ private:
   QList<GlassCard*> m_renderCards;
   QList<QDockWidget*> m_renderDocks;
   QStringList m_renderHiddenDocks; // the Docked layout's docks it hid
+  // The Docked layout's Render docks in the places of the docks they hide,
+  // and those docks back at their sizes after (mitcad#2077; conventions 15
+  // and 18): each hidden dock's size by its name, and in each dock area
+  // the first hidden dock's name and size. Logged once laid out as "Render
+  // docks in the places of the docks they hide: renderLeftPanel 240
+  // (browserDock 240), …" and "Docks given back at their sizes:
+  // browserDock 240, …" ("… not in the places …", "… not given back …"
+  // with the sizes when one is off by more than a pixel).
+  struct HiddenDockPlace {
+    QString name;
+    QSize size;
+  };
+  void placeRenderDocks();
+  void giveBackRenderDockSizes();
+  void logRenderDockPlaces(bool open);
+  QHash<QString, QSize> m_renderHiddenSizes;
+  QHash<int, HiddenDockPlace> m_renderAreaPlaces; // by Qt::DockWidgetArea
+
+  // The kept arrangement of the docks (mitcad#2070, MainWindowDocks.cpp):
+  // whether this window has one (the Docked layout's Qt window), the docks
+  // left out of it (the Render workspace's), the default arrangement taken
+  // right after the docks were made, and the visibility that follows other
+  // state (the Configuration dock the design's options, the Projects dock
+  // View › Projects, View › Chat the Chat dock) applied after a restore.
+  bool keepsDockArrangement() const;
+  QStringList dockArrangementLeftOut() const;
+  void captureDefaultDocks();
+  void applyFollowedDockVisibility();
+  QByteArray m_defaultDockState;
+  QHash<QString, Qt::DockWidgetArea> m_defaultDockAreas;
+  // A kept arrangement was restored: the start-up widths of the Command and
+  // Projects docks (their own keys) are not applied over it.
+  bool m_dockStateRestored = false;
+
+  // A drawing in the Docked layout (mitcad#2082, MainWindowDocks.cpp): the
+  // sheet takes the view as the Floating layout's does, so the model's
+  // docks shown (Command, Timeline, Projects, Configuration) are hidden
+  // while it is open and shown again when it closes; the Browser and the
+  // Chat panel stay. A dock the user had hidden stays hidden. Logs "Drawing
+  // docks hidden: commandDock, timelineDock" and "Drawing docks shown
+  // again: ...".
+  static QStringList drawingHiddenDockNames();
+  void updateDrawingDocks(bool open);
+  // Docks a page hid (the Start page, the Render workspace, a drawing)
+  // shown again as it closes; one another page still keeps hidden (the
+  // Start page shown, Render open, a drawing open for the model's docks)
+  // goes to that page's list instead, so that the pages never show a dock
+  // the other hid.
+  void showDocksAgain(const QStringList& names);
+  QStringList m_drawingHiddenDocks; // the docks a drawing hid
+  bool m_drawingDocksHidden = false; // a drawing holds the model's docks hidden
 };
 
 } // namespace mitcad

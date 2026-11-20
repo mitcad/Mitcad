@@ -26,6 +26,14 @@ itself as done (volume 1000, six faces).
   grown faces' continuation nor the regularities touch the input's faces
   and edges.
 
+Test: geometry/tests/test_fillet_rib_full_round.cpp,
+test_cube_rounded_within_a_hair_of_half_its_side (ctest
+geometry.fillet_rib_full_round): the cube of 10 rounded on its twelve
+edges with 4.9998 returns (before the patch it ran into the test's time
+limit), either not done or one valid solid with the exact shape's volume,
+never the cube as done. Its failure without the patch is still to be shown
+in the port's before/after run (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
 index 61f2eed8..bdd7d663 100644

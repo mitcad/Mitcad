@@ -37,6 +37,15 @@ And where the walls lean in (a square to a circle of radius 10, its seam
 on a side, shelled 1 mm), the intersection at the corner of the extended
 half left a gap about the tangency of 8 % of the offset on Windows;
 patch 1190 takes the continuation from within 20 % there (mitcad#1217).
+
+Test: geometry/tests/test_offset_loft_circle_seam.cpp,
+test_square_to_a_circle_of_radius_20_seam_on_a_side at 3 mm and
+test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side at 1 and 2 mm
+(ctest geometry.offset_loft_circle_seam): edges within 0.001 mm, the
+volume that of the seam-on-a-corner loft's offset within 1e-5 (3e-5 for
+the octagon); the port's notes record the square at 3 mm failing without
+the patch on the edges. Its failure without the patch is still to be shown
+in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
 index 8606ce2b..e667b52c 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx

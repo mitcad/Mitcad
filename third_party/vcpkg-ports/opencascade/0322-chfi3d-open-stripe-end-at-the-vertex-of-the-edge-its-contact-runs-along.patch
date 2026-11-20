@@ -24,6 +24,11 @@ vertex's for open stripes too, and the curves and edges the DS already has
 at the old point (the end's) are put at the vertex (the new
 ChFi3d_StripeEndAtVertex). The fin builds, valid, each side's rounding
 taking off the same volume.
+
+Test: geometry/tests/test_fillet_kernel.cpp (ctest
+geometry.suite.fillet_kernel), test_fin_sides_rounded_one_after_the_other:
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index f5f5492..1a039de 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -34,6 +34,14 @@ item within 9e-4 mm both ways; before, the result at the seam end was the
 at the seam.
 
 Upstream: new.
+
+Test: none yet, because no synthetic body reproduced the end past the
+face's edge at its seam: bodies with a bore's rim rounded where a pocket
+or a slot cuts into it, and the pocket's or slot's rim rounded up to that
+torus, built or failed alike with and without the patch, their contacts
+not running past the torus' edge at its seam. The patch is verified on the
+design's replayed and stored bodies only, where the seam end's rounding
+gives a body of 1e12 mm3 without it. Left: a synthetic test (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index bb5ada97..324d9a03 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

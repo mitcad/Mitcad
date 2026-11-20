@@ -96,11 +96,11 @@ wait-idle
 click-logged '^Browser Root/Bodies/cyl at '
 wait-log '^Remove Region Mesh Body: 1 body [[]body F2[.]b0[]]' 30
 wait-idle 30
-view-pointer press 40 20 left
-view-pointer release 40 20 left
+view-pointer press 40 25 left
+view-pointer release 40 25 left
 wait-log '^Remove Region lasso: 1 points' 30
-view-pointer press 60 20 left
-view-pointer release 60 20 left
+view-pointer press 60 25 left
+view-pointer release 60 25 left
 wait-log '^Remove Region lasso: 2 points' 30
 view-pointer press 60 80 left
 view-pointer release 60 80 left

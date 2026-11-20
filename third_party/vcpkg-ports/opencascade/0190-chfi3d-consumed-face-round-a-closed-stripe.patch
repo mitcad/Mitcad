@@ -35,6 +35,12 @@ rim is rounded with 0.5.
   (ChFi3d_KPartSectionCutAt) with its common point on the arc, as the walk
   found it; the next stretch starts on the arc (RecOnS, as a walk goes on
   across a seam).
+
+Test: geometry/tests/test_fillet_overflow.cpp (ctest
+geometry.suite.fillet_overflow),
+test_closed_rounding_consumes_an_earlier_rounding_over_a_rounded_rim: Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index b5dc4800..fd0cc1e3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

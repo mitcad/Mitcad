@@ -17,6 +17,15 @@ on that side where the analytic piece after the guide starts (going back:
 where the piece before it ends), as where it reaches the guide's end within
 that tolerance (ChFi3d_ReachedAnalyticPiece).
 
+The condition (mitcad#1986) is geometric, not the case's: a walked guide
+followed (or preceded) by an analytic piece, and a walked section of which
+either contact lies within ten times the spine's tolerance of the analytic
+piece's contact point on the same side at their meeting, whatever the
+surfaces, the kink's angle or the lag of the other contact. Only the margin
+is not derived from the case: it is the walk's own end test's (ten times
+the spine's tolerance), not the measured lag (2.2 and 4 micrometres): the
+stop comes from the contact that arrived, not from the one that lags.
+
 Test: geometry/tests/test_fillet_fin_top_creases.cpp, the rounding of a
 reported fin's top across creases of 1.4 and 2.2 degrees: built and closed,
 the stored body after it on the result within 0.01 mm (with patch 1300

@@ -26,6 +26,25 @@ runs along no edge (mitcad#1412).
 The case: 1520's lid, its top rim rounded through the mitres; without
 this patch the top rim's chain failed (its walked piece took the top for
 its second face) or, with the sphere piece, came out invalid.
+
+The conditions (mitcad#1986) are geometric, not the case's: any convex
+edge where a plane meets a cylinder, the material inside, of the ball's
+radius (within 1e-6) along the circle at their meeting, whatever the
+radius, the edge's length or what lies beside it; and any contact curve
+whose nine samples and end all lie within the tolerance of its start.
+The edge's shortness and the mitre beside it are the case's example, not
+conditions. Nothing else comes from the case; 1e-6 is a confusion of the
+radii, not a margin of the case.
+
+Test: geometry/tests/test_fillet_stationary_ball.cpp,
+test_top_rim_through_the_mitres and test_both_rims_on_the_half_lid (ctest
+geometry.fillet_stationary_ball; with 1520): the lid's top rim rounded
+through both corners' mitres, the ball touching the top at one point:
+valid, each corner one new face on the ball's sphere within 1e-4; the
+port's notes record each rounding failing without 1520 and 1521. Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 07ba8dfd..8ed8e86e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -116,6 +116,24 @@ if (-not (Create-Has $again 'ellipse') -or -not $again.EndsWith(' (counts)')) {
   Ui-Fail "the Ellipse started three times is not in '$again'"
 }
 Write-Host 'ok   the Ellipse started three times is in the section when the sketch opens again'
+# The Create section may lie below the palette's sight in session 0's
+# window, under the Docked top bar (mitcad#2082): the palette scrolled
+# down to it, the wheel over its rows above Finish Sketch a step at a
+# time (it logs its places again as it scrolls).
+Ui-ExpectNew 'Palette paletteCreate_sketch.ellipse ' 'its Create button is laid out'
+Ui-Step 'the palette scrolled to its Create section (wheel)' {
+  for ($i = 0; $i -lt 12; $i++) {
+    if ("$(Ui-LastLineWith 'Palette paletteCreate_sketch.ellipse ')" -match ' at \d+,\d+\s*$') { break }
+    $finish = Ui-LoggedAt 'Palette Finish Sketch'
+    $x = $finish[0] - 90
+    $y = $finish[1] - 150
+    [UiInput]::Move($script:UiWindow, $x, $y, 0)
+    Start-Sleep -Milliseconds 80
+    [UiInput]::Wheel($script:UiWindow, $x, $y, -1)
+    Start-Sleep -Milliseconds 300
+    Ui-Sync
+  }
+}
 Ui-ExpectNew 'Palette paletteCreate_sketch.ellipse at' 'its Create button is placed'
 Ui-Mark
 Ui-Step "the Ellipse's Create button"    { Ui-ClickLogged 'Palette paletteCreate_sketch.ellipse' }

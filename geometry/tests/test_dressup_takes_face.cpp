@@ -1179,14 +1179,10 @@ void test_wall_top_rounded_with_two_radii() {
 // (r - 2)^2)), and the face at 45 degrees cuts it at the end. The section:
 // the arc from the inner wall's top to the outer wall; the face at 45
 // degrees (z = 4 + y) cuts the wall above z = 4. Valid, every face named,
-// no top left; the volume within a millionth.
-// Until mitcad#1926 makes the geometry kernel build it, the fillet fails,
-// in words, the edge and its faces painted, and never comes back as a valid
-// body that is wrong: the kernel built roundings between 2 and 3 with the
-// ball riding on the floor beyond the wall and the outer wall, the wall
-// under the strip gone and the floor's edge rounded instead, and at 3 that
-// came back from the 0.1 % smaller retry (mitcad#1953). Either outcome
-// passes; a body with a wall missing does not.
+// no top left; the volume within a millionth. The OCCT port's patch 1850
+// builds it (mitcad#1987): before it the kernel failed at 3 and built
+// roundings between 2 and 3 with the ball riding on the floor beyond the
+// wall and the outer wall, the wall under the strip gone (mitcad#1953).
 void test_strip_between_a_parallel_plane_and_a_slope() {
   const ShapePtr body = wall();
   ChamferSet bevel;
@@ -1227,18 +1223,8 @@ void test_strip_between_a_parallel_plane_and_a_slope() {
       error = failed.what();
     }
     if (!rounded) {
-      // In words: no names, ids or coordinates in what a person reads; the
-      // places say where.
-      const std::string said = error_message(error);
-      std::fprintf(stderr, "strip beside a slope, rounded with %g: %s\n", r, said.c_str());
-      CHECK(said.find("wider than the face beside its edge") != std::string::npos ||
-            said.find("too large for the face beside its edge") != std::string::npos);
-      CHECK(error.find(kPlacedTail) != std::string::npos);
-      const std::string message = error.substr(error.find("\"message\":"));
-      const std::string plain = message.substr(0, message.find("\"detail\":"));
-      CHECK(plain.find("E{") == std::string::npos && plain.find("F1:") == std::string::npos &&
-            plain.find("F2:") == std::string::npos && plain.find('(') == std::string::npos);
-      CHECK(error.find("\"kind\":\"edge\"") != std::string::npos);
+      std::fprintf(stderr, "strip beside a slope, rounded with %g: %s\n", r, error_message(error).c_str());
+      CHECK(rounded != nullptr);
       continue;
     }
     CHECK(valid(*rounded));

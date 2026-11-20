@@ -67,8 +67,8 @@
 #     design (under This design then, the picker on it); one Undo takes both
 #     back; Edit materials…, the picker's last row, opens the Materials
 #     window for the body and changes nothing.
-#   - Docked: the 3D Print, Laser and CNC tabs beside the others, 3D
-#     Print's groups.
+#   - Docked: the 3D Print, Laser and CNC tabs in the Make workspace of
+#     the tab row's selector (mitcad#2082), 3D Print's groups.
 # tools/ui-windows-make-tab-test.ps1 does the same in the Windows VM.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -670,11 +670,16 @@ echo "ok   Edit materials… keeps the material"
 echo "--- Docked: the Make workspace's tabs and their groups"
 ui_stop_app
 ui_start_app --open "$WORK/make.mitcad" --no-native-dialogs --chrome=docked
-for tab in MAKE_PRINT MAKE_LASER MAKE_CNC MANAGE; do
-  ui_expect_log "Ribbon tab $tab at" "the $tab tab in the Docked layout"
+# The Docked tab row's selector (mitcad#2082): Design's tabs at first,
+# Make's out of sight until Make is chosen (ui_click_tab chooses it).
+ui_expect_log "Ribbon workspace at" "the workspace selector in the Docked layout"
+ui_expect_log "Ribbon tab MANAGE at" "the MANAGE tab in the Docked layout"
+for tab in MAKE_PRINT MAKE_LASER MAKE_CNC; do
+  ui_expect_log "Ribbon tab $tab out of sight" "the $tab tab in the Make workspace, Docked"
 done
 ui_mark
 ui_step "the 3D Print tab"                 ui_click_tab "MAKE_PRINT"
+ui_expect_new "Ribbon workspace: MAKE (tabs MAKE_PRINT, MAKE_LASER, MAKE_CNC)" "the Make workspace's three tabs, Docked"
 for group in SLICE PRINTERS PREPARE MATERIALS ANNOTATE INSPECT; do
   ui_expect_new "Ribbon MAKE_PRINT/$group at" "its $group group, Docked"
 done

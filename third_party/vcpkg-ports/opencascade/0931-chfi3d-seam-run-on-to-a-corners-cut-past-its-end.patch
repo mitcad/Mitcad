@@ -29,7 +29,27 @@ from the vertex to the cut's point. The seam itself stays whole. On the
 design's replayed body the rod's face has the file's area (412.4848
 against 412.4839 mm2) and every new face lies within 6e-4 of the file's.
 
+The condition (mitcad#1986) is geometric, not the case's: a corner's face
+at the end with a seam on an iso-line (constant U or V) that ends at the
+corner's vertex, the cut's crossing of that iso-line lying beyond the
+vertex (away from the seam's other end) and on the face's surface within
+10 times the approximation tolerance or the tolerance reached; any
+periodic face, not only a rod's cylinder, and any blend ending on it. A
+seam that is no iso-line is left as before.
+
 Upstream: new.
+
+Test: pending (mitcad#1986): geometry/tests/test_fillet_seam_run_on.cpp,
+test_rounding_ending_where_the_seam_ends_at_plus_y and
+test_rounding_ending_where_the_seam_ends_at_minus_y (ctest
+geometry.fillet_seam_run_on), a roof whose ridge runs into a rod standing on
+it, the rod's seam a B-spline along the line through the ridge's end: valid,
+the material removed the blend's section along the ridge less the rod within
+1e-6. It does not fail without the patch: on that body OCCT's topological
+build closes the rod's face without it as well, so it checks the patch's way
+only; the design's failure is verified on its replayed body only. A test
+failing without the patch needs a body that reaches the case.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 2411e415..f0c08991 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

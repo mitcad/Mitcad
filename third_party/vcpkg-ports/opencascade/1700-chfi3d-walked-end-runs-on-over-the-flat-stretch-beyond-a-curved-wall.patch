@@ -2,33 +2,46 @@ Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
 SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
 
 Fillet: a walked end cut by the face at the end runs on over the flat
-stretch beyond a curved wall, not over the wall's extrapolation
-(mitcad#1926).
+stretch beyond a curved wall, over the curved wall's own surface continued
+in a span of its own (mitcad#1926, mitcad#1987).
 
 A concave rounding along a fin's foot, its chain ending where the fin's
 sloping top runs down to the plate: the fin's side is a curved wall (an
 extrusion of a B-spline curve) bending tangentially into a flat stretch
 (a plane) lower than the radius. The contact left the curved wall across
 its edge with the top (the face at the end, holding the spine's end
-vertex), and the walk ran on over the wall's surface unbounded: past the
-flat stretch's edge that is the B-spline curve's polynomial
-extrapolation, which bends away from the plane; the walk stopped short of
-the end and WalkedCutToEnd's walk on failed the same way.
+vertex), and the walk ran on over the wall's surface past the flat
+stretch's edge, the curve's polynomial continued; it stopped 1.2 mm short
+of the end, and WalkedCutToEnd's walk on from there, over a face of N's
+surface bounded at the curve's ends, failed.
 
 - ChFi3d_RunOnSurface (new): where N is an extrusion whose basis curve
-  ends at an edge J across which a plane goes on tangentially to N, N's
-  surface continued past J by the curve's tangent line (N's parameters
-  kept on N), so that past J it is that plane.
+  ends at an edge J of N across which a plane N2 (neither Fo nor B) goes
+  on tangentially to N, holding J's tangent line, N's surface with the
+  basis curve continued past J by the polynomial of its span at J, in a
+  span of its own (N's parameters kept on N; J's knot removed where the
+  two are one polynomial), as long as its tangent stays within 45 degrees
+  of J's. Past J it bends in from N2's plane as the curve went on bending,
+  the way the bodies stored in reported designs run such a rounding on
+  (mitcad#1987: N2's plane, this patch's first form, left the rounding up
+  to 0.45 mm out at the flat stretch's far end, 0.5 mm3 at each arm).
+- WalkedCutToEnd: the walk on over such a surface on a face of it bounded
+  in v too (N's v range widened by the spine's length both ways), so that
+  a walk reaching its ends stops at edges with vertices.
+- ChFi3d_KPartCutPiece: at an end given as such (a point where the cut
+  meets the other contact) no section bounds the cut, which may reach
+  past that point's section (where the other contact turns in towards the
+  face beyond): the cut is kept in the piece on its other side only.
 - WalkedCutToEnd: with such a surface, the blend is walked again from
   the end piece's other end (as for a tight tangent face at the end) and
   cut by the face at the end from the crossing on; where the other
   contact meets the line of the edge Eq between the other face and the
   face at the end only past the spine's end vertex, on both surfaces,
   Eq is prolonged there and the face at the end grows up to the cut (as
-  ChFi3d_KPartCutToEnd does); the plane, wholly under the blend, has its
-  edges cut at its vertices so that the builder drops it, and its edges
-  with the face at the end are passed as cut edges. Also where the walk
-  ran on past the spine's end.
+  ChFi3d_KPartCutToEnd does); the flat stretch, wholly under the blend,
+  has its edges cut at its vertices so that the builder drops it, and its
+  edges with the face at the end are passed as cut edges. Also where the
+  walk ran on past the spine's end.
 - PerformSetOfSurf: an end try that fails (its inner walk) no longer
   leaves the stripe failed: done is restored, as the comment there says.
 - WalkedCutToEnd's pieces in the history: the walked piece that takes
@@ -38,25 +51,93 @@ the end and WalkedCutToEnd's walk on failed the same way.
   faces out, so that they had no name of their own and a later rounding
   along the top's edge with them found no edge.
 
+Test: geometry/tests/test_fillet_wall_run_on.cpp, test_reported_body
+(ctest geometry.fillet_wall_run_on): on the stored case
+`fillet-wall-run-on` of MITCAD_GEOMETRY_CASES, the outer foot rounded with
+3 by OCCT's fillet alone: valid, the flat stretches gone, the foot on the
+plate that of a ball on the plate and the curved side continued by its
+polynomial within 0.01 mm, the volume a little under the run-on over the
+flat stretch's plane (by at most a twentieth of the material added);
+documented to fail without this patch.
+No synthetic body: a U of cubic B-spline sides went another way at its
+ends (invalid with and without the patch). Its failure without the patch
+is still to be shown in the port's before/after run (mitcad#1986).
+
+Failures (mitcad#1986): the longer B-spline curve's construction fails
+with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): that end is not run on. Any other
+failure (a broken invariant, a signal) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -17381,6 +17381,183 @@ bool ChFi3d_Builder::ChamferEndPastTurnStop(const occ::handle<ChFiDS_Stripe>& St
+@@ -8703,14 +8703,39 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+         Par[k](aCoord)   = ElCLib::InPeriod(Par[k](aCoord), c - 0.5 * T, c + 0.5 * T);
+       }
+     }
++    // (At an end given as such the piece ends in a point, where the cut
++    // meets the other contact, and no section of it bounds the cut there:
++    // the cut may reach past that point's section, as where the other
++    // contact turns in towards the face beyond (1700).)
++    double aKeep[2] = {Par[0](aCoord), Par[1](aCoord)};
++    if (GivenStart != nullptr || GivenEnd != nullptr)
++    {
++      double cmin = RealLast(), cmax = RealFirst();
++      for (int i = 0; i <= 50; i++)
++      {
++        const gp_Pnt2d p = Ps->Value(Ps->FirstParameter() + (Ps->LastParameter() - Ps->FirstParameter()) * i / 50.);
++        const double   c = aCoord == 1 ? p.X() : p.Y();
++        cmin             = std::min(cmin, c);
++        cmax             = std::max(cmax, c);
++      }
++      const bool aRising = aKeep[1] >= aKeep[0];
++      if (GivenStart != nullptr)
++      {
++        aKeep[0] = aRising ? std::min(aKeep[0], cmin) : std::max(aKeep[0], cmax);
++      }
++      if (GivenEnd != nullptr)
++      {
++        aKeep[1] = aRising ? std::max(aKeep[1], cmax) : std::min(aKeep[1], cmin);
++      }
++    }
+     if (!ChFi3d_KeepCutInPiece(Ps,
+                                Cc,
+                                Pc,
+                                S,
+                                BRep_Tool::Surface(BF),
+                                aCoord,
+-                               Par[0](aCoord),
+-                               Par[1](aCoord),
++                               aKeep[0],
++                               aKeep[1],
+                                10. * tol3d,
+                                tolreached))
+     {
+@@ -17468,6 +17493,249 @@ bool ChFi3d_Builder::ChamferEndPastTurnStop(const occ::handle<ChFiDS_Stripe>& St
    return true;
  }
  
++// (Here, not with the file's other headers: the port's later patches add
++// theirs there.)
++#include <Geom_BezierCurve.hxx>
++#include <GeomConvert_BSplineCurveToBezierCurve.hxx>
++
 +//=======================================================================
 +// function : ChFi3d_RunOnSurface
 +// purpose  : The surface a walk runs on over past the edges of face N
 +//            (WalkedCutToEnd: N's surface unbounded) where N is an
 +//            extrusion whose basis curve ends at an edge J of N across
 +//            which a plane N2 (neither Fo nor B) goes on tangentially to N:
-+//            a side wall bending into a flat stretch along the spine. The
-+//            basis curve is continued past J by its tangent line, N's
-+//            parameters kept on N, so that past J the surface is N2's plane
-+//            (checked within Tol) and not the curve's polynomial
-+//            extrapolation, which bends away from N2. Null where N is not
-+//            so.
++//            a side wall bending into a flat stretch along the spine (N2
++//            checked to hold J's tangent line, within Tol). The basis
++//            curve is continued past J by the polynomial of its span at J,
++//            N's parameters kept on N: the curved wall's own surface run on
++//            past J, which bends in from N2's plane as the curve went on
++//            bending, as the bodies stored in reported designs run such a
++//            rounding on (mitcad#1987; N2's plane, 1700 at first, left
++//            the rounding up to 0.45 mm out at the stretch's far end). The
++//            continuation is a span of its own, its domain open (the walk
++//            stops at N's natural bounds), as long as its tangent stays
++//            within 45 degrees of J's. Null where N is not so.
 +//=======================================================================
 +
 +static occ::handle<Geom_Surface> ChFi3d_RunOnSurface(const TopoDS_Face& N,
@@ -136,9 +217,6 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    {
 +      Cs->Segment(after ? u0 : uJ, after ? uJ : u1);
 +    }
-+    // The tangent line past J, as a span of the same degree with its poles
-+    // evenly along the line (the line exactly, C1 at J), the curve's own
-+    // spans unchanged (J's knot of multiplicity p).
 +    const int    p  = Cs->Degree();
 +    const double uE = after ? Cs->LastParameter() : Cs->FirstParameter();
 +    gp_Pnt       PJ;
@@ -148,9 +226,65 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    {
 +      continue;
 +    }
-+    const double dU     = Length / DJ.Magnitude();
-+    const int    nPoles = Cs->NbPoles();
-+    const int    nKnots = Cs->NbKnots();
++    // (N2's plane holds J's tangent line: the stretch goes on flat past J.)
++    const gp_Pln   aPln = aPlane.Plane();
++    const gp_Dir   aDir = anExt->Direction();
++    const gp_Pnt   PJ1  = PJ.Translated(gp_Vec(aDir));
++    const gp_Vec   aTJ  = DJ.Normalized() * (after ? 1. : -1.);
++    bool           onN2 = aPln.Distance(PJ) <= Tol && aPln.Distance(PJ1) <= Tol;
++    for (int i = 1; i <= 4 && onN2; i++)
++    {
++      const gp_Vec aStep = aTJ * (Length * i / 4.);
++      onN2 = aPln.Distance(PJ.Translated(aStep)) <= Tol && aPln.Distance(PJ1.Translated(aStep)) <= Tol;
++    }
++    if (!onN2)
++    {
++      continue;
++    }
++    // Cs's span at J (aSpanLength long) as a Bezier curve on [0, 1],
++    // continued by its polynomial over dU past J: as long as its tangent
++    // stays within 45 degrees of J's and away from zero, at most Length long.
++    GeomConvert_BSplineCurveToBezierCurve aToArcs(Cs);
++    const int                             nArcs = aToArcs.NbArcs();
++    if (nArcs < 1)
++    {
++      continue;
++    }
++    NCollection_Array1<double> anArcKnots(1, nArcs + 1);
++    aToArcs.Knots(anArcKnots);
++    const occ::handle<Geom_BezierCurve> aSpan = aToArcs.Arc(after ? nArcs : 1);
++    const double aSpanLength = after ? anArcKnots(nArcs + 1) - anArcKnots(nArcs) : anArcKnots(2) - anArcKnots(1);
++    if (aSpan.IsNull() || aSpan->Degree() != p || aSpan->IsRational() || aSpanLength <= Precision::PConfusion())
++    {
++      continue;
++    }
++    // (On the segment's [0, 1] the derivative is the curve's times dU.)
++    occ::handle<Geom_BezierCurve> aMore;
++    double                        dU = Length / DJ.Magnitude();
++    for (int k = 0; k < 40; k++)
++    {
++      const occ::handle<Geom_BezierCurve> aTry = occ::down_cast<Geom_BezierCurve>(aSpan->Copy());
++      const double                        aS   = dU / aSpanLength;
++      aTry->Segment(after ? 1. : -aS, after ? 1. + aS : 0.);
++      bool aTurns = false;
++      for (int i = 0; i <= 8 && !aTurns; i++)
++      {
++        const gp_Vec aT = aTry->DN(i / 8., 1);
++        aTurns          = aT.Magnitude() < 0.1 * DJ.Magnitude() * dU || aT.Angle(DJ) > M_PI / 4.;
++      }
++      if (!aTurns)
++      {
++        aMore = aTry;
++        break;
++      }
++      dU *= 0.8;
++    }
++    if (aMore.IsNull())
++    {
++      continue;
++    }
++    const int                  nPoles = Cs->NbPoles();
++    const int                  nKnots = Cs->NbKnots();
 +    NCollection_Array1<gp_Pnt> aPoles(1, nPoles + p);
 +    NCollection_Array1<double> aKnots(1, nKnots + 1);
 +    NCollection_Array1<int>    aMults(1, nKnots + 1);
@@ -162,7 +296,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +      }
 +      for (int i = 1; i <= p; i++)
 +      {
-+        aPoles(nPoles + i) = PJ.Translated(DJ * (dU * i / p));
++        aPoles(nPoles + i) = aMore->Pole(i + 1);
 +      }
 +      for (int i = 1; i <= nKnots; i++)
 +      {
@@ -177,7 +311,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    {
 +      for (int i = 1; i <= p; i++)
 +      {
-+        aPoles(i) = PJ.Translated(DJ * (-dU * (p + 1 - i) / p));
++        aPoles(i) = aMore->Pole(i);
 +      }
 +      for (int i = 1; i <= nPoles; i++)
 +      {
@@ -198,21 +332,24 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +      OCC_CATCH_SIGNALS
 +      aLonger = new Geom_BSplineCurve(aPoles, aKnots, aMults, p);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      continue;
 +    }
-+    const occ::handle<Geom_Surface> aRun = new Geom_SurfaceOfLinearExtrusion(aLonger, anExt->Direction());
-+    // (Past J on N2's plane, and on N as N is.)
-+    const gp_Pln aPln  = aPlane.Plane();
-+    bool         onN2  = true;
-+    for (int i = 1; i <= 4 && onN2; i++)
-+    {
-+      const double u = after ? uE + dU * i / 4. : uE - dU * i / 4.;
-+      onN2           = aPln.Distance(aRun->Value(u, 0.)) <= Tol && aPln.Distance(aRun->Value(u, 1.)) <= Tol;
-+    }
++    // (J's knot gone where it can be: the span at J and its continuation are
++    // one polynomial.)
++    aLonger->RemoveKnot(after ? nKnots : 2, 0, Precision::Confusion());
++    const occ::handle<Geom_Surface> aRun = new Geom_SurfaceOfLinearExtrusion(aLonger, aDir);
++    // (On N as N is, and past J the span's polynomial.)
 +    const double uM = 0.5 * (Cs->FirstParameter() + Cs->LastParameter());
-+    if (!onN2 || aRun->Value(uM, 0.).Distance(anExt->Value(uM, 0.)) > Tol)
++    const double uX = after ? uE + 0.5 * dU : uE - 0.5 * dU;
++    if (aRun->Value(uM, 0.).Distance(anExt->Value(uM, 0.)) > Tol
++        || aRun->Value(uX, 0.).Distance(aMore->Value(0.5)) > Tol)
 +    {
 +      continue;
 +    }
@@ -225,7 +362,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
  //=======================================================================
  // function : WalkedCutToEnd
  // purpose  : As ChFi3d_KPartCutToEnd for a walked blend: the walk stopped
-@@ -17416,10 +17593,9 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17503,10 +17771,9 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
                                                    : Stripe->SetOfSurfData()->Sequence().Last();
    const double                       WP = isFirst ? P->FirstSpineParam() : P->LastSpineParam();
    const double WEnd = isFirst ? Spine->FirstParameter(1) : Spine->LastParameter(Spine->NbEdges());
@@ -239,20 +376,21 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    // The side whose contact leaves its face N across an edge E into B.
    int         ons = 0;
    TopoDS_Face B;
-@@ -17508,8 +17684,35 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17595,12 +17862,54 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    {
      return false;
    }
 -  const occ::handle<Geom_Surface> SN = BRep_Tool::Surface(N);
 -  if (SN.IsNull())
-+  // (N's surface unbounded; past a flat stretch beyond N, that stretch's
-+  // plane, the walk from P's other end: P ran on over the extrapolation,
-+  // 1700.)
++  // (N's surface unbounded; past a flat stretch beyond N, N's surface with
++  // its curve's span at the stretch run on in a span of its own
++  // (ChFi3d_RunOnSurface), the walk from P's other end, 1700.)
 +  const occ::handle<Geom_Surface> SN0 = BRep_Tool::Surface(N);
 +  if (SN0.IsNull())
-+  {
-+    return false;
-+  }
+   {
+     return false;
+   }
+-  TopoDS_Face NF = BRepLib_MakeFace(SN, Precision::Confusion());
 +  TopoDS_Face                     aFlat;
 +  const occ::handle<Geom_Surface> SNRun = ChFi3d_RunOnSurface(
 +    N, Fo, B, myEFMap, 2. * (Spine->LastParameter(Spine->NbEdges()) - Spine->FirstParameter(1)), tolapp3d, aFlat);
@@ -274,10 +412,29 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +  }
 +  const occ::handle<Geom_Surface> SN = SNRun.IsNull() ? SN0 : SNRun;
 +  if (aPastEnd && SNRun.IsNull())
++  {
++    return false;
++  }
++  // (A run-on surface's face bounded in v too, N's v range widened by the
++  // spine's length both ways: a walk that reaches the face's ends stops at
++  // edges with vertices.)
++  TopoDS_Face NF;
++  if (SNRun.IsNull())
++  {
++    NF = BRepLib_MakeFace(SN, Precision::Confusion());
++  }
++  else
++  {
++    double u1 = 0., u2 = 0., v1 = 0., v2 = 0., nu1 = 0., nu2 = 0., nv1 = 0., nv2 = 0.;
++    SN->Bounds(u1, u2, v1, v2);
++    BRepTools::UVBounds(N, nu1, nu2, nv1, nv2);
++    const double aL = Spine->LastParameter(Spine->NbEdges()) - Spine->FirstParameter(1);
++    NF              = BRepLib_MakeFace(SN, u1, u2, nv1 - aL, nv2 + aL, Precision::Confusion());
++  }
+   if (NF.IsNull())
    {
      return false;
-   }
-@@ -17584,13 +17787,16 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17676,13 +17985,16 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
      X->ChangeIndexOfS2(DStr.AddShape(ons == 1 ? Fo : N));
      // The walk ends where the other contact reaches Eq.
      const ChFiDS_CommonPoint& CPq = X->Vertex(isFirst, opp);
@@ -296,7 +453,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
      {
        return false;
      }
-@@ -17604,7 +17810,7 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17696,7 +18008,7 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    // crossing, on the surface of the piece cut from the rest, one face with
    // it, 1540.)
    occ::handle<ChFiDS_SurfData> X;
@@ -305,7 +462,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    double tN     = 0.;
    if (aWhole)
    {
-@@ -17615,14 +17821,93 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17707,14 +18019,93 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
               && (isFirst ? X->Interference(ons).LastParameter() - tN : tN - X->Interference(ons).FirstParameter())
                    > Precision::PConfusion();
    }
@@ -400,7 +557,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    TopoDS_Face BF = B, FoF = Fo;
    BF.Orientation(TopAbs_FORWARD);
    FoF.Orientation(TopAbs_FORWARD);
-@@ -17633,16 +17918,31 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17725,16 +18116,31 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    {
      return false;
    }
@@ -436,7 +593,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    {
      const TopAbs_Orientation OinB  = edgeInFace(Eq, BF).Orientation();
      const TopAbs_Orientation OinFo = edgeInFace(Eq, FoF).Orientation();
-@@ -17685,14 +17985,14 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17777,14 +18183,14 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
                               ons,
                               N,
                               B,
@@ -454,7 +611,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
                               false,
                               false,
                               !aTight.IsNull() && aTight.IsSame(B));
-@@ -17729,12 +18029,75 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17826,12 +18232,75 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
        CPs.SetParameter(X->Interference(s).Parameter(!isFirst));
        X->ChangeVertex(!isFirst, s) = CPs;
      }
@@ -532,7 +689,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    if (isFirst)
    {
      Stripe->ChangeSetOfSurfData()->Prepend(G);
-@@ -23836,10 +24199,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -23998,10 +24467,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
        if (!aPointEnd(isFirst) && !WalkedCutToEnd(Stripe, isFirst) && !RolledCutToEnd(Stripe, isFirst)
            && !WalkedOnSameToEndFace(Stripe, isFirst) && !RolledEndCutByEndFace(Stripe, isFirst))
        {

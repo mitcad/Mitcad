@@ -5,6 +5,12 @@ Mitcad patch (mitcad#343): roundings of both edges of a thread's crest
 narrower than the roundings, one blend between the two flanks cut by the
 faces at the thread's ends.
 
+Failures (mitcad#1986): the surface continued as a screw motion
+(ChFi3d_ScrewContinued) fails with OCCT's reports of a computation it
+cannot make (ChFi3d_IsComputationFailure, 0016) where the B-spline is no
+such sweep: the surface is loaded as it is. Any other failure (a broken
+invariant, a signal) is rethrown.
+
 A thread's crest 0.8 wide, both its edges rounded with 0.8: the two
 roundings' contacts on the crest cross each other, and OverlappingStripes
 computes each again overflowing the crest, the ball touching both flanks.
@@ -69,9 +75,8 @@ for an end face met within a turn.
 Test: pending (mitcad#2003): the port test written for this patch does not
 reach its case yet. Existing: geometry/tests/test_fillet_thread_crests.cpp
 (the case: a crest 0.8 wide rounded with 0.8, radius 28).
-
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index b30d669b..3c9e18b0 100644
+index 80d0ddce..4fc65c4d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -374,22 +374,22 @@ static bool contactBeyond(const TopOpeBRepDS_DataStructure&   DStr,
@@ -200,7 +205,7 @@ index b30d669b..3c9e18b0 100644
  // Removes the entries of stripe S from parallel lists of stripes and shapes.
  static void removeEntriesOf(const occ::handle<ChFiDS_Stripe>&             S,
                              NCollection_List<occ::handle<ChFiDS_Stripe>>& Stripes,
-@@ -2267,6 +2352,9 @@ void ChFi3d_Builder::Compute()
+@@ -2285,6 +2370,9 @@ void ChFi3d_Builder::Compute()
    if (done)
    {
      RemoveCoincidentStripes();
@@ -230,7 +235,7 @@ index 6c5162d6..3f1818c4 100644
    //! cannot be made one (their recomputation overflowing F failed): A is
    //! computed again on the faces of its edge, and B rolls on A's contact
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index c8e0eb83..179c0952 100644
+index ede9ebb9..71fefc0d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -70,9 +70,13 @@
@@ -321,7 +326,7 @@ index c8e0eb83..179c0952 100644
      for (int icont = 3; icont >= 1 && !goodext; icont--)
      {
        occ::handle<Geom_BoundedCurve> anExtCurve = aBase;
-@@ -8122,3 +8179,413 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
+@@ -8130,3 +8187,418 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
    }
    return ChFi3d_ConvexEdgeAt(E, Fin, Fbeyond, CP.ParameterOnArc());
  }
@@ -677,8 +682,13 @@ index c8e0eb83..179c0952 100644
 +    }
 +    return aRes;
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return nullptr;
 +  }
 +}
@@ -736,10 +746,10 @@ index c8e0eb83..179c0952 100644
 +  HS.Load(aExt, u0, u1, v0, v1, HS.Trsf());
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 905c8e67..82cdf32a 100644
+index 454d514b..f18da0e3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -604,4 +604,17 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
+@@ -623,4 +623,17 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
                                const ChFiDS_Map&                VFMap,
                                const occ::handle<ChFiDS_Spine>& Sp = occ::handle<ChFiDS_Spine>());
  
@@ -758,7 +768,7 @@ index 905c8e67..82cdf32a 100644
 +
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 1dc74381..03223f4e 100644
+index 0ab224b8..363ebaa0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -1021,6 +1021,9 @@ void ChFi3d_Builder::ConexFaces(const occ::handle<ChFiDS_Spine>&  Spine,
@@ -816,7 +826,7 @@ index 1dc74381..03223f4e 100644
        {
          Pk[k] = uv[k];
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index c4430055..fadf9d19 100644
+index d2ecfaba..6c5e60b1 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 @@ -192,6 +192,78 @@ static bool IsVois(const TopoDS_Edge&                                      E,
@@ -898,7 +908,7 @@ index c4430055..fadf9d19 100644
  static bool IsObst(const ChFiDS_CommonPoint& CP, const TopoDS_Vertex& Vref, const ChFiDS_Map& VEMap)
  {
    if (!CP.IsOnArc())
-@@ -1931,6 +2003,18 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -1982,6 +2054,18 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                                   const bool                              RecOnS1,
                                   const bool                              RecOnS2)
  {
@@ -917,7 +927,7 @@ index c4430055..fadf9d19 100644
    // Get offset guide if exists
    occ::handle<ChFiDS_ElSpine> OffsetHGuide;
    if (!Spine.IsNull() && Spine->Mode() == ChFiDS_ConstThroatWithPenetrationChamfer)
-@@ -2305,7 +2389,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2356,7 +2440,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                              Data->ChangeVertexFirstOnS1(),
                              tolapp3d);
        debarc1 = true;
@@ -927,7 +937,7 @@ index c4430055..fadf9d19 100644
        {
          // It is checked if there is not an obstacle.
          debcas1 = true;
-@@ -2338,7 +2423,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2389,7 +2474,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                              Data->ChangeVertexFirstOnS2(),
                              tolapp3d);
        debarc2 = true;
@@ -937,7 +947,7 @@ index c4430055..fadf9d19 100644
        {
          // It is checked if it is not an obstacle.
          debcas2 = true;
-@@ -2415,7 +2501,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2466,7 +2552,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                                  Data->ChangeVertexFirstOnS1(),
                                  tolapp3d);
            debarc1 = true;
@@ -947,7 +957,7 @@ index c4430055..fadf9d19 100644
            {
              // It is checked if it is not an obstacle.
              debcas1 = true;
-@@ -2451,7 +2538,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2502,7 +2589,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                                  Data->ChangeVertexFirstOnS2(),
                                  tolapp3d);
            debarc2 = true;
@@ -957,7 +967,7 @@ index c4430055..fadf9d19 100644
            {
              // It is checked if it is not an obstacle.
              debcas2 = true;
-@@ -2501,7 +2589,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2552,7 +2640,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                              Data->ChangeVertexLastOnS1(),
                              tolapp3d);
        finarc1 = true;
@@ -967,7 +977,7 @@ index c4430055..fadf9d19 100644
        {
          // It is checked if it is not an obstacle.
          fincas1 = true;
-@@ -2527,7 +2616,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2578,7 +2667,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                              Data->ChangeVertexLastOnS2(),
                              tolapp3d);
        finarc2 = true;
@@ -977,7 +987,7 @@ index c4430055..fadf9d19 100644
        {
          // It is checked if it is not an obstacle.
          fincas2 = true;
-@@ -2597,7 +2687,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2648,7 +2738,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                                  Data->ChangeVertexLastOnS1(),
                                  tolapp3d);
            finarc1 = true;
@@ -987,7 +997,7 @@ index c4430055..fadf9d19 100644
            {
              // It is checked if it is not an obstacle.
              fincas1 = true;
-@@ -2628,7 +2719,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2679,7 +2770,8 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                                  Data->ChangeVertexLastOnS2(),
                                  tolapp3d);
            finarc2 = true;

@@ -285,9 +285,10 @@ with several), or **Assistants unavailable** with a struck-through dot
 (the window cannot accept them, for example when MitCad was started with
 `--no-mcp`). When you have blocked an assistant in its menu, the indicator
 says so as well: **No assistant · 1 blocked** or **1 connected · 1
-blocked**. It is in the title row of the Floating layout, in the status
-bar of the Docked layout. In the title bar row of Windows and Linux it is
-a small plug icon with the dot on its corner and a ˅; the text is in its
+blocked**. On Windows and Linux it is in the top bar's title row in
+both layouts, on a Mac in the title row of the Floating layout and in the
+status bar of the Docked layout. In the title bar row of Windows and
+Linux it is a small plug icon with the dot on its corner and a ˅; the text is in its
 tooltip and at the top of its menu.
 Its tooltip gives the details, with the window's instance id and port.
 
@@ -713,9 +714,15 @@ MitCad arranges the window:
 
 - **Floating** (the default): the panels are cards over a full-window
   3D view.
-- **Docked**: the panels are in docks around the 3D view. A right-click
-  on a dock's title or on the toolbar opens a menu that shows and hides
-  the panels; the toolbar with its tabs always stays.
+- **Docked**: the panels are in docks around the 3D view. On Windows
+  and Linux the window has the same top bar and the same toolbar panel
+  as the Floating layout: the top bar at the window's top, the toolbar
+  panel under it across the window, and the docks below them. A
+  right-click on a dock's title or on the toolbar opens a menu that shows
+  and hides the panels; the top bar and the toolbar always stay. As in
+  the Floating layout, the workspace selector opens the
+  [Render workspace](#the-render-workspace) and a drawing; there is no
+  Render tab among Design's tabs.
 
 Tools › Preferences has a page for each kind of setting. Refer to
 [Preferences](#preferences).
@@ -732,23 +739,14 @@ The menus are in the menu bar at the top of the screen; **Show the menu
 bar in the window** on the Display page of Settings shows them under
 the title bar too (off by default).
 
-**The menus in the Floating layout (Windows and Linux).** There is no
-menu bar under the window's title bar: the title bar row has the menus.
+**The menus (Windows and Linux, both layouts).** There is no menu bar
+under the window's title bar: the title bar row has the menus.
 **File** opens the File menu, **?** the Help menu, and the ☰ button at
 the row's left has all the menus (File, Edit, View, Tools, Window and
 Help) as submenus. Alt with a menu's underlined letter opens it there
 (Alt+F File, Alt+E Edit, Alt+V View, Alt+T Tools, Alt+H Help), and Alt
 alone opens the ☰ menu; the arrow keys and Enter go on from there. The
 menus' shortcuts work as always.
-
-**Hide the menu bar (Docked layout).** Clear **Show the menu bar** on
-the Display page of Preferences to give the view the menu bar's height.
-The menus are then under the ☰ button at the start of the toolbar,
-before Undo and Redo. Press and release Alt to show the menu bar and go
-to its File menu, or press Alt with a menu's underlined letter (Alt+F
-for File). The menu bar goes away again when its menu closes or when you
-press Esc. The menus' shortcuts work while the bar is hidden. Select
-**Show the menu bar** to show it again.
 
 In the Floating layout nothing is above the 3D view on Windows and Linux
 (on macOS the system's menu bar is at the top of the screen). On Windows
@@ -759,7 +757,8 @@ its controls each have a small box of their own, and a click, a drag or
 the wheel between and beside them works in the view.
 
 The other cards always start below the bar and the floating rows, at
-any window size. The parts of the Floating layout are:
+any window size. The parts of the Floating layout are (the Docked layout
+of Windows and Linux has the same title bar row and toolbar panel):
 
 - **Title bar row (Windows and Linux):** the window's one top row, a flat
   bar. At the left the ☰ of the menus, **Home** (shows the Start page),
@@ -792,9 +791,9 @@ any window size. The parts of the Floating layout are:
   each as a submenu of its commands. The Start page has no workspace: the
   toolbar panel is hidden over it, and a click on the design's tab in the
   title bar row goes back to the design.
-- **Workspaces (Windows and Linux):** a click on the workspace selector
-  lists the workspaces, each with a line on what it is for and its tabs;
-  click one to switch (or use the arrow keys and Enter). **Design** has
+- **Workspaces (Windows and Linux; the Docked layout everywhere):** a
+  click on the workspace selector lists the workspaces, each with a line
+  on what it is for and its tabs; click one to switch (or use the arrow keys and Enter). **Design** has
   the Solid, Surface, Sheet Metal, Build and Manage tabs. **Make** has a
   tab for each manufacturing method, **3D Print · Laser · CNC**, each
   with materials, annotations and inspection; it opens on 3D Print, or on
@@ -870,9 +869,31 @@ any window size. The parts of the Floating layout are:
   in the design window it closes the design. The background can follow
   the system's appearance.
 
+In the Docked layout of Windows and Linux the top of the window is the
+Floating layout's: the title bar row (☰, Home, File, Save, Undo, Redo, the
+design tabs; at the right Boost development, the project and assistant
+indicators, the chat, Preferences, ? and the version), and under it the
+toolbar panel across the window, with the workspace selector, the tabs
+and the command search. Home shows the Start page, the toolbar panel is
+hidden over it, and a click on the design's tab goes back to the design,
+also with only one design open. On a Mac, where the menus are in the
+system's menu bar, the Docked toolbar starts with the same **workspace
+selector**; its row of tabs starts with the Start tab and has the
+quick-access group, with Undo and Redo first in it, and the command search
+field at its right end. Over the Start page it keeps only its row of tabs
+(with one design) or is hidden (with two or more, whose tabs lead back).
+
+On a Mac the Docked toolbar's tabs stand in one row. When the window is
+too narrow for all of them, the **Boost development** button first
+shrinks to its rocket and its × (point at it for its name), and then the
+last tabs fold into a **»** after the tabs in sight: click it and choose
+the tab. Start and the tab you are on always stay in sight.
+
 In the Docked layout the panels are docks: the Browser, the Timeline, the
 Command panel and, when shown, the Projects, Configuration and Chat
-panels. To hide a dock, click the × on its title row (it shows while the
+panels. The Render workspace's own docks (its list, its settings and the
+Shots bar) show only while that workspace is open, and only then are
+they in the panels' menu. To hide a dock, click the × on its title row (it shows while the
 pointer is over the row), or right-click a dock's title row and clear the
 dock's name in the menu. To show it again, choose it in the View menu's
 Panels submenu: View › Panels › Browser, Timeline, Projects, Command or
@@ -881,6 +902,18 @@ and cannot be hidden. The Command panel grows with the Text size and
 Icon size, so the Sketch Palette fits it; to make it wider, drag its left
 edge. MitCad remembers the width for the next start. In the Floating
 layout the command card grows with the sizes the same way.
+
+MitCad also remembers how you arranged the docks: a dock dragged to
+another edge of the window, a dock made wider or taller, and a dock
+floated as a window of its own, also on another monitor, are where you
+left them at the next start. A floating panel whose monitor is no longer
+connected, or that would lie partly off its screen, goes back into its
+dock instead; the panels on the monitors still connected stay where they
+are. A new window (Window › New Window, or a design opened in a window or
+tab of its own) gets the same arrangement with every panel docked, so that
+two designs' floating panels never lie on top of each other. To go back
+to the default arrangement, choose Preferences › Display › Restore
+Default Layout: it puts the docks of every window back at once.
 
 ### Messages and their history
 
@@ -925,17 +958,19 @@ same history.
 The quick-access group holds one-click buttons for the commands you use
 most. In the Floating layout it is in the title bar row, at the right
 end of the free space after the design tabs, just before the project
-indicator or Preferences. On Windows and Linux the bar's own Save, **+**
-(New Design) and Preferences stand for those commands there: the group
-does not show them a second time. On a Mac it is right after the workspace
-tabs. In the Docked layout it is in the toolbar's row of tabs,
-after the tabs. It stays on every tab, in sketch mode and while a drawing is open.
+indicator or Preferences. The Docked layout of Windows and Linux has it
+at the same place of the same bar. On Windows and Linux the bar's own
+Save and Preferences stand for those commands there: the group does not
+show them a second time. On a Mac it is right after the workspace tabs,
+and in the Docked layout at the right end of the toolbar's row of tabs,
+before the command search field, with Undo and Redo first in it. It stays
+on every tab, in sketch mode and while a drawing is open.
 
-In the Floating layout of Windows and Linux the group is empty at first
-and is not shown at all, its ⋮ neither: the bar already has the File
-menu, Save, **+** and Preferences. It appears as soon as you add a
-command to it, and goes away again when you take the last one out. In
-the Docked layout and on a Mac the group has New Design…, Open…, Save,
+On Windows and Linux (both layouts) the group is empty at first and is
+not shown at all, its ⋮ neither: the bar already has the File menu, Save
+and Preferences. It appears as soon as you add a command to it, and goes
+away again when you take the last one out. On a Mac the group has New
+Design…, Open…, Save,
 Print…, Design Properties… and Preferences… (MitCad › Settings… on
 macOS) by default, when your version of MitCad has them. If you have
 chosen commands before, you keep them in every layout. The tooltip of a
@@ -953,8 +988,8 @@ menus, and then the commands you added from the toolbar or the search.
 Each command with a check mark is shown in the group: those of the menus
 in the order of the menus, the others after them in the order you added
 them. Click a command to add it to the group or to remove it. **Reset to
-Default** brings back the default set (in the Floating layout of Windows
-and Linux, an empty group). MitCad keeps your choice for the next start.
+Default** brings back the default set (on Windows and Linux an empty
+group). MitCad keeps your choice for the next start.
 
 When the title bar row has no room for all of the group's buttons (on a
 Mac: for the group and the whole name of the design), the group shows
@@ -964,6 +999,7 @@ If you do not need the group, you can hide it. Choose **Hide Quick-Access
 Toolbar** at the end of the group's menu, or clear **Show quick-access
 toolbar** in Tools › Preferences › Display (MitCad › Settings… › Display
 on macOS). The group, its ⋮ too, goes away at once, and the row closes up.
+In the Docked layout of a Mac, Undo and Redo stay.
 To show it again, select **Show quick-access toolbar**. The group comes
 back with the commands you chose before. To find the setting, you can also
 search for "quick access".
@@ -972,8 +1008,9 @@ search for "quick access".
 
 MitCad is free. If you want to support its development, click **Boost
 development**, the pink button with a rocket at the right of the top
-bar (left of the project indicator). In the Docked layout it is at the
-right end of the toolbar's row of tabs. It opens the MitCad page on
+bar (left of the project indicator), in both layouts on Windows and
+Linux. In the Docked layout of a Mac it is at the right of the toolbar's
+row of tabs, after the quick-access group. It opens the MitCad page on
 Ko-fi in your web browser.
 
 The small **×** on the button hides it. To show it again, select **Show
@@ -1463,6 +1500,21 @@ edge. The faces and edges that the command itself makes, such as a
 fillet's rounding, cannot be picked. A click on one tells you so in the
 status bar, and that holding Ctrl (Cmd on macOS) shows the part's own
 faces and edges to pick from.
+
+**See what is picked.** A selection button shows how many items are
+picked (`3 selected`), and its tooltip names them: `Body3`, `Face of
+Body1`, the first ten and then how many more. An input that takes
+several items, such as Pattern on Path's Objects or a Fillet's Edges,
+has a small arrow (▸) between the button and its ✕. Click it to list
+the picks under the button, one row each (`1. Body1`, `2. Body2`).
+Point at a row to highlight that pick in the view, in the color the
+view uses for what the pointer is over, so that you can tell it apart
+from the other picks of the input. To take one pick out, click its row
+and then the ✕ beside the list. The arrow opens or closes the lists of
+every panel at once, and MitCad remembers your choice: once you open
+the list, every command shows its picks so until you close it again. A
+pick that is gone from the design opens the list by itself, marked
+`(missing)`.
 
 A value field takes an expression with units (`20`, `2 in`, `d1 * 2`).
 The value of an expression, or an error, shows below the field; a
@@ -1986,11 +2038,11 @@ for each manufacturing method: **3D Print**, **Laser** and **CNC**. Each
 tab starts with its method's groups and ends with the same **Materials**,
 **Annotate** and **Inspect** groups, so that the materials and the
 annotations a workshop reads are at hand whichever way the part is made.
-In the Floating layout of Windows and Linux choose **Make** in the
-workspace selector of the toolbar panel ([Layouts](#layouts)); its entry
-reads *3D Print · Laser · CNC*. It opens on 3D Print, or on the Make tab
-you used last; **Design** goes back to modeling. In the Docked layout the
-three tabs stand after Build. Work through a tab from left to right:
+Choose **Make** in the workspace selector: the toolbar panel's in the
+Floating layout of Windows and Linux, the one at the left of the tab row
+in the Docked layout ([Layouts](#layouts)); its entry reads *3D Print ·
+Laser · CNC*. It opens on 3D Print, or on the Make tab you used last;
+**Design** goes back to modeling. Work through a tab from left to right:
 prepare the part, choose its material, annotate, then send it to the
 machine.
 
@@ -8837,13 +8889,16 @@ dialog shows the image as it refines, the samples and the time left.
 
 ### The Render workspace
 
-The **Render** workspace (Windows and Linux: choose **Render** in the
-workspace selector of the toolbar panel) is where the images of the design
-are made. Its four stages, **1 Look › 2 Light › 3 Frame ›
+The **Render** workspace is where the images of the design are made.
+Choose **Render** in the workspace selector: the toolbar panel's on
+Windows and Linux, in both layouts, and on a Mac the one at the toolbar's
+left in the Docked layout ([Layouts](#layouts)). There is no Render tab
+among Design's tabs. Its four stages, **1 Look › 2 Light › 3 Frame ›
 4 Output**, are the tabs of the toolbar while it is chosen, in the order
 of the work, and
-**Render** and **Cancel** are at the right of that row, beside the search
-field. Under the stages the actions are groups of buttons as on the
+**Render** and **Cancel** are at the right of that row (beside the search
+field in the toolbar panel). Choose another workspace in the selector,
+Design for example, to leave it. Under the stages the actions are groups of buttons as on the
 other tabs of the toolbar, each button with its name under it: the
 **Live** group first, then the groups of the stage shown. Click the name
 of a group (with ˅) to see all its commands in a menu.
@@ -8856,7 +8911,10 @@ settings, and choosing something in a list never takes you to another
 stage. Each panel has one title: at the left the list's (**Appearances**,
 **Lights**, **Shots**, **Shots to Render**), at the right what you chose
 (the picked body's look, the environment or a light, a shot, the output).
-Its parts are headings that you click to fold them. The panels come back
+Its parts are headings that you click to fold them. In the Docked layout
+these panels are docks (the list at the left, the settings at the right,
+the Shots bar at the bottom) that you can move as the others; they show
+only while the workspace is open. The panels come back
 when you choose another workspace.
 
 The view shows the rendered view while the workspace is open. It refines
@@ -8871,9 +8929,9 @@ view shows again as it did before.
 the view with **Body**, **Face** or **Component** in the **Pick** group
 and pick it: the settings at the right name it and show its
 appearance. Then click an appearance in the **Appearances** library at
-the left to give it that one. The library has a search field, the tabs **In Design** (the
-appearances the design uses or keeps), **Library**, **Recent** and ★
-(the favorites), and filters such as Metal, Plastic, Paint and Glass. A right-click on an appearance adds it to
+the left to give it that one. The library has a search field, a choice
+of which appearances it lists (**In Design**: the appearances the design
+uses or keeps; **Library**; **Recent**; **Favorites**), and filters such as Metal, Plastic, Paint and Glass. A right-click on an appearance adds it to
 the favorites or removes it. **Paint** (in the **Look** group) gives the
 chosen appearance to each body, face or component that you click;
 **Pick Up** takes the appearance
@@ -11939,9 +11997,11 @@ The **Projects panel** (View › Projects) lists your projects, their
 folders and their designs. It is on the left above the Browser. On a
 Mac, it is a card above the Browser. It is hidden until you show it
 (File › Open from Project opens a project's design without it); MitCad
-then remembers whether you show or hide it. In the Floating layout of
-Windows and Linux it is hidden until you show it in that layout, whatever
-the other layouts remember.
+then remembers whether you show or hide it with View › Projects, its
+close button or the menu of the panels; the window hiding it for a while
+(the Start page, a drawing, the Render workspace) does not count. On
+Windows and Linux both layouts share that choice (the top bar's); a choice
+from before the Docked layout had the top bar is not read.
 
 ```
 github.com/acme/gripper     (cloud) ↑2
@@ -14641,8 +14701,12 @@ to show it. A right-click on a drawing has Open, Rename, Delete and
 Create Drawing…; **+ Drawing** under the list creates a drawing. The
 other cards (the timeline, the Projects card, the Command card) are
 hidden while the drawing is open, and the browser comes back when you
-close it. In the Docked layout the browser stays, so you can open
-another drawing from it.
+close it. In the Docked layout the browser and the Chat panel stay, so
+you can open another drawing from the browser; the Command panel, the
+Timeline, the Projects panel and the Configuration panel are hidden while
+the drawing is open and come back as they were when you close it (one
+you had hidden yourself stays hidden). The workspace selector's
+**Drawing** opens the design's drawing in both layouts.
 **Close Drawing**, the first button of the Drawing tab, shows the 3D
 view again, with Solid and Build back and the tab you opened the drawing
 from shown; only Close Drawing closes the drawing. Esc
@@ -15400,6 +15464,17 @@ Command search finds each page by its name or by what it sets, for example "auto
 "slicer" or "git". The result shows as *Preferences: Cache* and so on.
 The window opens no larger than the screen, and you can resize it.
 
+**Search settings.** The field above the page list has the keyboard when
+Preferences opens. Type a few words: a setting matches when each word is
+in its label, in one of its choices (for example "dark" finds the Theme)
+or in its tooltip, in any order. The page list shows how many settings
+match on each page, for example *Display (3)*, and grays the pages without
+a match; you can still open them. The matching settings are highlighted,
+and a tab with a match is marked. Return goes to the first match, Esc
+clears the field, and Down goes to the page list. The words stay while
+Preferences is open. Chosen from Command search, *Preferences: General*
+found by "temperature" opens with that word in the field.
+
 On macOS, the same pages are in the **Settings** window
 (MitCad › Settings, Cmd+,). Changes apply at once and are saved
 automatically. There is no OK. After each change the note *Changes are
@@ -15413,7 +15488,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube**, **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Show the menu bar** (Windows and Linux), **Browser background** (with **Rows at most**), **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube**, **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Browser background** (with **Rows at most**), **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |

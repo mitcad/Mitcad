@@ -43,8 +43,19 @@ two-stripe corner failed there ("No intersection pc pc").
   orients their curves from their other side, their faces by the
   orientation found against the support).
 
+Test: geometry/tests/test_fillet_top_chains.cpp, test_inner_arm_ends
+(ctest geometry.fillet_top_chains): on the stored case
+`fillet-wall-run-on`, both inner arm ends built together, valid, the
+ride's ends on the plate at the foot's end and on the top's prolonged
+edge. Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
+Failures (mitcad#1986): the guide's interpolation and the walk onto the
+corner fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): the end does not ride on and is left
+as before. Any other failure (a broken invariant, a signal) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 04c90262..41ebe0fd 100644
+index de923c1e..a559bd68 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -19,6 +19,11 @@
@@ -59,7 +70,7 @@ index 04c90262..41ebe0fd 100644
  #include <BRepLib.hxx>
  #include <BRepLib_MakeEdge.hxx>
  #include <BRepLib_MakeFace.hxx>
-@@ -4061,6 +4066,895 @@ bool ChFi3d_Builder::RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
+@@ -4088,6 +4093,905 @@ bool ChFi3d_Builder::RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
    return true;
  }
  
@@ -339,8 +350,13 @@ index 04c90262..41ebe0fd 100644
 +    OCC_CATCH_SIGNALS
 +    anInterp.Perform();
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return occ::handle<ChFiDS_ElSpine>();
 +  }
 +  if (!anInterp.IsDone())
@@ -420,8 +436,13 @@ index 04c90262..41ebe0fd 100644
 +      aDone = CompleteData(Data, func, aLin, S1, S2, o1, Gd1, Gd2, Gf1, Gf2);
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    aDone = false;
 +  }
 +  Last = aForward ? aLast : aFirst;
@@ -955,7 +976,7 @@ index 04c90262..41ebe0fd 100644
  // Whether the contacts of stripes A and B on a face they share cross each
  // other twice inside both (the face narrowing between their edges to less
  // than the two roundings' width, part of the way): the SurfData of each
-@@ -7024,14 +7918,14 @@ void ChFi3d_Builder::Compute()
+@@ -7116,14 +8020,14 @@ void ChFi3d_Builder::Compute()
      NCollection_List<occ::handle<ChFiDS_Stripe>> aFilOrder;
      for (itel.Initialize(myListStripe); itel.More(); itel.Next())
      {
@@ -972,7 +993,7 @@ index 04c90262..41ebe0fd 100644
        {
          aFilOrder.Append(itel.Value());
        }
-@@ -7203,6 +8097,7 @@ void ChFi3d_Builder::Compute()
+@@ -7300,6 +8204,7 @@ void ChFi3d_Builder::Compute()
      if (done)
      {
        turnRidesAgainst(DStr, myRideStripes);
@@ -980,7 +1001,7 @@ index 04c90262..41ebe0fd 100644
        // (Roundings that consume the face between them meet where their
        // contacts end.)
        joinEndsAlongContacts(DStr, myListStripe, 10. * tolapp3d);
-@@ -8323,7 +9218,10 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -8424,7 +9329,10 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
            ChFi3d_InitChron(cl_perform2corner);
  #endif
            myCorner = Corner_Two;
@@ -992,7 +1013,7 @@ index 04c90262..41ebe0fd 100644
  #ifdef OCCT_DEBUG // perf
            ChFi3d_ResultChron(cl_perform2corner, t_perform2corner);
  #endif
-@@ -8418,6 +9316,8 @@ void ChFi3d_Builder::Reset()
+@@ -8519,6 +9427,8 @@ void ChFi3d_Builder::Reset()
    myRideEdges.Clear();
    myRideSupports.Clear();
    myTangentRides.Clear();
@@ -1051,10 +1072,10 @@ index 51b2d0f4..c609e9ab 100644
    //! (RideOnBlendBetweenCrossings), both the rider and the stripe ridden on:
    //! their ends are no ends of the ride.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index bee1d48d..bfe2a260 100644
+index 08bc2cd3..b241298b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -8164,21 +8164,22 @@ static occ::handle<Geom_Surface> ChFi3d_WideSurface(const TopoDS_Face& F);
+@@ -8187,21 +8187,22 @@ static occ::handle<Geom_Surface> ChFi3d_WideSurface(const TopoDS_Face& F);
  //            surfaces are nearly tangent), with its foot on B. Cc runs from
  //            uv1's point to uv2's (uvB1 and uvB2 on B), with Ps its p-curve
  //            on S and Pc its p-curve on B's surface through the feet.

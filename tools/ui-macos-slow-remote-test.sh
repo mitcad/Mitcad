@@ -51,10 +51,10 @@ setup "$1" "$2" > "$UI_OUT/setup.log" 2>&1 || {
   cat "$UI_OUT/setup.log" >&2
   exit 1
 }
-# The Projects panel shown at the start, as for a user who turned it on (in
-# the macOS settings file).
+# The Projects panel shown at the start, as for a user who turned it on in
+# either layout (the Floating top bar has its own choice, mitcad#1990).
 mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
-printf '[projects]\npanel=true\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
+printf '[projects]\npanel=true\npanelTopBar=true\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
 
 # Every connection waits 5 s; a gap of the UI thread over 4 s is logged.
 SLOW_SSH_SECONDS=5 MITCAD_TEST_UI_STALL_MS=4000 MITCAD_TEST_REMOTE_RETRY_SECONDS=2 \

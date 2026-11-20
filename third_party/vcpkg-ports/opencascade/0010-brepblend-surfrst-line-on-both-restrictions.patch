@@ -12,6 +12,14 @@ then jumped, TestArret rejected it and the walk ended short of both arcs.
 The vector of the inverse function Blend_SurfCurvFuncInv is (guide,
 restriction, arc): the restriction's parameter is solinvs(2) and the arc's
 solinvs(3), as the Blend_OnRst1 case and PerformFirstSection use them.
+
+Test: geometry/tests/test_fillet_overflow.cpp (ctest
+geometry.suite.fillet_overflow),
+test_rounding_rolls_on_the_far_edge_of_a_rib: a rib's top edge rounded
+wider than its top, the ball rolling on the far top edge to the rib's
+ends, where its contact on the side and its point on that edge reach the
+end face together. Its failure without the patch is still to be shown in
+the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
 index 7b05208..5f06577 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx

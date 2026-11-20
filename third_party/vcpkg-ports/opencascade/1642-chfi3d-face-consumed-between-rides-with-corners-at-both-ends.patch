@@ -17,6 +17,13 @@ invalid, its volume larger than the input's).
   ride is not a part ride, F's other edges not yet cut are cut at their
   vertices as well.
 
+Test: geometry/tests/test_fillet_ride_corners.cpp (ctest
+geometry.fillet_ride_corners): test_plate_end_face_rims_and_corners, the
+plate's end face rims and the vertical edges at both its ends, the end
+face consumed between the rides (two corner cells within 0.002 of their
+volume), and test_plate_all_edges. Its failure without the patch is still
+to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 412bd3c6..d90f0284 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

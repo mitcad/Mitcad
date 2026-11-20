@@ -49,6 +49,16 @@ one with a single arc across the blend that arc; gaps between arcs, and
 pieces of spines of one edge, are made as they were.
 
 Upstream: new.
+
+Test: geometry/tests/test_chamfer_overflow.cpp,
+test_chamfer_of_a_flange_under_teeth (ctest
+geometry.suite.chamfer_overflow): a flange under a ring of 12 teeth, its rim
+chamfered a little past the teeth's roots and exactly up to them, by
+distance and angle and by two distances, its top circle in one edge or two:
+the volume against the revolved section less the teeth extended down. Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -3764,7 +3764,13 @@

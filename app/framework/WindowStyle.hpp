@@ -77,6 +77,15 @@ WindowColors windowColors(const QPalette& palette = QGuiApplication::palette());
 // semibold and spaced out, preserving the title's spelling.
 QFont panelTitleFont(const QFont& font);
 
+// The band of a selected or highlighted row (docs/ui-conventions.md,
+// States): `band` filled with the accent (actionColor, translucent, fainter
+// in an inactive window) and rounded at the control radius. The caller
+// insets it (panel::kRowInset at the sides, 1 px above and below). The
+// panels' trees (paintPanelRowBand) and the pop-up lists (a drop-down's
+// list, a completer's, Command Search's: IconSizeStyle, mitcad#2084) paint
+// their rows with it.
+void paintRowBand(QPainter* painter, const QRectF& band, bool active = true);
+
 // A selected row of a tree in a panel: a rounded band of the accent colour
 // behind the whole row (paint it before the row, for the first column), and
 // the option to paint the row with, without the style's own selection,
@@ -195,6 +204,7 @@ private:
   QString m_gapsBase;       // the application style's name under it
   QPointer<QWidget> m_host;
   QPointer<QToolBar> m_toolBar;
+  bool m_toolBarSurface = true; // styleToolBar: false for the top bar (mitcad#2082)
   QList<QPointer<QDockWidget>> m_docks;
   QString m_font;          // the family set, or empty
   QString m_applied;       // the colours applied, as logged

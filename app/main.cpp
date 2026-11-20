@@ -528,10 +528,11 @@ int runApplication(int argc, char* argv[]) {
   }
   qInfo().noquote() << "Style:" << mitcad::applicationStyleKey() << "Chrome:"
                     << mitcad::chromeStyleName(mitcad::chromeStyle()) << QStringLiteral("(%1)").arg(chromeSource);
-  // The toolbar panel of the Floating layout on Windows and Linux shows the
-  // buttons' labels under their icons unless the user chose Icons only
-  // (mitcad#1990, the owner's choice for the panel layout).
-  if (!nativeUiRequested && mitcad::chromeStyle() == mitcad::ChromeStyle::Floating && mitcad::floatingTopCards()) {
+  // The toolbar panel on Windows and Linux shows the buttons' labels under
+  // their icons unless the user chose Icons only (mitcad#1990, the owner's
+  // choice for the panel layout), in both layouts (mitcad#2082: the Docked
+  // layout has the same panel).
+  if (!nativeUiRequested && mitcad::floatingTopCards()) {
     mitcad::setDefaultRibbonLabels(mitcad::RibbonLabels::UnderIcons);
   }
   // Windows 10's dark app mode (mitcad#1282): Qt's own style with a dark palette

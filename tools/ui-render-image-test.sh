@@ -11,7 +11,8 @@
 #     keeps working.
 #   - A render of 8 samples finishes in the worker's batch mode; Save writes
 #     the PNG: 320 x 240 pixels with an alpha channel, not empty, and the
-#     block's silhouette in it matches the shaded view's inside the frame.
+#     block's silhouette in it matches the shaded view's inside the frame
+#     (above the version watermark).
 #   - A named view renders too (the frame is hidden for it), and the
 #     settings are saved in the file.
 #
@@ -171,11 +172,19 @@ ui_expect_log "Render image frame hidden" "closing the dialog hides the frame"
 ui_focus_main
 shot shaded
 # The block in the image where the shaded view shows it: inside the frame
-# (off its edge) and below the orientation cube's corner.
+# (off its edge), below the orientation cube's corner and above the
+# version watermark (at the view's lower right, not in the image: with
+# the taller top bar of mitcad#2082 the view is shorter and the frame
+# reaches down beside it).
 read -r _ _ vx vy _ _ <<< "$(grep -o "View area [0-9]* [0-9]* [0-9]* [0-9]*" "$UI_LOG" | tail -1)"
 top=$((fy + 3 > vy + 200 ? fy + 3 : vy + 200))
+bottom=$((fy + fh - 3))
+# The watermark's last place, "box x,y wxh" in the window, unless hidden since.
+wy=$(grep -E "^Version watermark ('.*' at |hidden)" "$UI_LOG" | tail -1 |
+  sed -nE 's/.*: box -?[0-9]+,(-?[0-9]+) [0-9]+x[0-9]+, view .*/\1/p')
+[ -n "$wy" ] && [ $((wy - 4)) -lt "$bottom" ] && bottom=$((wy - 4))
 json=$(python3 "$STATS" --image-silhouette "$WORK/shaded.xwd" $((X + fx + 3)) $((Y + top)) $((fw - 6)) \
-  $((fy + fh - 3 - top)) "$WORK/render.png" $((X + fx)) $((Y + fy)) "$fw" "$fh")
+  $((bottom - top)) "$WORK/render.png" $((X + fx)) $((Y + fy)) "$fw" "$fh")
 echo "     image against the shaded view: $json"
 python3 -c '
 import json, sys

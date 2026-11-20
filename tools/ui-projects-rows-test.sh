@@ -182,6 +182,10 @@ dock=$(grep -o "Projects panel: dock width [0-9]* remembered" "$UI_LOG" | tail -
 echo "ok   the dock is $dock px wide (was $before)"
 ui_key ctrl+q
 expect_exit "exited"
+# Without the docks' kept arrangement (mitcad#2070), which would give the
+# dock its width at quit instead: the remembered width's own restore, as at
+# a start with nothing kept.
+sed -i '/^\[dockState\]/,/^\[/{/^\[dockState\]/d;/^\[/!d}' "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 ui_start_app
 UI_MARK=0 # a new log

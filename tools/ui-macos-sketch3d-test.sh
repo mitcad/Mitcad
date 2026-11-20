@@ -16,7 +16,8 @@
 # Length, Fit Point Spline, Tangent Arc with typed Radius and Arc Length,
 # Center Point Arc, Point, a line end On Face), editing (a dimension typed,
 # driven and removed, a drag, a Length added, Fix, Delete with Dependents),
-# a planar sketch converted to 3D and back, a fillet, the plane-bound
+# a planar sketch converted to 3D and back, Helix and Extrude starting on
+# its region (mitcad#2087), a fillet, the plane-bound
 # Rectangle, Circle, Ellipse, Polygon and Text, and Rib taking a 3D
 # sketch's curves in its sketch plane only.
 # Usage: bash tools/ui-macos-sketch3d-test.sh <app> <mitcad-cli> [out directory]

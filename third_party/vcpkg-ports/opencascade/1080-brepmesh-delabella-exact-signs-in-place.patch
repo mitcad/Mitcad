@@ -32,6 +32,13 @@ nodes compared); Delabella's time on it falls from 1.1 s to 0.49 s.
   Their normal's x and y, in long double, are left out.
 
 Upstream: new.
+
+Test: none, because its only effect is speed: the signs, and so the
+triangulations, are 1070's, which test_nearly_cocircular_planes
+(geometry/io/tests/test_io.cpp, ctest geometry.io) checks, and no test
+bounds Delabella's time (cli.perf_holes_mesh's limit catches only a plane
+gone to BRepMesh's default insertion, not the factor of two this patch
+saves).
 diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
 index 2aa672e9..9535338e 100644
 --- a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp

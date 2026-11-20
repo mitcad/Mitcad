@@ -25,6 +25,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -159,6 +160,34 @@ CameraState cameraOf(const QJsonObject& view) {
   camera.height = view.value(QStringLiteral("height")).toDouble(250.0);
   return camera;
 }
+
+// The library's swatches; empty, its empty text in the viewport's top
+// left corner in the placeholder color (docs/ui-conventions.md, Lists and
+// trees: an empty list says how to fill it), as the Configurations
+// window's lists do.
+class SwatchList : public QListWidget {
+public:
+  void setEmptyText(const QString& text) {
+    if (text != m_emptyText) {
+      m_emptyText = text;
+      viewport()->update();
+    }
+  }
+
+protected:
+  void paintEvent(QPaintEvent* event) override {
+    QListWidget::paintEvent(event);
+    if (count() == 0 && !m_emptyText.isEmpty()) {
+      QPainter painter(viewport());
+      painter.setPen(palette().color(QPalette::PlaceholderText));
+      painter.drawText(viewport()->rect().adjusted(4, 4, -4, -4), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                       m_emptyText);
+    }
+  }
+
+private:
+  QString m_emptyText;
+};
 
 QLabel* hint(const QString& text) {
   auto* label = new QLabel(text);
@@ -296,6 +325,15 @@ QStringList cutFields(const QWidget* panel) {
       const int icon = button->icon().isNull() ? 0 : button->iconSize().width() + 4;
       if (!text.isEmpty() && button->width() < button->fontMetrics().horizontalAdvance(text) + icon + 8) {
         cut << name(button, text);
+      }
+    } else if (const auto* tabs = qobject_cast<const QTabBar*>(widget)) {
+      // Every tab's whole name (mitcad#2083: the Appearances panel's scopes
+      // were cut to "Libr…" at 240 px).
+      for (int i = 0; i < tabs->count(); ++i) {
+        if (tabs->isTabVisible(i) && !tabs->tabText(i).isEmpty() &&
+            tabs->tabRect(i).width() < tabs->fontMetrics().horizontalAdvance(tabs->tabText(i)) + 8) {
+          cut << name(tabs, tabs->tabText(i));
+        }
       }
     } else if (const auto* choice = qobject_cast<const QComboBox*>(widget)) {
       // Room for the arrow beside the entry.
@@ -783,19 +821,13 @@ void RenderWorkspace::buildLook() {
   m_search->setPlaceholderText(tr("Search appearances"));
   m_search->setClearButtonEnabled(true);
   column->addWidget(m_search);
-  // The scopes fit the card's width: Favorites as a star, the names
-  // elided before the bar would make the panel wider.
-  m_scope = new QTabBar;
+  // Which appearances the list shows, as a drop-down choice: four whole
+  // names do not fit a row of tabs at the panel's 240 px (mitcad#2083,
+  // docs/ui-conventions.md "Choices in a narrow card").
+  m_scope = new QComboBox;
   m_scope->setObjectName(QStringLiteral("renderAppearanceScope"));
-  m_scope->setDrawBase(false);
-  m_scope->setExpanding(true);
-  m_scope->setUsesScrollButtons(false);
-  m_scope->setElideMode(Qt::ElideRight);
-  for (const QString& name : {tr("In Design"), tr("Library"), tr("Recent")}) {
-    m_scope->addTab(name);
-  }
-  m_scope->addTab(QStringLiteral("★"));
-  m_scope->setTabToolTip(3, tr("Favorites"));
+  m_scope->setToolTip(tr("Which appearances the list shows"));
+  m_scope->addItems({tr("In Design"), tr("Library"), tr("Recent"), tr("Favorites")});
   m_scope->setCurrentIndex(1);
   column->addWidget(m_scope);
   // The classes as chips in rows that wrap at the card's width.
@@ -815,7 +847,7 @@ void RenderWorkspace::buildLook() {
     filterRow->addWidget(button);
   }
   column->addWidget(filters);
-  m_swatches = new QListWidget;
+  m_swatches = new SwatchList;
   m_swatches->setObjectName(QStringLiteral("renderAppearances"));
   m_swatches->setViewMode(QListView::IconMode);
   m_swatches->setIconSize(QSize(48, 48));
@@ -837,8 +869,8 @@ void RenderWorkspace::buildLook() {
   m_library = page(QStringLiteral("renderLibraryPage"), library);
   m_left->addWidget(m_library);
   connect(m_search, &QLineEdit::textChanged, this, [this] { fillLibrary(); });
-  connect(m_scope, &QTabBar::currentChanged, this, [this](int index) {
-    qDebug().noquote() << QStringLiteral("Render appearances scope %1").arg(index);
+  connect(m_scope, &QComboBox::currentIndexChanged, this, [this](int index) {
+    qInfo().noquote() << QStringLiteral("Render appearances scope %1").arg(index);
     fillLibrary();
   });
   connect(m_filters, &QButtonGroup::idClicked, this, [this](int index) {
@@ -1017,6 +1049,18 @@ void RenderWorkspace::fillLibrary() {
     m_swatches->addItem(item);
     if (a->id == m_chosen) {
       item->setSelected(true);
+    }
+  }
+  // Favorites without any: how to add one, which a right-click does
+  // unseen (mitcad#2083).
+  const QString empty =
+      scope == 3 && favorites.isEmpty() ? tr("No favorites yet. Right-click an appearance to add it to Favorites.")
+                                        : QString();
+  static_cast<SwatchList*>(m_swatches)->setEmptyText(empty);
+  if (empty != m_swatches->property("loggedEmpty").toString()) {
+    m_swatches->setProperty("loggedEmpty", empty);
+    if (!empty.isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Render appearances empty: %1").arg(empty);
     }
   }
   const QString line = QStringLiteral("Render appearances shown: %1").arg(m_swatches->count());
@@ -1612,7 +1656,11 @@ void RenderWorkspace::flattenSections(QWidget* root) {
     // label | field in two columns).
     box->setTitle(QString());
     box->setFlat(true);
-    box->setStyleSheet(QStringLiteral("QGroupBox { border: none; margin: 0px; padding: 0px; }"));
+    // Its text in the theme's colour, set again when the theme changes: a
+    // box with a style sheet keeps the palette it was polished with, so its
+    // labels stayed dark on the Docked layout's dark docks (mitcad#2077).
+    setRoleStyleSheet(box, ColorRole::Text,
+                      QStringLiteral("QGroupBox { border: none; margin: 0px; padding: 0px; color: %1; }"));
     if (QLayout* inside = box->layout()) {
       inside->setContentsMargins(2, 0, 2, 4);
       if (auto* form = qobject_cast<QFormLayout*>(inside)) {
@@ -1733,6 +1781,7 @@ void RenderWorkspace::refreshShots() {
     button->setToolTip(tr("Look through this shot; Render renders it"));
     m_shotGroup->addButton(button);
     m_shotRow->addWidget(button);
+    new PlaceWatcher(button, [this] { logLayout(); });
   }
   m_shotRow->addStretch(1);
   // Frame's and Output's lists, the current shot chosen in both; their
@@ -1989,9 +2038,7 @@ void RenderWorkspace::logLayout() {
   }
   if (m_left->isVisible() && m_left->currentWidget() == m_library) {
     lines << QStringLiteral("Render appearance search at %1").arg(center(m_search));
-    for (int i = 0; i < m_scope->count(); ++i) {
-      lines << QStringLiteral("Render appearance scope %1 at %2").arg(i).arg(at(m_scope, m_scope->tabRect(i).center()));
-    }
+    lines << QStringLiteral("Render appearance scope at %1").arg(center(m_scope));
     for (QAbstractButton* button : m_filters->buttons()) {
       lines << QStringLiteral("Render appearance filter %1 at %2").arg(button->property("filter").toString(), center(button));
     }

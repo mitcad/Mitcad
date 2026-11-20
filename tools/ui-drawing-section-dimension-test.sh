@@ -123,7 +123,7 @@ settled "Drawing view 2"
 
 echo "--- 1. The cut edge beside the hole, alone"
 ui_mark
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 ui_step "point at the bottom's cut edge"   section_hover 15 0
 hover_is "line at " "the cut edge under the pointer"

@@ -42,13 +42,29 @@ one rolling on the edge to be prolonged and found no face at the end.
   (ChFi3d_RolledIntoEndVertex), is put at the vertex within two hundredths
   of the radius, as a vanishing end (0902).
 
+Failures (mitcad#1986): the walk on along the line or circle past the
+spine's end fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the ball cannot roll on so: the
+builder's state is restored and the end is left as before. Any other
+failure (a broken invariant, a signal) is rethrown. So too the walk of a
+step in PerformSetOfSurfOnElSpine (its two PerformSurf calls rolling on an
+edge): it stops at the vertex on the face at the end only where it fails
+with such a report (ChFi3d_IsComputationFailure is tested before
+ChFi3d_RolledToFaceAtEnd, which resets the step's state); any other
+failure is rethrown, not taken for the end of the walk.
+
 Upstream: new.
 
+Test: pending (mitcad#1986): no synthetic body is known that reaches its
+case; it is verified on the stored design's bodies only
+(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded with
+0.86). A regression test needs such a body first.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 05fee9d3..a69bc793 100644
+index 4ae7c8bc..56f95aaa 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3094,6 +3094,40 @@ static occ::handle<TheBSpline> ChFi3d_BSplineEndingAt(const occ::handle<TheCurve
+@@ -3161,6 +3161,40 @@ static occ::handle<TheBSpline> ChFi3d_BSplineEndingAt(const occ::handle<TheCurve
    return aBS;
  }
  
@@ -89,7 +105,7 @@ index 05fee9d3..a69bc793 100644
  //=======================================================================
  // function : ChFi3d_ShrinkVanishingEnd
  // purpose  : A blend between two faces that come tangent at the vertex
-@@ -3311,16 +3345,21 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -3382,16 +3416,21 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
      {
        // (Or within two hundredths where the walk stopped as its contact
        // crossed onto a face tangent to the other face along an edge to the
@@ -139,7 +155,7 @@ index 492764fb..6aa3ca39 100644
    //! blend rolls on an edge prolonged past its vertex, which lies on a face
    //! at the end: built as an OnSame end. Returns false for other corners.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 85d13d89..6fce034c 100644
+index 53e57e25..0ac68491 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -123,6 +123,8 @@
@@ -235,7 +251,7 @@ index 85d13d89..6fce034c 100644
  //=================================================================================================
  
  bool ChFi3d_Builder::ObstacleAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
-@@ -4974,6 +5053,31 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -4987,6 +5066,31 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      NCollection_Sequence<occ::handle<ChFiDS_SurfData>> SeqSD;
      SeqSD.Append(SD);
  
@@ -267,7 +283,7 @@ index 85d13d89..6fce034c 100644
      if (!aBridge.IsEmpty())
      {
        // (The pieces over the gap, cut by the rim, are this step's.)
-@@ -5130,31 +5234,41 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5143,31 +5247,41 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
        }
        else
        {
@@ -324,9 +340,9 @@ index 85d13d89..6fce034c 100644
 +                      RecRst1,
 +                      SoldepCS);
 +        }
-+        catch (Standard_Failure const&)
++        catch (Standard_Failure const& anException)
 +        {
-+          if (!RolledToFaceAtEnd())
++          if (!ChFi3d_IsComputationFailure(anException) || !RolledToFaceAtEnd())
 +          {
 +            throw;
 +          }
@@ -334,7 +350,7 @@ index 85d13d89..6fce034c 100644
        }
        SD->ChangeIndexOfS1(DStr.AddShape(HS1->Face()));
        SD->ChangeIndexOfS2(DStr.AddShape(HS2->Face()));
-@@ -5201,31 +5315,41 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5214,31 +5328,41 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
        }
        else
        {
@@ -391,9 +407,9 @@ index 85d13d89..6fce034c 100644
 +                      RecRst2,
 +                      SoldepCS);
 +        }
-+        catch (Standard_Failure const&)
++        catch (Standard_Failure const& anException)
 +        {
-+          if (!RolledToFaceAtEnd())
++          if (!ChFi3d_IsComputationFailure(anException) || !RolledToFaceAtEnd())
 +          {
 +            throw;
 +          }
@@ -401,7 +417,7 @@ index 85d13d89..6fce034c 100644
        }
        SD->ChangeIndexOfS1(DStr.AddShape(HS1->Face()));
        SD->ChangeIndexOfS2(DStr.AddShape(HS2->Face()));
-@@ -5323,6 +5447,21 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5336,6 +5460,21 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
            intf = 1;
          }
        }
@@ -423,7 +439,7 @@ index 85d13d89..6fce034c 100644
        else
        { // Otherwise invalidation of the stripe.
          Spine->SetErrorStatus(ChFiDS_WalkingFailure);
-@@ -5446,6 +5585,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5459,6 +5598,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      {
        fini =
          ((wl - Last) <= 10. * tolesp || (intl && !(obstacleon1 || obstacleon2))); // General case
@@ -433,7 +449,7 @@ index 85d13d89..6fce034c 100644
        // A walk between two faces that stopped where a contact left its face
        // across an edge before the spine's end, no face at the end beyond it
        // (ChFi3d_ObstacleBeforeEnd): the next piece rolls on that edge.
-@@ -5523,6 +5665,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5536,6 +5678,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
          ref     = Stripe->SetOfSurfData()->Sequence().First();
          forward = false;
          fini    = false;
@@ -443,7 +459,7 @@ index 85d13d89..6fce034c 100644
          First   = Firstsov;
          // (The faces, edges and obstacles now those of the first step, the
          // walk going on from its start: the steps forward changed them.)
-@@ -5547,6 +5692,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5560,6 +5705,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      if (!forward)
      {
        fini     = ((First - wf) <= 10. * tolesp || (intf && !(obstacleon1 || obstacleon2)));
@@ -453,7 +469,7 @@ index 85d13d89..6fce034c 100644
        // (The same at the spine's start.)
        if (fini && intf && !(obstacleon1 || obstacleon2) && StoppedOnObstacleBeforeEnd(ref, true))
        {
-@@ -14260,6 +14408,153 @@ static TopoDS_Face ChFi3d_FaceAtBoth(const ChFiDS_Map&    VFMap,
+@@ -14380,6 +14528,153 @@ static TopoDS_Face ChFi3d_FaceAtBoth(const ChFiDS_Map&    VFMap,
    return TopoDS_Face();
  }
  
@@ -607,7 +623,7 @@ index 85d13d89..6fce034c 100644
  //=======================================================================
  // function : RolledOnProlongedEdge
  // purpose  : A blend P rolling on side opp on a straight edge Er of its
-@@ -14310,6 +14605,17 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
+@@ -14430,6 +14725,17 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
        {
          continue;
        }
@@ -625,7 +641,7 @@ index 85d13d89..6fce034c 100644
        const double tol = 10. * tolesp;
        const gp_Pnt a = S->Vertex(true, s).Point(), b = S->Vertex(false, s).Point();
        const gp_Pnt p1 = BRep_Tool::Pnt(E1), p2 = BRep_Tool::Pnt(E2);
-@@ -14367,13 +14673,17 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
+@@ -14487,13 +14793,17 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
      CEr = occ::down_cast<Geom_TrimmedCurve>(CEr)->BasisCurve();
    }
    occ::handle<ChFiDS_ElSpine> HGuide = Spine->ChangeElSpines().First();
@@ -645,7 +661,7 @@ index 85d13d89..6fce034c 100644
    const occ::handle<Geom_Surface> SB = BRep_Tool::Surface(B);
    const occ::handle<Geom_Surface> SN = BRep_Tool::Surface(N);
    if (SB.IsNull() || SN.IsNull())
-@@ -14426,95 +14736,14 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
+@@ -14546,95 +14856,14 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
    {
      return false;
    }
@@ -745,7 +761,7 @@ index 85d13d89..6fce034c 100644
    }
    occ::handle<BRepAdaptor_Surface>      HSN = new BRepAdaptor_Surface(NF);
    occ::handle<BRepAdaptor_Surface>      HSB = new BRepAdaptor_Surface(BF);
-@@ -14639,6 +14868,305 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
+@@ -14764,6 +14993,310 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
    return true;
  }
  
@@ -961,8 +977,13 @@ index 85d13d89..6fce034c 100644
 +                  tolesp, First, Last, false, true, !isFirst, false, false, false, Soldep);
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = doneSave;
@@ -1051,7 +1072,7 @@ index 85d13d89..6fce034c 100644
  // Whether two surfaces of analytic blends are one surface with one
  // parametrization (copies, as the pieces of one blend have).
  static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, const occ::handle<Geom_Surface>& S2)
-@@ -17395,7 +17923,11 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -17530,7 +18063,11 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
        }
      }
      RolledEndToEndAcrossSeam(Stripe);

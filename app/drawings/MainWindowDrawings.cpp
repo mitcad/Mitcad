@@ -303,6 +303,10 @@ void MainWindow::updateDrawingChrome() {
   }
   // The AppKit frontend reads its tabs from this ribbon (mitcad#1073).
   m_ribbon->setDrawingMode(open, open && m_drawingWorkspace->isCutSheet());
+  // The Docked layout's model docks out of the sheet's way while it is
+  // open, back as they were after (mitcad#2082); the Browser and the Chat
+  // panel stay.
+  updateDrawingDocks(open);
   // The sheet takes the whole view: of the cards over it only the Drawings
   // card stays (mitcad#1008), the design's drawings and their sheets in
   // place of the whole model's Browser, from which another drawing or sheet
@@ -624,13 +628,24 @@ void MainWindow::setRenderWorkspace(bool on) {
   if (m_ribbon == nullptr || m_ribbon->renderTabShown() == on) {
     return;
   }
+  m_ribbon->setRenderMode(on);
+  holdRenderedView(on);
+  // Its stages, panels and live line (mitcad#2013), also when the tab
+  // shown did not change.
+  updateRenderWorkspace(on ? QStringLiteral("RENDER") : m_ribbon->currentTab());
+}
+
+void MainWindow::holdRenderedView(bool on) {
+  if (on == m_renderedViewHeld) {
+    return;
+  }
+  m_renderedViewHeld = on;
   // The rendered view on while the Render workspace is shown; the view
   // mode that was on before it comes back when it is left (the owner,
   // 17.11.2026).
   QAction* rendered = m_registry->action(QStringLiteral("view.rendered"));
   if (on) {
     m_renderedBeforeRender = rendered != nullptr && rendered->isChecked();
-    m_ribbon->setRenderMode(true);
     if (rendered != nullptr && rendered->isEnabled() && !rendered->isChecked()) {
       rendered->trigger();
     }
@@ -638,7 +653,6 @@ void MainWindow::setRenderWorkspace(bool on) {
                               .arg(rendered != nullptr && rendered->isChecked() ? QStringLiteral("on")
                                                                                  : QStringLiteral("not available"));
   } else {
-    m_ribbon->setRenderMode(false);
     if (rendered != nullptr && !m_renderedBeforeRender && rendered->isChecked()) {
       rendered->trigger();
     }
@@ -646,9 +660,6 @@ void MainWindow::setRenderWorkspace(bool on) {
                               .arg(rendered != nullptr && rendered->isChecked() ? QStringLiteral("on")
                                                                                  : QStringLiteral("off"));
   }
-  // Its stages, panels and live line (mitcad#2013), also when the tab
-  // shown did not change.
-  updateRenderWorkspace(on ? QStringLiteral("RENDER") : m_ribbon->currentTab());
 }
 
 void MainWindow::requestWorkspace(const QString& workspace) {

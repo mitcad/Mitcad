@@ -28,7 +28,21 @@ by a chord, the arcs' edges not same parameter with trimmed circles as
 p-curves: FixIntersectingWires returns (nothing to fix); before, it never
 returned. With same-parameter edges it returned before as well.
 
+The condition (mitcad#1986) is general, not the case's: CutEdge's answer
+follows what it did for every edge (a trimmed p-curve that is not a line
+is not cut; a line whose cut keeps its range within the parametric
+confusion is no cut). Nothing in it is a circle, an arc or a chamfer; the
+patch is named after the case only by its symptom.
+
 Upstream: new.
+
+Test: geometry/tests/test_shapefix.cpp, test_arcs_meeting_in_two_wires
+(ctest geometry.suite.shapefix): a planar face of two wires whose arcs of
+one circle meet end to end at a vertex the wires share, at three placements:
+the repair of intersecting wires returns with nothing to repair (it never
+returns without the patch by its documentation). Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx

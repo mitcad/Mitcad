@@ -4,7 +4,8 @@
 # recurring test (its name is not ui-*-test.sh, so no check picks it up).
 # The screen is saved with the group in the Floating layout's title row
 # (at the free part's right end, before the indicators and the search
-# field: mitcad#1989) and the Docked toolbar (after its tabs),
+# field: mitcad#1989) and in the Docked layout's top bar, the same title
+# row (mitcad#2082),
 # on the light and the dark theme (Qt's GTK platform theme,
 # MITCAD_TEST_COLOR_SCHEME), with the default commands and View > Look At
 # added (quickAccess/commands in the settings), on a saved plate whose Save

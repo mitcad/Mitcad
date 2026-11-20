@@ -63,7 +63,33 @@ surface, the surfaces are intersected as before (mitcad#1883):
   came out 1.5e-4 (OCCT's bug28828_16 allows 1e-4; now 8.7e-5). The same
   on a periodic curve's prolongation from the last vertex.
 
+The conditions (mitcad#1986) are geometric, not the case's: at an OnSame
+end, a non-degenerate edge between two faces not tangent along it whose
+own curve, continued from the vertex to the contact's end, lies on both
+surfaces within 10 tolapp3d at the points a quarter, a half and three
+quarters of the way, its p-curves' ends inside each surface's range in
+every direction that is not periodic; the ends taken in one period only on
+an opposite face that goes round its whole period. Any curve and any pair
+of surfaces qualify (a circle on a cone and a cylinder in the case, a
+rod's seam in the second geometry of mitcad#1883), whatever the radius or
+the thread. Only the sampling (three points) and the margin (10 tolapp3d,
+OCCT's own tolerance) are chosen, not taken from the case.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_corner_cases.cpp,
+test_rounding_end_prolonged_across_a_seam (ctest
+geometry.fillet_corner_cases): a post with a rib under a chamfer cone, the
+rib's side rounded with 0.5 along the cone just short of the cone's seam and
+turned away from it, the post a cylinder or a spline: the same cone face,
+and on the cylinder the same volume removed. Other callers:
+geometry/tests/test_fillet_occt_cases.cpp,
+test_meridian_edge_rounded_to_the_pole_of_a_partial_revolve and
+test_throat_chamfer_ends_along_a_circle_keep_their_tolerance (ctest
+geometry.fillet_occt_cases). Its failure without the patch, stated in its
+documentation, is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 4299602d..bc14a062 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

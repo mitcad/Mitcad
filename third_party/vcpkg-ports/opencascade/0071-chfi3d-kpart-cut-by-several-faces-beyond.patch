@@ -36,6 +36,11 @@ rolled on the hole's edge and failed.
   both surfaces (its transition on Bf from the one on the blend, as for
   the contacts); the next piece starts from its own point, which cuts its
   edge.
+
+Test: geometry/tests/test_fillet_overflow.cpp (ctest
+geometry.suite.fillet_overflow),
+test_rounding_over_a_slot_is_cut_by_its_faces: Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index ed0026c0..890ed2a7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -25,6 +25,17 @@ file stored, whose vertices there are tight.
   tolerance (OwnTolerance). The snap of a contact hatched on its face's
   boundary (HatchOnBoundary) keeps its own tolerance.
 
+Test: geometry.port.1730
+(geometry/tests/port/p1730-contact-end-at-a-vertex-within-its-own-tolerance.cpp):
+a cube whose top corner at the far end of the top's end edge has a
+tolerance of 0.7, its edge chamfered and rounded with 0.5: valid, the
+contact's end 0.5 from the near vertex kept on the arc, no vertex left at
+the corner, the exact volume (without the patch the end is drawn to the
+near vertex); the same cube with every vertex tight. Also
+cli.f3d_edit_reported (the reported design's Chamfer3 on the kernel's
+Fillet1 result). Its failure without the patch is still to be shown in the
+port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 index f97d2eb2..d5144d30 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx

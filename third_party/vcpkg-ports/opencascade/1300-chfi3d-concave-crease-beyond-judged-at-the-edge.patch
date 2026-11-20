@@ -18,9 +18,17 @@ now judged at the edge itself, where the function checks the normals for
 its angle already.
 
 On a reported fin's top chamfered over slight creases and rounded with
-0.2: the walk after each arc's torus passes onto the spline's top. Test:
-geometry/tests/test_fillet_fin_top_creases.cpp (with patch 1301; without
-this patch the rounding fails on both contours).
+0.2: the walk after each arc's torus passes onto the spline's top.
+Test: geometry/tests/test_fillet_fin_top_creases.cpp (ctest
+geometry.fillet_fin_top_creases; with patch 1301; without this patch the
+rounding fails on both contours).
+
+The condition (mitcad#1986) is geometric, not the case's: every crease
+0980 judges (two faces at an edge taken for tangent) is classified as the
+faces meet on the edge itself, for any surface type; only the point
+correction, which moves points off a face's parameter bound, is no longer
+used there. Nothing comes from the case: the change has no size of its own
+(the tolerance 1e-5 is the call's as before).
 
 Upstream: new.
 

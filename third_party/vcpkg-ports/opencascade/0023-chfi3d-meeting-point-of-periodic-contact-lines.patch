@@ -16,6 +16,15 @@ the bevel between them (PerformTwoCornerbyInter) gave a self-intersecting
 face. When the vertex is given (Check2dDistance) and the other, non-periodic
 contact line prefers the other point, the point nearest to the vertex is
 kept.
+
+Test:
+geometry/tests/port/p0023-meeting-point-of-periodic-contact-lines.cpp
+(ctest geometry.port.0023), test_roundings_meet_near_a_shallow_corner: a
+plate's outline turning by 10 degrees from a line into an arc of radius
+40, both top edges rounded with 2: valid, no self-interference
+(BOPAlgo_ArgumentAnalyzer), the two roundings' volume. A new test: its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

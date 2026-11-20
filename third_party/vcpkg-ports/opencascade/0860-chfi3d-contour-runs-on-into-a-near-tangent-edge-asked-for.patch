@@ -18,6 +18,15 @@ edge as one at an angle where it is one of the edges asked for
 (StopChainsAtTurns) and its faces meet at more than the angular tolerance;
 without StopChainsAtTurns nothing changes.
 
+Test: geometry/tests/test_fillet_near_tangent_contour.cpp,
+test_contour_runs_on_into_a_near_tangent_edge (ctest
+geometry.fillet_near_tangent_contour): a block whose top meets a wall along
+three edges, the first between faces 0.05 radian apart: the contour started
+from the second edge is one contour of the three, valid, with the volume of
+the one started from the first. Its failure without the patch, stated in its
+documentation, is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
 index e08e7f4..98e87a3 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx

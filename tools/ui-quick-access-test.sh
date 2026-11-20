@@ -6,10 +6,10 @@
 # check-all sources: app/files/MainWindowFiles.cpp app/MainWindow.cpp app/view/ViewController.cpp tools/cli
 # check-all sources: app/framework/Ribbon.cpp app/framework/CommandSearch.cpp
 # The quick-access group (mitcad#1090) through the real UI, in the
-# Floating layout (in the title row at the free part's right end, before
-# the indicators, where the title box was: mitcad#1989) and the Docked one
-# (after the tabs in the toolbar's tab row), on a saved plate that
-# mitcad-cli makes:
+# Floating layout and the Docked one, both with the top bar of Windows and
+# Linux (mitcad#2082: in the title row at the free part's right end, before
+# the indicators, where the title box was: mitcad#1989), on a saved plate
+# that mitcad-cli makes:
 #   1. Floating, fresh settings: the top bar's group has no commands
 #      (mitcad#1990: the bar has its own File menu, Save and
 #      Preferences) and is not shown, its ⋮ neither: the title row has no
@@ -31,16 +31,16 @@
 #      Remove from Quick Access in Measure's row menu takes Measure out,
 #      and Look At unchecked in the group's menu leaves it empty: the group
 #      is hidden again.
-#   2. Docked: the saved empty choice wins over the defaults (none), the
-#      group's ⋮ still there; Reset to Default in its menu brings back the
-#      default set (New, Open, Save, Design Properties, Print,
-#      Preferences); Save disabled, enabled after an edit, disabled once
-#      saved; Look At checked (a right-click on the group): a seventh
-#      button; Preferences hides the group.
+#   2. Docked: the same top bar: the saved empty choice, the group hidden
+#      and no ⋮ in sight, no quick-access group anywhere else (not in the
+#      toolbar's tab row); Save disabled, enabled after an edit, disabled
+#      once saved; Add to Quick Access in Measure's row menu: the group in
+#      the title row ("Docked top bar: ... titleQuickAccess ...") at the
+#      free part's right end; Look At checked (a right-click on the group):
+#      a button more; Preferences hides the group.
 #   3. Floating again: the group hidden at the start (the setting read
-#      back); Preferences shows it with the saved choice of Docked, which
-#      wins over the top bar's empty default: the title row's part is
-#      there.
+#      back); Preferences shows it with the choice saved in Docked: the
+#      title row's part is there.
 # The Windows counterpart is tools/ui-windows-quick-access-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -64,9 +64,8 @@ cat > "$WORK/plate.json" << 'JSON'
 JSON
 "$CLI" run "$WORK/plate.json" --save "$PLATE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
 CONF=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
-# The Docked defaults, in the menus' order; the Floating top bar has none
-# (mitcad#1990).
-DOCKED_DEFAULTS=(file.new_design file.open file.save file.design_properties file.print tools.preferences)
+# The top bar has no default commands in either layout (mitcad#1990,
+# mitcad#2082).
 DEFAULTS=()
 
 # group_line: the group's last "Quick access: " line, without its prefix.
@@ -220,7 +219,8 @@ toggle_preference() {
   ui_expect_new "Quick access toolbar $2" "$1: the group $2 at once"
 }
 
-# title_part with|without: the last "Floating cards" line, waited for, has
+# title_part with|without: the last "Floating cards" or "Docked top bar"
+# line, waited for, has
 # the title row's quick-access part (titleQuickAccess) or has not; the
 # tabs' part is there either way, a title box never (mitcad#1989), and the
 # group's right end lies just left of the indicators or the search field
@@ -228,12 +228,12 @@ toggle_preference() {
 title_part() {
   local line=""
   for _ in $(seq 1 25); do
-    line=$(grep -o "^Floating cards: .*" "$UI_LOG" | tail -1)
+    line=$(grep -oE "^(Floating cards|Docked top bar): .*" "$UI_LOG" | tail -1)
     if [ "$1" = with ] && grep -qF "; titleQuickAccess " <<< "$line"; then break; fi
     if [ "$1" = without ] && ! grep -qF "; titleQuickAccess " <<< "$line"; then break; fi
     sleep 0.2
   done
-  grep -qF "titleTabs " <<< "$line" || ui_fail "no title row tabs among the Floating cards: '$line'"
+  grep -qF "titleTabs " <<< "$line" || ui_fail "no title row tabs in the top bar: '$line'"
   if [ "$1" = with ]; then
     grep -qF "; titleQuickAccess " <<< "$line" || ui_fail "the title row has no quick-access part: '$line'"
     echo "ok   the title row's quick-access part is there"
@@ -319,27 +319,32 @@ expect_empty "floating, emptied"
 grep -q -e "view.look_at" -e "inspect.measure" "$CONF" && ui_fail "floating: removed commands still in the settings ($CONF)"
 ui_stop_app
 
-echo "--- 2. Docked: the saved empty choice, Reset to Default, Save, Look At, hidden"
+echo "--- 2. Docked: the same top bar: the saved empty choice, Save, Measure and Look At, hidden"
 cp "$PLATE" "$WORK/docked.mitcad"
 ui_start_app --chrome=docked --no-native-dialogs --open "$WORK/docked.mitcad"
 ui_expect_log "Opened $WORK/docked.mitcad" "opened"
-ui_expect_log "Quick access: none" "docked: the saved choice (none) wins over the defaults"
-# Docked keeps the empty group's ⋮, to add commands from.
-ui_expect_log "Quick access menu at " "docked: the empty group's ⋮ in sight"
-open_menu
-ui_mark
-ui_menu_choose "Reset to Default"
-ui_expect_new "Quick access reset to the default" "docked: Reset to Default"
-ui_expect_new "Quick access: " "docked: the group made again"
-DEFAULTS=("${DOCKED_DEFAULTS[@]}")
-expect_group "docked: the default group"
+ui_expect_log "Quick access: none" "docked: the saved choice (none)"
+ui_expect_log "Quick access group hidden: no commands" "docked: the empty group hidden, as in the Floating top bar"
+title_part without
+ui_sync
+grep -q "^Quick access menu at " "$UI_LOG" && ui_fail "docked: the empty group's ⋮ is in sight"
+grep -qE "^(Quick access group: flat|Ribbon tab row end: )" "$UI_LOG" && ui_fail "docked: a quick-access group in the toolbar's tab row"
+echo "ok   docked: no quick-access group in the top bar by default, none in the tab row"
 save_steps docked "$WORK/docked.mitcad"
-add_look_at docked right view.look_at
+ui_step "a wide window"                  xdotool windowsize "$UI_WINDOW" 1600 900
+ui_sync
+measure_row_menu "Add to Quick Access"
+ui_expect_new "Quick access added inspect.measure" "docked: Measure added from its row menu"
+ui_expect_new "Quick access group shown: it has commands" "docked: the group shown"
+expect_group "docked: Measure's button" inspect.measure
+title_part with
+add_look_at docked right view.look_at inspect.measure
 toggle_preference docked hidden
+title_part without
 expect_hidden_setting "docked, from Preferences"
 ui_stop_app
 
-echo "--- 3. Floating: a saved choice wins over the top bar's empty default"
+echo "--- 3. Floating: the choice saved in Docked"
 cp "$PLATE" "$WORK/floating2.mitcad"
 ui_start_app --chrome=floating --no-native-dialogs --open "$WORK/floating2.mitcad"
 ui_expect_log "Opened $WORK/floating2.mitcad" "opened"
@@ -347,7 +352,7 @@ ui_expect_log "Quick access toolbar hidden" "floating: the group hidden at the s
 title_part without
 toggle_preference floating shown
 ui_expect_new "Quick access: " "floating: the group made again"
-expect_group "floating: the saved choice read back" view.look_at
+expect_group "floating: the saved choice read back" view.look_at inspect.measure
 title_part with
 ui_stop_app
 

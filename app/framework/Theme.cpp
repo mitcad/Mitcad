@@ -274,6 +274,12 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_ROLE(TimelineMarker, hex(0x2b3a4a), hex(0xc8d0da), Indicator, TimelineMarker),
       MITCAD_SAME(GroupBand, hex(0x7d8c9e), View),
       MITCAD_SAME(ViewInk, hex(0x2b3a4a), View),
+      // The frame of every popup (drop-down lists, menus, completers) under
+      // Qt's portable style (mitcad#2081, IconSizeStyle): at least 3:1 on
+      // the light and dark chrome's surfaces, so that an open list stands
+      // apart from the panel under it, where the style's own frame (the
+      // window's colour darkened) has about 1.2:1 on a dark theme.
+      MITCAD_ROLE(PopupBorder, hex(0x7c828b), hex(0x707580), Indicator, PopupBorder),
       // Object states.
       MITCAD_ROLE(BoundText, hex(0x174ea6), hex(0xd6e4ff), Text, BoundText),
       MITCAD_ROLE(BoundFill, hex(0xdce8fb), hex(0x1e3a66), Fill, BoundText),

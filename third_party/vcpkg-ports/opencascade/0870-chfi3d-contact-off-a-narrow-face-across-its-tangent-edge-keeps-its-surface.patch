@@ -45,14 +45,32 @@ the crossings.
   intersection of the two surfaces leaves gaps; the cut there is the
   contact itself. Its curve and p-curves are interpolated by chord length
   (it leaves the contact like a square root of the spine parameter).
+
+Failures (mitcad#1986): KeepFaceAcrossTangentEdge, its walk over N's
+surface and its cut by C (ChFi3d_SectionCut) fail with OCCT's reports of
+a computation it cannot make (ChFi3d_IsComputationFailure, 0016) where the
+contact does not come back onto N: the stripe is left as walked. Any other
+failure (a broken invariant, a signal) is rethrown.
+
+Test: geometry/tests/test_fillet_tangent_overflow.cpp (ctest
+geometry.fillet_tangent_overflow): a block whose top's edge with an arc
+wall is rounded with 6, the front edge rounded with 3 (its contact on the
+top's flat part, 2 wide in the middle, runs off across the rounding's
+tangent edge and comes back): the rounding's faces within 1e-3 of the
+ball's path along the whole edge. Fails without the patch (0.171 off: the
+ball rolled on over the rim), passes with it (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 202df496..a8b031df 100644
+index 11ed2ab9..8c51a9ac 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2381,6 +2381,15 @@ void ChFi3d_Builder::Compute()
-     {
-       // (The stripes as they are.)
-     }
+@@ -2382,9 +2382,17 @@ void ChFi3d_Builder::Compute()
+     // (Each pair is joined, or left as it was, on its own: mitcad#1986.)
+     JoinOverNarrowFaces();
+     // Stripes whose edges a corner of the solid interrupts, one blend over
+-    // the corner (each pair joined, or left as it was, on its own:
+-    // mitcad#1986).
++    // the corner.
+     JoinAcrossCorners();
 +    // Blends whose contact crossed a tangent edge of a narrow face of their
 +    // edge and came back: on that face's surface, cut by the face beyond.
 +    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itK(myListStripe); itK.More(); itK.Next())
@@ -96,7 +114,7 @@ index 1594f88c..492764fb 100644
    //! plane, at the vertices of a corner of the solid that interrupts their
    //! edges (a face holding both vertices): one blend walked from the one to
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
-index 8373031d..aa3c9867 100644
+index 4c64e0c6..438ebea0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 @@ -8,12 +8,15 @@
@@ -142,7 +160,7 @@ index 8373031d..aa3c9867 100644
  #include <Standard_ErrorHandler.hxx>
  #include <Standard_Failure.hxx>
  #include <TopAbs.hxx>
-@@ -2076,3 +2084,684 @@ void ChFi3d_Builder::PierceBlends(const occ::handle<ChFiDS_Stripe>& St)
+@@ -2111,3 +2119,699 @@ void ChFi3d_Builder::PierceBlends(const occ::handle<ChFiDS_Stripe>& St)
      }
    }
  }
@@ -259,8 +277,13 @@ index 8373031d..aa3c9867 100644
 +        OCC_CATCH_SIGNALS
 +        aKept = KeepFaceAcrossTangentEdge(St, i, j, s, N, Fo, C);
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        aKept = false;
 +      }
 +      if (aKept)
@@ -564,8 +587,13 @@ index 8373031d..aa3c9867 100644
 +    walked = PerformSurf(SeqSD, HG, sp, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First, Last, false,
 +                         false, true, false, false, Soldep, intf, intl);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = aDone;
@@ -698,8 +726,13 @@ index 8373031d..aa3c9867 100644
 +    OCC_CATCH_SIGNALS
 +    aCut = ChFi3d_SectionCut(SX, FiN, FiO, C, a, b, tolapp3d, 0.1 * R, Cc, Ps, Pc, tolCut);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    aCut = false;
 +  }
 +  if (!aCut)

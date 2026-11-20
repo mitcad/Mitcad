@@ -31,8 +31,16 @@ expect-no-log '^Command panel: dock width [0-9]+ restored$'
 # 2. A sketch: the palette whole within the panel.
 mark
 command sketch.create
-expect-log 'Datum xy at ' 10
-click-logged '^Datum xy at '
+expect-log '^Create Sketch: select a plane' 10
+# XY from the browser's Origin folder: at these sizes the top bar leaves the
+# view little room, and the plane's place in it may be under the view's
+# own controls.
+click-logged '^Browser arrow Root/Origin at '
+wait-idle 60
+wheel-logged '^Browser Root/Origin at ' -10
+wait-idle 60
+expect-log '^Browser Root/Origin/XY at ' 10
+click-logged '^Browser Root/Origin/XY at '
 expect-log 'Sketch started on xy' 10
 wait-idle
 expect-log '^Palette rows cut: none [(]' 10

@@ -16,6 +16,13 @@ structure, and the topological build either throws
 (TopOpeBRepDS_DataStructure::Point) or, without range checks, writes out
 of bounds. The vertex now fails with an exception, as other corners that
 cannot be computed do, and the fillet fails cleanly.
+
+Test: pending (mitcad#1986): no test reaches this corner yet. It needs a
+stripe whose last two surface data both meet the face at the end, one with
+a side reduced to a point where its contact leaves its face near the
+spine's end; the case came from a stored model and no synthetic body for
+it is known. Wanted: such a body, the fillet failing (not done) with the
+patch and corrupting the data structure without it.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 85f5818..00c95c2 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

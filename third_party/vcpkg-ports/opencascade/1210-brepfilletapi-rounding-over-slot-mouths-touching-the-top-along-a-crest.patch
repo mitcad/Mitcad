@@ -5,6 +5,14 @@ Fillets: a rounding over the mouths of slots whose rounded ends touch the
 top face along a crest line, built as a construction of its own when the
 corners fail there (mitcad#1204).
 
+Failures (mitcad#1986): the slot-mouth construction fails with OCCT's
+reports of a computation it cannot make (a Standard_Failure thrown as
+such, StdFail_NotDone, Standard_ConstructionError or
+Standard_NotImplemented, as ChFi3d_IsComputationFailure of 0016 tests,
+here the local isComputationFailure) where the case does not hold: the
+fillet's own failure stands. Any other failure (a broken invariant, a
+signal) is rethrown.
+
 The case: a rim of eight arcs (a circle of radius 93.5 between a top plane
 and eight pieces of an outer cylinder, 2.17 high above a rounding of 5),
 rounded with 2.5. At each of the eight vertices between the arcs a fin
@@ -80,7 +88,6 @@ empty both ways with a fuzzy value of 2 micrometres; the material within
 a wedge of 6 degrees round a mouth 0.04 mm3 more than the file's, within
 the arc beside it (39 degrees) 0.19 mm3 more; the rounding of the rim
 takes about 10 s.
-
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
 index 9963c775..3a60d690 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
@@ -171,10 +178,10 @@ index 98e87a3d..61f2eed8 100644
  #endif // _BRepFilletAPI_MakeFillet_HeaderFile
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx
 new file mode 100644
-index 00000000..f49b7c2c
+index 00000000..3ced9597
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx
-@@ -0,0 +1,811 @@
+@@ -0,0 +1,831 @@
 +// MitCad's addition to OCCT 8.0.1, under OCCT's licence:
 +// SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
 +//
@@ -213,6 +220,9 @@ index 00000000..f49b7c2c
 +#include <Precision.hxx>
 +#include <Standard_ErrorHandler.hxx>
 +#include <Standard_Failure.hxx>
++#include <Standard_ConstructionError.hxx>
++#include <Standard_NotImplemented.hxx>
++#include <StdFail_NotDone.hxx>
 +#include <TopExp.hxx>
 +#include <TopExp_Explorer.hxx>
 +#include <TopTools_ShapeMapHasher.hxx>
@@ -223,6 +233,7 @@ index 00000000..f49b7c2c
 +
 +#include <algorithm>
 +#include <cmath>
++#include <typeinfo>
 +
 +namespace
 +{
@@ -453,6 +464,17 @@ index 00000000..f49b7c2c
 +  GeomAPI_ProjectPointOnSurf aProj(aP, theS);
 +  return aProj.NbPoints() > 0 && aProj.LowerDistance() <= theTol;
 +}
++//! OCCT's reports of a computation it cannot make (as ChFi3d_IsComputationFailure, patch
++//! 0016): a Standard_Failure thrown as such, StdFail_NotDone, Standard_ConstructionError or
++//! Standard_NotImplemented; any other failure is a broken invariant or a signal (mitcad#1986).
++static bool isComputationFailure(const Standard_Failure& theFailure)
++{
++  return typeid(theFailure) == typeid(Standard_Failure)
++         || dynamic_cast<const StdFail_NotDone*>(&theFailure) != nullptr
++         || dynamic_cast<const Standard_ConstructionError*>(&theFailure) != nullptr
++         || dynamic_cast<const Standard_NotImplemented*>(&theFailure) != nullptr;
++}
++
 +} // namespace
 +
 +//=================================================================================================
@@ -981,8 +1003,13 @@ index 00000000..f49b7c2c
 +    Done();
 +    return true;
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this construction, mitcad#1986.)
++    if (!isComputationFailure(anException))
++    {
++      throw;
++    }
 +    return false;
 +  }
 +}

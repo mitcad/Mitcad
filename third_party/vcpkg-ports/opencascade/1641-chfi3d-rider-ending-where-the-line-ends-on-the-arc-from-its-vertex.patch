@@ -25,6 +25,14 @@ radiuses").
   end of A's contact on the same arc (theSharedEnd), and A's SurfData is
   split once, at B's other end.
 
+Test: geometry/tests/test_fillet_ride_corners.cpp, test_slab_end_face_pair
+(ctest geometry.fillet_ride_corners): the roof slab's end face's two edges
+along a slope rounded with 1 (and 0.9), the underside's rounding riding on
+the slope's contact line and ending on the line's end on the eave's edge;
+the material taken 14.029 against 14.019 of the roundings' union. Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 60496947..412bd3c6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

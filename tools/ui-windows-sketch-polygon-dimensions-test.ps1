@@ -7,7 +7,10 @@ param(
   [string]$Out = (Join-Path $env:TEMP 'mitcad-ui-windows-polygon-dimensions'),
   [string]$QtBin = '')
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
-Ui-Init $App $Out $QtBin @{}
+# The layout grid at 5 mm, as the fitted sketch had it in a taller view:
+# below the Docked top bar (mitcad#2082) the automatic grid is 10 mm in
+# session 0's window, and the clicks snapped to other points.
+Ui-Init $App $Out $QtBin @{ 'view/gridSpacing' = '5' }
 $work = Join-Path $script:UiOut 'files'
 New-Item -ItemType Directory -Force $work | Out-Null
 $design = Join-Path $work 'polygons.mitcad'

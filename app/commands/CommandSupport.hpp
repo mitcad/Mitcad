@@ -22,6 +22,7 @@
 
 #include "../framework/Command.hpp"
 #include "../framework/Json.hpp"
+#include "ProfilePicks.hpp"
 
 namespace mitcad::cmd {
 
@@ -197,7 +198,7 @@ void loadCount(CommandState& state, const QString& key, const QJsonValue& slot,
 
 // --- The model
 
-void newestProfile(CommandState& state, const CommandContext& context);
+// newestProfile (the profile commands' init): ProfilePicks.hpp.
 bool hasProfiles(const CommandContext& context);
 bool hasBodies(const CommandContext& context);
 // Planar sketches; with `spatial` 3D sketches too (a Pipe's route,

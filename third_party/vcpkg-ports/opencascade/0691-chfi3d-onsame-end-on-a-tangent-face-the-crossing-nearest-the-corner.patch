@@ -25,8 +25,12 @@ point was the other corner's.
   nothing) are computed, and the one nearer the corner's vertex is taken.
   Elsewhere the intersection alone, as before.
 
-Before, the rounding failed at both ends. Test: a disc's recess crossed by
-a rib, its rim rounded (geometry test_fillet_results).
+Before, the rounding failed at both ends.
+Test: geometry/tests/test_fillet_results.cpp,
+test_recess_rim_rounded_up_to_a_rib_across_it (ctest
+geometry.suite.fillet_results): a disc's recess crossed by a rib, its rim
+rounded. Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

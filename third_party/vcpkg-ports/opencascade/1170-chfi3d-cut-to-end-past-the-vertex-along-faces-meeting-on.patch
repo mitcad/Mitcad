@@ -28,10 +28,12 @@ corner's cylinder running on along their vertical edge. The wall grows
 down to the cut and Eq is prolonged down to the end, 1 below the top, as
 in the file: on the stored design the boolean differences with the
 file's body are empty both ways and the change of volume is 0.013 % off
-the file's. Test: geometry/tests/test_fillet_corners.cpp, a block lowered
-on one side of a wall across its rounded corner, against the lower block
-alone rounded on the far side of the wall's plane (failing without the
-patch).
+the file's.
+Test: geometry/tests/test_fillet_corners.cpp,
+test_rounding_round_a_corner_cut_by_a_wall_standing_across_it (ctest
+geometry.suite.fillet_corners): a block lowered on one side of a wall
+across its rounded corner, against the lower block alone rounded on the
+far side of the wall's plane (failing without the patch).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index a0156063..8c40e525 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

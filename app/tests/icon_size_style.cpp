@@ -5,8 +5,11 @@
 // another through its proxy is not multiplied twice), and leaves the other
 // metrics alone; a combo box and a menu in it take their icons at that
 // size; the style keys are found through the proxy; the application's
-// style is wrapped only at an Icon size other than 100 %. The run's Icon
-// size and the application's style are put back afterwards.
+// style is wrapped at every Icon size (since mitcad#2084, which draws the
+// pop-up lists' rows in it, tests/popup_list_rows.cpp; it also draws the
+// popups' border over the portable style, mitcad#2081,
+// tests/popup_border.cpp). The run's Icon size and the application's style
+// are put back afterwards.
 #include "UnitTests.hpp"
 #include "framework/IconSizeStyle.hpp"
 
@@ -125,19 +128,28 @@ void applicationTests() {
   const QString key = portableStyleKey();
   CHECK(!kept.isEmpty());
 
-  // 100 %: the application's style is not wrapped.
+  // 100 %: wrapped too, with the style's own icon sizes.
   detail::iconPercent = 100;
-  CHECK(mitcad::setApplicationStyle(key));
-  CHECK(!mitcad::applicationStyleScalesIcons());
-  CHECK(mitcad::applyIconSizeToApplicationStyle().endsWith(QStringLiteral(", not wrapped (Icon size 100%)")));
-  CHECK(!mitcad::applicationStyleScalesIcons());
+  QApplication::setStyle(key);
+  CHECK(!mitcad::applicationStyleWrapped());
+  CHECK(mitcad::applyIconSizeToApplicationStyle().endsWith(QStringLiteral(" with the style's icons at 100%")));
+  CHECK(mitcad::applicationStyleWrapped());
+  CHECK(mitcad::applicationStyleKey().compare(key, Qt::CaseInsensitive) == 0);
   const int small = QApplication::style()->pixelMetric(QStyle::PM_SmallIconSize);
+  {
+    const std::unique_ptr<QStyle> plain(QStyleFactory::create(key));
+    CHECK(plain != nullptr && small == plain->pixelMetric(QStyle::PM_SmallIconSize));
+  }
+  CHECK(mitcad::setApplicationStyle(key));
+  CHECK(mitcad::applicationStyleWrapped());
 
-  // 150 %: wrapped once, the key still the style's, its icons larger.
+  // 150 % from Qt's own style: wrapped once, the key still the style's,
+  // its icons larger.
   detail::iconPercent = 150;
+  QApplication::setStyle(key);
   const QString applied = mitcad::applyIconSizeToApplicationStyle();
   CHECK(applied.endsWith(QStringLiteral(" with the style's icons at 150%")));
-  CHECK(mitcad::applicationStyleScalesIcons());
+  CHECK(mitcad::applicationStyleWrapped());
   CHECK(mitcad::applicationStyleKey().compare(key, Qt::CaseInsensitive) == 0);
   CHECK(QApplication::style()->pixelMetric(QStyle::PM_SmallIconSize) == times(small, 150));
   const QStyle* wrapped = QApplication::style();
@@ -149,15 +161,15 @@ void applicationTests() {
   // Another style by its key (as Windows 10's app mode swaps them): wrapped
   // too.
   CHECK(mitcad::setApplicationStyle(key));
-  CHECK(mitcad::applicationStyleScalesIcons());
+  CHECK(mitcad::applicationStyleWrapped());
   CHECK(QApplication::style() != wrapped);
   CHECK(!mitcad::setApplicationStyle(QStringLiteral("No Such Style 1561")));
-  CHECK(mitcad::applicationStyleScalesIcons());
+  CHECK(mitcad::applicationStyleWrapped());
 
   // Back as it was.
   detail::iconPercent = 100;
   QApplication::setStyle(kept);
-  CHECK(!mitcad::applicationStyleScalesIcons());
+  CHECK(!mitcad::applicationStyleWrapped());
   detail::iconPercent = icon;
 }
 

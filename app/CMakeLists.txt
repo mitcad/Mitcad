@@ -2725,3 +2725,21 @@ endif()
 # Panelize in the SOLID tab's MODIFY group (mitcad#2005, app/COMMANDS.md
 # "Panelize"): a body's planar faces split off as panels of one thickness.
 target_sources(mitcad PRIVATE commands/PanelizeCommands.cpp)
+
+# A selection input's picks listed by name on demand, each highlighted in
+# the view on hover (mitcad#2064, GitHub mitcad/Mitcad#473): the lists'
+# open state, the picks' words and the hovered row.
+target_sources(mitcad PRIVATE framework/InputPicks.cpp framework/InputPicks.hpp)
+
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451, app/COMMANDS.md "The window's size and place"): their
+# arrangement and the floating docks' frames saved at quit, restored in the
+# first window (a floating dock whose screen is gone back in its dock), a
+# new window's floating docks docked, Restore Default Layout; the test steps
+# dock-float, dock-area and expect-dock-area (TestDriverDocks.cpp).
+target_sources(mitcad PRIVATE MainWindowDocks.cpp framework/DockState.cpp framework/DockState.hpp)
+
+# Preferences' search (mitcad#2074, GitHub mitcad/Mitcad#450): the field
+# above the page list, the index made from the pages' widgets, the counts
+# and the matches painted.
+target_sources(mitcad PRIVATE framework/PreferencesSearch.cpp framework/PreferencesSearch.hpp)

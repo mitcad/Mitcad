@@ -33,6 +33,7 @@
 #include <QContextMenuEvent>
 #include <QDir>
 #include <QDockWidget>
+#include <QEnterEvent>
 #include <QEvent>
 #include <QFile>
 #include <QFileInfo>
@@ -383,6 +384,7 @@ const StepSpec kSpecs[] = {
     {"expect-projects-layout", 1, 1, kIdle},
     {"expect-sketch-finish-layout", 0, 0, kIdle},
     {"expect-ribbon-labels", 1, -1, kIdle},
+    {"expect-ribbon-scroll", 1, 1, kIdle},
     {"workspace", 1, 1, kIdle},
     {"leave-start-page", 0, 0, kInputOfMain},
     {"expect-tree-rename", 1, 1, kIdle},
@@ -401,6 +403,7 @@ const StepSpec kSpecs[] = {
     {"test-dialog-controls", 1, 1, kInputOfTarget},
     {"expect-macos-tool-buttons", 0, 0, kIdle},
     {"expect-command-search", 2, 3, kIdle},
+    {"expect-command-enabled", 2, 2, kIdle},
     {"expect-command-icon", 2, 3, kIdle},
     {"click-parameter", 2, 2, kInputOfTarget},
     {"expect-parameter-cell", 4, 4, kIdle},
@@ -494,6 +497,11 @@ const StepSpec kSpecs[] = {
     {"expect-popup-entries", 1, 1, kPlain},
     {"dock-close", 1, 1, kInputOfMain},
     {"expect-dock", 2, 2, kIdle},
+    // Docks floated and moved, and where they are (mitcad#2070).
+    {"dock-float", 5, 5, kInputOfMain},
+    {"expect-dock-float", 5, 5, kIdle},
+    {"dock-area", 2, 2, kInputOfMain},
+    {"expect-dock-area", 2, 2, kIdle},
     // The colour a widget shows as drawn in its window (mitcad#1245).
     {"expect-widget-background", 3, 3, kIdle},
     // Whether that colour is dark or light (mitcad#1282).
@@ -854,18 +862,23 @@ QWidget* namedWidget(QWidget* scope, const QString& name, bool forInput = false)
 // scrolled into the panel's view first (mitcad#1643: Send to Slicer's rows
 // below the fold were logged where the scrolled panel no longer shows
 // them), and its message ("Panel <name> message at x,y", mitcad#1877: a
-// long Flange panel's refusal below the fold, hovered for its places):
-// its middle now, in `top`'s coordinates; false when the line names no
-// such widget or it is in view, and the logged place stands.
+// long Flange panel's refusal below the fold, hovered for its places) and
+// a table's add button ("Panel <name> add <key> at x,y", mitcad#2082: the
+// Docked top bar leaves the Command panel shorter, and the add buttons of
+// Flange and Sheet Rules lay under its OK row): its middle now, in `top`'s
+// coordinates; false when the line names no such widget or it is in view,
+// and the logged place stands.
 bool revealedPanelPlace(QWidget* main, QWidget* top, const QString& logged, QPoint& at) {
-  static const QRegularExpression line(QStringLiteral("^Panel .* (input|action) (\\S+?)(?:[.](\\d+))? at "));
+  static const QRegularExpression line(QStringLiteral("^Panel .* (input|action|add) (\\S+?)(?:[.](\\d+))? at "));
   static const QRegularExpression message(QStringLiteral("^Panel .* message at "));
   const QRegularExpressionMatch match = line.match(logged);
   const bool isMessage = !match.hasMatch() && message.match(logged).hasMatch();
   if ((!match.hasMatch() && !isMessage) || main == nullptr || top == nullptr) {
     return false;
   }
+  const bool isAdd = !isMessage && match.captured(1) == QStringLiteral("add");
   QWidget* row = isMessage ? namedWidget(main, QStringLiteral("commandMessage"))
+                 : isAdd   ? namedWidget(main, QStringLiteral("add_") + match.captured(2))
                            : namedWidget(main, QStringLiteral("input_") + match.captured(2));
   if (row == nullptr || !row->isVisible()) {
     return false;
@@ -2980,6 +2993,31 @@ void TestDriver::run(const Step& step) {
               }, 6,
               QStringLiteral("no hover position logged"), [this, point] {
       sendMouse(QEvent::MouseMove, *point, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      // The pointer enters what it is over, as a real move does: a widget
+      // that tracks the mouse also when the place lies on a child of it
+      // that does not (mitcad#2082: the middle of a panel's note row lay
+      // on its Edit button, which takes the move without passing it on,
+      // and the row never learnt it was hovered).
+      if (QWidget* top = topWindow(); top != nullptr && !m_grab) {
+        // In the window sendMouse sent the move to (a card over the view).
+        QWidget* window = top;
+        if (GlassCard* card = cardAt(*point)) {
+          window = card;
+        }
+        const QPoint global = top->mapToGlobal(*point);
+        QList<QWidget*> entered;
+        for (QWidget* under = window->childAt(window->mapFromGlobal(global)); under != nullptr && under != window;
+             under = under->parentWidget()) {
+          if (under->hasMouseTracking() && !under->underMouse()) {
+            entered.prepend(under);
+          }
+        }
+        for (QWidget* widget : std::as_const(entered)) {
+          QEnterEvent enter(QPointF(widget->mapFromGlobal(global)), QPointF(window->mapFromGlobal(global)),
+                            QPointF(global));
+          QCoreApplication::sendEvent(widget, &enter);
+        }
+      }
     }, mainWindow);
   } else if (name == QLatin1String("timeline-leave")) {
     auto* strip = m_main->findChild<QWidget*>(QStringLiteral("timelineStrip"));
@@ -3016,14 +3054,21 @@ void TestDriver::run(const Step& step) {
         widget = top->findChild<QWidget*>(a.at(0));
       }
     }
-    auto* list = qobject_cast<QTreeWidget*>(widget);
-    if (list == nullptr) { fail(line, QStringLiteral("no list named '%1'").arg(a.at(0))); return; }
+    // Any list or tree of rows: a choice's rows, a selection input's list
+    // of picks (mitcad#2064).
+    auto* list = qobject_cast<QAbstractItemView*>(widget);
+    if (list == nullptr || list->model() == nullptr) {
+      fail(line, QStringLiteral("no list named '%1'").arg(a.at(0)));
+      return;
+    }
     bool ok = false;
     const int index = a.at(1).toInt(&ok);
-    QTreeWidgetItem* item = ok ? list->topLevelItem(index) : nullptr;
-    if (item == nullptr) { fail(line, QStringLiteral("list '%1' has no row %2").arg(a.at(0), a.at(1))); return; }
+    const QModelIndex item = ok ? list->model()->index(index, 0) : QModelIndex();
+    if (!item.isValid()) { fail(line, QStringLiteral("list '%1' has no row %2").arg(a.at(0), a.at(1))); return; }
+    // The rows laid out now: a list just shown lays them out later by itself.
+    list->doItemsLayout();
     QWidget* viewport = list->viewport();
-    const QPoint local = list->visualItemRect(item).center();
+    const QPoint local = list->visualRect(item).center();
     const QPoint global = viewport->mapToGlobal(local);
     const QPointF scene(viewport->window()->mapFromGlobal(global));
     const auto send = [&](QEvent::Type kind, Qt::MouseButton button, Qt::MouseButtons buttons) {
@@ -6256,14 +6301,22 @@ void TestDriver::run(const Step& step) {
     testSketchFinishLayout();
   } else if (name == QLatin1String("expect-ribbon-labels")) {
     testRibbonLabels(a);
+  } else if (name == QLatin1String("expect-ribbon-scroll")) {
+    if (a.at(0) != QLatin1String("none") && a.at(0) != QLatin1String("start") &&
+        a.at(0) != QLatin1String("scrolled")) {
+      fail(line, QStringLiteral("expect-ribbon-scroll none|start|scrolled"));
+      return;
+    }
+    testRibbonScroll(a.at(0));
   } else if (name == QLatin1String("workspace")) {
     // workspace DESIGN|MAKE|RENDER|DRAWING: the toolbar panel's workspace chosen as
-    // its selector's list chooses it (mitcad#1990), so that a script's next
-    // step finds that workspace's tabs; nothing in a layout without the
-    // selector (Docked, macOS), where every tab is in sight. The list
-    // itself is clicked by the UI tests (tools/ui-workspaces-test.sh).
+    // its selector's list chooses it (mitcad#1990; the Docked tab row's
+    // selector too, mitcad#2082), so that a script's next step finds that
+    // workspace's tabs; nothing in a layout without the selector (the macOS
+    // Floating title bar), where every tab is in sight. The list itself is
+    // clicked by the UI tests (tools/ui-workspaces-test.sh).
     auto* ribbon = m_main ? m_main->findChild<Ribbon*>() : nullptr;
-    if (ribbon == nullptr || !ribbon->isPanel()) {
+    if (ribbon == nullptr || !ribbon->hasWorkspaceSelector()) {
       qDebug().noquote() << QStringLiteral("TestDriver: workspace %1: no selector in this layout").arg(a.at(0));
     } else {
       ribbon->setWorkspace(a.at(0).toUpper());
@@ -6393,6 +6446,28 @@ void TestDriver::run(const Step& step) {
       fail(line, QStringLiteral("search current %1, enabled %2, disabled %3, Command glyphs %4, hint rows %5")
                      .arg(current).arg(enabled).arg(disabled).arg(shortcuts).arg(hints));
     }
+  } else if (name == QLatin1String("expect-command-enabled")) {
+    if (a.at(1) != QLatin1String("true") && a.at(1) != QLatin1String("false")) {
+      fail(line, QStringLiteral("expect-command-enabled <id> true|false"));
+      return;
+    }
+    // Registry actions belong to the main window, independently of the
+    // buttons that expose them in the current layout.
+    const QList<QAction*> actions = m_main
+        ? m_main->findChildren<QAction*>(QStringLiteral("command_") + a.at(0), Qt::FindDirectChildrenOnly)
+        : QList<QAction*>();
+    if (actions.size() != 1) {
+      fail(line, QStringLiteral("expected one registered action for command '%1', found %2")
+                     .arg(a.at(0)).arg(actions.size()));
+      return;
+    }
+    const bool enabled = actions.first()->isEnabled();
+    if (enabled != (a.at(1) == QLatin1String("true"))) {
+      fail(line, QStringLiteral("command %1 enabled is %2, expected %3")
+                     .arg(a.at(0), enabled ? QStringLiteral("true") : QStringLiteral("false"), a.at(1)));
+      return;
+    }
+    qDebug().noquote() << QStringLiteral("TestDriver: command %1 enabled %2").arg(a.at(0), a.at(1));
   } else if (name == QLatin1String("expect-command-icon")) {
     // The command's icon as the ribbon, the menus and the command search
     // show it (they all take the command's action's icon), compared with an

@@ -119,23 +119,26 @@ click-pick 'face F3[.]b0/F3:side1'
 wait-log '^Flex: node 1 on face F3:side1'
 wait-idle
 # (Free nodes in the air below the model in both layouts, in front of the
-# block, where section 3 lays a flat cable onto this item.) Without Alt a
-# click there places nothing.
+# block, where section 3 lays a flat cable onto this item. At 79 %: the
+# Docked top bar and toolbar panel across the window (mitcad#2082) leave
+# the view 541 px high at 1280 x 800, and at 75 % the click lay 6 px under
+# the block's bottom edge, which took it.) Without Alt a click there
+# places nothing.
 mark
-click 36 75
+click 36 79
 wait-log '^Flex: click in empty space not taken'
 wait-idle
 expect-no-log '^Flex: node 2 '
 # With Alt held the pointer resting there shows the route alone (no solid
 # before the node is placed), and the click is a free node.
 mark
-view-pointer move 35 75 none alt
+view-pointer move 35 79 none alt
 wait-idle
-view-pointer move 36 75 none alt
+view-pointer move 36 79 none alt
 wait-log '^Flex route under the pointer: 2 node[(]s[)]' 30
 wait-idle
 mark
-click 36 75 alt
+click 36 79 alt
 wait-log '^Flex: node 2 free'
 wait-log '^Preview Flex: ok' 60
 wait-idle
@@ -145,7 +148,7 @@ wait-log '^Flex: last node taken back, 1 left'
 wait-log '^Flex: Backspace taken'
 wait-idle
 mark
-click 36 75 alt
+click 36 79 alt
 wait-log '^Flex: node 2 free'
 wait-log '^Preview Flex: ok' 60
 wait-idle

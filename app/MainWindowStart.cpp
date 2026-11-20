@@ -20,9 +20,11 @@
 #include <QSaveFile>
 #include <QStringList>
 #include <QTabBar>
+#include <QToolBar>
 #include <QUrl>
 #include <QtLogging>
 
+#include "DocumentFrame.hpp"
 #include "OcctViewer.hpp"
 #include "WindowManager.hpp"
 #include "framework/AppSettings.hpp"
@@ -78,13 +80,16 @@ void MainWindow::createStartPage() {
   host.drop = [this](const QStringList& paths) { openDropped(paths); };
   host.defaultUnits = [] { return GeneralSettings::load().newDesignUnits; };
   host.openUrl = [](const QString& url) { openExternalUrl(QUrl(url)); };
-  // The workspace tabs, or the toolbar panel that holds them on Windows and
-  // Linux (mitcad#1990): the page starts right below it.
+  // The workspace tabs, or the toolbar that holds them: the Floating
+  // toolbar panel on Windows and Linux (mitcad#1990), the Docked toolbar
+  // (its tab row alone over the page, or hidden: updateStartToolbar,
+  // mitcad#2082). The page starts right below it.
   host.tabBar = [this]() -> QWidget* {
     if (m_ribbon == nullptr) {
       return nullptr;
     }
-    return m_ribbon->isPanel() ? static_cast<QWidget*>(m_ribbon) : m_ribbon->tabBar();
+    const bool toolbar = m_ribbon->isPanel() || m_ribbon->presentation() == Ribbon::Presentation::Classic;
+    return toolbar ? static_cast<QWidget*>(m_ribbon) : m_ribbon->tabBar();
   };
   // The Floating layout's message band over the view's bottom (mitcad#1042):
   // the page's footer keeps above it.
@@ -153,15 +158,15 @@ void MainWindow::updateStartPage(const QString& tab) {
       // (mitcad#1008, mitcad#1990).
       m_floating->showOnlyCards(drawingOpen() ? drawingCards() : QStringList());
     } else if (!m_nativeUi) {
-      for (const QString& name : std::as_const(m_startHiddenDocks)) {
-        if (auto* dock = findChild<QDockWidget*>(name, Qt::FindDirectChildrenOnly)) {
-          dock->show();
-        }
-      }
-      m_startHiddenDocks.clear();
+      // A drawing opened meanwhile keeps the model's docks hidden
+      // (showDocksAgain, mitcad#2082).
+      QStringList hidden;
+      hidden.swap(m_startHiddenDocks);
+      showDocksAgain(hidden);
       m_viewer->setFocus(Qt::OtherFocusReason);
     }
   }
+  updateStartToolbar();
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeWindow) {
     m_nativeWindow->setStartPageShown(start);
@@ -169,6 +174,67 @@ void MainWindow::updateStartPage(const QString& tab) {
   }
 #endif
   updateNavigationBar();
+}
+
+void MainWindow::updateStartToolbar() {
+  if (m_floating != nullptr || m_nativeUi || m_ribbon == nullptr) {
+    return;
+  }
+  auto* bar = findChild<QToolBar*>(QStringLiteral("ribbonToolbar"), Qt::FindDirectChildrenOnly);
+  if (bar == nullptr) {
+    return;
+  }
+  if (m_dockedPanel != nullptr) {
+    // The top bar of Windows and Linux (mitcad#2082): the title row stays
+    // (Home, and the design's tab that leads back, also with one design);
+    // the toolbar panel under it is hidden over the Start page, as the
+    // Floating layout hides it (the Start page has no workspace). Also when
+    // a kept dock state hid the tool bar (restoreState).
+    if (bar->isHidden()) {
+      bar->show();
+    }
+    const bool start = startPageShown();
+    if (m_dockedPanel->isHidden() != start) {
+      m_dockedPanel->setVisible(!start);
+    }
+    const StartToolbar wanted = start ? StartToolbar::Hidden : StartToolbar::Whole;
+    if (wanted != m_startToolbar) {
+      m_startToolbar = wanted;
+      qDebug().noquote() << (start ? QStringLiteral("Docked toolbar panel hidden (Start)")
+                                   : QStringLiteral("Docked toolbar panel shown"));
+    }
+    return;
+  }
+  // The Docked toolbar of macOS, without Home: the designs' tabs under the
+  // menu bar show for two designs or more
+  // (DocumentFrame::showsTabs); with one there is no tab to go back by.
+  const DocumentFrame* frame = DocumentFrame::containing(this);
+  const bool designTabs = frame != nullptr && frame->showsTabs();
+  StartToolbar wanted = StartToolbar::Whole;
+  if (startPageShown()) {
+    wanted = designTabs ? StartToolbar::Hidden : StartToolbar::TabRow;
+  }
+  // Also when a kept dock state hid or showed the bar (restoreState).
+  const bool hidden = wanted == StartToolbar::Hidden;
+  if (bar->isHidden() != hidden) {
+    bar->setVisible(!hidden);
+  }
+  m_ribbon->setTabRowOnly(wanted == StartToolbar::TabRow);
+  if (wanted == m_startToolbar) {
+    return;
+  }
+  m_startToolbar = wanted;
+  switch (wanted) {
+  case StartToolbar::Hidden:
+    qDebug().noquote() << QStringLiteral("Docked toolbar on the Start page: hidden (the designs' tabs lead back)");
+    break;
+  case StartToolbar::TabRow:
+    qDebug().noquote() << QStringLiteral("Docked toolbar on the Start page: tab row only");
+    break;
+  case StartToolbar::Whole:
+    qDebug().noquote() << QStringLiteral("Docked toolbar back: workspace block, tab row and groups");
+    break;
+  }
 }
 
 void MainWindow::leaveStartPage() {
@@ -182,7 +248,7 @@ void MainWindow::leaveStartPageForDesign() {
     return;
   }
   qDebug().noquote() << QStringLiteral("Start page left by the design's tab");
-  if (m_ribbon->isPanel()) {
+  if (m_ribbon->hasWorkspaceSelector()) {
     m_ribbon->showWorkspaceTab();
   } else {
     leaveStartPage();

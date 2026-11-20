@@ -43,11 +43,23 @@ side of it); the first two are verified on the stored body and the replay's
 body only, as no synthetic body made the projection miss the line's end or
 the intersection lose its last stretch.
 
+Failures (mitcad#1986): the blend's surface extended along the spine
+(GeomLib::ExtendSurfByLength) fails with OCCT's reports of a computation
+it cannot make (ChFi3d_IsComputationFailure, 0016): it is intersected as
+it is. Any other failure (a broken invariant, a signal) is rethrown.
+
+Test: geometry/tests/test_fillet_end_overflow.cpp (ctest
+geometry.fillet_end_overflow), test_disc_rim_over_a_rounded_hole_mouth: a
+disc's bottom rim rounded over a hole whose mouth is rounded wider than
+the ball reaches: built. Fails without the patch (no result), passes with
+it (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 4b833e7c..164e363c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -5503,8 +5503,36 @@
+@@ -5561,8 +5561,41 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
    {
      return false;
    }
@@ -73,8 +85,13 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +        GeomLib::ExtendSurfByLength(aExt, 0.25 * aLen, 1, Coord == 1, false);
 +        SI = aExt;
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        SI = S;
 +      }
 +    }
@@ -85,7 +102,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    if (!anInter.IsDone())
    {
      return false;
-@@ -6188,6 +6216,22 @@
+@@ -6246,6 +6279,22 @@ static bool ChFi3d_KPartLineParam(const TopOpeBRepDS_DataStructure&   DStr,
      const double aMid = 0.5 * (FI.FirstParameter() + FI.LastParameter());
      t                 = ElCLib::InPeriod(t, aMid - 0.5 * C->Period(), aMid + 0.5 * C->Period());
    }
@@ -108,7 +125,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    return true;
  }
  
-@@ -6689,8 +6733,19 @@
+@@ -6752,8 +6801,19 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
        {
          continue;
        }

@@ -97,7 +97,9 @@ expect-profiles 3
 # Use an expression too: the dimension still holds the actual first edge.
 command sketch.polygon_edge
 sketch-click 30 5
-sketch-move 30 25
+# Establish the upward direction below the orientation cube's left arrow;
+# the typed length still puts the edge's end at (30, 25).
+sketch-move 30 15
 key Tab
 type 8
 key Tab

@@ -88,6 +88,9 @@
 //   expect-widget-property <object-name> <property> <value>
 //                           a Qt target widget's property as text (a
 //                           size as WxH)
+//   expect-command-enabled <id> true|false  the registered QAction's enabled
+//                           state, independent of its toolbar button; a
+//                           missing or ambiguous action fails the assertion
 //   expect-widget-background <object-name> <#rrggbb> <tolerance>  wait until
 //                           the colour covering most of the visible main
 //                           window widget's area, in a grab of its window
@@ -116,6 +119,8 @@
 //                           accessibility, and no all-caps group captions
 //                           (but the acronyms listed in testRibbonLabels,
 //                           CNC, which are the group's name)
+//   expect-ribbon-scroll <none|start|scrolled>  the shown Classic page's
+//                           actual range, arrow state, exposure and accessibility
 //   expect-design-chrome    the design in front shows its ribbon (Docked:
 //                           its toolbar, the view's top below it; Floating:
 //                           its group cards), its Browser and its
@@ -397,6 +402,18 @@
 //                           not; fails while the View menu has no entry
 //                           for it; logs "TestDriver: dock <dock> shown,
 //                           View/<name> checked"
+//   dock-float <dock> <x> <y> <w> <h>  the dock floated, its frame's top
+//                           left x, y from the main window's screen's
+//                           available area's top left, w x h large
+//                           (mitcad#2070)
+//   expect-dock-float <dock> <x> <y> <w> <h>  wait until the dock floats
+//                           there (1 px of slack); logs "TestDriver: dock
+//                           <dock> floating at x, y, wxh"
+//   dock-area <dock> left|right|top|bottom  the dock docked at that area of
+//                           the window, shown
+//   expect-dock-area <dock> left|right|top|bottom|floating  wait until the
+//                           dock is there; logs "TestDriver: dock <dock>
+//                           at <area>"
 // The interface walked (mitcad#1473, TestDriverWalk.cpp; with
 // MITCAD_LOG_UNTRANSLATED=1 in another language, tools/ui-language-walk-test.sh):
 //   walk-commands <regex> [exclude]  each command whose id matches the
@@ -944,6 +961,7 @@ private:
   void testMacToolButtons();
   void testSketchFinishLayout();
   void testRibbonLabels(const QStringList& expected);
+  void testRibbonScroll(const QString& expected);
   void testDesignChrome();
   void testInterfaceSize(double ratio);
   void testTextIconSize(int textPercent, int iconPercent, const QString& family);

@@ -27,6 +27,10 @@ namespace {
 constexpr int kLeftPad = 10;
 constexpr int kGap = 6;
 constexpr int kRightPad = 4;
+// The compact form (setCompact): left of the rocket, and between the
+// rocket and the ×.
+constexpr int kCompactPad = 8;
+constexpr int kCompactGap = 4;
 
 QString label() { return BoostButton::tr("Boost development"); }
 
@@ -83,20 +87,42 @@ BoostButton::BoostButton(int height, std::function<void(const QUrl&)> open, QWid
   new PlaceWatcher(this, [this] { logPlaces(); });
 }
 
-QSize BoostButton::sizeHint() const {
+int BoostButton::wideWidth() const {
   const int icon = uiIconSize(16);
   const int cross = height() - 8;
   // The label is drawn semi-bold (paintEvent).
   QFont bold = font();
   bold.setWeight(QFont::DemiBold);
   const int text = QFontMetrics(bold).horizontalAdvance(label()) + 2;
-  const int wide = kLeftPad + icon + kGap + text + kGap + cross + kRightPad;
-  return QSize(wide, height());
+  return kLeftPad + icon + kGap + text + kGap + cross + kRightPad;
 }
 
+int BoostButton::compactWidth() const {
+  return kCompactPad + uiIconSize(16) + kCompactGap + (height() - 8) + kRightPad;
+}
+
+QSize BoostButton::sizeHint() const { return QSize(m_compact ? compactWidth() : wideWidth(), height()); }
+
 QSize BoostButton::minimumSizeHint() const {
+  if (m_compact) {
+    return sizeHint();
+  }
   const int cross = height() - 8;
   return QSize(kLeftPad + uiIconSize(16) + kGap + cross + kRightPad, height());
+}
+
+void BoostButton::setCompact(bool compact) {
+  if (compact == m_compact) {
+    return;
+  }
+  m_compact = compact;
+  // The name, cut away, where the pointer finds it.
+  setToolTip(compact ? QStringLiteral("%1\n%2").arg(label(), tr("Opens MitCad's Ko-fi page"))
+                     : tr("Opens MitCad's Ko-fi page"));
+  m_hovered = Part::None;
+  updateGeometry();
+  update();
+  qDebug().noquote() << (compact ? QStringLiteral("Boost button compact") : QStringLiteral("Boost button wide"));
 }
 
 void BoostButton::applyVisible() {
@@ -171,7 +197,8 @@ void BoostButton::paintEvent(QPaintEvent*) {
   const int icon = uiIconSize(16);
   const QPixmap rocket =
       tinted(themeIcon(QStringLiteral("boost"), IconBackdrop::Light), icon, devicePixelRatioF(), support);
-  painter.drawPixmap(QPointF(kLeftPad, (height() - icon) / 2.0), rocket);
+  // The compact form: the rocket and the × close together, no label.
+  painter.drawPixmap(QPointF(m_compact ? kCompactPad : kLeftPad, (height() - icon) / 2.0), rocket);
   const QRect closeBox = closeRect();
   const int textLeft = kLeftPad + icon + kGap;
   QFont bold = font();
@@ -179,7 +206,7 @@ void BoostButton::paintEvent(QPaintEvent*) {
   painter.setFont(bold);
   painter.setPen(ink);
   const int textWidth = closeBox.left() - kGap - textLeft;
-  if (textWidth > 0) {
+  if (!m_compact && textWidth > 0) {
     painter.drawText(QRect(textLeft, 0, textWidth, height()), Qt::AlignVCenter | Qt::AlignLeft,
                      QFontMetrics(bold).elidedText(label(), Qt::ElideRight, textWidth));
   }
@@ -271,7 +298,9 @@ void BoostButton::logPlaces() {
   }
   const QRect closeBox = closeRect();
   const int textLeft = kLeftPad + uiIconSize(16) + kGap;
-  const QPoint text = mapTo(window(), QPoint((textLeft + closeBox.left() - kGap) / 2, height() / 2));
+  // The label's middle; in the compact form the rocket's.
+  const QPoint text = m_compact ? mapTo(window(), QPoint(kCompactPad + uiIconSize(16) / 2, height() / 2))
+                                : mapTo(window(), QPoint((textLeft + closeBox.left() - kGap) / 2, height() / 2));
   const QPoint cross = mapTo(window(), closeBox.center());
   const QString places = QStringLiteral("Boost button at %1,%2\nBoost button close at %3,%4")
                              .arg(text.x())

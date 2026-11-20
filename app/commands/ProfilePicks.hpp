@@ -8,6 +8,11 @@
 
 #include "../framework/Selection.hpp"
 
+namespace mitcad {
+class CommandContext;
+class CommandState;
+} // namespace mitcad
+
 namespace mitcad::cmd {
 
 // What Extrude's and Revolve's Profiles take with a click (mitcad#868).
@@ -43,5 +48,14 @@ QString profilesRefused(const SelectionItem& item, const Selection& held, bool p
 // face's leftover region around the drawn shapes) only when the sketch has
 // no other unused profile. None when every profile is used.
 std::optional<SelectionItem> automaticProfile(const QJsonArray& profiles);
+
+// The `init` of the profile commands (Extrude, Revolve, Sweep, Helix,
+// Emboss, the sheet and surface commands): an empty Profiles takes
+// automaticProfile's pick of the model's `profiles` query; a region of a
+// QR code brings the code's other dark regions, so that the code extrudes
+// whole (mitcad#473). A region of a 3D sketch (mitcad#1550) is taken alone
+// (mitcad#2087): the planar `sketch` query, which refuses a 3D sketch, is
+// asked only for a planar sketch.
+void newestProfile(CommandState& state, const CommandContext& context);
 
 } // namespace mitcad::cmd

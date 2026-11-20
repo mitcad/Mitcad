@@ -16,6 +16,13 @@ write of 8 bytes just after a block of 64 in BOPDS_DS::Paves called from
 MakeFacesSec and FindFromVEdge). The array now holds every distinct pave,
 counted first.
 
+Test: geometry/tests/test_pipe_square_section.cpp, test_stirrup (ctest
+geometry.pipe_square_section): the closed stirrup of lines and arcs whose
+turns at slight kinks overran the intersection's array: a valid solid
+within 0.2 % of the circle's area times the path's length. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx b/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx
 --- a/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx
 +++ b/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx

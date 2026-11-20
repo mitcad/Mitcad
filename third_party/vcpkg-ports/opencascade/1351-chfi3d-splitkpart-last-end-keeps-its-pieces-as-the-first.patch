@@ -17,6 +17,11 @@ fin the spine ends there and the torus was dropped and walked, a B-spline
 face where the stored body has the torus, and 1350's transition before it
 could not run it on. The last end now keeps them all as the first does.
 
+The condition (mitcad#1986) is general, not the case's: at the spine's
+last end, wherever none of an analytic blend's pieces runs into a face at
+the end (ilast == 0), whatever the end's status, the same rule as OCCT's
+own at the first end. Nothing comes from the case.
+
 Test: geometry/tests/test_fillet_fin_top_creases.cpp,
 test_transitions_cut_by_their_pieces (with 1350 and 1352).
 

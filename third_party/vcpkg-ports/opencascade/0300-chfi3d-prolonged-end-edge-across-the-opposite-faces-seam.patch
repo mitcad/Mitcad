@@ -16,6 +16,11 @@ Fv: on Fv they lay anywhere (edges with tolerances of several mm), and the
 face at the end was unorientable. The pieces now take the intersection's
 own p-curve on Fv, trimmed at the seam crossing, as the opposite face's
 pieces are computed on that face.
+
+Test: geometry/tests/test_fillet_results.cpp (ctest
+geometry.suite.fillet_results),
+test_rib_foot_rounded_across_the_rods_seam: Its failure without the patch
+is still to be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index b869f0c..931f51c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

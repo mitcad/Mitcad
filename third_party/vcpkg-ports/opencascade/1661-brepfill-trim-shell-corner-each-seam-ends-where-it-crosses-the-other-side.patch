@@ -49,6 +49,15 @@ pipe/specific H4 to J8, which lost 5 % of their volume). And an end of a
 section edge's curve is at a point where OCCT's comparison on the face
 finds it; the comparison in 3D only decides where that finds neither.
 
+Test: geometry/tests/test_pipe_square_section.cpp (ctest
+geometry.pipe_square_section): test_four_lines and test_kink, an 8 mm
+circle swept along the sine wave as 4 lines crossed with the bent arc and
+along two splines meeting at a kink of 1 degree: the section square to the
+path within 0.01 degrees at 20 points and the volume within 0.1 % (58.8
+degrees and -23.9 % before the patches 1661 and 1662). Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx

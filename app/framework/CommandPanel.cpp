@@ -59,6 +59,7 @@
 #include "CutTargetsPanel.hpp"
 #include "GlassCard.hpp"
 #include "Icons.hpp"
+#include "InputPicks.hpp"
 #include "Language.hpp"
 #include "ModelMessages.hpp"
 #include "NoteRow.hpp"
@@ -706,6 +707,13 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
                            QWidget* parent)
     : QWidget(parent), m_def(def) {
   setObjectName(QStringLiteral("commandPanel"));
+  // The lists of picks opened or closed in this panel or another one
+  // (mitcad#2064): every list of this one follows.
+  connect(&InputPicksState::instance(), &InputPicksState::shownChanged, this, [this](bool) {
+    for (const auto& row : m_rows) {
+      updatePicksShown(*row, false);
+    }
+  });
   // Keep the widget signals for existing test and UI callers, and forward
   // them through the same presenter actions the native inspector uses.
   connect(this, &CommandPanel::textEdited, this, [this](const QString& key, const QString& value) {
@@ -1079,7 +1087,15 @@ void CommandPanel::changeEvent(QEvent* event) {
   }
 }
 
-CommandPanel::~CommandPanel() = default;
+CommandPanel::~CommandPanel() {
+  // The lists' hover watches go first: a list that goes from under the
+  // pointer as the widgets are deleted would report its pick left through
+  // the presenter's actions, which are gone by then (mitcad#2064).
+  for (const auto& row : m_rows) {
+    delete row->pickHover;
+    row->pickHover = nullptr;
+  }
+}
 
 CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString& key,
                                            QFormLayout* form, const CommandState& state,
@@ -1117,12 +1133,26 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     connect(row.select, &QPushButton::clicked, this, [this, key] { emit selectionActivated(key); });
     connect(row.clear, &QToolButton::clicked, this, [this, key] { emit selectionCleared(key); });
     box->addWidget(row.select, 1);
+    // An input of several picks that is not ordered lists them on demand
+    // (mitcad#2064): the button opens or closes the lists of every panel.
+    if (!input.ordered && input.max != 1) {
+      row.picksToggle =
+          smallButton(inputPicksShown() ? QStringLiteral("▾") : QStringLiteral("▸"), tr("List the picks"));
+      row.picksToggle->setObjectName(QStringLiteral("picks_") + key);
+      connect(row.picksToggle, &QToolButton::clicked, this, [this, key] {
+        const bool shown = !inputPicksShown();
+        qDebug().noquote() << QStringLiteral("Panel %1 picks %2 list %3")
+                                  .arg(m_def.name, key, shown ? QStringLiteral("opened") : QStringLiteral("closed"));
+        setInputPicksShown(shown);
+      });
+      box->addWidget(row.picksToggle);
+    }
     box->addWidget(row.clear);
     field = line;
     // An ordered input's picks in order, with buttons that move and remove
-    // them. Another input of several picks has the list under its line only
-    // while one of them is gone (mitcad#1780), its ✕ removing the pick
-    // chosen there.
+    // them. Another input of several picks has the list under its line
+    // while the lists are open (mitcad#2064) or one of its picks is gone
+    // (mitcad#1780), its ✕ removing the pick chosen there.
     if (input.ordered || input.max != 1) {
       auto* ordered = new QWidget;
       row.picks = ordered;
@@ -1136,6 +1166,20 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       row.order->setFocusPolicy(Qt::NoFocus);
       row.order->setMaximumHeight(90);
       row.order->setObjectName(QStringLiteral("order_") + key);
+      // The pick under the pointer highlighted in the view (mitcad#2064),
+      // in the row's words in the log.
+      QListWidget* shownPicks = row.order;
+      row.pickHover = new PickHoverWatch(row.order, [this, key, shownPicks](int at) {
+        const QListWidgetItem* item = at >= 0 ? shownPicks->item(at) : nullptr;
+        if (item != nullptr) {
+          qDebug().noquote() << QStringLiteral("Panel %1 pick %2 hovered: %3").arg(m_def.name, key, item->text());
+        } else {
+          qDebug().noquote() << QStringLiteral("Panel %1 pick %2 left").arg(m_def.name, key);
+        }
+        if (CommandPresenter::actions().pickHovered) {
+          CommandPresenter::actions().pickHovered(key, item != nullptr ? at : -1);
+        }
+      });
 #ifdef MITCAD_MAC_UI
       auto* moves = new QHBoxLayout;
 #else
@@ -1178,7 +1222,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
         column->addWidget(line);
         field = ordered;
       } else {
-        ordered->hide(); // under the line (below), while a pick is gone
+        ordered->hide(); // under the line (below), while shown (updatePicksShown)
       }
     }
     break;
@@ -1797,6 +1841,18 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
     const QString words = scope.itemsWords(id);
     const QString listed = items.isEmpty() ? QString() : words.isEmpty() ? scope.itemsText(id) : words;
     const QString tip = input.tooltip.isEmpty() ? tr("Click to pick %1").arg(input.label) : input.tooltip;
+    // Each pick in words (mitcad#1741), its kind until the session has
+    // named it: the list's rows and the chip's tooltip (mitcad#2064).
+    const QStringList wordsOfPicks = scope.itemWords(id);
+    QStringList pickTexts;
+    for (int i = 0; i < items.size(); ++i) {
+      QString word = i < wordsOfPicks.size() ? wordsOfPicks.at(i) : SelectionItem::kindText(items[i].kind);
+      if (!word.isEmpty()) {
+        word[0] = word[0].toUpper();
+      }
+      pickTexts << word;
+    }
+    const QString pickTip = inputPicksTooltip(pickTexts, tip);
     // An empty row may stand for something (InputDef::emptyShows): its
     // text and swatch then.
     const auto empty = items.isEmpty() && input.emptyShows ? input.emptyShows(scope) : std::pair<QString, QColor>();
@@ -1814,13 +1870,14 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
         qDebug().noquote() << QStringLiteral("Panel %1 %2: %3").arg(m_def.name, row.key, counted);
       }
       row.select->setText(counted);
-      row.select->setToolTip(tip);
+      row.select->setToolTip(pickTip);
     } else if (!empty.first.isEmpty()) {
       row.select->setText(empty.first);
       row.select->setToolTip(tip);
     } else if (listed.isEmpty()) {
+      // The count on the chip, the picks in its tooltip (mitcad#2064).
       row.select->setText(countText(input, static_cast<int>(items.size())));
-      row.select->setToolTip(tip);
+      row.select->setToolTip(pickTip);
     } else {
       row.select->setText(row.select->fontMetrics().elidedText(listed, Qt::ElideRight, 220));
       row.select->setToolTip(QStringLiteral("%1\n%2").arg(listed, tip));
@@ -1838,24 +1895,21 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
       }
     }
     if (row.order != nullptr) {
-      // Each pick in words (mitcad#1741), its kind until the session has
-      // named it; a gone one marked.
-      const QStringList pickWords = scope.itemWords(id);
+      // Each pick in words, a gone one marked.
       QStringList texts;
-      for (int i = 0; i < items.size(); ++i) {
-        QString word = i < pickWords.size() ? pickWords.at(i) : SelectionItem::kindText(items[i].kind);
-        if (!word.isEmpty()) {
-          word[0] = word[0].toUpper();
-        }
-        const QString text = QStringLiteral("%1. %2").arg(i + 1).arg(word);
+      for (int i = 0; i < pickTexts.size(); ++i) {
+        const QString text = QStringLiteral("%1. %2").arg(i + 1).arg(pickTexts.at(i));
         texts << (missing.contains(i) ? tr("%1 (missing)").arg(text) : text);
       }
       QStringList shownTexts;
       for (int i = 0; i < row.order->count(); ++i) {
         shownTexts << row.order->item(i)->text();
       }
-      if (texts != shownTexts) {
+      const bool changed = texts != shownTexts;
+      if (changed) {
         const int current = row.order->currentRow();
+        // The pick under the pointer is another one now, or none.
+        row.pickHover->reset();
         row.order->clear();
         row.order->addItems(texts);
         for (const int index : missing) {
@@ -1871,11 +1925,7 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
                                     .arg(m_def.name, row.key, texts.join(QStringLiteral("; ")));
         }
       }
-      // An input that is not ordered lists its picks only while one is gone.
-      if (!input.ordered && row.picks != nullptr && row.picks->isHidden() != missing.isEmpty()) {
-        row.picks->setVisible(!missing.isEmpty());
-        scheduleLogLayout();
-      }
+      updatePicksShown(row, changed);
     }
     break;
   }
@@ -2208,6 +2258,36 @@ void CommandPanel::setPlaceholder(const QString& key, const QString& text) {
   }
   row->edit->setPlaceholderText(text);
   qDebug().noquote() << QStringLiteral("Panel %1 placeholder %2: %3").arg(m_def.name, key, text);
+}
+
+void CommandPanel::updatePicksShown(Row& row, bool changed) {
+  if (row.input->ordered || row.picks == nullptr || row.order == nullptr) {
+    return; // an ordered input's list is its field, always shown
+  }
+  const bool open = inputPicksShown();
+  if (row.picksToggle != nullptr) {
+    row.picksToggle->setText(open ? QStringLiteral("▾") : QStringLiteral("▸"));
+  }
+  const bool shown = row.order->count() > 0 && (open || row.missingShown);
+  if (!shown) {
+    row.pickHover->reset(); // closing the list takes the highlight away
+  }
+  if (row.picks->isHidden() == shown || (shown && changed)) {
+    QStringList texts;
+    for (int i = 0; i < row.order->count(); ++i) {
+      texts << row.order->item(i)->text();
+    }
+    if (shown) {
+      qDebug().noquote() << QStringLiteral("Panel %1 picks %2 shown: %3")
+                                .arg(m_def.name, row.key, texts.join(QStringLiteral("; ")));
+    } else if (!row.picks->isHidden()) {
+      qDebug().noquote() << QStringLiteral("Panel %1 picks %2 hidden").arg(m_def.name, row.key);
+    }
+  }
+  if (row.picks->isHidden() == shown) {
+    row.picks->setVisible(shown);
+    scheduleLogLayout();
+  }
 }
 
 void CommandPanel::updateNote(Row& row) {
@@ -2753,6 +2833,10 @@ QStringList CommandPanel::layoutLines() const {
             break;
           }
         }
+      }
+      if (row->picksToggle != nullptr) {
+        // The button that opens and closes the lists of picks (mitcad#2064).
+        lines << QStringLiteral("Panel %1 picks_%2 at %3").arg(m_def.name, row->key, position(row->picksToggle));
       }
       if (row->button != nullptr) {
         // The button beside a choice (InputDef::onButton).

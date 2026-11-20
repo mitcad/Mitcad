@@ -2,7 +2,9 @@
 # A half-millimetre strip fits inside the opposing edges' pick widths.
 wait-idle 30
 window-resize 1280 900
+mark
 command view.top
+wait-log '^Camera direction 0 0 -1 up 0 1 0 [(]orthographic[)]$' 30
 command view.fit
 expect-viewport
 command solid.fillet
@@ -12,6 +14,11 @@ mark
 click-pick-offset 'face F1.b0/F1:top' 0 0 '^face F1:top of F1.b0$'
 expect-log 'Fillet Edges: 1 face'
 expect-log 'Preview Fillet: ok' 30
+# Frame the completed preview with its command card in place. Keep the
+# half-millimetre strip and the original selected top face as the target.
+wait-idle
+command view.fit
+wait-idle
 expect-viewport
 # After selection its highlight must not change the narrow-face rule.
 expect-pick-offset 'face F1.b0/F1:top' 0 0 '^face F1:top of F1.b0$'

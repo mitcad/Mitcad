@@ -44,6 +44,20 @@ makes it.
   taken from its curve, its interference's parameter and the piece's spine
   parameter set there when the end is built.
 
+Test: geometry/tests/test_fillet_crease_end_corner.cpp (ctest
+geometry.fillet_crease_end_corner): test_cut_cylinder_rims_at_30_degrees
+and test_cut_cylinder_rims_at_45_degrees, a cylinder cut at a crease with
+a block below the cut face, its rims rounded with 1.5: valid, the horn
+tori of area R^2 (pi / 2 - psi) (pi / 2 - 1) (invalid without the patch);
+the boundary test_cut_cylinder_rims_without_the_block, the tori cut by the
+cut face as before; and test_reported_body on the stored case
+`tube-end-crease-corners`. Its failure without the patch is still to be
+shown in the port's before/after run (mitcad#1986).
+
+Failures (mitcad#1986): the section of the turned ball's patch by the
+solid (BRepAlgoAPI_Section) fails with OCCT's reports of a computation it
+cannot make (ChFi3d_IsComputationFailure, 0016): that end is not turned.
+Any other failure (a broken invariant, a signal) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index af755114..73b8e75b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
@@ -66,10 +80,10 @@ index af755114..73b8e75b 100644
  
    //! Contours of constant radius R whose tangent chain runs round a wall's
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index bdc1ae86..b233b4bc 100644
+index 6ddcddb7..9a8e3ad8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -84,6 +84,10 @@
+@@ -85,6 +85,10 @@
  #include <GeomProjLib.hxx>
  #include <gp_Lin.hxx>
  #include <GeomAPI_ExtremaCurveCurve.hxx>
@@ -80,7 +94,7 @@ index bdc1ae86..b233b4bc 100644
  #include <BRepBuilderAPI_MakeFace.hxx>
  #include <BRepAlgoAPI_Section.hxx>
  #include <gp_Pnt.hxx>
-@@ -4247,6 +4251,66 @@ static bool ChFi3d_OutwardNormalAt(const TopoDS_Face& F, const gp_Pnt& X, const
+@@ -4300,6 +4304,66 @@ static bool ChFi3d_OutwardNormalAt(const TopoDS_Face& F, const gp_Pnt& X, const
    return true;
  }
  
@@ -147,7 +161,7 @@ index bdc1ae86..b233b4bc 100644
  //=======================================================================
  // function : PerformPivotAboutCreaseAtEnd
  // purpose  : See the header.
-@@ -4309,14 +4373,67 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+@@ -4362,14 +4426,67 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
    {
      const ChFiDS_CommonPoint& CPs = Fd->Vertex(isfirst, s);
      const ChFiDS_CommonPoint& CPo = Fd->Vertex(isfirst, 3 - s);
@@ -217,7 +231,7 @@ index bdc1ae86..b233b4bc 100644
      // The face at the other contact: a plane.
      BRepAdaptor_Surface aOp(Fop, false);
      if (aOp.GetType() != GeomAbs_Plane)
-@@ -4373,12 +4490,31 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+@@ -4426,12 +4543,31 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
      {
        continue;
      }
@@ -252,7 +266,7 @@ index bdc1ae86..b233b4bc 100644
      // dIn: L's direction from the plane into the material; C0 the ball's
      // centre at the end, Xt from P to it.
      gp_Dir dIn = BRepAdaptor_Curve(L).Line().Direction();
-@@ -4391,20 +4527,50 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+@@ -4444,20 +4580,50 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
      {
        continue;
      }
@@ -306,8 +320,8 @@ index bdc1ae86..b233b4bc 100644
      if (aTurn.Magnitude() <= gp::Resolution())
      {
        continue;
-@@ -4436,23 +4602,6 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
-     {
+@@ -4494,28 +4660,6 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+       }
        continue;
      }
 -    BRepAlgoAPI_Section aSec(aPatch, myShape, false);
@@ -319,8 +333,13 @@ index bdc1ae86..b233b4bc 100644
 -      OCC_CATCH_SIGNALS
 -      aSec.Build();
 -    }
--    catch (Standard_Failure const&)
+-    catch (Standard_Failure const& anException)
 -    {
+-      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
+-      if (!ChFi3d_IsComputationFailure(anException))
+-      {
+-        throw;
+-      }
 -      continue;
 -    }
 -    if (!aSec.IsDone())
@@ -330,7 +349,7 @@ index bdc1ae86..b233b4bc 100644
      struct ChainPiece
      {
        TopoDS_Edge E;
-@@ -4460,32 +4609,126 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+@@ -4523,32 +4667,131 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
        gp_Pnt      A, B; // from P's side to the plane
      };
      NCollection_Sequence<ChainPiece> aEdges;
@@ -381,9 +400,9 @@ index bdc1ae86..b233b4bc 100644
 +      const gp_Dir aX0(std::cos(a0) * e1.XYZ() - std::sin(a0) * e2.XYZ());
 +      const occ::handle<Geom_Circle> aMerid = new Geom_Circle(gp_Ax2(aCK, e1.Crossed(e2), aX0), R);
 +      if (aMerid->Value(a0).Distance(P) > tolP || plOp.Distance(aMerid->Value(a1)) > tolP)
-+      {
-+        continue;
-+      }
+       {
+         continue;
+       }
 +      const occ::handle<Geom_Surface> SK = BRep_Tool::Surface(Fk);
 +      BRepClass_FaceClassifier        aCl;
 +      bool                            aOnK = true;
@@ -400,9 +419,9 @@ index bdc1ae86..b233b4bc 100644
 +        }
 +      }
 +      if (!aOnK)
-       {
-         continue;
-       }
++      {
++        continue;
++      }
 +      NCollection_Array1<gp_Pnt2d> aPoles(1, 2);
 +      NCollection_Array1<double>   aKnots(1, 2);
 +      NCollection_Array1<int>      aMults(1, 2);
@@ -433,8 +452,13 @@ index bdc1ae86..b233b4bc 100644
 +        OCC_CATCH_SIGNALS
 +        aSec.Build();
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        continue;
 +      }
 +      if (!aSec.IsDone())
@@ -471,7 +495,7 @@ index bdc1ae86..b233b4bc 100644
      // The chain from P to the plane.
      NCollection_Sequence<ChainPiece> aChain;
      NCollection_Sequence<bool>       aChainRev;
-@@ -4821,8 +5064,9 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+@@ -4884,8 +5127,9 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
      {
        continue;
      }
@@ -482,7 +506,7 @@ index bdc1ae86..b233b4bc 100644
      // On the torus: the tube at u = 0, from vPlane (Cw) to pi (P).
      const double   vP1 = s == 1 ? M_PI : vPlane;
      const double   dv1 = s == 1 ? (vPlane - M_PI) : (M_PI - vPlane);
-@@ -4944,6 +5188,13 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+@@ -5007,6 +5251,13 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
      CPP.SetArc(std::max(CPs.Tolerance(), tolapp3d), L, wP, keptOnArc(L, wP, P, -gp_Vec(dIn)));
      CPP.SetParameter(spineAt);
      ChFiDS_CommonPoint CPW = CPo;
@@ -496,7 +520,7 @@ index bdc1ae86..b233b4bc 100644
      CPW.SetParameter(spineAt);
      aPtW.Append(CPW);
      aPtX.Append(CPP);
-@@ -5001,6 +5252,20 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+@@ -5064,6 +5315,20 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
      }
      Fd->ChangeVertex(isfirst, s)     = CPP;
      Fd->ChangeVertex(isfirst, 3 - s) = CPW;

@@ -50,6 +50,24 @@ struct WindowPlace {
 // its title bar first, is on that screen. Without screens, unchanged.
 QRect fitFrameToScreens(const QRect& frame, const QList<QRect>& available, int preferred);
 
+// A connected screen: its name and its available area.
+struct ScreenArea {
+  QString name;
+  QRect available;
+};
+
+// The connected screens, in QGuiApplication::screens()' order.
+QList<ScreenArea> connectedScreenAreas();
+
+// Whether a floating panel of the Docked layout stays where it was kept
+// (mitcad#2070, GitHub mitcad/Mitcad#451): true when its kept `frame`
+// (title bar and borders included) lies wholly within the available area
+// of the connected screen named `screen` (unnamed: of any connected screen).
+// False, and the panel goes back into its dock, when that screen is gone,
+// or the frame is half off it or across two screens: a panel is never moved
+// onto another screen, where it would cover the design window.
+bool floatingFrameStays(const QRect& frame, const QString& screen, const QList<ScreenArea>& screens);
+
 // The frame of a new window of `frameSize` cascaded from the frame `from`
 // of the window it opens from: `step` pixels right of and below it, so that
 // it does not cover that window exactly; back at the available area's left

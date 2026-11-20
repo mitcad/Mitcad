@@ -20,7 +20,9 @@ $design = Join-Path $work 'constraints.mitcad'
 & $Cli run (Join-Path $PSScriptRoot 'ui-scripts/sketch-constraint-shortcuts.json') --save $design
 if ($LASTEXITCODE -ne 0) { Ui-Fail 'sketch constraint keys fixture creation failed' }
 $workflow = Join-Path $work 'workflow.mitcad-ui'
-$source = Get-Content -Raw (Join-Path $PSScriptRoot 'ui-scripts/sketch-constraint-shortcuts.mitcad-ui')
+# The clicks after the fit clear of the orientation cube (Ui-StepsPannedBefore).
+$panned = Ui-StepsPannedBefore 'sketch-constraint-shortcuts.mitcad-ui' @('mark')
+$source = Get-Content -Raw $panned
 Set-Content -Encoding ascii $workflow ($source.Replace('ENTER_SKETCH', "dblclick-logged '^Timeline Sketch1 at '"))
 $env:MITCAD_TEST_WORK = $work
 $env:MITCAD_TEST_INPUT = $workflow

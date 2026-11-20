@@ -23,6 +23,14 @@ The tried copies now start at the first one at or above the range's start
 is tried. Faces whose range spans at most one period try the same copies as
 before.
 
+Test: geometry/tests/test_multi_turn_faces.cpp,
+test_cut_across_a_thread_whose_faces_run_many_turns (ctest
+geometry.multi_turn_faces): the same box cuts across the 32-turn thread: the
+parts of the section curves inside the faces are kept (without the patch
+they were classified outside and the first cut removed nothing). Its failure
+without the patch, stated in its documentation, is still to be shown in the
+port's before/after run (mitcad#1986).
+
 --- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_FClass2d.cxx
 +++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_FClass2d.cxx
 @@ -52,6 +52,17 @@

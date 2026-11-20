@@ -108,10 +108,61 @@ Results: the single-arm cases and `e12 2` fail at those vertices (a
 corner fault, "the end of a fillet meets an edge where another fillet has
 taken it away"); every case above builds as before.
 
+## The ride's end as a fold (mitcad#1987)
+
+With the foot's rounding run on over the curved side's polynomial (1700),
+its foot turns in towards the arm's end and the ride's last walk stops
+short of the foot's contact with the plate: there the foot's blend is
+tangent to the plate, and the 0.5's contact runs to that line like a
+square root of the guide's parameter (the ball e above the plate touches
+the blend at D from its foot with D^2 about 2 (3 - 0.5) e). It stopped
+8e-5 mm above the plate, 0.022 mm from the foot line, where the end's
+check wants the foot on that line; the corner then went to
+PerformMoreThreeCorner and failed ("an edge met twice").
+
+- `rideFoldEnd`: the exact end, the ball tangent to the top and to the
+  plate at a point of the foot's contact (on the sides of both the walk's
+  ball is: inside the solid for this convex rounding), found from the
+  walk's last contact along that line; its section where the contacts'
+  middle lies in the guide's normal plane (`BlendFunc_ConstRad`'s
+  condition), here 1.8e-4 before the walk's last section.
+- `RideOnCornerWalk(..., End)` (mitcad#2075): every point of the walk is
+  kept and the end put after them, with the line's extremities (the blend
+  surface's corners are put on them) and its common points; the line is
+  approximated by the support's parameter across the ride
+  (`RideAcrossSweep`), not by the guide's.
+
+Why not by the guide's parameter: the foot's blend is approximated, so
+the ride's solutions do not fold exactly at the foot's contact. On the
+second arm the walk's guide parameter rises to 39.49680 with the 0.5's
+contact on the foot's blend still 0.058 (in the blend's parameter across
+it, about 0.02 mm) from the foot line; the solutions beyond go on to the
+foot line while the guide parameter turns back, to 39.49663 at the end
+`rideFoldEnd` finds, which is a solution of the ride's function there
+(the scan of the solutions between the two sections found it to 1e-6).
+Dropping the walk's points past the end's section and approximating by
+the guide's parameter put the walk's last point and the end, on the two
+sides of that turn, next to each other: the approximation solved its
+sections in between on either side (a jump of 0.07 mm), reached 0.065 mm
+in 3D and 0.12 in the parameters of its curves, and the ride's curves and
+vertices took tolerances of 0.4 to 1.1 mm. The support's parameter across
+the ride (here the foot blend's u, from 11.13 at the crossing to 0 at the
+foot) runs monotonically through the turn, and each section solved with
+it given and the guide's parameter free is regular there: one span of
+degree 10 or 11, within 2e-5 mm in 3D and 1e-5 in 2D. The approximation
+has only the sections themselves (no derivatives), so where it needs more
+than one span its spans join with C0 continuity within its tolerance.
+
+On the design's state before Fillet1 the outer arm ends then build, valid,
+the 0.5's foot at x -292.4393 and -270.9052 (the stored body's -292.4627
+and -270.8987), its top contact meeting the plate at -291.7665 and
+-271.5777 (-291.7904 and -271.5709); the whole of Fillet1 builds, valid,
+the arm tips within 0.05 mm3 of the stored body's (0.48 and 0.51 over it
+before: 0.044 and 0.003 under it now), every vertex within 0.02.
+
 ## What is left
 
-- The tower slots' corners and the outer arm ends' last piece against the
-  stored body (above).
+- The tower slots' corners against the stored body (above).
 - The single-arm case itself built: the 0.5 would have to ride on over the
   pit's rounding's end (as 1727 rides over the corner patch).
 

@@ -22,8 +22,8 @@ struct QuickAccessSettings {
   QStringList chosen;
 
   // New, Open, Save, Print, Design Properties and Preferences; none in the
-  // top bar of the Floating layout on Windows and Linux (setTopBarDefaults,
-  // mitcad#1990), whose own buttons are the File menu, Save, the + for a
+  // top bar of Windows and Linux, in either layout (setTopBarDefaults,
+  // mitcad#1990, mitcad#2082), whose own buttons are the File menu, Save, the + for a
   // new design and Preferences: there the group is empty until the user
   // adds commands, and hidden while it is (QuickAccessGroup).
   static QStringList defaults();

@@ -121,7 +121,7 @@ def saved_unchanged():
     if native:
         add("expect-native-enabled native.quickAccess.file.save false")
     else:
-        add("expect-widget-property quickAccess_file.save enabled false")
+        add("expect-command-enabled file.save false")
 
 saved_unchanged()
 add("mark",

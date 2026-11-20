@@ -44,16 +44,27 @@ faces within 0.0006 mm. Before, the near wall failed in both orders of
 its edges, and so did the eleven edges. On the stored state before the
 item, the same 152 faces as before.
 
+The conditions (mitcad#1986) are geometric, not the case's: at an end of
+a non-periodic spine, the pieces next to the end vertex V that roll on an
+edge of a face W holding V, where W's outward normal at the rolled edge's
+vertex A lies within a tenth of a radian of the face's beyond that edge
+(OCCT's own angle for tangent faces), or turn about A on the rolled edge
+itself; a start rolling on an edge running into V is taken only where no
+other start is found. Any strip width, radius or surface types; a strip
+narrower than the radius is the case's example, not a condition. Only the
+sizes are margins, not derived: ten times the spine's tolerance for the
+pieces' ends at V and max(1e-4, twice A's tolerance) for A on the faces.
+
 Test: geometry/tests/test_fillet_fin_end_strips.cpp, on the case
 `fin-end-strips` of MITCAD_GEOMETRY_CASES.
 
 Upstream: new.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index e2415548..8f83db81 100644
+index 636c1171..5d6f1aba 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -1810,6 +1810,112 @@ static bool ChFi3d_RolledToFaceAtEnd(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -1811,6 +1811,112 @@ static bool ChFi3d_RolledToFaceAtEnd(const TopOpeBRepDS_DataStructure&   DStr,
    return false;
  }
  
@@ -166,7 +177,7 @@ index e2415548..8f83db81 100644
  //=================================================================================================
  
  bool ChFi3d_Builder::ObstacleAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
-@@ -1870,6 +1976,16 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+@@ -1871,6 +1977,16 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
                    Spine->FirstParameter(1),
                    Spine->LastParameter(nbed),
                    Precision::Confusion());
@@ -183,7 +194,7 @@ index e2415548..8f83db81 100644
    // The samples along the spine; where none of them finds a start, the
    // spine four times as finely between them (a start may be found only
    // along a stretch shorter than their spacing).
-@@ -2460,6 +2576,45 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+@@ -2461,6 +2577,45 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
      {
        continue;
      }
@@ -229,7 +240,7 @@ index e2415548..8f83db81 100644
      HS1    = HS[0];
      HS2    = HS[1];
      HC1    = HC[0];
-@@ -2477,6 +2632,25 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+@@ -2478,6 +2633,25 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
      First = w;
      return (rolls[0] ? 1 : 0) | (rolls[1] ? 2 : 0);
    }
@@ -255,7 +266,7 @@ index e2415548..8f83db81 100644
    return -1;
  }
  
-@@ -19376,7 +19550,11 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
+@@ -19543,7 +19717,11 @@ bool ChFi3d_Builder::RolledOnProlongedEdge(const occ::handle<ChFiDS_Stripe>& Str
  //            end, rolling on Er's line past A as the edge of a strip of B's
  //            surface, the other side's face N's surface grown, up to the
  //            guide's end; the corner at V cuts it by W from A
@@ -268,7 +279,7 @@ index e2415548..8f83db81 100644
  //=======================================================================
  
  bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>& Stripe, const bool isFirst)
-@@ -19394,11 +19572,46 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+@@ -19561,11 +19739,46 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
    }
    TopOpeBRepDS_DataStructure&                         DStr = myDS->ChangeDS();
    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeq = Stripe->ChangeSetOfSurfData()->ChangeSequence();
@@ -319,7 +330,7 @@ index e2415548..8f83db81 100644
    {
      return false;
    }
-@@ -19564,6 +19777,13 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+@@ -19731,6 +19944,13 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
    bool                     walked   = true;
    const bool               doneSave = done;
    const ChFiDS_ErrorStatus stSave   = Spine->ErrorStatus();
@@ -333,7 +344,7 @@ index e2415548..8f83db81 100644
    try
    {
      OCC_CATCH_SIGNALS
-@@ -19647,21 +19867,37 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+@@ -19819,21 +20039,37 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
        CP.SetVector(v);
      }
    }

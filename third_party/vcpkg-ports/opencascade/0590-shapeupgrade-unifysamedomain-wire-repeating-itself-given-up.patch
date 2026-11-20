@@ -21,6 +21,13 @@ that repeats itself; it now counts its edges and is given up past that
 bound, as when no next edge is found (isWireBuildingFailed): the faces are
 left unmerged. Nothing changes for wires within the bound.
 
+Test: geometry/tests/test_sweeps.cpp,
+test_helix_slivers_within_the_bodies_faces (ctest geometry.suite.sweeps.2):
+a nut threaded past its bore's bottom, intersected with the cylinder inside
+the bore: the merge after it ends (before, it went back and forth over the
+same seams without end). Its failure without the patch is still to be shown
+in the port's before/after run (mitcad#1986).
+
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -4026,6 +4026,12 @@

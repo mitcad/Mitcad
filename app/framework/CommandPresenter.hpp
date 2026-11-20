@@ -67,6 +67,11 @@ public:
     // Inspection::Value::places painted meanwhile (mitcad#1979). The Qt
     // panel's ResultRows calls it for the rows that have places.
     std::function<void(const QString&, bool)> resultHovered;
+    // The pointer came over a row of a selection input's list of picks:
+    // the input's key and the pick's index (-1: it left the list), that
+    // pick highlighted in the view meanwhile (mitcad#2064). The Qt panel's
+    // list calls it.
+    std::function<void(const QString&, int)> pickHovered;
     // The button beside the message was clicked (setMessageAction,
     // mitcad#1634).
     std::function<void()> messageAction;

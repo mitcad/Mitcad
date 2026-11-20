@@ -14,7 +14,9 @@
 #      live view refining.
 #   2. Look: Body2 picked in the view: the card names it and shows its
 #      appearance (the default); an appearance from the library given to
-#      it (one undo step).
+#      it (one undo step); the library's scope chosen from its drop-down
+#      (In Design, Favorites with its empty text, then Library again;
+#      mitcad#2083).
 #   3. Light: its list (the Environment, the lights) and the chosen row's
 #      settings (Lights | Environment; the Light group's Add Light and
 #      Reset Environment); a light added from Add Light's menu, its name
@@ -72,6 +74,7 @@ expect-ever '^Render panels: Appearances [|] Look$' 30
 expect-ever '^Render card Look fields cut: none$' 30
 expect-ever '^Render list Appearances fields cut: none$' 30
 expect-ever '^Render appearance steel_satin at ' 30
+expect-ever '^Render appearance scope at ' 30
 expect-never '^Ribbon RENDER/'
 expect-never '^Ribbon tab RENDER at '
 
@@ -89,6 +92,23 @@ expect-no-log '^Render stage [A-Za-z]+$'
 wait-idle
 sleep 500
 screenshot '${MITCAD_TEST_PICTURES}/render-look.png'
+
+# The library's scope as a drop-down choice of whole names (mitcad#2083):
+# In Design lists the design's appearances, Steel - Satin among them now;
+# Favorites, empty, says how to add one; Library again.
+mark
+qt-choice renderAppearanceScope 'In Design'
+wait-log '^Render appearances scope 0$'
+wait-log '^Render appearance steel_satin at ' 30
+mark
+qt-choice renderAppearanceScope 'Favorites'
+wait-log '^Render appearances scope 3$'
+wait-log '^Render appearances empty: No favorites yet[.] Right-click an appearance to add it to Favorites[.]$'
+wait-log '^Render appearances shown: 0$'
+mark
+qt-choice renderAppearanceScope 'Library'
+wait-log '^Render appearances scope 1$'
+wait-idle
 
 # 3. Light: its list and the Environment's settings, a light added, the
 # rows chosen in turn (Light staying shown), the light turned off.

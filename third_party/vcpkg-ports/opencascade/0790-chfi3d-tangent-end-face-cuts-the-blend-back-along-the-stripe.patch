@@ -34,9 +34,39 @@ there down to the run-out.
   intersection curves with the blend's two faces, ending in Q, where the
   spine's edge is cut. The spine's end becomes a free one (no corner at the
   vertex). Elsewhere nothing changes.
+
+Failures (mitcad#1986): the curves of the cut and of the cap's edges
+(ChFi3d_ComputeCurves) fail with OCCT's reports of a computation it
+cannot make (ChFi3d_IsComputationFailure, 0016) where the face at the end
+does not cut the blend across: the stripe is not cut back and ends as
+before. Any other failure (a broken invariant, a signal) is rethrown.
+
+The conditions (mitcad#1986) are geometric, not the case's: a lone
+non-periodic stripe of constant radius at a vertex, its end OnSame, a face
+at the end going on G1 (ChFi3d::IsTangentFaces) across an edge at the
+vertex from one of the spine edge's faces, and that face's surface (any
+type, the solid's side by its normal) crossed by both contacts, followed
+back, on one piece; nothing in it is a thread, a crest or a plane. Only
+the sizes come from the case: the cut more than 4 radii from the vertex
+and the crossing Q of the spine's edge within 4 radii of the cut's middle
+(the case's touch near the vertex lies within a radius, its cut many radii
+away), the contacts sampled every quarter radius (16 to 20000 samples),
+and the cut's ends within 10 times the approximation tolerance.
+
+Test: geometry/tests/test_sweeps.cpp,
+test_thread_crest_rounded_down_to_a_run_out (ctest geometry.suite.sweeps.3):
+a post whose thread runs out along a straight cut, its lower crest rounded
+down to the run-out: valid, one small face on the run-out's flank plane
+where it cuts the rounding a turn back, the crest left sharp from there down
+to the run-out against the helix's length. Its failure without the patch,
+stated in its documentation, is still to be shown in the port's before/after
+run (mitcad#1986).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index d7724b67..28d87e50 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3191,7 +3191,13 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -3423,7 +3423,13 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
            ChFi3d_InitChron(cl_perform1corner);
  #endif
            myCorner = Corner_EndMitred;
@@ -51,9 +81,11 @@ there down to the run-out.
            {
              // (Made with the fillet ending at the edge's other vertex.)
            }
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index add28758..176aa59a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -1143,6 +1143,18 @@ private:
+@@ -1151,6 +1151,18 @@ private:
    //! at the end: built as an OnSame end. Returns false for other corners.
    Standard_EXPORT bool PerformRolledPastEnd(const int Index);
  
@@ -72,6 +104,8 @@ there down to the run-out.
    //! Two ends of blends of one radius on the same two faces, of two stripes
    //! whose balls are one ball rolling over a narrow face C between them (a
    //! strip that breaks the edge chain, its edges with the common face under
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index cd2f96b9..7451f469 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 @@ -19,6 +19,7 @@
@@ -82,7 +116,7 @@ there down to the run-out.
  #include <BRepAlgo_NormalProjection.hxx>
  #include <BRepBlend_Line.hxx>
  #include <BRepClass_FaceClassifier.hxx>
-@@ -43,10 +44,13 @@
+@@ -44,10 +45,13 @@
  #include <Geom_Ellipse.hxx>
  #include <GeomAdaptor_Curve.hxx>
  #include <IntAna_QuadQuadGeo.hxx>
@@ -96,7 +130,7 @@ there down to the run-out.
  #include <Extrema_LocateExtCC.hxx>
  #include <Extrema_POnCurv.hxx>
  #include <Geom2d_BSplineCurve.hxx>
-@@ -80,6 +84,7 @@
+@@ -81,6 +85,7 @@
  #include <IntRes2d_IntersectionPoint.hxx>
  #include <Precision.hxx>
  #include <Standard_ConstructionError.hxx>
@@ -104,7 +138,7 @@ there down to the run-out.
  #include <Standard_Failure.hxx>
  #include <Standard_NotImplemented.hxx>
  #include <StdFail_NotDone.hxx>
-@@ -2665,6 +2670,578 @@ static bool ChFi3d_EndSectionAlongEdge(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -2698,6 +2703,588 @@ static bool ChFi3d_EndSectionAlongEdge(const TopOpeBRepDS_DataStructure&   DStr,
    return true;
  }
  
@@ -504,8 +538,13 @@ there down to the run-out.
 +      return false;
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return false;
 +  }
 +  if (Ccut.IsNull() || PcS.IsNull() || PcCap.IsNull())
@@ -563,8 +602,13 @@ there down to the run-out.
 +        return false;
 +      }
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      return false;
 +    }
 +    if (Cs[s].IsNull() || PcF[s].IsNull() || PcC[s].IsNull())

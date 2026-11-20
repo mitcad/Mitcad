@@ -1,0 +1,223 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding tried again over a narrow face's surface unbounded
+(ChamferOverNarrowFace, patches 0531 and 0940) walked its guides past the
+spine's ends and approximated them in full, though its cut by the faces
+beyond (ChamferCutByFacesBeyond) was refused for a reason its analytic
+pieces showed before the walk (mitcad#1824, mitcad#2065).
+
+The case: a ring wall 3 thick with five windows, each window's floor and
+ceiling rounded with 1.5 on both edges (geometry.fillet_consumed_strip,
+the case of patch 0950). Each rounding is tried over its floor's or
+ceiling's plane unbounded: its piece within the spine is the analytic
+torus (PerformSetOfKPart), whose contact on the floor reaches the
+pillars' half-round ends and so leaves the floor; the walk
+(PerformSetOfKGen) then runs past the spine's ends over the unbounded
+plane until the guide's normal plane grazes the wall, where the sections
+slide along the wall while the guide barely moves. The approximation of
+those pieces (Approx_SweepApproximation) cut each into up to its 5000
+segments and still missed the tolerance (about 90 % of the fillet's time
+in stack samples). The cut then refused the try at the analytic piece
+(its step 1 takes a crossing of B's boundary only on a walked piece), the
+stripe was computed again as before (PerformSetOfSurf), and all ten tries
+were thrown away: 21 to 27 s of the fillet's time.
+
+- ChFi3d_NarrowCutRefusedByAnalyticPieces: after the analytic pieces of
+  the try, before the walk, a piece within the spine that is not walked
+  (ChFi3d_NarrowPieceWalked, the test step 1 uses, now shared) and whose
+  contact on B, at step 1's samples, changes between inside and outside B
+  refuses the try: ChamferCutByFacesBeyond's step 1 returns false at such
+  a piece whatever the pieces before it gave, the walk adds pieces past or
+  between the analytic ones and leaves those as they are, and every
+  earlier exit of the cut is a refusal too. Only pieces whose line lies on
+  the unbounded face with a p-curve are read; any other piece leaves the
+  decision to the cut as before.
+- Such a try walks its guides within the spine as before and leaves out
+  only the guides past the spine's ends (ChFi3d_NarrowNotPast, read by
+  PerformSetOfKGen), whose pieces the refusal throws away; such a guide
+  leaves the builder done, as it did walked or failed (its failure was
+  caught there). ChamferOverNarrowFace then returns false, as the cut did.
+  A failure that is not a computation failure (mitcad#1986) is passed on
+  as before, with the flag cleared.
+
+The guides within the spine stay walked because what they leave goes on
+to the stripe computed again after the refusal. On a reported design two
+bosses on a plate were rounded where each try's walk from the spine's
+start failed at once (a walking failure): the builder's done flag the
+failed walk left false is not set again by the stripe computed again
+from analytic pieces alone, so the stripe was reported failed and the
+rounding made otherwise, the plate's end face split into five pieces that
+later features name. A first version of this patch (1696 of 18.11.2026)
+skipped the whole walk, left done true and the end face whole, and those
+features failed.
+
+The result is the same: the fillet of the consumed-strip case written as
+BRep is the same byte for byte, in about 3 s instead of 21 to 34 s; the
+reported design's faces and edges are named the same as without the
+patch (mitcad-cli info --names); and OCCT's blend and chamfer DRAW cases
+(754) give the same status and results.
+
+Upstream: new (the narrow-face tries are Mitcad's own).
+
+Test: geometry.fillet_consumed_strip (the fillet within 15 s, the same
+volume and checks as before); tools/ui-fillet-chain-remark-test.sh.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 1667c27b..e5fb7a58 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -1000,6 +1000,10 @@ static thread_local const NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopToo
+ // (ChamferOverNarrowFace for a fillet): the face beyond may cut the narrow
+ // face's side of the blend away from a crossing on (ChamferCutByFacesBeyond).
+ static thread_local bool ChFi3d_NarrowForward = false;
++// A try over a narrow face whose cut its analytic pieces already refuse
++// (ChamferOverNarrowFace): PerformSetOfKGen walks its guides within the
++// spine and leaves out those past its ends.
++static thread_local bool ChFi3d_NarrowNotPast = false;
+ // (The sides whose step starts a walk on an edge from the ball of the
+ // piece before it, StartSol over a concave crease: ComputeData does not
+ // complete such a walk back forward over that piece.)
+@@ -14001,6 +14005,69 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+   return false;
+ }
+ 
++// Whether a piece's line on the narrow face (side Ons) runs along the
++// spine: a walked piece, its lines' parameters those of the spine up to the
++// guide's own tolerance (ChamferCutByFacesBeyond).
++static bool ChFi3d_NarrowPieceWalked(const occ::handle<ChFiDS_SurfData>& SD, const int Ons)
++{
++  const ChFiDS_FaceInterference& FI = SD->Interference(Ons);
++  const double aTolW = std::max(1.e-3 * (SD->LastSpineParam() - SD->FirstSpineParam()), Precision::PConfusion());
++  return std::abs(FI.FirstParameter() - SD->FirstSpineParam()) <= aTolW
++         && std::abs(FI.LastParameter() - SD->LastSpineParam()) <= aTolW;
++}
++
++// Whether the analytic pieces of a stripe computed again over the narrow
++// face B's surface unbounded (ChamferOverNarrowFace, before the rest of it
++// is walked) already refuse its cut by the faces beyond B: a piece within
++// the spine, not walked, whose contact on B (side Ons, its line on WideB,
++// the unbounded face) leaves B or comes back into it at
++// ChamferCutByFacesBeyond's samples. That cut takes such a crossing on a
++// walked piece only (its step 1), and the walk leaves the analytic pieces
++// as they are, so the cut is refused after the walk as well.
++static bool ChFi3d_NarrowCutRefusedByAnalyticPieces(const occ::handle<ChFiDS_Stripe>& Stripe,
++                                                    const int                         Ons,
++                                                    const TopoDS_Face&                B,
++                                                    const TopoDS_Face&                WideB,
++                                                    const TopOpeBRepDS_DataStructure& DStr)
++{
++  if (Stripe->SetOfSurfData().IsNull())
++  {
++    return false;
++  }
++  const occ::handle<ChFiDS_Spine>& Spine = Stripe->Spine();
++  const double                     WEnd  = Spine->LastParameter(Spine->NbEdges());
++  TopoDS_Face                      BF    = B;
++  BF.Orientation(TopAbs_FORWARD);
++  BRepTopAdaptor_FClass2d aClass(BF, Precision::PConfusion());
++  const NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& Seq = Stripe->SetOfSurfData()->Sequence();
++  for (int i = 1; i <= Seq.Length(); i++)
++  {
++    const occ::handle<ChFiDS_SurfData>& SD = Seq.Value(i);
++    const ChFiDS_FaceInterference&      FI = SD->Interference(Ons);
++    const double                        W0 = SD->FirstSpineParam(), W1 = SD->LastSpineParam();
++    if (W1 <= Precision::PConfusion() || W0 >= WEnd - Precision::PConfusion() || SD->Index(Ons) <= 0
++        || !DStr.Shape(SD->Index(Ons)).IsSame(WideB) || FI.PCurveOnFace().IsNull() || FI.LineIndex() <= 0
++        || ChFi3d_NarrowPieceWalked(SD, Ons))
++    {
++      continue;
++    }
++    // (The samples of the cut's step 1.)
++    const int nbs = 200;
++    bool      in  = true;
++    for (int k = 0; k <= nbs; k++)
++    {
++      const double t   = FI.FirstParameter() + (FI.LastParameter() - FI.FirstParameter()) * k / nbs;
++      const bool   sIn = aClass.Perform(FI.PCurveOnFace()->Value(t)) != TopAbs_OUT;
++      if (k > 0 && sIn != in)
++      {
++        return true;
++      }
++      in = sIn;
++    }
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : ChamferOverNarrowFace
+ // purpose  : The chamfer's computation failed; where a piece's contact on
+@@ -14090,19 +14157,29 @@ bool ChFi3d_Builder::ChamferOverNarrowFace(const occ::handle<ChFiDS_Stripe>& Str
+   aMap.Bind(BF, NF);
+   Stripe->Reset();
+   Spine->SetErrorStatus(ChFiDS_Ok);
+-  bool aComputed = true;
++  bool aComputed = true, aRefused = false;
+   ChFi3d_NarrowFaces = &aMap;
+   try
+   {
+     OCC_CATCH_SIGNALS
+     occ::handle<ChFiDS_Stripe> aStripe = Stripe;
+     PerformSetOfKPart(aStripe, false);
++    // (Where the analytic pieces already refuse the cut, the guides past
++    // the spine's ends are not walked: over B's unbounded surface such a
++    // walk may run on to where its sections get singular, and their
++    // approximation take most of the fillet's time, for pieces thrown away.
++    // The guides within the spine are walked as before: whether they fail
++    // and what they leave, the builder's done above all, goes on to the
++    // stripe computed again after the refusal.)
++    aRefused             = ChFi3d_NarrowCutRefusedByAnalyticPieces(aStripe, ons, B, NF, DStr);
++    ChFi3d_NarrowNotPast = aRefused;
+     PerformSetOfKGen(aStripe, false);
+   }
+   catch (Standard_Failure const& anEx)
+   {
+     // (aMap is gone once this returns or throws.)
+-    ChFi3d_NarrowFaces = nullptr;
++    ChFi3d_NarrowFaces   = nullptr;
++    ChFi3d_NarrowNotPast = false;
+     // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
+     if (!ChFi3d_IsComputationFailure(anEx))
+     {
+@@ -14110,8 +14187,9 @@ bool ChFi3d_Builder::ChamferOverNarrowFace(const occ::handle<ChFiDS_Stripe>& Str
+     }
+     aComputed = false;
+   }
+-  ChFi3d_NarrowFaces = nullptr;
+-  if (!aComputed || Spine->ErrorStatus() != ChFiDS_Ok)
++  ChFi3d_NarrowFaces   = nullptr;
++  ChFi3d_NarrowNotPast = false;
++  if (!aComputed || aRefused || Spine->ErrorStatus() != ChFiDS_Ok)
+   {
+     return false;
+   }
+@@ -14987,13 +15065,7 @@ bool ChFi3d_Builder::ChamferCutByFacesBeyond(const occ::handle<ChFiDS_Stripe>& S
+   BRepTopAdaptor_FClass2d aClass(BF, Precision::PConfusion());
+   const double            aTol = std::max(100. * tolapp3d, 1.e-4);
+   // (A walked piece: its lines' parameters are those of the spine.)
+-  const auto walked = [&](const occ::handle<ChFiDS_SurfData>& SD) {
+-    const ChFiDS_FaceInterference& FI = SD->Interference(ons);
+-    // (Within the piece's spine parameters, up to the guide's own tolerance.)
+-    const double aTolW = std::max(1.e-3 * (SD->LastSpineParam() - SD->FirstSpineParam()), Precision::PConfusion());
+-    return std::abs(FI.FirstParameter() - SD->FirstSpineParam()) <= aTolW
+-           && std::abs(FI.LastParameter() - SD->LastSpineParam()) <= aTolW;
+-  };
++  const auto walked = [&](const occ::handle<ChFiDS_SurfData>& SD) { return ChFi3d_NarrowPieceWalked(SD, ons); };
+   const auto stateAt = [&](const occ::handle<ChFiDS_SurfData>& SD, const double t) {
+     return aClass.Perform(SD->Interference(ons).PCurveOnFace()->Value(t));
+   };
+@@ -22991,6 +23063,14 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
+       PerformSetOfSurfOnElSpine(ES, Stripe, It1, It2, Simul);
+       continue;
+     }
++    if (ChFi3d_NarrowNotPast)
++    {
++      // (A try whose cut is refused already: what a guide past an end of
++      // the spine leaves, walked or failed, is done, the error status as
++      // the guides before gave it.)
++      done = true;
++      continue;
++    }
+     try
+     {
+       OCC_CATCH_SIGNALS

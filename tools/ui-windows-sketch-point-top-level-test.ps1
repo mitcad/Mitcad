@@ -8,7 +8,10 @@
 # tools/ui-scripts/sketch-point-top-level.mitcad-ui as
 # tools/ui-sketch-point-top-level-test.sh runs it on Linux: the Create
 # menu's entries with Point second and not in Other Geometry, Point chosen
-# there adds a point, and the ribbon's Point button adds another.
+# there adds a point. Not the ribbon's Point button: in session 0's
+# 1028 px window the Docked toolbar panel (mitcad#2082) folds the SKETCH
+# tab's Create group to its name, whose menu is step 1; the button is
+# checked on Linux and macOS.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-sketch-point-top-level-test.ps1 -App build\dev\mitcad.exe [-Out dir] [-QtBin dir]
 param(
@@ -21,7 +24,14 @@ $work = Join-Path $script:UiOut 'files'
 New-Item -ItemType Directory -Force $work | Out-Null
 $env:MITCAD_TEST_WORK = $work
 $env:MITCAD_TEST_STEP_MS = '100'
-$env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/sketch-point-top-level.mitcad-ui'
+# The shared steps without the Point button's (step 2 and its place).
+$source = Get-Content -Raw (Join-Path $PSScriptRoot 'ui-scripts/sketch-point-top-level.mitcad-ui')
+$source = $source -replace "(?m)^expect-log '\^Ribbon button sketch\\.point at '\r?\n", ''
+$source = $source -replace "(?s)# 2\. The ribbon's Point button\..*?(?=command sketch\.finish)", ''
+if ($source.Contains('Ribbon button sketch')) { Ui-Fail 'the Point button steps were not taken out of the shared script' }
+$workflow = Join-Path $work 'workflow.mitcad-ui'
+Set-Content -Encoding ascii $workflow $source
+$env:MITCAD_TEST_INPUT = $workflow
 Ui-StartApp 'sketch-point-top-level' @('--ui=qt', '--no-mcp')
 $null = $script:UiProcess.Handle
 if (-not $script:UiProcess.WaitForExit(120000)) { Ui-Fail 'sketch Point driver timed out' }
@@ -30,7 +40,6 @@ if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "sketch Point driver failed (exit code $exitCode)"
 }
 Ui-ExpectLog 'TestDriver: popup entries: Lines | Point | Rectangles | ' 'Point at the top level of the Create menu'
-Ui-ExpectLog 'Ribbon button sketch.point at ' 'a Point button in the Create group'
-Ui-ExpectLog 'TestDriver: done' 'Point from the Create menu and from its ribbon button'
+Ui-ExpectLog 'TestDriver: done' 'Point from the Create menu'
 Ui-StopApp
 Write-Host 'PASS: sketch Point at the top level'

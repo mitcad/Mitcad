@@ -36,7 +36,23 @@ Nothing else changes: walks that do not start on a seam and steps within
 the spine are made as before; a failure within the spine fails the stripe
 as before.
 
+Failures (mitcad#1986): the step past the spine's end ends the extension
+only where its walk or surface fails with OCCT's reports of a computation
+it cannot make (ChFi3d_IsComputationFailure, 0016: "Path failed", a
+B-spline's "Weights values too small" as Standard_ConstructionError);
+any other failure there (a broken invariant, a signal) is rethrown, as is
+every failure of a step within the spine.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_kernel.cpp,
+test_rounding_walked_past_its_end_across_a_seam (ctest
+geometry.suite.fillet_kernel): a cylinder under two tilted planes, one arc
+of its top rounded with 1, its end where the cylinder's seam lies, so that
+the walk past that end starts on the seam: the stripe is made. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
 index bf10104be..5d80857e0 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
@@ -158,9 +174,9 @@ index 73d072e8a..1f2118ee9 100644
 +                           intf,
 +                           intl);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
-+      if (!aBeyond)
++      if (!aBeyond || !ChFi3d_IsComputationFailure(anException))
 +      {
 +        throw;
 +      }

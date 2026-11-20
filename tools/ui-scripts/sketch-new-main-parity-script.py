@@ -205,7 +205,7 @@ else:
 if scenario == 'measure':
     # Both kept dimensions were undone: the original saved model is clean.
     add('expect-native-enabled native.quickAccess.file.save false' if native else
-        'expect-widget-property quickAccess_file.save enabled false')
+        'expect-command-enabled file.save false')
 else:
     add("menu 'File/Save'", "expect-log '^Saved '")
 print('\n'.join(lines))

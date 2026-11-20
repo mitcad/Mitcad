@@ -26,6 +26,14 @@ contacts are 14.5 apart.
 - OverlappingStripes and RollsInsteadOfOverflow measure each contact
   against that edge.
 
+Test: geometry/tests/test_fillet_top_chains.cpp, test_reported_body (ctest
+geometry.fillet_top_chains): on the stored case `fillet-wall-run-on` of
+MITCAD_GEOMETRY_CASES, the fin top's outer and inner chains rounded with
+0.5 by OCCT's fillet alone: valid, taking what the two chains take alone
+within a thousandth; documented to fail without the patch
+(Failure_Overlap). Its failure without the patch is still to be shown in
+the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 506e40f4..09f39919 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

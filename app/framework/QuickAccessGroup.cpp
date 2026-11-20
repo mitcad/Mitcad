@@ -158,6 +158,38 @@ void QuickAccessGroup::setHiddenWhileEmpty(bool hidden) {
 
 bool QuickAccessGroup::isEmptyHidden() const { return m_hiddenWhileEmpty && m_buttons.isEmpty(); }
 
+void QuickAccessGroup::setLeadingWidgets(const QList<QWidget*>& widgets) {
+  int index = 0;
+  for (QWidget* widget : widgets) {
+    if (widget == nullptr) {
+      continue;
+    }
+    m_row->insertWidget(index++, widget, 0, Qt::AlignVCenter);
+    m_leading.append(widget);
+  }
+  if (m_leadingDivider == nullptr && !m_leading.isEmpty()) {
+    m_leadingDivider = new Hairline;
+    m_row->insertWidget(index, m_leadingDivider);
+  }
+  updateOwnParts();
+  updateGeometry();
+  emit contentsChanged();
+  schedulePlaces();
+}
+
+void QuickAccessGroup::updateOwnParts() {
+  for (const QPointer<QToolButton>& button : std::as_const(m_buttons)) {
+    if (button != nullptr) {
+      button->setVisible(m_ownShown && !m_folded);
+    }
+  }
+  m_divider->setVisible(m_ownShown && !m_folded && !m_buttons.isEmpty());
+  m_menuButton->setVisible(m_ownShown);
+  if (m_leadingDivider != nullptr) {
+    m_leadingDivider->setVisible(m_ownShown);
+  }
+}
+
 void QuickAccessGroup::applyVisible() {
   const bool wanted = QuickAccessSettings::loadVisible();
   const bool empty = isEmptyHidden();
@@ -169,7 +201,11 @@ void QuickAccessGroup::applyVisible() {
   m_visibleApplied = true;
   const bool changed = wanted != m_wanted;
   m_wanted = wanted;
-  setVisible(show);
+  // With widgets of the row's first in it (setLeadingWidgets) the group
+  // stays, its own parts hidden.
+  m_ownShown = show || m_leading.isEmpty();
+  updateOwnParts();
+  setVisible(show || !m_leading.isEmpty());
   // The preference's lines: whether the user wants the group.
   if (first || changed) {
     qDebug().noquote() << (wanted ? QStringLiteral("Quick access toolbar shown")
@@ -260,7 +296,8 @@ void QuickAccessGroup::rebuild() {
     disconnect(connection);
   }
   m_rowStates.clear();
-  int index = 0;
+  // After the leading widgets and their hairline (setLeadingWidgets).
+  int index = m_row->indexOf(m_divider);
   for (const QString& id : std::as_const(m_shown)) {
     QAction* action = m_registry.action(id);
     if (action == nullptr || m_rowCommands.contains(id)) {
@@ -269,11 +306,10 @@ void QuickAccessGroup::rebuild() {
     auto* button = new QuickButton(action, m_iconSize, [this, id] { return tooltipOf(id); });
     button->setObjectName(QStringLiteral("quickAccess_") + id);
     m_row->insertWidget(index++, button);
-    button->setVisible(!m_folded);
     connect(action, &QAction::changed, button, [this, id] { logState(id, false); });
     m_buttons.append(button);
   }
-  m_divider->setVisible(!m_folded && !m_buttons.isEmpty());
+  updateOwnParts();
   QStringList missing;
   for (const QString& id : QuickAccessSettings::defaults()) {
     if (m_registry.find(id) == nullptr) {
@@ -319,12 +355,7 @@ void QuickAccessGroup::setFolded(bool folded) {
     return;
   }
   m_folded = folded;
-  for (const QPointer<QToolButton>& button : std::as_const(m_buttons)) {
-    if (button != nullptr) {
-      button->setVisible(!folded);
-    }
-  }
-  m_divider->setVisible(!folded && !m_buttons.isEmpty());
+  updateOwnParts();
   qDebug().noquote() << (folded ? QStringLiteral("Quick access folded") : QStringLiteral("Quick access unfolded"));
   updateGeometry();
   emit contentsChanged();
@@ -357,6 +388,16 @@ int QuickAccessGroup::unfoldedWidth() const {
   const QMargins margins = m_row->contentsMargins();
   int width = margins.left() + margins.right();
   int parts = 0;
+  for (const QPointer<QWidget>& widget : m_leading) {
+    if (widget != nullptr && !widget->isHidden()) {
+      width += widget->sizeHint().width();
+      ++parts;
+    }
+  }
+  if (m_leadingDivider != nullptr) {
+    width += m_leadingDivider->minimumWidth();
+    ++parts;
+  }
   for (const QPointer<QToolButton>& button : m_buttons) {
     if (button != nullptr) {
       width += button->sizeHint().width();
@@ -566,6 +607,39 @@ void QuickAccessGroup::logPlaces() {
   // The places in the window, as the ribbon logs its own (ui_click_logged).
   QStringList lines;
   const QWidget* top = window();
+  // The row's widgets first in the group (setLeadingWidgets, mitcad#2082):
+  // inside its rectangle and before its first command.
+  const QWidget* firstOwn = nullptr;
+  for (const QPointer<QToolButton>& button : std::as_const(m_buttons)) {
+    if (button != nullptr && button->isVisible()) {
+      firstOwn = button;
+      break;
+    }
+  }
+  for (const QPointer<QWidget>& widget : std::as_const(m_leading)) {
+    if (widget == nullptr || !widget->isVisible()) {
+      continue;
+    }
+    const QPoint at = widget->mapTo(top, widget->rect().center());
+    const bool inside = widget->parentWidget() == this && rect().contains(widget->geometry());
+    const bool first = firstOwn == nullptr || widget->geometry().right() < firstOwn->geometry().left();
+    lines.append(QStringLiteral("Quick access leading %1 at %2,%3: %4, %5")
+                     .arg(widget->objectName())
+                     .arg(at.x())
+                     .arg(at.y())
+                     .arg(inside ? QStringLiteral("inside the group") : QStringLiteral("outside the group"),
+                          first ? QStringLiteral("first") : QStringLiteral("not first")));
+  }
+  if (!m_ownShown) {
+    const QString text = lines.join(QLatin1Char('\n'));
+    if (text != m_lastPlaces) {
+      m_lastPlaces = text;
+      for (const QString& line : std::as_const(lines)) {
+        qDebug().noquote() << line;
+      }
+    }
+    return;
+  }
   // The commands in order: the group's buttons, and the row's own for the
   // commands it shows itself (setRowCommands).
   QList<QPair<QString, QPointer<QWidget>>> places;

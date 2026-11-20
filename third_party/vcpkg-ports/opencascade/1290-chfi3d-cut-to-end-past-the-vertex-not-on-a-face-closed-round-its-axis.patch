@@ -31,8 +31,11 @@ round its surface) builds as before.
 On the stored design's body before the item (a pin on a plate's rounded
 end, rounded with 1): valid, one torus, the material added 4.76572 against
 the file's 4.76602 mm3 (patch 0911's result), where the end past V made an
-invalid shape. Test: geometry/tests/test_fillet_tangent_end_face.cpp, the
-pin on a plate's end whose seam runs along a side at V2: valid, one torus,
+invalid shape.
+Test: geometry/tests/test_fillet_tangent_end_face.cpp,
+test_rounding_of_a_pin_on_a_plate_end_round_most_of_it (ctest
+geometry.fillet_tangent_end_face): the pin on a plate's end whose seam
+runs along a side at V2: valid, one torus,
 the material added within 1e-6 of the ring at the foot within the sides'
 planes (without the patch: not valid, two tori).
 

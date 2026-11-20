@@ -11,12 +11,12 @@ cmake_minimum_required(VERSION 3.24)
 # dimensions: every feature after them recomputes and the tower's top
 # moves; then Fillet1's rounding of 3 along the fin's foot and of 0.5
 # along its top's edges, each added alone before the fillet, build
-# (mitcad#1926). The whole of Fillet1 (timeline item 37) builds too, but
-# its result is not the file's (a few cubic millimetres at the fin's arm
-# ends and the tower slot's corners): the import lists it as a deviating
-# result, and the test keeps it as the user would (--accept-deviations
-# 37), so that Fillet1 comes in parametric and recomputes on the edited
-# tower. Chamfer3 (timeline item 38) builds on Fillet1's result (OCCT port
+# (mitcad#1926). The whole of Fillet1 (timeline item 37) builds too, its
+# legs' feet rounded before their tops where both end at one vertex
+# (FootCorners in geometry/src/dressup.cpp, mitcad#1987), and comes in
+# parametric and verified against the file's result, so that it
+# recomputes on the edited tower. Chamfer3 (timeline item 38) builds on
+# Fillet1's result (OCCT port
 # patch 1730) and comes in parametric and verified, so that the final
 # body's tower height follows the edit. After the support's height edit
 # (d49 = 6 mm) Fillet1 builds too, its legs' feet rounded on the result of
@@ -72,7 +72,7 @@ if(design STREQUAL "")
   message(FATAL_ERROR "the archive ${archive_id} holds no design ${design_id}")
 endif()
 
-execute_process(COMMAND "${CLI}" import-f3d "${design}" --accept-deviations 37 --save "${WORK}/imported.mitcad"
+execute_process(COMMAND "${CLI}" import-f3d "${design}" --save "${WORK}/imported.mitcad"
                 RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE err)
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "mitcad-cli import-f3d failed (${status}):\n${out}${err}")
@@ -84,11 +84,11 @@ if(NOT row MATCHES " parametric +-> F33 [^\n]*\\(verified\\)")
 endif()
 message(STATUS "ok   ${row}")
 # Fillet1 builds its rounding of all its sets (OCCT port patches up to
-# 1729), kept parametric with its deviation from the file's result.
+# 1729), the file's result (its legs' foot corners, mitcad#1987).
 string(REGEX MATCH "\n +37 [^\n]*" row "${out}")
 string(STRIP "${row}" row)
-if(NOT row MATCHES " parametric +-> F35 [^\n]*kept parametric at the user's choice")
-  message(FATAL_ERROR "Fillet1 did not come in parametric with its deviating result kept: ${row}")
+if(NOT row MATCHES " parametric +-> F35 [^\n]*\\(verified\\)")
+  message(FATAL_ERROR "Fillet1 did not come in parametric and verified: ${row}")
 endif()
 message(STATUS "ok   ${row}")
 # Chamfer3 builds on the kernel's Fillet1 result (OCCT port patch 1730).

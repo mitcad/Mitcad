@@ -25,6 +25,11 @@ a rim's torus), that common edge does not hold the vertex.
   the vertex where the walk reached the edge, and the short edge lies in
   the removed corner (as 0071's prolongation from an edge's end does).
 
+Test: geometry/tests/test_fillet_corners.cpp (ctest
+geometry.suite.fillet_corners),
+test_walk_round_the_corner_past_a_short_edge: Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index f6a30e99..bab35181 100644

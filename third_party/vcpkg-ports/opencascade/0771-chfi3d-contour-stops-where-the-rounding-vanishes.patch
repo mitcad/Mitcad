@@ -44,7 +44,31 @@ contact's, and the approximation of the line between failed or wandered
   ends; the corner moves that end to the vertex (ChFi3d_ShrinkVanishingEnd,
   patch 0770), and the stripes there meet in the singular corner.
 
+The conditions (mitcad#1986) are geometric, not the case's: a vertex of
+a contour where the edges continue each other and the faces of both edges
+come tangent within 5e-4 rad (a face without a normal at the vertex taken
+at its limit along the edge), and, for a constant-radius, non-periodic
+stripe whose spine end is a tangency extremity, a walked line of at least
+four points ending within a hundredth of the radius of the vertex. Any
+pair of faces qualifies (not only a block's side over a post's foot
+rounding), whatever the radius. Only the sizes are chosen: 5e-4 rad and
+5e-4 of the radius as the vanishing width (the block on the post comes
+tangent within 7e-5 rad, two crossing cylinders of mitcad#1883 at 0.008),
+a hundredth of the radius as the reach, 30 solver iterations.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_lens_overflow.cpp,
+test_chain_through_points_where_the_rounding_vanishes (ctest
+geometry.fillet_lens_overflow): after the post's foot, the block's bottom
+outline rounded with 1 through the points where the foot's rounding
+vanishes: valid, the two points kept, its quarters alike. Another caller:
+geometry/tests/test_fillet_occt_cases.cpp,
+test_crossing_cylinders_rounded_through_their_near_tangent_points (ctest
+geometry.fillet_occt_cases). Its failure without the patch, stated in its
+documentation, is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 index 93ed3625..1904a2d4 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx

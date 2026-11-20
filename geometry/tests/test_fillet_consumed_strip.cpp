@@ -7,8 +7,13 @@
 // or left the face as a sliver between them where the two corners at an end
 // made a point each. A ring of a stored design with the windows of a
 // circular pattern is the case behind the patch 0950 of the OCCT port
-// (third_party/vcpkg-ports, mitcad#343).
+// (third_party/vcpkg-ports, mitcad#343). Each rounding is first tried over
+// its floor's or ceiling's surface unbounded (patch 0940), which the
+// roundings' analytic pieces refuse; walking that try's guides past the
+// spine's ends first took most of the fillet's time (patch 1696,
+// mitcad#1824, mitcad#2065).
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -173,12 +178,18 @@ void test_windows_sills_rounded_away() {
   for (const TopoDS_Edge& e : edges) {
     fillet.Add(kRound, e);
   }
+  const auto start = std::chrono::steady_clock::now();
   try {
     OCC_CATCH_SIGNALS
     fillet.Build();
   } catch (const Standard_Failure& e) {
     std::printf("fillet threw: %s\n", e.what());
   }
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  std::printf("fillet: %.2f s\n", seconds);
+  // (About 3 s with patch 1696, 21 to 34 s without it: the tries over the
+  // unbounded faces walked and approximated past the spine's ends in vain.)
+  CHECK(seconds < 15.0);
   CHECK(fillet.IsDone());
   if (!fillet.IsDone()) {
     return;

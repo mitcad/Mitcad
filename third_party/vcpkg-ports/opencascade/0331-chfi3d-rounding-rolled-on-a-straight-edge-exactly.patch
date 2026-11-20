@@ -28,6 +28,11 @@ curves by the contacts' lines, with exact p-curves on the plane and on a
 planar restriction face (else the walked one), on the same parameters;
 anything else is left as walked. (The edge on the rolled edge, where the
 rounding meets the face beyond at an angle, gets no regularity with 0350.)
+
+Test: geometry/tests/test_fillet_kernel.cpp (ctest
+geometry.suite.fillet_kernel), test_rounding_rolled_on_a_straight_edge:
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 index 5789dc5..928dac5 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx

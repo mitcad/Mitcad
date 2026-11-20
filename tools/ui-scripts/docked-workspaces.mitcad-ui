@@ -1,0 +1,307 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout of Windows and Linux (mitcad#2082, GitHub
+# mitcad/Mitcad#476) through the real UI: the Floating layout's top bar at
+# the window's top and its toolbar panel under it across the window, the
+# docks below them, on a box with one drawing (workspaces.json), in a
+# 1280 x 800 window. The wrapper sets the Docked layout's old Projects
+# choice (projects/panel=true) beforehand.
+#   0. The top bar as in the Floating layout: no menu bar row ("Menu bar
+#      hidden: Docked"), the ☰ of the menus at the bar's left ("Menu bar
+#      button at"); the bar's parts in the Floating order ("Docked top
+#      bar: ..." as "Floating cards: ..." names them): titleRow at the
+#      window's top, then titleMenu (☰), titleFile (Home, File, Save),
+#      titleHistory (Undo, Redo), titleTabs (the design's tab, also with one
+#      design), the quick-access group only while it has commands (none by
+#      default), titleBoost, the indicators, titleChat, titleSettings
+#      (Preferences, ?) and titleVersion; then the toolbar panel: the
+#      workspace block (ribbonWorkspace), the workspace's tabs (ribbonTabs)
+#      and the command search field at the card's row's right end
+#      (ribbonSearch). Nothing of the old Docked toolbar's stand-ins: no
+#      quick-access group in the tab row, no Boost in a menu bar. The
+#      design's tab on the bar's centre line with Home. The Projects panel
+#      hidden at the start (the top bar's own choice, none yet; the old
+#      Docked choice is not read). The design's tab at its full width, its
+#      name not elided ("Title row tabs: ... elided no").
+#   1. Outside Render the window's menu of its panels lists none of the
+#      Render workspace's docks.
+#   2. Design -> Make from the selector's list: only 3D Print, Laser and
+#      CNC of the workspaces' tabs, Design's out of sight; Laser shown.
+#   3. Make -> Render: the RENDER tab alone with its own row, the rendered
+#      view on (where the render worker is there), its docks shown and the
+#      model's hidden; the panels' menu lists its docks there.
+#   4. Render -> Design: Design's tabs, the docks shown before and the view
+#      mode of before; Design -> Make opens on Laser, the tab shown last
+#      there; back to Design.
+#   5. The Timeline hidden by the user, the Projects panel shown (View ›
+#      Panels › Projects: remembered). Drawing from the selector opens the
+#      design's drawing: Command and Projects hidden, the Browser stays,
+#      the Timeline stays hidden; the hide is no choice of the user's (the
+#      setting stays shown). Close Drawing shows exactly Command and
+#      Projects again; the Timeline stays hidden.
+#   6. Home shows the Start page: the title row stays, the toolbar panel
+#      hidden as the Floating layout hides it, the docks hidden (and the
+#      Projects choice still shown); the design's tab in the title row leads
+#      back to Solid with the panel. Home again, Drawing chosen over the
+#      page (as the selector would): the page goes, the panel back, the
+#      drawing opens with the same docks hidden; Close Drawing shows the
+#      docks shown before the Start page.
+#   7. The selector disabled while a sketch is edited, enabled after it.
+# Run by tools/ui-docked-workspaces-test.sh (Linux) and
+# tools/ui-windows-docked-workspaces-test.ps1 (Windows), both Docked. The
+# macOS Docked layout (the system's menu bar, no top bar) has its own
+# steps: docked-workspaces-macos.mitcad-ui.
+expect-ever 'View area' 30
+window-resize 1280 800
+wait-idle
+
+# 0. The top bar and the toolbar panel under it.
+expect-ever '^Menu bar hidden: Docked$' 30
+expect-ever '^Menu bar button at ' 30
+expect-ever '^Projects panel at the start: hidden [(]no choice yet in this layout[)]$' 30
+expect-ever '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$' 30
+expect-ever '^Ribbon workspace at ' 30
+expect-ever '^Ribbon tab START at ' 30
+expect-ever '^Ribbon tab SOLID at ' 30
+expect-ever '^Ribbon tab MAKE_PRINT out of sight$' 30
+expect-ever '^Document tab shown at ' 30
+# The title row's top within the tool bar's own margin (Qt's own style
+# of Linux gives 4 px, Windows' style less), never below a menu bar row.
+expect-ever '^Docked top bar: window 1280x800, view top [0-9]+; titleRow [0-9]+,[0-9] [0-9]+x[0-9]+; titleMenu [^;]+; titleFile [^;]+; titleHistory [^;]+; titleTabs [^;]+;( titleBoost [^;]+;)?( titleIndicator [^;]+;)?( titleAgent [^;]+;)?( titleChat [^;]+;)? titleSettings [^;]+; titleVersion [^;]+; ribbon [^;]+; ribbonWorkspace [^;]+; ribbonTabs [^;]+; ribbonSearch [^;]+' 30
+expect-widget-property ribbonWorkspace enabled true
+expect-widget-property dockedPanel visible true
+expect-dock browserDock shown
+expect-dock timelineDock shown
+expect-dock commandDock shown
+expect-dock projectsDock hidden
+wait-idle
+# The view below the tool bar, which ends where the panel ends.
+expect-design-chrome
+# The design's tab on Home's centre line, as in the Floating top bar.
+capture homeY '^Ribbon tab START at \d+,(\d+)$'
+capture tabY '^Document tab shown at \d+,(\d+)$'
+expect-near ${tabY} ${homeY} 0 1
+# The design's tab at the full width it asks for, its name not elided in
+# its semibold (the Docked layout's font had elided it, "Un…ed").
+capture tabWidth '^Title row tabs: bar \d+; [^;]+ (\d+) of \d+ elided (?:yes|no)$'
+capture tabWanted '^Title row tabs: bar \d+; [^;]+ \d+ of (\d+) elided (?:yes|no)$'
+expect-near ${tabWidth} ${tabWanted} 0 0
+expect-never '^Title row tabs: .* elided yes'
+
+# 1. The panels' menu outside Render: none of the Render docks.
+dock-title-context browserDock
+expect-popup-entries '^(?!.*\b(Appearances|Look|Lights|Environment|Shots|Output)\b)Browser [|] Timeline'
+key Escape
+wait-idle
+
+# 2. Design -> Make (the list opens on the current workspace's entry:
+# the arrow keys and Enter choose).
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry MAKE at '
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: MAKE$'
+wait-log '^Ribbon workspace: MAKE [(]tabs MAKE_PRINT, MAKE_LASER, MAKE_CNC[)]$'
+wait-log '^Ribbon tab shown: MAKE_PRINT$'
+wait-idle
+wait-log '^Ribbon tab MAKE_PRINT at '
+wait-log '^Ribbon tab MAKE_LASER at '
+wait-log '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab SOLID out of sight$'
+wait-log '^Ribbon tab MANAGE out of sight$'
+mark
+click-logged '^Ribbon tab MAKE_LASER at '
+wait-log '^Ribbon tab shown: MAKE_LASER$'
+wait-idle
+
+# 3. Make -> Render.
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [(]current[)] [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry RENDER at '
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: RENDER$'
+wait-log '^Ribbon tabs: RENDER [(]shown RENDER[)]$'
+wait-log '^Ribbon workspace: RENDER [(]tabs RENDER[)]$'
+wait-log '^Workspace RENDER: the rendered view (on|not available)$'
+wait-log '^Render workspace opened$' 30
+wait-idle
+wait-log '^Ribbon tab RENDER: its own row$'
+expect-dock-area renderLeftPanel left
+expect-dock-area renderSettingsPanel right
+expect-dock-area renderBarPanel bottom
+expect-dock browserDock hidden
+expect-dock timelineDock hidden
+expect-dock commandDock hidden
+dock-title-context renderLeftPanel
+expect-popup-entries '\bShots\b'
+key Escape
+wait-idle
+
+# 4. Render -> Design: the model's tabs, docks and view mode back.
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [|] Render [(]current[)] [|] Drawing$'
+wait-log '^Ribbon workspace entry DESIGN at '
+key Up
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Workspace RENDER left: the rendered view off$'
+wait-log '^Render workspace closed$' 30
+wait-log '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$'
+wait-idle
+wait-log '^Ribbon tab SOLID at '
+wait-log '^Ribbon tab MAKE_PRINT out of sight$'
+expect-dock browserDock shown
+expect-dock timelineDock shown
+expect-dock commandDock shown
+expect-design-chrome
+dock-title-context browserDock
+expect-popup-entries '^(?!.*\b(Appearances|Look|Lights|Environment|Shots|Output)\b)Browser [|] Timeline'
+key Escape
+wait-idle
+# Make opens on the tab shown last there.
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace entry MAKE at '
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: MAKE$'
+wait-log '^Ribbon tab shown: MAKE_LASER$'
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace entry DESIGN at '
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Ribbon tab shown: SOLID$'
+wait-idle
+
+# 5. A drawing hides the model's docks; one the user hid stays hidden; the
+# Projects panel's choice stays the user's.
+expect-dock projectsDock hidden
+dock-close timelineDock
+expect-dock timelineDock hidden
+menu View/Panels/Projects
+expect-dock projectsDock shown
+expect-setting projects/panelTopBar true
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace entry DRAWING at '
+key Down
+key Down
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: DRAWING$'
+wait-log '^Workspace DRAWING: opened D1$'
+wait-log '^Ribbon tabs: DRAWING [(]shown DRAWING[)]$'
+wait-log '^Drawing docks hidden: commandDock, projectsDock$'
+wait-idle
+expect-dock browserDock shown
+expect-dock commandDock hidden
+expect-dock projectsDock hidden
+expect-dock timelineDock hidden
+expect-setting projects/panelTopBar true
+mark
+command drawing.close
+wait-log '^Drawing docks shown again: commandDock, projectsDock$'
+wait-log '^Ribbon tab shown: SOLID$'
+wait-idle
+expect-dock browserDock shown
+expect-dock commandDock shown
+expect-dock projectsDock shown
+expect-dock timelineDock hidden
+
+# 6. Home: the Start page with the title row, without the panel; the
+# design's tab leads back.
+sleep 300
+mark
+click-logged '^Ribbon tab START at '
+wait-log '^Title row: Home$'
+wait-log '^Start page shown$'
+wait-log '^Ribbon panel hidden [(]Start[)]$'
+wait-log '^Docked toolbar panel hidden [(]Start[)]$'
+wait-idle
+expect-dock browserDock hidden
+expect-dock commandDock hidden
+expect-widget-property ribbonToolbar visible true
+expect-widget-property titleRow visible true
+expect-widget-property dockedPanel visible false
+expect-setting projects/panelTopBar true
+sleep 300
+mark
+click-logged '^Document tab shown at '
+wait-log '^Start page left by the design.s tab$'
+wait-log '^Ribbon tab shown: SOLID$'
+wait-log '^Start page hidden$'
+wait-log '^Docked toolbar panel shown$'
+wait-idle
+expect-widget-property dockedPanel visible true
+expect-widget-property ribbonWorkspace visible true
+expect-dock browserDock shown
+expect-dock commandDock shown
+expect-design-chrome
+# Home again, then Drawing over the page.
+sleep 300
+mark
+click-logged '^Ribbon tab START at '
+wait-log '^Start page shown$'
+wait-log '^Docked toolbar panel hidden [(]Start[)]$'
+wait-idle
+mark
+workspace DRAWING
+wait-log '^Workspace DRAWING: opened D1$'
+wait-log '^Start page hidden$'
+wait-log '^Docked toolbar panel shown$'
+wait-log '^Drawing docks hidden: commandDock, projectsDock$'
+wait-idle
+expect-widget-property dockedPanel visible true
+expect-dock browserDock shown
+expect-dock commandDock hidden
+expect-dock projectsDock hidden
+expect-dock timelineDock hidden
+mark
+command drawing.close
+wait-log '^Drawing docks shown again: commandDock, projectsDock$'
+wait-idle
+expect-dock browserDock shown
+expect-dock commandDock shown
+expect-dock projectsDock shown
+expect-dock timelineDock hidden
+expect-design-chrome
+
+# 7. The selector locked while sketching.
+mark
+command sketch.create
+expect-log '^Create Sketch: select a plane' 10
+# XY from the browser's Origin folder: the box lies in front of the plane's
+# place in the view below the top bar.
+click-logged '^Browser arrow Root/Origin at '
+wait-idle 60
+wheel-logged '^Browser Root/Origin at ' -10
+wait-idle 60
+expect-log '^Browser Root/Origin/XY at ' 10
+click-logged '^Browser Root/Origin/XY at '
+expect-log 'Sketch started on xy' 10
+wait-idle
+expect-widget-property ribbonWorkspace enabled false
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+expect-widget-property ribbonWorkspace enabled true
+expect-never '^Quick access group: flat [(]Docked[)]$'
+expect-never '^Boost button row: '
+expect-never '^Ribbon tab row end: '
+expect-never 'TestDriver: FAIL'

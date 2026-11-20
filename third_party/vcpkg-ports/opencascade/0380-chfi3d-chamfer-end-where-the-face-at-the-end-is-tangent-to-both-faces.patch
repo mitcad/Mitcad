@@ -24,6 +24,11 @@ a free boundary with a singular extremity as WalkedCutToEnd's; ChFi3d_FilDS
 cuts the edge such an end lies on also where the end has a degenerated
 edge, both contacts on that edge.
 
+Test: geometry/tests/test_chamfer_overflow.cpp (ctest
+geometry.suite.chamfer_overflow), test_chamfer_of_a_rounded_crease: Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -62,8 +62,10 @@ void follow(bool again = false) {
     return;
   }
   current.dark = dark;
-  // The styles by their keys, inside Icon size's proxy when Icon size is not
-  // 100 % (IconSizeStyle, mitcad#1561), as the start wrapped the first one.
+  // The styles by their keys, inside MitCad's proxy at every Icon size
+  // (IconSizeStyle: Icon size, mitcad#1561; the pop-up rows' band, #2084;
+  // the popups' border over the portable style, #2081), as the start
+  // wrapped the first one.
   if (dark) {
     setApplicationStyle(paletteStyleKey());
     // The theme's neutral roles of a dark theme (mitcad#1041), as the Docked

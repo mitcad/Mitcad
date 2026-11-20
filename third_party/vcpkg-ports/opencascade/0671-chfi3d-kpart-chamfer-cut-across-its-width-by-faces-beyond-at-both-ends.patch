@@ -57,6 +57,15 @@ Nothing else changes: roundings, chamfers whose ends are made otherwise,
 and chamfers that add material keep their ends as before.
 
 Upstream: new.
+
+Test: geometry/tests/test_chamfer_overflow.cpp,
+test_chamfer_of_a_groove_end_wall (ctest geometry.suite.chamfer_overflow): a
+groove's end wall chamfered past its flanks at three reaches: the volume
+removed that of the chamfer's wedge within the groove carried on past the
+wall, and one edge between the chamfer and the top through MitCad's chamfer.
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -3500,7 +3500,9 @@

@@ -25,6 +25,28 @@
 #include "../platform/MacCommandSearch.hpp"
 
 namespace mitcad {
+namespace {
+
+// The command chosen last in the search and the text it was chosen with,
+// until takeCommandSearchText() takes them.
+struct ChosenText {
+  QString id;
+  QString text;
+};
+
+ChosenText& chosenText() {
+  static ChosenText chosen;
+  return chosen;
+}
+
+} // namespace
+
+QString takeCommandSearchText(const QString& commandId) {
+  ChosenText& chosen = chosenText();
+  const QString text = chosen.id == commandId ? chosen.text : QString();
+  chosen = ChosenText();
+  return text;
+}
 
 CommandSearch::CommandSearch(CommandRegistry& registry, QWidget* parent)
     : QFrame(parent, Qt::Popup), m_registry(registry) {
@@ -196,6 +218,7 @@ void CommandSearch::choose() {
     return;
   }
   const QString id = item->data(0, Qt::UserRole).toString();
+  chosenText() = ChosenText{id, m_edit->text()};
   hide();
   qDebug().noquote() << "Command search chose" << id;
   emit chosen(id);

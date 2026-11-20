@@ -8,6 +8,12 @@ hole: a solid of thousands of faces with tens of cavities, the union of a
 machine's 257 bodies (mitcad#1279), mapped its tens of thousands of edges
 tens of times. The solid's edges are now mapped once for all the holes
 tried in it. The results are unchanged.
+
+Test: none, because its only effect is speed: the solid's edges are mapped
+once for all the holes tried in it instead of once per hole, the holes
+placed the same, and no test bounds the time. Its results are those of
+geometry.join_many_bodies (76 shells, the cavities placed), OCCT's without
+the patch.
 diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_BuilderSolid.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_BuilderSolid.cxx
 index 3428268d..ef1f0ac1 100644
 --- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_BuilderSolid.cxx

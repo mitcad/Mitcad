@@ -15,6 +15,12 @@ the corner (CornerKind), FailedCornerBlends(IV) and FailedCornerEdges(IV)
 the blends and the sharp edges meeting there, and FailedCornerMessage(IV)
 the exception's message, also through BRepFilletAPI_MakeFillet. The
 computation is unchanged.
+
+Test: geometry/tests/test_fillet_kernel.cpp (ctest
+geometry.suite.fillet_kernel), test_which_corner_a_fillet_fails_at: it
+reads the corner the patch adds and does not build without it. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
 index 6514a6a..e08e7f4 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx

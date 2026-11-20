@@ -62,6 +62,8 @@ run_layout() {
   grep -E '^(Design chrome|Window context menu): ' "$UI_LOG"
   if [ "$1" = docked ]; then
     ui_expect_log 'Window context menu: Browser | ' "docked: the right-click on the free end of the ribbon's tab row opened the window's menu"
+    ui_expect_log 'Docked toolbar panel hidden (Start)' "docked: the toolbar panel hidden over the Start page, the top bar staying"
+    ui_expect_log 'Docked toolbar panel shown' "docked: the toolbar panel back after the design's tab"
   fi
   ui_expect_log 'Placed Bar 20 test as ' "$1: a member placed with Build > Profile"
   ui_expect_log 'Document window created: window-2 ' "$1: a second design"

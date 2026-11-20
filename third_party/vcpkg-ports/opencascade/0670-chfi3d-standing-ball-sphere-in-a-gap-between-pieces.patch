@@ -41,6 +41,15 @@ Nothing else changes: gaps whose ends are no standing ball are walked as
 before.
 
 Upstream: new.
+
+Test: geometry/tests/test_fillet_results.cpp,
+test_bowl_topped_boss_rounded_past_corners_of_the_balls_radius (ctest
+geometry.suite.fillet_results): a boss topped by a steep bowl, its top's
+outline rounded with 0.2 past corners of the ball's radius: each corner one
+face on the ball's sphere, its area the spherical triangle's. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -121,6 +121,11 @@

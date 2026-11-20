@@ -17,6 +17,14 @@ other's would be rejected at that tree's root anyway: the crossings found
 are the same. The plate's check takes 0.1 s.
 
 Upstream: new.
+
+Test: none for its time, because its only effect is speed and no test
+bounds the checker's time (cli.perf_holes_mesh's limit catches only a
+plane gone to BRepMesh's default insertion). The crossings it must keep
+finding are checked by test_face_checker_wire_boxes
+(geometry/io/tests/test_io.cpp, ctest geometry.io): a square with 64 holes
+apart has no crossing segments, and with two holes that overlap each other
+exactly their two edges cross.
 diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_FaceChecker.cxx b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_FaceChecker.cxx
 --- a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_FaceChecker.cxx
 +++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_FaceChecker.cxx

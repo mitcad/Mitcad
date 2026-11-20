@@ -14,6 +14,13 @@ stored body has one torus face. The piece past the end now takes P's surface
 where that surface is the blend's own (the same points at the piece's
 contact), so the two are one face.
 
+The condition (mitcad#1986) is geometric, not the case's: wherever 1310
+adds one piece past the end, the piece takes P's surface when the two
+surfaces agree within Precision::Confusion at five points evenly along the
+piece's contact on its surface, whatever the blend's surface type. Only
+the count of five points is a choice (enough for a copy of the same
+analytic surface, which agrees everywhere or nowhere off a few points).
+
 Test: geometry/tests/test_fillet_fin_top_creases.cpp,
 test_transitions_cut_by_their_pieces (with 1350 and 1351): the rounding has
 the stored body's faces.

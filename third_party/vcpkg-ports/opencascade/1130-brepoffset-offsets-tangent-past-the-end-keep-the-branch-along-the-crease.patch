@@ -34,6 +34,19 @@ offsets become tangent before the end (walls leaning in, the end's own
 offset cutting the branch first), and for every other edge, the
 intersection is as before. The shells are valid, both ends open, the inner
 walls the thickness from the outer ones within 1e-6 mm.
+
+Test: geometry/tests/test_shell_loft_to_circle.cpp,
+test_occt_shells_of_octagon_lofts and
+test_occt_shells_of_a_square_loft_to_a_circle_of_radius_20 (ctests
+geometry.shell_loft_to_circle.octagon_24_5_seam_0, octagon_24_5_seam_22_5,
+octagon_21_7_seam_0, octagon_21_7_seam_22_5 and square_20):
+octagon-to-circle lofts of radii 24.5 and 21.7, the seam on a side and on
+a corner, shelled 0.5 to 3 mm with both ends removed, and a square to a
+circle of radius 20 shelled 0.5 to 2 mm, with OCCT alone: valid single
+solids, both ends open, the walls the thickness within 1e-6 mm; the port's
+notes record every OCCT-only case failing without the patch. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
 index cde0d94a..8f56ff39 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx

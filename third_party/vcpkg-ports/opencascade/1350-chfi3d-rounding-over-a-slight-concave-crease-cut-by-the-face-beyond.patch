@@ -51,12 +51,33 @@ faces (147 before); the grown pieces and the arcs' tori lie on the stored
 body's faces within 1e-4 mm, the stretches' walked roundings within 0.0005
 mm.
 
+The conditions (mitcad#1986) are geometric, but the arrangement is partly
+the case's. General: a fillet's piece rolling on an edge E of no spine
+edge whose faces OCCT takes for tangent, concave, with outward normals
+more than 0.01 radian apart at E's middle; any surfaces and radius. The
+case's: the rest of the arrangement, a walked piece W on B ending on E
+and, on the other side, an analytic piece A whose contacts end on the
+edges of its faces with C and with a third face T, as a transition piece
+between two chamfers makes it; a crease between other faces (W with no
+analytic piece beyond, or A's contacts ending elsewhere) still rolls on E
+as before (a general one would cut any walked piece across such a crease
+by the face beyond; left, mitcad#1986). Only the sizes are choices, not
+derived: the 0.01 radian floor (well above a crease that is tangent within
+the approximation), the point tolerance max(100 tolapp3d, 1e-4) and T's
+run-on of four blend widths.
+
 Test: geometry/tests/test_fillet_fin_top_creases.cpp,
 test_transitions_cut_by_their_pieces, on the case `fin-top-chamfer-rounding`
 of MITCAD_GEOMETRY_CASES (with 1351 and 1352).
 
-Upstream: new.
+Failures (mitcad#1986): the approximation of a p-curve, the intersection
+of the face beyond with the crease's face (GeomInt_IntSS) and the cut's
+curve (ChFi3d_KPartCutCurve) fail with OCCT's reports of a computation it
+cannot make (ChFi3d_IsComputationFailure, 0016): the blend is not cut so
+and rolls on the crease as before. Any other failure (a broken invariant,
+a signal) is rethrown.
 
+Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index 92d42534..7baf0056 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
@@ -82,7 +103,7 @@ index 92d42534..7baf0056 100644
    //! the face at an end of the spine before that end: the blend is walked
    //! on over that face's surface and cut by the face at the end up to where
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index a7569a0d..a6f9b5be 100644
+index d2e15129..ef6c49d6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -119,6 +119,7 @@
@@ -93,7 +114,7 @@ index a7569a0d..a6f9b5be 100644
  #include <GeomAPI_IntSS.hxx>
  #include <GeomLProp_SLProps.hxx>
  #include <Geom_BSplineCurve.hxx>
-@@ -6664,6 +6665,86 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -6677,6 +6678,91 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
  
  //=================================================================================================
  
@@ -171,8 +192,13 @@ index a7569a0d..a6f9b5be 100644
 +    }
 +    return occ::handle<Geom2d_Curve>(anApp.Curve());
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return occ::handle<Geom2d_Curve>();
 +  }
 +}
@@ -180,7 +206,7 @@ index a7569a0d..a6f9b5be 100644
  //=======================================================================
  // function : ChFi3d_KPartCutCurve
  // purpose  : The cut of an analytic blend S by the face beyond B, from P1
-@@ -7136,6 +7217,16 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
+@@ -7154,6 +7240,16 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
        // periods of the parameters given at its start.
        occ::handle<Geom2d_Curve> aP1 = GeomProjLib::Curve2d(aC, uf, ul, S);
        occ::handle<Geom2d_Curve> aP2 = GeomProjLib::Curve2d(aC, uf, ul, SB);
@@ -197,7 +223,7 @@ index a7569a0d..a6f9b5be 100644
        if (aP1.IsNull() || aP2.IsNull())
        {
          continue;
-@@ -15188,6 +15279,843 @@ bool ChFi3d_Builder::ChamferCutByFacesBeyond(const occ::handle<ChFiDS_Stripe>& S
+@@ -15274,6 +15370,853 @@ bool ChFi3d_Builder::ChamferCutByFacesBeyond(const occ::handle<ChFiDS_Stripe>& S
    return true;
  }
  
@@ -396,8 +422,13 @@ index a7569a0d..a6f9b5be 100644
 +      OCC_CATCH_SIGNALS
 +      anInter.Perform(ChFi3d_WideSurface(TF), ChFi3d_WideSurface(CF), 1.e-7, true, false, false);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      return occ::handle<ChFiDS_SurfData>();
 +    }
 +    for (int il = 1; anInter.IsDone() && il <= anInter.NbLines(); il++)
@@ -499,8 +530,13 @@ index a7569a0d..a6f9b5be 100644
 +      computed = ChFi3d_KPartCutCurve(S, CF, P1, isLast ? uv : uvQ, gp_Pnt2d(u, v), P2, aCoord, aLo, aHi, tol3d,
 +                                      aCc[s - 1], aPs[s - 1], aPc[s - 1], aTolR[s - 1]);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      computed = false;
 +    }
 +    if (!computed)
@@ -1041,7 +1077,7 @@ index a7569a0d..a6f9b5be 100644
  //=======================================================================
  // function : ChamferEndPastTurnStop
  // purpose  : A chamfer's contour stopped at the vertex V at an end of the
-@@ -21640,6 +22568,12 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -21800,6 +22743,12 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
      ChFi3d_JoinStandingEnd(DStr, Stripe, tolapp3d);
      ChFi3d_ExtensionOnNeighbourSurface(DStr, Stripe, tolapp3d);
      ChFi3d_MakeExtremities(Stripe, DStr, myEFMap, tolapp3d, tol2d);

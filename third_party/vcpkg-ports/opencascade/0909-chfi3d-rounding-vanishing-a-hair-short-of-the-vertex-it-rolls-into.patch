@@ -25,6 +25,11 @@ roll on and failed, and the stripe with it.
 
 Upstream: new.
 
+Test: pending (mitcad#1986): no synthetic body is known that reaches its
+case; it is verified on the stored design's bodies only
+(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded with
+0.86). A regression test needs such a body first.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index a69bc793..f517a95c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

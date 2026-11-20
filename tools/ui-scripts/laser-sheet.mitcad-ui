@@ -45,6 +45,8 @@ command sheet.t_nut_slot
 wait-log '^Command T-Nut Slot started' 30
 wait-log '^Pick places:' 30
 wait-idle
+command view.fit
+wait-idle
 mark
 click-pick 'face F3[.]b0/F3:side1 at'
 wait-log '^Preview T-Nut Slot: ok' 60

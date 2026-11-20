@@ -21,6 +21,8 @@
 #   - Sketch1 to a 3D sketch from the Browser's menu and back to 2D by the
 #     3D Sketch Palette's box, each one undo step; Convert to 2D Sketch
 #     offered on the 3D sketch's row; fully constrained.
+#   - Helix and Extrude then open with the converted sketch's region in
+#     Profiles, Esc cancels each (mitcad#2087, GitHub mitcad/Mitcad#487).
 #   - Fillet of the triangle's corner p12 with Radius 3 typed.
 #   - Plane-bound tools in a new 3D sketch on XY: 2-Point Rectangle from the
 #     origin (Width 30, Height 20), undone and redone; Center Diameter
@@ -494,6 +496,30 @@ wait-idle
 mark
 context-menu-logged '^Browser Root/Sketches/Sketch1 at ' cancel
 wait-log '^Context menu: .*Convert to 2D Sketch'
+wait-idle
+
+# Helix and Extrude start on the converted sketch's region (mitcad#2087,
+# GitHub mitcad/Mitcad#487): every sketch of the design is a 3D sketch now,
+# and the profile the commands take by themselves as they start is a 3D
+# sketch's region, for which the planar sketch query is refused (Helix threw
+# out of its start there and the application ended).
+mark
+command solid.helix
+wait-log '^Command Helix started'
+wait-log '^Helix Profiles: 1 profile [[]profile '
+wait-idle
+mark
+key Escape
+wait-log '^Command Helix cancelled'
+wait-idle
+mark
+command solid.extrude
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile [[]profile '
+wait-idle
+mark
+key Escape
+wait-log '^Command Extrude cancelled'
 wait-idle
 
 # Fillet: a corner of the triangle with a typed radius.

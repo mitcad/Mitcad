@@ -127,6 +127,26 @@ QRect fitFrameToScreens(const QRect& frame, const QList<QRect>& available, int p
   return QRect(x, y, width, height);
 }
 
+QList<ScreenArea> connectedScreenAreas() {
+  QList<ScreenArea> result;
+  for (const QScreen* screen : QGuiApplication::screens()) {
+    result.append(ScreenArea{screen->name(), screen->availableGeometry()});
+  }
+  return result;
+}
+
+bool floatingFrameStays(const QRect& frame, const QString& screen, const QList<ScreenArea>& screens) {
+  if (!frame.isValid()) {
+    return false;
+  }
+  for (const ScreenArea& area : screens) {
+    if ((screen.isEmpty() || area.name == screen) && area.available.contains(frame)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 QRect cascadedFrame(const QRect& from, const QSize& frameSize, int step, const QRect& available) {
   QPoint at = from.topLeft() + QPoint(step, step);
   if (available.isValid()) {

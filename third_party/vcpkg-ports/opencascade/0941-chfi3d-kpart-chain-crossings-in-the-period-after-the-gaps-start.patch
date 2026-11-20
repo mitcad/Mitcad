@@ -37,7 +37,24 @@ in steps of 15 degrees: valid, the volume of the boss with the chamfer's
 cone cut by the plate's outline within 1e-6 mm3; before, invalid for the
 seam from 120 to 180 degrees.
 
+The condition (mitcad#1986) is geometric, not the case's, and has no size
+of its own: a crossing on a periodic line of the other contact, in a chain
+with a piece before the gap (or a given start), where the gap does not run
+across the spine's start; any closed contact line and any seam position
+meet it (the turned seams of the synthetic test are the second geometry).
+
 Upstream: new.
+
+Test: geometry/tests/test_chamfer_overflow.cpp,
+test_chamfer_of_a_boss_beyond_a_slanted_plate_corner (ctest
+geometry.suite.chamfer_overflow): a boss under a plate corner with a slanted
+side, its foot chamfered past the corner, the boss's seam at 120, 150, 180
+and 300 degrees, 13 and 15 long: valid, the boss with the chamfer's cone cut
+by the plate's outline within 1e-8 relative (invalid without the patch for
+the seams from 120 to 180 degrees by its documentation; 300 degrees the
+boundary case). Its failure without the patch is still to be shown in the
+port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

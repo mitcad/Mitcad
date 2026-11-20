@@ -22,6 +22,15 @@ fillet failed.
   stripe (ContactsAtTangentEnd). The end is then the singular corner, as
   where the walk reaches the vertex exactly.
 
+Test: geometry/tests/test_fillet_corners.cpp,
+test_rounding_vanishing_where_its_faces_come_tangent_short_of_the_end (ctest
+geometry.suite.fillet_corners): a valley's floor rounded with 1 up to the
+vertex where its sides come tangent, the sides' curves exact and shifted by
+2e-4 (the end then within the vertex's tolerance, not at it): both built
+with a point at the vertex, the shifted one's volume within 2e-3 of the
+exact one's. Its failure without the patch is still to be shown in the
+port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 977ced2..b56eb98 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

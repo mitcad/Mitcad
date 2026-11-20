@@ -1,0 +1,357 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding of a wall's outer top edge with a radius wider than
+the wall's top, the top closed off at the edge's end by a sloping face
+(the end's top edge chamfered), takes the top away, its ball rolling on
+the inner wall's top edge, and the slope cuts it past the edge's end
+(mitcad#1987).
+
+- StartSolOverflow: a side of a convex edge's rounding (its ball inside
+  the solid) that went over a face its ball touches at no point, at least
+  the radius wide (the inner wall), across an edge where the solid turns
+  away by a right angle or more, rolls on that edge instead of touching a
+  face beyond (the floor at the inner wall's foot), where a ball touching
+  the outer wall and the floor from below took the whole wall away: a
+  valid body that was wrong (radii between 2 and 3 on a top 2 wide).
+  Past a sliver, and for a concave edge's rounding, nothing changes.
+- RolledOnProlongedEdgeAtEnd: a piece ending at the spine's end with its
+  contact on the other face inside that face, on no edge and off the
+  surfaces of the other faces at the end vertex (the slope cuts it further
+  on), rolls on past the end too. Its walk past Er's end rolls on the strip
+  of Er's other face (the top's plane) where the ball reaches into B (the
+  inner wall) and not into that face; its curve is then moved onto B's
+  surface with the guide's parameters, and its transition on B is P's.
+- PerformOneCorner: such an end at a vertex whose edges are all convex
+  (AllSame) is the cap of ChFi3d_RolledPastEdgeVertex too; the face at the
+  end keeps the side of the cap away from the vertex. A cap leaving that
+  face (the other contact running past the face's far edge, radii over
+  about 3.5 there) is refused in words rather than made invalid.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 47dd97c5..f9a17639 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -88,6 +88,7 @@
+ #include <BRepAdaptor_Curve.hxx>
+ #include <gp.hxx>
+ #include <BRepAdaptor_Surface.hxx>
++#include <BSplCLib.hxx>
+ #include <Geom2d_BSplineCurve.hxx>
+ #include <Geom2d_Line.hxx>
+ #include <Geom2d_TrimmedCurve.hxx>
+@@ -1725,6 +1726,41 @@ static bool convexAt(const TopoDS_Edge& E, const TopoDS_Face& F1, const TopoDS_F
+   return T.Dot(Pro) > 0.;
+ }
+ 
++// Whether the solid turns away at edge E between faces F1 and F2 by a right
++// angle or more at its parameter W: E convex there (convexAt) and the
++// faces' outward normals at least a right angle apart (a wall's top meeting
++// its inner wall).
++static bool turnsAwayAt(const TopoDS_Edge& E, const TopoDS_Face& F1, const TopoDS_Face& F2, const double W)
++{
++  if (!convexAt(E, F1, F2, W))
++  {
++    return false;
++  }
++  double                          f, l;
++  const occ::handle<Geom2d_Curve> C1 = BRep_Tool::CurveOnSurface(E, F1, f, l);
++  const occ::handle<Geom2d_Curve> C2 = BRep_Tool::CurveOnSurface(E, F2, f, l);
++  gp_Vec                          N[2];
++  for (int k = 0; k < 2; k++)
++  {
++    const TopoDS_Face&              F  = k == 0 ? F1 : F2;
++    const gp_Pnt2d                  uv = (k == 0 ? C1 : C2)->Value(W);
++    const occ::handle<Geom_Surface> S  = BRep_Tool::Surface(F);
++    gp_Pnt                          P;
++    gp_Vec                          DU, DV;
++    S->D1(uv.X(), uv.Y(), P, DU, DV);
++    N[k] = DU.Crossed(DV);
++    if (N[k].SquareMagnitude() <= gp::Resolution())
++    {
++      return false;
++    }
++    N[k].Normalize();
++  }
++  // (The sign of the product does not depend on the faces' orientations
++  // where both are oriented alike; convexAt has the solid's sides.)
++  const double aDot = (F1.Orientation() == F2.Orientation() ? 1. : -1.) * N[0].Dot(N[1]);
++  return aDot <= 1.e-6;
++}
++
+ // Whether the faces F1 and F2 of edge E meet at an angle at its parameter W
+ // (their normals apart by more than convexAt's tangency, and not folded
+ // back): a ball can roll on the edge there.
+@@ -2524,6 +2560,8 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+     TopoDS_Face fbBefore[2], fbFace[2];
+     TopoDS_Edge fbEntry[2];
+     double      fbWent[2] = {0., 0.};
++    // (The width of that face across the section, from its entry edge.)
++    double      fbWidth[2] = {0., 0.};
+     // Side k rolls on its entry edge (or the fallback's), unless the faces
+     // there are tangent (the blend can only run onto the next face).
+     auto roll = [&](const int k) {
+@@ -2640,6 +2678,7 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+           fbFace[k]      = face[k];
+           fbEntry[k]     = entry[k];
+           fbWent[k]      = went[k];
++          fbWidth[k]     = en.IsNull() ? RealLast() : dn;
+         }
+         if (!en.IsNull() && dn <= reach && moveOn(k, en, wn))
+         {
+@@ -2649,6 +2688,22 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+         roll(k);
+         break;
+       }
++      // A side that went over a face its ball touches at no point, at least
++      // the radius wide, across an edge where the solid turns away by a
++      // right angle or more (a wall's top narrower than the ball, its inner
++      // wall beyond), touches no face beyond it where the ball lies inside
++      // the solid (the spine's edge convex): it rolls on that edge. (The
++      // floor at the inner wall's foot is touched only from below, the wall
++      // gone. Past a sliver the ball touches the face beyond near the edge;
++      // a ball outside the solid, of a concave edge's rounding, may come
++      // down onto the floor.)
++      if (blind >= 0 && hasFallback[blind] && !fbBefore[blind].IsNull() && fbWidth[blind] >= radius
++          && turnsAwayAt(fbEntry[blind], fbBefore[blind], fbFace[blind], fbWent[blind])
++          && convexAt(cured, f1, f2, woned))
++      {
++        roll(blind);
++        break;
++      }
+       movedNow[0] = movedNow[1] = false;
+       bool in[2] = {pos[0] == TopAbs_IN || pos[0] == TopAbs_ON,
+                     pos[1] == TopAbs_IN || pos[1] == TopAbs_ON};
+@@ -21264,16 +21319,6 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+   {
+     return false;
+   }
+-  // (P ending at the spine's end, its section there in W, needs no rolling
+-  // on: the corner at V takes that end as it is.)
+-  {
+-    const double aWEnd = isFirst ? Spine->FirstParameter(1) : Spine->LastParameter(Spine->NbEdges());
+-    const double aWP   = isFirst ? P->FirstSpineParam() : P->LastSpineParam();
+-    if (std::abs(aWP - aWEnd) <= 10. * tolesp)
+-    {
+-      return false;
+-    }
+-  }
+   int opp = 0;
+   for (int s = 1; s <= 2 && opp == 0; s++)
+   {
+@@ -21287,6 +21332,38 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+     return false;
+   }
+   const int         ons = 3 - opp;
++  // (P ending at the spine's end, its section there in W, needs no rolling
++  // on: the corner at V takes that end as it is. Where its contact on N
++  // ends there inside N, on no edge, and off the surfaces of the faces at V
++  // but N and B, W does not reach that contact at the section (W slopes
++  // away from Er's vertex down N, as a chamfer of the end's top edge leaves
++  // it), and P rolls on past the spine's end as past A, up to where W cuts
++  // it.)
++  {
++    const double aWEnd = isFirst ? Spine->FirstParameter(1) : Spine->LastParameter(Spine->NbEdges());
++    const double aWP   = isFirst ? P->FirstSpineParam() : P->LastSpineParam();
++    if (std::abs(aWP - aWEnd) <= 10. * tolesp)
++    {
++      const ChFiDS_CommonPoint& aCN    = P->Vertex(isFirst, ons);
++      const NCollection_List<TopoDS_Shape> aNone;
++      const NCollection_List<TopoDS_Shape>& aFacesAtV = myVFMap.Contains(V) ? myVFMap(V) : aNone;
++      bool                                  aInEnd    = aCN.IsOnArc();
++      for (NCollection_List<TopoDS_Shape>::Iterator it(aFacesAtV); it.More() && !aInEnd; it.Next())
++      {
++        const TopoDS_Shape& F = it.Value();
++        if (F.IsSame(DStr.Shape(P->Index(ons))) || F.IsSame(DStr.Shape(P->Index(opp))))
++        {
++          continue;
++        }
++        GeomAPI_ProjectPointOnSurf aPr(aCN.Point(), BRep_Tool::Surface(TopoDS::Face(F)));
++        aInEnd = aPr.IsDone() && aPr.NbPoints() > 0 && aPr.LowerDistance() <= 10. * tolesp;
++      }
++      if (aInEnd)
++      {
++        return false;
++      }
++    }
++  }
+   const TopoDS_Edge Er  = TopoDS::Edge(DStr.Shape(P->IndexOfC(opp)));
+   const TopoDS_Face B   = TopoDS::Face(DStr.Shape(P->Index(opp)));
+   const TopoDS_Face N   = TopoDS::Face(DStr.Shape(P->Index(ons)));
+@@ -21371,19 +21448,71 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+     }
+     NF.Orientation(N.Orientation());
+   }
+-  // B prolonged past Er's ends: on B's surface the strip beside Er's curve
+-  // on B's side of it (B's interior there), Er's curve its edge, so that the
+-  // ball still leaves the edge for B where it reaches into it.
++  // The face of Er the ball rolls on beside it (Bw): B, unless the ball
++  // reaches into B there and not into Er's other face (B standing square to
++  // the face across Er, which the ball takes away, wider than that face:
++  // a wall's top narrower than the radius, its inner wall B). The ball
++  // reaches into a face where the foot of its centre on the face's surface
++  // lies inside the face. (On a face it reaches into, the walk rolling on
++  // Er's line leaves the edge for that face at once.)
++  TopoDS_Face Bw = B;
++  {
++    TopoDS_Face aOther;
++    for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(Er)); it.More() && aOther.IsNull(); it.Next())
++    {
++      if (!it.Value().IsSame(B))
++      {
++        aOther = TopoDS::Face(it.Value());
++      }
++    }
++    // The ball's centre in the middle of P (its ends' sections lie on the
++    // faces' boundaries): off P's contact on N by the radius, along N's
++    // normal, the radius from its contact on Er.
++    const double   WM   = 0.5 * (P->FirstSpineParam() + P->LastSpineParam());
++    const gp_Pnt2d uvNM = FN.PCurveOnFace()->Value(WM);
++    const gp_Pnt   pRM  = DStr.Curve(FR.LineIndex()).Curve()->Value(WM);
++    GeomLProp_SLProps aProps(SN, uvNM.X(), uvNM.Y(), 1, Precision::Confusion());
++    if (!aOther.IsNull() && aProps.IsNormalDefined())
++    {
++      const gp_Pnt pN = SN->Value(uvNM.X(), uvNM.Y());
++      const gp_Vec nN(aProps.Normal());
++      const gp_Pnt C1 = pN.Translated(R * nN), C2 = pN.Translated(-R * nN);
++      const gp_Pnt C  = std::abs(C1.Distance(pRM) - R) <= std::abs(C2.Distance(pRM) - R) ? C1 : C2;
++      const auto   reachesInto = [&](const TopoDS_Face& F) {
++        const occ::handle<Geom_Surface> S = BRep_Tool::Surface(F);
++        if (S.IsNull())
++        {
++          return true;
++        }
++        GeomAPI_ProjectPointOnSurf aPr(C, S);
++        if (!aPr.IsDone() || aPr.NbPoints() == 0)
++        {
++          return true;
++        }
++        double u = 0., v = 0.;
++        aPr.LowerDistanceParameters(u, v);
++        BRepClass_FaceClassifier aCl(F, gp_Pnt2d(u, v), Precision::PConfusion());
++        return aCl.State() == TopAbs_IN;
++      };
++      if (std::abs(C.Distance(pRM) - R) <= 1.e-3 * R && reachesInto(B) && !reachesInto(aOther))
++      {
++        Bw = aOther;
++      }
++    }
++  }
++  // Bw prolonged past Er's ends: on Bw's surface the strip beside Er's
++  // curve on Bw's side of it (Bw's interior there), Er's curve its edge, so
++  // that the ball still leaves the edge for Bw where it reaches into it.
+   TopoDS_Face BF;
+   TopoDS_Edge Eprol;
+-  if (!ChFi3d_StripBesideRolledEdge(B, Er, CEr, pf, pl, aGrow, BF, Eprol))
++  if (!ChFi3d_StripBesideRolledEdge(Bw, Er, CEr, pf, pl, aGrow, BF, Eprol))
+   {
+     return false;
+   }
+   TopoDS_Face Fref;
+   for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(Er)); it.More() && Fref.IsNull(); it.Next())
+   {
+-    if (!it.Value().IsSame(B))
++    if (!it.Value().IsSame(Bw))
+     {
+       Fref = TopoDS::Face(it.Value());
+     }
+@@ -21476,6 +21605,50 @@ bool ChFi3d_Builder::RolledOnProlongedEdgeAtEnd(const occ::handle<ChFiDS_Stripe>
+   {
+     X->SetIndexOfC2(DStr.AddShape(Er));
+   }
++  // (Walked on Er's other face: X's curve on Er's side moved onto B's
++  // surface, point by point along Er's line, with its parameters.)
++  if (!Bw.IsSame(B))
++  {
++    ChFiDS_FaceInterference&        FX  = X->ChangeInterference(opp);
++    const occ::handle<Geom2d_Curve> PCX = FX.PCurveOnFace();
++    const occ::handle<Geom_Surface> SW  = BRep_Tool::Surface(Bw);
++    if (PCX.IsNull() || SW.IsNull())
++    {
++      return false;
++    }
++    const double                 f  = std::min(FX.FirstParameter(), FX.LastParameter());
++    const double                 l  = std::max(FX.FirstParameter(), FX.LastParameter());
++    const int                    nb = 40;
++    NCollection_Array1<gp_Pnt2d> aUV(1, nb + 1);
++    NCollection_Array1<double>   aPar(1, nb + 1);
++    for (int k = 0; k <= nb; k++)
++    {
++      const double               t = f + (l - f) * k / nb;
++      const gp_Pnt2d             q = PCX->Value(t);
++      GeomAPI_ProjectPointOnSurf aPr(SW->Value(q.X(), q.Y()), SB);
++      if (!aPr.IsDone() || aPr.NbPoints() == 0 || aPr.LowerDistance() > 10. * tolesp)
++      {
++        return false;
++      }
++      double u = 0., v = 0.;
++      aPr.LowerDistanceParameters(u, v);
++      aUV.SetValue(k + 1, gp_Pnt2d(u, v));
++      aPar.SetValue(k + 1, t);
++    }
++    Geom2dAPI_PointsToBSpline anApp(aUV, aPar, 1, 8, GeomAbs_C2, 1.e-9);
++    if (!anApp.IsDone())
++    {
++      return false;
++    }
++    // (The approximation's knots run from 0 to 1: back to the guide's
++    // parameters it was given.)
++    occ::handle<Geom2d_BSplineCurve> aPC = anApp.Curve();
++    NCollection_Array1<double>       aKnots(aPC->Knots());
++    BSplCLib::Reparametrize(f, l, aKnots);
++    aPC->SetKnots(aKnots);
++    FX.ChangePCurveOnFace() = aPC;
++    FX.SetTransition(P->Interference(opp).Transition());
++  }
+   // X's curves on N and B in the periods of P's at WS.
+   for (int s = 1; s <= 2; s++)
+   {
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 64ca556d..6bcb90a6 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -7776,7 +7776,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+   double        tPast = 0.;
+   // (Also at a vertex of more edges, the face at the end there meeting the
+   // opposite face at the vertex only: PerformRolledPastEnd.)
+-  const bool    isRolledPast = (onsame || stat == ChFiDS_BreakPoint) && !isRolledEnd
++  const bool    isRolledPast = (onsame || stat == ChFiDS_BreakPoint || stat == ChFiDS_AllSame) && !isRolledEnd
+                             && ChFi3d_RolledPastEdgeVertex(DStr,
+                                                            Fd,
+                                                            isfirst,
+@@ -8947,6 +8947,33 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+         }
+       }
+     }
++    if (isRolledPast && stat == ChFiDS_AllSame)
++    {
++      // (At a vertex whose edges are all convex the cap's side is not that
++      // of an OnSame end: the face at the end keeps the side of the cap
++      // away from the vertex, which the blend takes away.)
++      const gp_Pnt2d aUV = BRep_Tool::Parameters(Vtx, Fv);
++      gp_Pnt2d       aMid;
++      gp_Vec2d       aTan;
++      Pc->D1(0.5 * (Udeb + Ufin), aMid, aTan);
++      const double aCross = aTan.X() * (aUV.Y() - aMid.Y()) - aTan.Y() * (aUV.X() - aMid.X());
++      if (aTan.Magnitude() > gp::Resolution() && std::abs(aCross) > gp::Resolution())
++      {
++        const bool aKeptLeft = aCross < 0.;
++        Et = (aKeptLeft == (Fv.Orientation() != TopAbs_REVERSED)) ? TopAbs_FORWARD : TopAbs_REVERSED;
++      }
++      // (A cap that leaves the face at the end, the blend's other contact
++      // running on past that face's far edge, would need the faces beyond
++      // to cut it too: not made.)
++      for (const double u : {Udeb, Ufin})
++      {
++        BRepClass_FaceClassifier aCl(Fv, Pc->Value(u), 1.e-4);
++        if (aCl.State() == TopAbs_OUT)
++        {
++          throw Standard_ConstructionError("Corner rolled past an edge: the cap leaves the face at the end");
++        }
++      }
++    }
+ 
+     TopOpeBRepDS_Curve Tc(Cc, tolreached);
+     ICurve = DStr.AddCurve(Tc);

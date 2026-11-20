@@ -31,6 +31,14 @@ with the far side split, one face too many); now it is valid with the exact
 volume.
 
 Upstream: new.
+
+Test: geometry/tests/test_chamfer_overflow.cpp,
+test_chamfer_consuming_a_strip_along_a_chain_of_edges (ctest
+geometry.suite.chamfer_overflow): the foot of a boss on a slab chamfered (or
+rounded) by 2, as wide as the slab's top round the boss, with the top's far
+edge whole and split, and the split on either side. Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451), the start after dock-state-render-move.mitcad-ui,
+# which ended in the Render workspace with its list's dock moved:
+#   1. The docks the workspace hid are shown again as they were kept: the
+#      Browser at the right, the Timeline floating, the Chat panel.
+#   2. The Render workspace's docks are not in the kept arrangement: opened
+#      again (from the Docked tab row's workspace selector, mitcad#2082),
+#      the list is at the left, the settings at the right, the Shots bar at
+#      the bottom; Design closes the workspace and the docks come back.
+# Run by tools/ui-dock-state-test.sh (Linux),
+# tools/ui-windows-dock-state-test.ps1 (Windows) and
+# tools/ui-macos-dock-state-test.sh (macOS), all Docked.
+expect-ever '^Dock state restored: .*browserDock right.*timelineDock floating ' 20
+expect-ever 'View area' 30
+wait-idle
+sleep 300
+wait-idle
+
+# 1. As kept outside the workspace.
+expect-dock browserDock shown
+expect-dock-area browserDock right
+expect-dock-float timelineDock 300 420 400 160
+expect-dock chatDock shown
+
+# 2. The workspace's docks at their own areas.
+expect-ever '^Ribbon workspace at ' 10
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry RENDER at '
+key Down
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: RENDER$'
+wait-log '^Render workspace opened$' 30
+wait-idle
+expect-dock-area renderLeftPanel left
+expect-dock-area renderSettingsPanel right
+expect-dock-area renderBarPanel bottom
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [|] Render [(]current[)] [|] Drawing$'
+wait-log '^Ribbon workspace entry DESIGN at '
+key Up
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Render workspace closed$' 30
+wait-idle
+expect-dock browserDock shown
+expect-dock-float timelineDock 300 420 400 160
+expect-never 'TestDriver: FAIL'

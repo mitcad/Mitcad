@@ -33,37 +33,35 @@ cat >> "$UI_OUT/docked.mitcad-ui" <<'DRIVER'
 # titlebar margins, without changing the physical display resolution.
 fit-main-frame 916 394
 expect-main-frame 916 394
-expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 focus-widget projectsTree
 key Home Right
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 key End
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
-expect-widget-property ribbonScrollLeft enabled false
-focus-widget ribbonScrollRight
-key Space
-expect-widget-property ribbonScrollLeft enabled true
-expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
-focus-widget ribbonScrollLeft
-key Space
-expect-widget-property ribbonScrollLeft enabled false
-expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
+# The current groups fit at this width; inspect this page's hidden arrows,
+# rather than another stacked page's control with the same object name.
+expect-ribbon-scroll none
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 screenshot ${MITCAD_TEST_SHOTS}/short-frame.png
 # Below the width of all group captions, overflow must work through ordinary
 # keyboard input and leave every complete group menu reachable.
 fit-main-frame 500 394
 expect-main-frame 500 394
-expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-scroll start
 expect-widget-property ribbonScrollLeft enabled false
 focus-widget ribbonScrollRight
 key Space
 expect-widget-property ribbonScrollLeft enabled true
-expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
+expect-ribbon-scroll scrolled
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 focus-widget ribbonScrollLeft
 key Space
 expect-widget-property ribbonScrollLeft enabled false
-expect-ribbon-labels Start Solid Build '3D Print' Laser CNC
+expect-ribbon-scroll start
+expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 screenshot ${MITCAD_TEST_SHOTS}/ribbon-overflow.png
 DRIVER
 for chrome in floating docked; do
@@ -116,9 +114,10 @@ for count in $project_counts; do
         else
           # Shown at the start, as for a user who turned it on (mitcad#1020:
           # hidden until then, also with projects configured), in the
-          # macOS settings file nocodo.fi/Mitcad.ini.
+          # macOS settings file nocodo.fi/Mitcad.ini, for both layouts
+          # (the Floating top bar has its own choice, mitcad#1990).
           mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
-          printf '[projects]\npanel=true\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
+          printf '[projects]\npanel=true\npanelTopBar=true\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
         fi
         export MITCAD_TEST_SHOTS=$UI_OUT/$count-$chrome-${scale}x-$scheme
         mkdir -p "$MITCAD_TEST_SHOTS"

@@ -161,7 +161,7 @@ echo "ok   no corner dots"
 
 echo "--- 1. The corner marker and the centre line under the pointer"
 ui_mark
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 ui_step "point at the plate's corner"      plate_hover 90 0
 hover_is "point at " "the corner under the pointer"

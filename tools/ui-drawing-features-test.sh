@@ -174,9 +174,12 @@ ui_focus_main
 ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "its sheet over the view"
 ui_expect_new "Drawing tool: Base View" "Base View is on"
 ui_expect_new "Drawing sheet view " "the sheet placed"
-# The Geometry group's new tools (mitcad#729).
+# The Geometry group's new tools (mitcad#729): their buttons, or the
+# group's name where it is collapsed (Docked at 1280 pixels, mitcad#2082);
+# its menu's entries are chosen below (ui_drawing_tool).
+settled "Ribbon DRAWING/EXPORT"
 for tool in Line Arc "Center Pattern" "Edge Extension"; do
-  ui_expect_log "Drawing tool $tool at" "the $tool tool on the bar"
+  ui_expect_log "$(ui_drawing_tool_place "$tool") at" "the $tool tool on the bar"
 done
 settled "Drawing panel drawingOption_direction"
 ui_step "Orientation: Top"                 ui_click_logged "Drawing panel drawingOption_direction"
@@ -209,8 +212,8 @@ ui_expect_new '"text_height":5' "5 mm letters"
 no_refusal
 # The plate's width: its left and right edges below the holes.
 ui_mark
-settled "Drawing tool Dimension"
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+settled "$(ui_drawing_tool_place "Dimension")"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 ui_step "the left edge"                    sheet_click 120.5 125
 ui_expect_new "Drawing picked line (1)" "the left edge picked"
@@ -268,8 +271,8 @@ ui_step "Esc"                              ui_key Escape
 
 echo "--- A centre pattern and an edge extension"
 ui_mark
-settled "Drawing tool Center Pattern"
-ui_step "Center Pattern"                   ui_click_logged "Drawing tool Center Pattern"
+settled "$(ui_drawing_tool_place "Center Pattern")"
+ui_step "Center Pattern"                   ui_drawing_tool "Center Pattern"
 ui_expect_new "Drawing tool: Center Pattern" "the tool is on"
 ui_step "one hole's rim"                   sheet_click 173 150
 ui_expect_new '"type":"center_pattern"' "a centre pattern asked for"
@@ -277,8 +280,8 @@ ui_expect_new "5 center marks" "the pattern drawn over the holes' own marks"
 ui_expect_new "2 = center_pattern" "listed"
 no_refusal
 ui_mark
-settled "Drawing tool Edge Extension"
-ui_step "Edge Extension"                   ui_click_logged "Drawing tool Edge Extension"
+settled "$(ui_drawing_tool_place "Edge Extension")"
+ui_step "Edge Extension"                   ui_drawing_tool "Edge Extension"
 ui_expect_new "Drawing tool: Edge Extension" "the tool is on"
 settled "Drawing panel drawingOption_edges"
 ui_step "Edges: One, Both Ways"            ui_click_logged "Drawing panel drawingOption_edges"
@@ -291,8 +294,8 @@ no_refusal
 
 echo "--- A line in the view, an arc on the sheet, a text in the view"
 ui_mark
-settled "Drawing tool Line"
-ui_step "Line"                             ui_click_logged "Drawing tool Line"
+settled "$(ui_drawing_tool_place "Line")"
+ui_step "Line"                             ui_drawing_tool "Line"
 ui_expect_new "Drawing tool: Line" "the line tool is on"
 # Its Width: Extra Thick (mitcad#1402), right after Thin and Thick; its
 # Pattern left Continuous (mitcad#1447).
@@ -310,8 +313,8 @@ ui_expect_new '"view":1' "in the view"
 ui_expect_new "4 = line" "drawn"
 no_refusal
 ui_mark
-settled "Drawing tool Arc"
-ui_step "Arc"                              ui_click_logged "Drawing tool Arc"
+settled "$(ui_drawing_tool_place "Arc")"
+ui_step "Arc"                              ui_drawing_tool "Arc"
 ui_expect_new "Drawing tool: Arc" "the arc tool is on"
 settled "Drawing panel drawingOption_attach"
 ui_step "Drawn: On the Sheet"              ui_click_logged "Drawing panel drawingOption_attach"
@@ -325,8 +328,8 @@ ui_expect_new '"sheet":0' "on the sheet"
 ui_expect_new "5 = arc" "drawn"
 no_refusal
 ui_mark
-settled "Drawing tool Text"
-ui_step "Text"                             ui_click_logged "Drawing tool Text"
+settled "$(ui_drawing_tool_place "Text")"
+ui_step "Text"                             ui_drawing_tool "Text"
 ui_expect_new "Drawing tool: Text" "the text tool is on"
 settled "Drawing panel drawingOption_text"
 ui_step "its text"                         ui_click_logged "Drawing panel drawingOption_text"
@@ -411,8 +414,8 @@ ui_step "Esc"                              ui_key Escape
 
 echo "--- The view's orientation changed under its section and detail (mitcad#729)"
 ui_mark
-settled "Drawing tool Section View"
-ui_step "Section View"                     ui_click_logged "Drawing tool Section View"
+settled "$(ui_drawing_tool_place "Section View")"
+ui_step "Section View"                     ui_drawing_tool "Section View"
 ui_expect_new "Drawing tool: Section View" "the section tool is on"
 ui_step "the line's first end, on the view" sheet_click 160 125
 ui_step "its second end"                   sheet_click 160 175
@@ -422,8 +425,8 @@ ui_expect_new '"type":"section"' "the section asked for"
 ui_expect_new "Drawing view 2 at" "the section drawn"
 no_refusal
 ui_mark
-settled "Drawing tool Detail View"
-ui_step "Detail View"                      ui_click_logged "Drawing tool Detail View"
+settled "$(ui_drawing_tool_place "Detail View")"
+ui_step "Detail View"                      ui_drawing_tool "Detail View"
 ui_expect_new "Drawing tool: Detail View" "the detail tool is on"
 ui_step "the circle's middle, a hole"      sheet_click 180 150
 ui_step "its edge"                         sheet_click 186 150
@@ -468,8 +471,8 @@ echo "--- A right click is the tool's Esc (mitcad#1404)"
 # right drag keeps it, the first right click drops it and keeps the tool,
 # the second ends the tool, and one with no tool opens the sheet's menu.
 ui_mark
-settled "Drawing tool Line"
-ui_step "Line"                             ui_click_logged "Drawing tool Line"
+settled "$(ui_drawing_tool_place "Line")"
+ui_step "Line"                             ui_drawing_tool "Line"
 ui_expect_new "Drawing tool: Line" "the line tool is on"
 settled "Drawing panel drawingOption_attach"
 ui_step "Drawn: On the Sheet"              ui_click_logged "Drawing panel drawingOption_attach"

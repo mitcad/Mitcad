@@ -49,13 +49,18 @@ rounding there was built before too, by the corner).
 On the stored design the step's foot builds as in the file: every face of
 the result lies on the file's (the boolean differences with the file's
 body are empty both ways), the change of volume 0.04 % off the file's, and
-the bar's rounding grown past the step by the file's 0.41 mm2. Tests:
-geometry/tests/test_fillet_corners.cpp, the step beside the rounded bar
-(failing without the patch) and beside a notch rounded tangent to the
-block's rounding, both against the block alone rounded less what lies in
-the bar's profile, and a tab's top rounded concave up to its side
-roundings tangent to a curved wall, against the material under the
-rounding's torus within the tab's outline.
+the bar's rounding grown past the step by the file's 0.41 mm2.
+Test: geometry/tests/test_fillet_corners.cpp (ctest
+geometry.suite.fillet_corners):
+test_step_foot_rounded_where_a_bar_rounding_tangent_to_the_floor_ends_it,
+the step beside the rounded bar (failing without the patch), and
+test_step_foot_on_a_rounding_ended_by_a_rounding_tangent_to_it, beside a
+notch rounded tangent to the block's rounding, both against the block
+alone rounded less what lies in the bar's profile; and
+test_tab_top_rounded_up_to_its_side_roundings_tangent_to_a_curved_wall, a
+tab's top rounded concave up to its side roundings tangent to a curved
+wall, against the material under the rounding's torus within the tab's
+outline.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 4c4a518f..a0156063 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

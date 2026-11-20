@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451), the start after dock-state-default.mitcad-ui:
+# MitCad opens with the default arrangement: the Browser at the left, the
+# Timeline docked at the bottom, the Command panel at the right.
+# Run by tools/ui-dock-state-test.sh (Linux),
+# tools/ui-windows-dock-state-test.ps1 (Windows) and
+# tools/ui-macos-dock-state-test.sh (macOS), all Docked.
+expect-ever '^Dock state restored: .*browserDock left.*timelineDock bottom' 20
+expect-ever 'View area' 30
+wait-idle
+expect-dock-area browserDock left
+expect-dock browserDock shown
+expect-dock-area timelineDock bottom
+expect-dock timelineDock shown
+expect-dock-area commandDock right
+expect-never 'TestDriver: FAIL'

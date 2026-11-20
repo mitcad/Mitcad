@@ -29,6 +29,12 @@ cylinder's wire as self-intersecting (the circle's tolerance is 1e-7).
 
 Upstream: new.
 
+Test: pending (mitcad#1986): no synthetic body is known that reaches its
+case; its cap crosses the edge only through the contact curve's
+approximation lying on the wrong side of the face at the end by 1.3e-6 mm,
+at a corner where the blend is nearly tangent to that face, verified on the
+design's replayed body only. A regression test needs such a body first.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 45cb8a61..2411e415 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

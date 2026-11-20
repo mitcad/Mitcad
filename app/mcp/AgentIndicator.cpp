@@ -303,8 +303,9 @@ bool AgentIndicator::arrowHit(const QPoint& point) const {
 }
 
 void AgentIndicator::mousePressEvent(QMouseEvent* event) {
-  // The Floating capsule draws its own arrow, wider than the style's.
-  if (chromeStyle() == ChromeStyle::Floating && popupMode() == QToolButton::MenuButtonPopup &&
+  // The Floating capsule and the top bar's compact button (both layouts,
+  // mitcad#2082) draw their own arrow, wider than the style's.
+  if ((m_compact || chromeStyle() == ChromeStyle::Floating) && popupMode() == QToolButton::MenuButtonPopup &&
       event->button() == Qt::LeftButton && arrowHit(event->position().toPoint())) {
     showMenu();
     return;

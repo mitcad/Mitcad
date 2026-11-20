@@ -23,6 +23,11 @@ at the current vertex first, and its own end there is compared with the
 current point (and its p-curves swapped where that end lies a period
 away), on a surface periodic in one direction; the case of a surface
 periodic in both is unchanged.
+
+Test: geometry/tests/test_boolean.cpp (ctest geometry.suite.boolean),
+test_join_merges_coaxial_cylinders_whatever_their_seams: Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -911,6 +911,18 @@

@@ -60,12 +60,24 @@ groove's rim on the strip rounded with 10: valid, both notch walls grown up
 to the cut above the groove's rim, the 9 roundings grown a little past the
 slot's wall; before, both corners failed.
 
+Failures (mitcad#1986): the walk past the ball's tangency and the curves
+of the cut by the faces at the end (ChFi3d_ComputeCurves) fail with OCCT's
+reports of a computation it cannot make (ChFi3d_IsComputationFailure,
+0016): a shorter walk is tried, and where none succeeds the end is left as
+before. Any other failure (a broken invariant, a signal) is rethrown.
+
+Test: geometry/tests/test_fillet_rolled_end_cut.cpp (ctest
+geometry.fillet_rolled_end_cut): a slot's end wall over a groove, the
+groove's rim on the wall's strip rounded with 10 (rolling on the strip's
+top edges), cut by the notch walls at both ends: built and valid. Fails
+without the patch, passes with it (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 03047af2..9bbf9f88 100644
+index 4539756d..97a119c9 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3688,6 +3688,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -3951,6 +3951,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
      int sens                      = 0;
      int num                       = ChFi3d_IndexOfSurfData(Vtx, stripe, sens);
      isfirst                       = (sens == 1);
@@ -79,7 +91,7 @@ index 03047af2..9bbf9f88 100644
      // A fillet ending alone at a vertex where its faces come tangent ends
      // in a point there (its contacts within a hundredth of its radius of the
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 2b9dbf4a..b8a0d4ba 100644
+index 11c026d7..6145e4ff 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -1133,6 +1133,16 @@ private:
@@ -100,10 +112,10 @@ index 2b9dbf4a..b8a0d4ba 100644
    //! stopped where the contact on one face left it across an edge away from
    //! the face at the end, the other contact short of its edge with that
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 26cf2314..1bbab9fe 100644
+index 7e88ea78..b781c305 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -14748,6 +14748,1218 @@ bool ChFi3d_Builder::RolledCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -15052,6 +15052,1228 @@ bool ChFi3d_Builder::RolledCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    return true;
  }
  
@@ -540,8 +552,13 @@ index 26cf2314..1bbab9fe 100644
 +                    tolesp, First, Last, false, false, !isFirst, false, false, false, Soldep);
 +      }
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      walked = false;
 +    }
 +    done = doneSave;
@@ -950,8 +967,13 @@ index 26cf2314..1bbab9fe 100644
 +        computed = ChFi3d_ComputeCurves(HS, HF, Pardeb, Parfin, c.C, c.PS, c.PF, tol3d, tol2d, c.Tol, true);
 +      }
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      computed = false;
 +    }
 +    if (!computed || c.C.IsNull() || c.PS.IsNull() || c.PF.IsNull())
@@ -1322,7 +1344,7 @@ index 26cf2314..1bbab9fe 100644
  // Whether the ball of SD, rolling on side S on an edge of face F, is tangent
  // to F at SD's end (its first end if isFirst): the blend's normal at its
  // contact there along F's normal.
-@@ -18910,7 +20122,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -19244,7 +20466,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
        // (A try that fails leaves the stripe as it was.)
        const bool aDone = done;
        if (!aPointEnd(isFirst) && !WalkedCutToEnd(Stripe, isFirst) && !RolledCutToEnd(Stripe, isFirst)
@@ -1332,10 +1354,10 @@ index 26cf2314..1bbab9fe 100644
          if (aNarrowCut)
          {
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
-index 6c57c96f..322a1410 100644
+index 0027e148..26c5633f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
-@@ -2072,6 +2072,12 @@ static void ChFi3d_ExtendAtSpineEnds(const occ::handle<ChFiDS_SurfData>& Data,
+@@ -2077,6 +2077,12 @@ static void ChFi3d_ExtendAtSpineEnds(const occ::handle<ChFiDS_SurfData>& Data,
                 anArc->Edge(),
                 anExt.PointOnRst(1).ParameterOnArc(),
                 TopAbs_FORWARD);

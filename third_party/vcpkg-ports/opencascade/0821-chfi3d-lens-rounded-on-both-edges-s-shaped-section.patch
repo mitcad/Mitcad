@@ -5,6 +5,13 @@ Fillets: both edges of a lens rounded, a face of two edges, one concave
 and one convex, narrower than the roundings: one S-shaped section, the
 lens consumed (mitcad#343).
 
+Failures (mitcad#1986): the walks of the concave and the convex rounding
+over the lens fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): the pair is not joined. Any other
+failure (a broken invariant, a signal) is rethrown. The handler round
+JoinLensPair in FinishLensRoundings fails the fillet (the lens's stripes
+bad, Failure_Stripe): a boundary that reports the failure.
+
 The case: a key on a shaft ends in a lens between the key's convex arc
 and the shaft's concave arc, both rounded with a radius wider than the
 lens. The stored designs' concave rounding is a ball touching the shaft
@@ -62,10 +69,10 @@ reach its case yet. Existing: geometry/tests/test_fillet_lens_overflow.cpp
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 8d2944b..757619f 100644
+index 28d87e50..2196d7b5 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2098,6 +2098,9 @@ void ChFi3d_Builder::Compute()
+@@ -2106,6 +2106,9 @@ void ChFi3d_Builder::Compute()
    {
      myListStripe.Append(itN.Value());
    }
@@ -75,7 +82,7 @@ index 8d2944b..757619f 100644
    done = (badstripes.IsEmpty());
    // Stripes whose blends ran over a narrow face of their edge onto a face
    // where another stripe's contact lies are computed again rolling on the
-@@ -2449,6 +2452,9 @@ void ChFi3d_Builder::Compute()
+@@ -2511,6 +2514,9 @@ void ChFi3d_Builder::Compute()
      }
    }
  
@@ -85,7 +92,7 @@ index 8d2944b..757619f 100644
  #ifdef OCCT_DEBUG // perf
    ChFi3d_ResultChron(cl_perfsetofsurf, t_perfsetofsurf);
    ChFi3d_InitChron(cl_perffilletonvertex);
-@@ -2614,7 +2620,7 @@ void ChFi3d_Builder::Compute()
+@@ -2676,7 +2682,7 @@ void ChFi3d_Builder::Compute()
            continue;
          }
          occ::handle<ChFiDS_Stripe> aCheckStripe = itel1.Value();
@@ -94,7 +101,7 @@ index 8d2944b..757619f 100644
          {
            continue;
          }
-@@ -3494,6 +3500,11 @@ void ChFi3d_Builder::Reset()
+@@ -3565,6 +3571,11 @@ void ChFi3d_Builder::Reset()
    myRideSupports.Clear();
    myRollStripes.Clear();
    myRollFaces.Clear();
@@ -107,7 +114,7 @@ index 8d2944b..757619f 100644
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
    for (itel.Initialize(myListStripe); itel.More();)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 176aa59..12d8d14 100644
+index 176aa59a..12d8d14a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -1242,6 +1242,35 @@ private:
@@ -162,10 +169,10 @@ index 176aa59..12d8d14 100644
  
  #endif // _ChFi3d_Builder_HeaderFile
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index d914501..a801ce7 100644
+index f18da0e3..30feb12b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -615,4 +615,22 @@ occ::handle<Geom_Surface> ChFi3d_ScrewContinued(const occ::handle<Geom_Surface>&
+@@ -636,4 +636,22 @@ occ::handle<Geom_Surface> ChFi3d_ScrewContinued(const occ::handle<Geom_Surface>&
  //! surface follows the sweep instead of the end spans' polynomials.
  void ChFi3d_LoadScrewContinued(BRepAdaptor_Surface& HS, const double Tol);
  
@@ -189,7 +196,7 @@ index d914501..a801ce7 100644
 +
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
-index 8bf2758..7ef1dcd 100644
+index 562cc2e6..38b0b776 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
 @@ -496,6 +496,56 @@ bool gapCutBetween(const occ::handle<Geom_Surface>& S,
@@ -249,7 +256,7 @@ index 8bf2758..7ef1dcd 100644
  //=======================================================================
  // function : JoinAcrossCorners
  // purpose  : See the header.
-@@ -774,41 +824,12 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -779,41 +829,12 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
    TopoDS_Face NF = BRepLib_MakeFace(SN, Precision::Confusion());
    NF.Orientation(NA.Orientation());
    occ::handle<BRepAdaptor_Surface>      HSN = new BRepAdaptor_Surface(NF);
@@ -298,10 +305,10 @@ index 8bf2758..7ef1dcd 100644
    occ::handle<BRepAdaptor_Surface>      HS1 = ons == 1 ? HSN : HSO;
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Lens.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Lens.cxx
 new file mode 100644
-index 0000000..f4ce9e6
+index 00000000..f496f3b7
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Lens.cxx
-@@ -0,0 +1,1248 @@
+@@ -0,0 +1,1258 @@
 +// This file is part of Open CASCADE Technology software library.
 +//
 +// This library is free software; you can redistribute it and/or modify it under
@@ -806,8 +813,13 @@ index 0000000..f4ce9e6
 +      }
 +      walked = true;
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      walked = false;
 +    }
 +    done = aDone;
@@ -1052,8 +1064,13 @@ index 0000000..f4ce9e6
 +        ok = PerformSurf(SeqSD, HG, spV, Choix, HS1, I1, HS2, I2, MaxStep, Fleche, tolesp, First, Last, true, true,
 +                         true, false, false, S0, intf, intl);
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        ok = false;
 +      }
 +      done = aDone;
@@ -1551,7 +1568,7 @@ index 0000000..f4ce9e6
 +  return true;
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
-index 534d45a..37ae5a5 100644
+index 534d45ab..37ae5a55 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
 @@ -18,6 +18,7 @@ set(OCCT_ChFi3d_FILES

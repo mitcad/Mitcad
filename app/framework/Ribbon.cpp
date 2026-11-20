@@ -53,6 +53,7 @@
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include "BoostButton.hpp"
 #include "CommandLayout.hpp"
 #include "CommandRegistry.hpp"
 #include "Icons.hpp"
@@ -282,10 +283,15 @@ public:
     updateGeometry();
   }
 
-  QSize sizeHint() const override {
-    QFont small = font();
+  // The caption's font (docs/ui-conventions.md §10): 0.92 Regular.
+  static QFont captionFont(const QFont& base) {
+    QFont small = base;
     small.setPointSizeF(small.pointSizeF() * 0.92);
-    const QFontMetrics metrics(small);
+    return small;
+  }
+
+  QSize sizeHint() const override {
+    const QFontMetrics metrics(captionFont(font()));
     const int text = std::max(metrics.horizontalAdvance(this->text()), metrics.horizontalAdvance(m_widest));
     return QSize(text + 34, macCaptionHeight(font()));
   }
@@ -304,8 +310,7 @@ protected:
       painter.setBrush(textTint(pal, 20));
       painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), kControlRadius, kControlRadius);
     }
-    QFont small = font();
-    small.setPointSizeF(small.pointSizeF() * 0.92);
+    const QFont small = captionFont(font());
     painter.setFont(small);
     const QColor color = textTint(pal, 190);
     painter.setPen(color);
@@ -411,7 +416,9 @@ private:
   static constexpr int kTop = 6;
 };
 
-// The group's name with ▾ in the Classic ribbon: never narrower than its
+// The group's name with its one ˅ in the Classic ribbon, drawn as the
+// toolbar panel's (GroupCaption, mitcad#2082: the name's own ▾ and the
+// tool button's menu indicator were two marks): never narrower than its
 // whole caption (mitcad#1477). A size taken once, when the group was made,
 // fell a pixel short on Windows in the pseudo-language: the caption's
 // metrics changed after the group came into the window, and QToolButton
@@ -419,16 +426,17 @@ private:
 // layout kept the old width). So the minimum is the caption's size as it is
 // now, and a change of that size lays the group out and fits the ribbon
 // again.
-class ClassicGroupCaption : public QToolButton {
+class ClassicGroupCaption : public GroupCaption {
 public:
-  explicit ClassicGroupCaption(std::function<void()> resized) : m_resized(std::move(resized)) {}
+  ClassicGroupCaption(const QString& text, std::function<void()> resized)
+      : GroupCaption(text), m_resized(std::move(resized)) {}
 
   QSize minimumSizeHint() const override { return sizeHint(); }
 
 protected:
   void changeEvent(QEvent* event) override {
     const QSize before = sizeHint();
-    QToolButton::changeEvent(event);
+    GroupCaption::changeEvent(event);
     if (sizeHint() != before) {
       updateGeometry();
       if (m_resized) m_resized();
@@ -626,23 +634,125 @@ private:
 // The workspace tabs of the Classic presentation, the Docked chrome's
 // (mitcad#251): small semibold names, the selected one on a pill of the
 // window's accent colour; SKETCH's name in the accent colour.
+//
+// A row too narrow for every tab (mitcad#2079: Docked's ten tabs in a
+// 1024 px window; the Classic presentation is the macOS Docked toolbar's
+// since mitcad#2082) folds the tabs at its right end into a » after the last
+// tab in sight, whose menu lists them; the first tab (Start) and the shown
+// one never fold. QTabBar's scroll buttons kept the shown tab in sight by
+// scrolling Start and Solid away. A folded tab is laid out zero wide
+// (tabSizeHint), so QTabBar keeps its index, its signals and its
+// accessible name. The room comes from the row (setRoom, Ribbon::
+// fitTabRow); the bar is as wide as its tabs in sight and the », so that
+// the + follows the » as it follows the last tab of a wide row.
 class PillTabBar : public QTabBar {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::Ribbon)
+
 public:
   explicit PillTabBar(QWidget* parent = nullptr) : QTabBar(parent) {
     setDrawBase(false);
     setExpanding(false);
     setFocusPolicy(Qt::NoFocus);
+    // The tabs fold instead of scrolling (mitcad#2079).
     setUsesScrollButtons(false);
+    setElideMode(Qt::ElideNone);
     setMouseTracking(true);
     setAttribute(Qt::WA_Hover);
+    m_more = new MoreButton(this);
+    m_more->setObjectName(QStringLiteral("ribbonTabsMore"));
+    m_more->setToolTip(tr("More tabs that do not fit"));
+    m_more->setAccessibleName(tr("More tabs"));
+    m_more->hide();
+    connect(m_more, &QToolButton::clicked, this, [this] { openMoreMenu(); });
+    // Another shown tab may let others fold or unfold.
+    connect(this, &QTabBar::currentChanged, this, [this] { relayout(); });
+    // As wide as its hint: the row gives it its room (setRoom).
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
   }
+
+  // The tabs folded into the » (mitcad#2079), in the row's order.
+  bool isFolded(int index) const {
+    const std::vector<bool> folds = folded(m_room);
+    return index >= 0 && index < static_cast<int>(folds.size()) && folds[static_cast<size_t>(index)];
+  }
+  QToolButton* moreButton() const { return m_more; }
+
+  // The room the row has for the tabs and the » (Ribbon::fitTabRow); none
+  // given yet: every tab in sight.
+  void setRoom(int room) {
+    if (room != m_room) {
+      m_room = room;
+      relayout();
+    }
+  }
+  // Called when the tabs' own widths may have changed (a tab added,
+  // removed, shown, hidden or renamed): the row works out their room again.
+  void setLaidOut(std::function<void()> laidOut) { m_laidOut = std::move(laidOut); }
+
+  // Every tab in sight, unfolded.
+  int wholeWidth() const {
+    int width = 0;
+    for (int i = 0; i < count(); ++i) {
+      if (isTabVisible(i)) {
+        width += naturalWidth(i);
+      }
+    }
+    return width;
+  }
+  // Start, the shown tab and the »: what never folds.
+  int foldedMinimum() const {
+    const int first = firstVisible();
+    int width = first >= 0 ? naturalWidth(first) : 0;
+    const int shown = currentIndex();
+    if (shown >= 0 && shown != first && isTabVisible(shown)) {
+      width += naturalWidth(shown);
+    }
+    if (visibleCount() > 2) {
+      width += moreWidth();
+    }
+    return width;
+  }
+
+  // The tabs in sight and the » after them, in the room given.
+  QSize sizeHint() const override {
+    const std::vector<bool> folds = folded(m_room);
+    int width = 0;
+    bool any = false;
+    for (int i = 0; i < count(); ++i) {
+      if (!isTabVisible(i)) {
+        continue;
+      }
+      if (folds[static_cast<size_t>(i)]) {
+        any = true;
+      } else {
+        width += naturalWidth(i);
+      }
+    }
+    return QSize(width + (any ? moreWidth() : 0), rowHeight());
+  }
+  QSize minimumSizeHint() const override { return sizeHint(); }
 
 protected:
   QSize tabSizeHint(int index) const override {
-    const QFontMetrics metrics(tabFont());
-    return QSize(metrics.horizontalAdvance(tabText(index)) + 24, metrics.height() + 10);
+    return QSize(isFolded(index) ? 0 : naturalWidth(index), rowHeight());
   }
   QSize minimumTabSizeHint(int index) const override { return tabSizeHint(index); }
+
+  // The » right after the last tab in sight, as high as the tabs.
+  void tabLayoutChange() override {
+    QTabBar::tabLayoutChange();
+    placeMore();
+    if (wholeWidth() != m_laidOutWidth) {
+      m_laidOutWidth = wholeWidth();
+      if (m_laidOut) {
+        m_laidOut();
+      }
+    }
+  }
+  void resizeEvent(QResizeEvent* event) override {
+    QTabBar::resizeEvent(event);
+    placeMore();
+  }
 
   void leaveEvent(QEvent* event) override {
     QTabBar::leaveEvent(event);
@@ -660,6 +770,12 @@ protected:
     const int hovered = tabAt(mapFromGlobal(QCursor::pos()));
     painter.setFont(tabFont());
     for (int i = 0; i < count(); ++i) {
+      // Another workspace's tab (Ribbon::setWorkspaceSelector, mitcad#2082),
+      // or a folded one (mitcad#2079): it has no room, and its name would be
+      // drawn centred on the place where it would be.
+      if (!isTabVisible(i) || tabRect(i).width() <= 0) {
+        continue;
+      }
       const QRectF pill = QRectF(tabRect(i)).adjusted(1.5, 2.5, -1.5, -2.5);
       const bool selected = i == currentIndex();
       painter.setPen(Qt::NoPen);
@@ -689,6 +805,157 @@ protected:
   }
 
 private:
+  // The », painted as an unselected tab is (the hover's tint), its glyph in
+  // the tabs' secondary text.
+  class MoreButton : public QToolButton {
+  public:
+    explicit MoreButton(QWidget* parent) : QToolButton(parent) {
+      setAutoRaise(true);
+      setFocusPolicy(Qt::NoFocus);
+      setAttribute(Qt::WA_Hover);
+      setText(QStringLiteral("»"));
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+      QPainter painter(this);
+      painter.setRenderHint(QPainter::Antialiasing);
+      const WindowColors colors = windowColors(palette());
+      const QRectF box = QRectF(rect()).adjusted(1.5, 2.5, -1.5, -2.5);
+      painter.setPen(Qt::NoPen);
+      if (isDown() || underMouse()) {
+        QColor fill = colors.text;
+        fill.setAlpha(isDown() ? 36 : 18);
+        painter.setBrush(fill);
+        painter.drawRoundedRect(box, kControlRadius, kControlRadius);
+      }
+      QFont big = font();
+      if (big.pointSizeF() > 0) {
+        big.setPointSizeF(big.pointSizeF() * 1.2);
+      }
+      painter.setFont(big);
+      painter.setPen(colors.secondaryText);
+      painter.drawText(rect(), Qt::AlignCenter, text());
+    }
+  };
+
+  // 8 px each side of the name, as the title row's tabs (mitcad#2079: 12
+  // before, which left Docked's ten tabs no room at 1024 px).
+  int naturalWidth(int index) const {
+    return QFontMetrics(tabFont()).horizontalAdvance(tabText(index)) + 16;
+  }
+  int rowHeight() const { return QFontMetrics(tabFont()).height() + 10; }
+  int moreWidth() const { return rowHeight(); }
+  int firstVisible() const {
+    for (int i = 0; i < count(); ++i) {
+      if (isTabVisible(i)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  int visibleCount() const {
+    int visible = 0;
+    for (int i = 0; i < count(); ++i) {
+      visible += isTabVisible(i) ? 1 : 0;
+    }
+    return visible;
+  }
+
+  // Which tabs fold in a row this wide: none when all fit; else, after
+  // the room of the first tab, the shown one and the », the tabs from the
+  // left as long as they fit, and every one after the first that does not.
+  std::vector<bool> folded(int room) const {
+    std::vector<bool> folds(static_cast<size_t>(count()), false);
+    if (room < 0 || wholeWidth() <= room) {
+      return folds;
+    }
+    const int first = firstVisible();
+    const int shown = currentIndex();
+    room -= moreWidth() + (first >= 0 ? naturalWidth(first) : 0);
+    if (shown >= 0 && shown != first && isTabVisible(shown)) {
+      room -= naturalWidth(shown);
+    }
+    bool full = false;
+    for (int i = 0; i < count(); ++i) {
+      if (i == first || i == shown || !isTabVisible(i)) {
+        continue;
+      }
+      full = full || naturalWidth(i) > room;
+      if (full) {
+        folds[static_cast<size_t>(i)] = true;
+      } else {
+        room -= naturalWidth(i);
+      }
+    }
+    return folds;
+  }
+
+  // QTabBar lays its tabs out again on a change of a property such as
+  // this one (QTabBarPrivate::refresh); the shown tab is not one. The
+  // row places the + again after the bar's new width.
+  void relayout() {
+    setElideMode(Qt::ElideNone);
+    updateGeometry();
+  }
+
+  void placeMore() {
+    // Not yet made: QTabBar lays its tabs out in the constructor's setters.
+    if (m_more == nullptr) {
+      return;
+    }
+    const std::vector<bool> folds = folded(m_room);
+    const bool any = std::find(folds.cbegin(), folds.cend(), true) != folds.cend();
+    if (!any) {
+      m_more->hide();
+      return;
+    }
+    int end = 0;
+    for (int i = 0; i < count(); ++i) {
+      if (tabRect(i).width() > 0) {
+        end = std::max(end, tabRect(i).right() + 1);
+      }
+    }
+    m_more->setGeometry(end, 0, moreWidth(), rowHeight());
+    m_more->show();
+    m_more->raise();
+  }
+
+  // The folded tabs by name; the one chosen is shown (and so in sight).
+  void openMoreMenu() {
+    auto* menu = new QMenu(m_more);
+    menu->setObjectName(QStringLiteral("ribbonTabsMoreMenu"));
+    connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
+    const std::vector<bool> folds = folded(m_room);
+    QStringList names;
+    for (int i = 0; i < count(); ++i) {
+      if (!folds[static_cast<size_t>(i)]) {
+        continue;
+      }
+      const QString name = tabText(i);
+      names << tabName(tabData(i).toInt());
+      const QPointer<PillTabBar> self(this);
+      menu->addAction(name, this, [self, name] {
+        // By name: the tabs may have changed while the menu was open.
+        if (self == nullptr) {
+          return;
+        }
+        for (int tab = 0; tab < self->count(); ++tab) {
+          if (self->tabText(tab) == name) {
+            self->setCurrentIndex(tab);
+            break;
+          }
+        }
+      });
+    }
+    // "Ribbon tabs more menu: MAKE_CNC, MANAGE": the entries in order.
+    qDebug().noquote() << QStringLiteral("Ribbon tabs more menu: %1").arg(names.join(QStringLiteral(", ")));
+    menu->popup(m_more->mapToGlobal(m_more->rect().bottomLeft()));
+  }
+
+public:
+  // The pills' font (docs/ui-conventions.md §10: 0.92 DemiBold), the shown
+  // tab's and the others' alike.
   QFont tabFont() const {
     QFont small = font();
     if (small.pointSizeF() > 0) {
@@ -698,13 +965,21 @@ private:
     small.setLetterSpacing(QFont::PercentageSpacing, 105);
     return small;
   }
+
+private:
+  QToolButton* m_more = nullptr;
+  int m_room = -1;
+  int m_laidOutWidth = -1;
+  std::function<void()> m_laidOut;
 };
 
 // The toolbar panel's workspace selector (Ribbon::setPanel, mitcad#1990): a
 // block of its own at the panel's left. As high as the panel's groups: the
 // workspace's icon, its name under it and "Workspace" with a chevron under
 // that; as high as the tab row alone (the Start tab), the icon, the name and
-// the chevron in one line. A click opens the workspaces' list.
+// the chevron in one line. The Docked toolbar has the same block at its
+// left (Ribbon::setWorkspaceSelector, mitcad#2082). A click opens the
+// workspaces' list.
 class WorkspaceButton : public QToolButton {
   Q_DECLARE_TR_FUNCTIONS(mitcad::Ribbon)
 
@@ -727,6 +1002,18 @@ public:
     update();
   }
   const QString& title() const { return m_title; }
+  // The name's font and the "Workspace ˅" line's (docs/ui-conventions.md
+  // §10: 1.0 DemiBold, 0.85 Regular).
+  QFont nameFont() const {
+    QFont bold = font();
+    bold.setWeight(QFont::DemiBold);
+    return bold;
+  }
+  QFont smallFont() const {
+    QFont small = font();
+    small.setPointSizeF(small.pointSizeF() * 0.85);
+    return small;
+  }
 
   QSize sizeHint() const override {
     QFont bold = font();
@@ -803,11 +1090,6 @@ protected:
 
 private:
   int iconSide() const { return uiIconSize(22); }
-  QFont smallFont() const {
-    QFont small = font();
-    small.setPointSizeF(small.pointSizeF() * 0.85);
-    return small;
-  }
   // The one line's height: the panel's tab row's.
   int compactHeight() const { return std::max(panelTabHeight(font()) + 8, iconSide() + 12); }
   // The tall block's: the icon and two lines of text, with room around.
@@ -1555,21 +1837,19 @@ private:
 
 } // namespace
 
-void Ribbon::addTabRowWidget(QWidget* widget) {
+void Ribbon::addTabRowEndWidget(QWidget* widget, bool first) {
   if (m_tabRow == nullptr || widget == nullptr) {
     return;
   }
-  // After the tabs and the + of their menu (mitcad#1975).
-  QWidget* last = m_tabsButton != nullptr && m_tabRow->indexOf(m_tabsButton) >= 0 ? static_cast<QWidget*>(m_tabsButton)
-                                                                                 : static_cast<QWidget*>(m_tabs);
-  m_tabRow->insertWidget(m_tabRow->indexOf(last) + 1, widget, 0, Qt::AlignVCenter);
-}
-
-void Ribbon::addTabRowEndWidget(QWidget* widget) {
-  if (m_tabRow == nullptr || widget == nullptr) {
-    return;
+  int stretch = -1;
+  for (int i = 0; i < m_tabRow->count() && stretch < 0; ++i) {
+    if (m_tabRow->itemAt(i)->spacerItem() != nullptr) {
+      stretch = i;
+    }
   }
-  m_tabRow->addWidget(widget, 0, Qt::AlignVCenter);
+  m_tabRow->insertWidget(first && stretch >= 0 ? stretch + 1 : m_tabRow->count(), widget, 0, Qt::AlignVCenter);
+  widget->installEventFilter(this);
+  scheduleFitTabRow();
 }
 
 namespace {
@@ -1860,6 +2140,7 @@ Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* pa
   auto* layout = new QVBoxLayout(this);
   layout->setSpacing(0);
   m_pages = new QStackedWidget;
+  m_pages->setObjectName(QStringLiteral("ribbonPages")); // the groups' row (UI tests)
   if (presentation == Presentation::Mac) {
     layout->setContentsMargins(0, 0, 0, 1);
     // The tab bar is the title bar's; it is a child of the ribbon until that
@@ -1868,9 +2149,12 @@ Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* pa
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   } else {
     layout->setContentsMargins(4, 2, 4, 2);
-    // The Docked chrome's pills (mitcad#251), in a row that may hold the
-    // quick-access group after them (addTabRowWidget, mitcad#1090).
-    m_tabs = new PillTabBar;
+    // The Docked chrome's pills (mitcad#251), in a row that holds the
+    // quick-access group and the search field at its right end
+    // (addTabRowEndWidget, mitcad#1090, mitcad#2082).
+    auto* pills = new PillTabBar;
+    pills->setLaidOut([this] { scheduleFitTabRow(); });
+    m_tabs = pills;
     m_tabRow = new QHBoxLayout;
     m_tabRow->setContentsMargins(0, 0, 0, 0);
     m_tabRow->setSpacing(8);
@@ -1917,18 +2201,7 @@ Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* pa
     }
     updateGroupMask();
   });
-  connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
-    if (index >= 0) {
-      // The workspace follows a model tab of another one (mitcad#1990).
-      followCurrentTab();
-      m_pages->setCurrentIndex(m_tabs->tabData(index).toInt());
-      // The shown page's group menus, for UI tests (BUILD, mitcad#375).
-      TestSync::singleShot(0, this, [this] { logLayout(); });
-      // What the window shows for the tab (the Make tab's body card and
-      // Browser markers, mitcad#1049).
-      emit tabChanged(currentTab());
-    }
-  });
+  connect(m_tabs, &QTabBar::currentChanged, this, &Ribbon::followTabAt);
   // The places logged again when the ribbon or the tab bar is shown or
   // moves in the window (mitcad#375: the window shows after the start's
   // log, a banner makes room, the title bar takes the tabs), when they
@@ -2333,7 +2606,40 @@ void Ribbon::applyContentLabels() {
 }
 
 void Ribbon::placeTabRows() {
-  if (!m_panel || m_panelTabRow == nullptr) {
+  if (!m_workspaces) {
+    return;
+  }
+  if (!m_panel) {
+    // The Docked tab row (setWorkspaceSelector, mitcad#2082): the stages
+    // after the tabs' +, the trailing part right after the row's free
+    // stretch, before what its right end holds.
+    if (m_tabRow == nullptr) {
+      return;
+    }
+    for (auto it = m_tabRows.cbegin(); it != m_tabRows.cend(); ++it) {
+      QWidget* tabs = it.value().value(0);
+      QWidget* trailing = it.value().value(1);
+      if (tabs != nullptr && !tabRowHolds(tabs)) {
+        const int plus = m_tabRow->indexOf(m_tabsButton);
+        m_tabRow->insertWidget(plus >= 0 ? plus + 1 : m_tabRow->indexOf(m_tabs) + 1, tabs, 0, Qt::AlignVCenter);
+        tabs->hide();
+        tabs->installEventFilter(this); // the tabs' room when it shows (fitTabRow)
+      }
+      if (trailing != nullptr && !tabRowHolds(trailing)) {
+        int stretch = -1;
+        for (int i = 0; i < m_tabRow->count() && stretch < 0; ++i) {
+          if (m_tabRow->itemAt(i)->spacerItem() != nullptr) {
+            stretch = i;
+          }
+        }
+        m_tabRow->insertWidget(stretch >= 0 ? stretch + 1 : m_tabRow->count(), trailing, 0, Qt::AlignVCenter);
+        trailing->hide();
+        trailing->installEventFilter(this);
+      }
+    }
+    return;
+  }
+  if (m_panelTabRow == nullptr) {
     return;
   }
   auto* row = qobject_cast<QHBoxLayout*>(m_panelTabRow->layout());
@@ -2359,8 +2665,18 @@ void Ribbon::placeTabRows() {
   }
 }
 
+bool Ribbon::tabRowHolds(QWidget* widget) const {
+  if (widget == nullptr) {
+    return false;
+  }
+  if (m_panel) {
+    return widget->parentWidget() == m_panelTabRow;
+  }
+  return m_tabRow != nullptr && m_tabRow->indexOf(widget) >= 0;
+}
+
 void Ribbon::updateTabRow() {
-  if (!m_panel || m_tabs == nullptr) {
+  if (!m_workspaces || m_tabs == nullptr) {
     return;
   }
   const QString shown = currentTab();
@@ -2371,11 +2687,34 @@ void Ribbon::updateTabRow() {
   }
   for (auto it = m_tabRows.cbegin(); it != m_tabRows.cend(); ++it) {
     for (const QPointer<QWidget>& widget : it.value()) {
-      if (widget != nullptr && widget->parentWidget() == m_panelTabRow && widget->isHidden() == (it.key() == shown)) {
+      if (widget != nullptr && tabRowHolds(widget) && widget->isHidden() == (it.key() == shown)) {
         widget->setVisible(it.key() == shown);
       }
     }
   }
+}
+
+void Ribbon::followTabAt(int index) {
+  if (index >= 0) {
+    // The workspace follows a model tab of another one (mitcad#1990).
+    followCurrentTab();
+    m_pages->setCurrentIndex(m_tabs->tabData(index).toInt());
+    // The shown page's group menus, for UI tests (BUILD, mitcad#375).
+    TestSync::singleShot(0, this, [this] { logLayout(); });
+    // What the window shows for the tab (the Make tab's body card and
+    // Browser markers, mitcad#1049).
+    emit tabChanged(currentTab());
+  }
+}
+
+void Ribbon::removeTabShowing(int index, int page) {
+  {
+    const QSignalBlocker blocker(m_tabs);
+    m_tabs->removeTab(index);
+    const int back = tabOfPage(page);
+    m_tabs->setCurrentIndex(back >= 0 ? back : fallbackTab());
+  }
+  followTabAt(m_tabs->currentIndex());
 }
 
 int Ribbon::fallbackTab() const {
@@ -2808,7 +3147,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
   // event that changed it (mitcad#1477).
   const auto refit = [this] { QTimer::singleShot(0, this, [this] { fitGroups(); }); };
   QToolButton* menuButton = mac ? static_cast<QToolButton*>(new GroupCaption(displayName(group)))
-                                : new ClassicGroupCaption(refit);
+                                : new ClassicGroupCaption(displayName(group), refit);
   QMenu* menu = createGroupMenu(tab, key(tab, group), menuButton);
   // The group's entries as the layout has them (mitcad#1951): its
   // commands, a separator where a section ends (mitcad#579; never at the
@@ -2969,12 +3308,9 @@ QWidget* Ribbon::finishGroup(QWidget* widget, QWidget* row, QToolButton* menuBut
   }
 
   if (!mac) {
-    menuButton->setText(displayName(group) + QStringLiteral(" ▾"));
+    // Its name and one ˅, at the captions' 0.92 (GroupCaption).
     menuButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
     menuButton->setAutoRaise(true);
-    QFont font = menuButton->font();
-    font.setPointSizeF(font.pointSizeF() * 0.85);
-    menuButton->setFont(font);
   } else {
     // Since macOS 27 AppKit hides the images of menu items unless asked.
     mac::showMenuImages(menu);
@@ -3678,11 +4014,70 @@ QSize Ribbon::minimumSizeHint() const {
   if (m_presentation == Presentation::Mac) {
     return content;
   }
-  return QSize(std::max(m_tabs->sizeHint().width() + 8, 160), content.height());
+  // The tabs fold below their preferred width (mitcad#2079). Requiring every tab's
+  // natural width here moves the whole ribbon into QToolBar's overflow.
+  const auto* pills = dynamic_cast<const PillTabBar*>(m_tabs);
+  const int tabs = pills != nullptr ? pills->foldedMinimum() : m_tabs->minimumSizeHint().width();
+  return QSize(std::max(tabs + 8, 160), content.height());
+}
+
+void Ribbon::scheduleFitTabRow() {
+  if (m_fitTabRowPending) {
+    return;
+  }
+  m_fitTabRowPending = true;
+  TestSync::singleShot(0, this, [this] {
+    m_fitTabRowPending = false;
+    fitTabRow();
+  });
+}
+
+void Ribbon::fitTabRow() {
+  auto* pills = dynamic_cast<PillTabBar*>(m_tabs);
+  if (m_tabRow == nullptr || pills == nullptr) {
+    return;
+  }
+  // The row's width less what its other widgets take: each at the width
+  // the row gives it (its layout item's hint, which keeps a fixed width:
+  // the + is narrower by its own hint), Boost development (BoostButton) at
+  // its whole one, and the row's spacing after each.
+  const QMargins margins = layout()->contentsMargins();
+  int room = width() - margins.left() - margins.right();
+  // The workspace block beside the row (setWorkspaceSelector, mitcad#2082:
+  // the macOS Docked toolbar), unless the row is alone over the Start page.
+  if (!m_panel && m_workspaceButton != nullptr && !m_workspaceButton->isHidden()) {
+    room -= m_workspaceButton->sizeHint().width() + kPanelBlockGap;
+  }
+  QList<BoostButton*> boosts;
+  for (int i = 0; i < m_tabRow->count(); ++i) {
+    QLayoutItem* item = m_tabRow->itemAt(i);
+    QWidget* widget = item->widget();
+    if (widget == nullptr || widget == m_tabs || widget->isHidden()) {
+      continue;
+    }
+    if (auto* boost = qobject_cast<BoostButton*>(widget)) {
+      boosts << boost;
+      room -= boost->wideWidth();
+    } else {
+      room -= item->sizeHint().width();
+    }
+    room -= m_tabRow->spacing();
+  }
+  // Boost development gives up its name before any tab folds; it takes
+  // its whole width back once every tab fits beside it.
+  const bool compact = pills->wholeWidth() > room;
+  for (BoostButton* boost : std::as_const(boosts)) {
+    boost->setCompact(compact);
+    if (compact) {
+      room += boost->wideWidth() - boost->compactWidth();
+    }
+  }
+  pills->setRoom(std::max(0, room));
 }
 
 void Ribbon::resizeEvent(QResizeEvent* event) {
   QWidget::resizeEvent(event);
+  fitTabRow();
   fitGroups();
   updateGroupMask();
 }
@@ -3702,7 +4097,11 @@ void Ribbon::fitGroups() {
   // (mitcad#1357): the hidden one logs no folds (fitPage).
   if (m_presentation == Presentation::Classic) {
     const QMargins outside = layout()->contentsMargins();
-    const int available = std::max(0, width() - outside.left() - outside.right());
+    // Less the workspace block and its gap (setWorkspaceSelector).
+    const int block = m_workspaceButton != nullptr && !m_workspaceButton->isHidden()
+                          ? m_workspaceButton->sizeHint().width() + kPanelBlockGap
+                          : 0;
+    const int available = std::max(0, width() - outside.left() - outside.right() - block);
     for (auto it = m_groupsOfPage.begin(); it != m_groupsOfPage.end(); ++it) {
       // The captions' widths as they are now, not as when the groups were
       // made (mitcad#1477), also as the groups' minimums (finishGroup).
@@ -4130,6 +4529,7 @@ void Ribbon::setPanel(QWidget* search) {
     return;
   }
   m_panel = true;
+  m_workspaces = true;
   // Placed by the Floating layout, as wide as the view less its margins:
   // the groups clip and fold at its right (fitGroups) rather than make it
   // wider.
@@ -4187,22 +4587,72 @@ void Ribbon::setPanel(QWidget* search) {
   // The whole panel takes the mouse.
   clearMask();
   // The workspace's tabs alone (DESIGN at first, mitcad#1990).
-  m_workspace = kDesignWorkspace;
-  {
-    const int index = m_tabs->currentIndex();
-    const QString shown = index >= 0 ? tabName(m_tabs->tabData(index).toInt()) : QString();
-    const QString of = workspaceOfTab(shown);
-    if (isModelWorkspace(of)) {
-      m_workspace = of;
-      m_workspacePage.insert(of, m_tabs->tabData(index).toInt());
-    }
-  }
+  initWorkspace();
   applyWorkspaceTabs();
   updatePanelPages();
   fitGroups();
   updateGeometry();
   updateGroupMask();
   update();
+}
+
+void Ribbon::initWorkspace() {
+  m_workspace = kDesignWorkspace;
+  const int index = m_tabs->currentIndex();
+  const QString shown = index >= 0 ? tabName(m_tabs->tabData(index).toInt()) : QString();
+  const QString of = workspaceOfTab(shown);
+  if (isModelWorkspace(of)) {
+    m_workspace = of;
+    m_workspacePage.insert(of, m_tabs->tabData(index).toInt());
+  }
+}
+
+void Ribbon::setWorkspaceSelector() {
+  if (m_presentation != Presentation::Classic || m_workspaces || m_tabRow == nullptr) {
+    return;
+  }
+  m_workspaces = true;
+  // The workspace block at the toolbar's left, as the toolbar panel's
+  // (mitcad#2082): as high as the tab row and the groups' row together,
+  // kPanelBlockGap to the rest of the toolbar beside it; the tab row and
+  // the groups in a column of their own.
+  auto* column = static_cast<QVBoxLayout*>(layout());
+  column->removeItem(m_tabRow);
+  m_tabRow->setParent(nullptr); // a layout takes a child layout without a parent only
+  column->removeWidget(m_pages);
+  auto* outer = new QHBoxLayout;
+  outer->setContentsMargins(0, 0, 0, 0);
+  outer->setSpacing(kPanelBlockGap);
+  auto* selector = new WorkspaceButton(this);
+  m_workspaceButton = selector;
+  connect(selector, &QToolButton::clicked, this, [this] { openWorkspaceMenu(); });
+  outer->addWidget(selector);
+  auto* body = new QVBoxLayout;
+  body->setContentsMargins(0, 0, 0, 0);
+  body->setSpacing(0);
+  body->addLayout(m_tabRow);
+  body->addWidget(m_pages);
+  outer->addLayout(body, 1);
+  column->addLayout(outer);
+  // The Render workspace's stages (setTabRow) into the row, hidden.
+  placeTabRows();
+  initWorkspace();
+  applyWorkspaceTabs();
+  TestSync::singleShot(0, this, [this] { logLayoutIfChanged(); });
+}
+
+void Ribbon::setTabRowOnly(bool on) {
+  if (m_panel || !m_workspaces || m_workspaceButton == nullptr || m_tabRowOnly == on) {
+    return;
+  }
+  m_tabRowOnly = on;
+  m_workspaceButton->setVisible(!on);
+  m_pages->setVisible(!on);
+  // The groups fitted to the width beside the block again, and the tabs'
+  // room in their row (mitcad#2079).
+  fitGroups();
+  scheduleFitTabRow();
+  updateGeometry();
 }
 
 QStringList Ribbon::workspaces() { return {kDesignWorkspace, kMakeWorkspace, kRenderWorkspace, kDrawingWorkspace}; }
@@ -4275,7 +4725,7 @@ QStringList Ribbon::tabsOfWorkspace(const QString& workspace) const {
 }
 
 void Ribbon::applyWorkspaceTabs() {
-  if (!m_panel || m_tabs == nullptr) {
+  if (!m_workspaces || m_tabs == nullptr) {
     return;
   }
   {
@@ -4283,7 +4733,10 @@ void Ribbon::applyWorkspaceTabs() {
     const QScopedValueRollback<bool> applying(m_applyingWorkspace, true);
     for (int i = 0; i < m_tabs->count(); ++i) {
       const int page = m_tabs->tabData(i).toInt();
-      const bool shown = isModeTab(page) || (page != kStartPage && workspaceOfTab(tabName(page)) == m_workspace);
+      // The Start tab is the title row's Home in the toolbar panel, and
+      // first in the Docked tab row (no Home there, mitcad#2082).
+      const bool shown =
+          isModeTab(page) || (page == kStartPage ? !m_panel : workspaceOfTab(tabName(page)) == m_workspace);
       if (m_tabs->isTabVisible(i) != shown) {
         m_tabs->setTabVisible(i, shown);
       }
@@ -4314,7 +4767,7 @@ void Ribbon::applyWorkspaceTabs() {
 }
 
 void Ribbon::followCurrentTab() {
-  if (!m_panel || m_applyingWorkspace) {
+  if (!m_workspaces || m_applyingWorkspace) {
     return;
   }
   const int index = m_tabs->currentIndex();
@@ -4334,7 +4787,7 @@ void Ribbon::followCurrentTab() {
 }
 
 void Ribbon::setWorkspace(const QString& workspace) {
-  if (!m_panel || tabOfPage(kSketchPage) >= 0) {
+  if (!m_workspaces || tabOfPage(kSketchPage) >= 0) {
     return;
   }
   qDebug().noquote() << QStringLiteral("Ribbon workspace chosen: %1").arg(workspace);
@@ -4391,7 +4844,7 @@ void Ribbon::showWorkspaceTab() {
 }
 
 void Ribbon::openWorkspaceMenu() {
-  if (!m_panel || m_workspaceButton == nullptr || !m_workspaceButton->isEnabled()) {
+  if (!m_workspaces || m_workspaceButton == nullptr || !m_workspaceButton->isEnabled()) {
     return;
   }
   auto* list = new WorkspaceList(this);
@@ -4697,6 +5150,14 @@ bool Ribbon::eventFilter(QObject* watched, QEvent* event) {
       button != nullptr && button->property(kPinIdProperty).isValid() && dragPinned(button, event)) {
     return true;
   }
+  // A widget of the Docked tabs' row shown, hidden or resized: the tabs'
+  // room again (mitcad#2079).
+  if (m_tabRow != nullptr && watched != m_tabs &&
+      (event->type() == QEvent::Show || event->type() == QEvent::Hide || event->type() == QEvent::Resize)) {
+    if (auto* widget = qobject_cast<QWidget*>(watched); widget != nullptr && m_tabRow->indexOf(widget) >= 0) {
+      scheduleFitTabRow();
+    }
+  }
   if (m_groupCards || m_panel) {
     switch (event->type()) {
     case QEvent::Move:
@@ -4726,6 +5187,19 @@ void Ribbon::changeEvent(QEvent* event) {
 void Ribbon::paintEvent(QPaintEvent* event) {
   if (m_presentation != Presentation::Mac) {
     QWidget::paintEvent(event);
+    // The Docked toolbar's workspace block (setWorkspaceSelector,
+    // mitcad#2082): in the cards' material, as the toolbar panel's.
+    if (m_workspaceButton != nullptr && !m_workspaceButton->isHidden()) {
+      QPainter painter(this);
+      painter.setRenderHint(QPainter::Antialiasing);
+      const QPalette pal = palette();
+      const qreal hairline = 1.0 / devicePixelRatioF();
+      painter.setPen(QPen(cardBorderColor(pal), hairline));
+      painter.setBrush(cardFillColor(pal));
+      const QRectF box = QRectF(m_workspaceButton->geometry())
+                             .adjusted(hairline / 2, hairline / 2, -hairline / 2, -hairline / 2);
+      painter.drawRoundedRect(box, kPanelRadius, kPanelRadius);
+    }
     return;
   }
   if (m_groupCards) {
@@ -4783,7 +5257,8 @@ void Ribbon::setSketchMode(bool sketching) {
     // Not to the Start tab (mitcad#1258): a sketch is the model's (the
     // workspace's tab shown last in the toolbar panel, mitcad#1990).
     if (m_pageBeforeSketch == kStartPage) {
-      m_pageBeforeSketch = m_panel ? m_workspacePage.value(m_workspace, firstPageOfWorkspace(m_workspace)) : kSolidPage;
+      m_pageBeforeSketch =
+          m_workspaces ? m_workspacePage.value(m_workspace, firstPageOfWorkspace(m_workspace)) : kSolidPage;
     }
     const int index = m_tabs->addTab(displayName(kSketch));
     m_tabs->setTabData(index, kSketchPage);
@@ -4795,12 +5270,10 @@ void Ribbon::setSketchMode(bool sketching) {
     emit sketchModeChanged(true);
   } else if (!sketching && shown >= 0) {
     {
-      // The tab Qt picks while SKETCH goes is not followed: the one it
-      // started from is shown next.
+      // The tab Qt picks while SKETCH goes is not shown, not even for a
+      // moment (removeTabShowing): the one it started from is.
       const QScopedValueRollback<bool> applying(m_applyingWorkspace, true);
-      m_tabs->removeTab(shown);
-      const int back = tabOfPage(m_pageBeforeSketch);
-      m_tabs->setCurrentIndex(back >= 0 ? back : fallbackTab());
+      removeTabShowing(shown, m_pageBeforeSketch);
     }
     followCurrentTab();
     applyWorkspaceTabs();
@@ -4826,7 +5299,7 @@ void Ribbon::setDrawingMode(bool open, bool cutSheet) {
       // the workspace's tab shown last in the toolbar panel, mitcad#1990).
       if (m_pageBeforeDrawing == kStartPage) {
         m_pageBeforeDrawing =
-            m_panel ? m_workspacePage.value(m_workspace, firstPageOfWorkspace(m_workspace)) : kSolidPage;
+            m_workspaces ? m_workspacePage.value(m_workspace, firstPageOfWorkspace(m_workspace)) : kSolidPage;
       }
     }
     // The drawing's tab alone: SOLID and BUILD (or another drawing's tab)
@@ -4855,9 +5328,7 @@ void Ribbon::setDrawingMode(bool open, bool cutSheet) {
     {
       const QScopedValueRollback<bool> applying(m_applyingWorkspace, true);
       addModelTabs();
-      m_tabs->removeTab(tabOfPage(drawingPage));
-      const int back = tabOfPage(m_pageBeforeDrawing);
-      m_tabs->setCurrentIndex(back >= 0 ? back : fallbackTab());
+      removeTabShowing(tabOfPage(drawingPage), m_pageBeforeDrawing);
     }
     // The tab it was opened from, or the workspace the selector chose
     // (setWorkspace), with that workspace's tabs.
@@ -4901,9 +5372,7 @@ void Ribbon::setRenderMode(bool on) {
       }
     } else {
       addModelTabs();
-      m_tabs->removeTab(tabOfPage(kRenderPage));
-      const int back = tabOfPage(m_pageBeforeDrawing);
-      m_tabs->setCurrentIndex(back >= 0 ? back : fallbackTab());
+      removeTabShowing(tabOfPage(kRenderPage), m_pageBeforeDrawing);
     }
   }
   followCurrentTab();
@@ -4958,13 +5427,19 @@ QStringList Ribbon::layoutLines() const {
         lines << QStringLiteral("Ribbon tab %1 out of sight").arg(id);
         continue;
       }
+      // Docked's row too narrow for every tab (mitcad#2079): "Ribbon tab
+      // MANAGE folded", in the menu of the » ("Ribbon tabs more at x,y").
+      if (const auto* pills = dynamic_cast<const PillTabBar*>(m_tabs); pills != nullptr && pills->isFolded(i)) {
+        lines << QStringLiteral("Ribbon tab %1 folded").arg(id);
+        continue;
+      }
       const QPoint center = m_tabs->mapTo(m_tabs->window(), m_tabs->tabRect(i).center());
       lines << QStringLiteral("Ribbon tab %1 at %2,%3").arg(id).arg(center.x()).arg(center.y());
     }
   }
   // A tab with its own row (setTabRow, mitcad#2013): the tabs are out of
   // sight, the window's own stand there and log their places.
-  if (m_panel && m_tabRows.contains(currentTab()) && isVisible()) {
+  if (m_workspaces && m_tabRows.contains(currentTab()) && isVisible()) {
     lines << QStringLiteral("Ribbon tab %1: its own row").arg(currentTab());
   }
   if (m_panel && tabOfPage(kStartPage) >= 0 && m_startButton != nullptr && m_startButton->isVisible()) {
@@ -4975,6 +5450,116 @@ QStringList Ribbon::layoutLines() const {
   if (m_workspaceButton != nullptr && m_workspaceButton->isVisible()) {
     const QPoint center = m_workspaceButton->mapTo(window(), m_workspaceButton->rect().center());
     lines << QStringLiteral("Ribbon workspace at %1,%2").arg(center.x()).arg(center.y());
+  }
+  // The Docked toolbar's workspace block (mitcad#2082): at the left, as
+  // high as the tab row and the groups' row together, kPanelBlockGap to
+  // them: "Ribbon workspace block: left of the card (x 4-92, the card from
+  // x 100, gap 8), as high as both rows: yes (top 2, bottom 120; the tabs'
+  // top 4, the groups' bottom 118)".
+  if (!m_panel && m_tabRow != nullptr && m_workspaceButton != nullptr && m_workspaceButton->isVisible() &&
+      m_tabs->isVisible()) {
+    const QRect block(m_workspaceButton->mapTo(window(), QPoint(0, 0)), m_workspaceButton->size());
+    const QRect tabs(m_tabs->mapTo(window(), QPoint(0, 0)), m_tabs->size());
+    const QRect pages(m_pages->mapTo(window(), QPoint(0, 0)), m_pages->size());
+    const int cardLeft = std::min(tabs.left(), pages.left());
+    const bool left = block.right() < cardLeft;
+    const bool both = block.top() <= tabs.top() && block.bottom() >= pages.bottom();
+    lines << QStringLiteral("Ribbon workspace block: %1 (x %2-%3, the card from x %4, gap %5), as high as both rows: "
+                            "%6 (top %7, bottom %8; the tabs' top %9, the groups' bottom %10)")
+                 .arg(left ? QStringLiteral("left of the card") : QStringLiteral("not left of the card"))
+                 .arg(block.left())
+                 .arg(block.right())
+                 .arg(cardLeft)
+                 .arg(cardLeft - block.right() - 1)
+                 .arg(both ? QStringLiteral("yes") : QStringLiteral("no"))
+                 .arg(block.top())
+                 .arg(block.bottom())
+                 .arg(tabs.top())
+                 .arg(pages.bottom());
+  }
+  // The Docked toolbar's fonts (docs/ui-conventions.md §10, mitcad#2082):
+  // each as its family, its size as a factor of the application font's and
+  // its weight, "Ribbon fonts: application Segoe UI 9pt; tab shown Segoe UI
+  // 0.92 DemiBold; tab not shown Segoe UI 0.92 DemiBold; caption Segoe UI
+  // 0.92 Regular; workspace name Segoe UI 1.00 DemiBold; workspace line
+  // Segoe UI 0.85 Regular; labels Segoe UI 0.85 Regular".
+  if (m_presentation == Presentation::Classic && isVisible()) {
+    const QFont application = QApplication::font();
+    const auto weightName = [](int weight) {
+      switch (weight) {
+      case QFont::Light:
+        return QStringLiteral("Light");
+      case QFont::Normal:
+        return QStringLiteral("Regular");
+      case QFont::Medium:
+        return QStringLiteral("Medium");
+      case QFont::DemiBold:
+        return QStringLiteral("DemiBold");
+      case QFont::Bold:
+        return QStringLiteral("Bold");
+      default:
+        return QString::number(weight);
+      }
+    };
+    const auto describe = [&application, &weightName](const QFont& used) {
+      const qreal base = application.pointSizeF() > 0 ? application.pointSizeF() : used.pointSizeF();
+      const qreal factor = base > 0 ? used.pointSizeF() / base : 1.0;
+      return QStringLiteral("%1 %2 %3").arg(used.family()).arg(factor, 0, 'f', 2).arg(weightName(used.weight()));
+    };
+    QStringList fonts;
+    fonts << QStringLiteral("application %1 %2pt").arg(application.family()).arg(application.pointSizeF());
+    if (const auto* pills = dynamic_cast<const PillTabBar*>(m_tabs)) {
+      // The shown tab's and the others' are one font (PillTabBar::tabFont).
+      fonts << QStringLiteral("tab shown %1").arg(describe(pills->tabFont()));
+      fonts << QStringLiteral("tab not shown %1").arg(describe(pills->tabFont()));
+    }
+    for (auto it = m_groupButtons.cbegin(); it != m_groupButtons.cend(); ++it) {
+      if (it.value()->isVisible()) {
+        fonts << QStringLiteral("caption %1").arg(describe(GroupCaption::captionFont(it.value()->font())));
+        break;
+      }
+    }
+    if (const auto* block = dynamic_cast<const WorkspaceButton*>(m_workspaceButton)) {
+      fonts << QStringLiteral("workspace name %1").arg(describe(block->nameFont()));
+      fonts << QStringLiteral("workspace line %1").arg(describe(block->smallFont()));
+    }
+    fonts << QStringLiteral("labels %1").arg(describe(ribbonLabelFont(font())));
+    lines << QStringLiteral("Ribbon fonts: %1").arg(fonts.join(QStringLiteral("; ")));
+  }
+  // The Docked tab row's right end (mitcad#2082): the widgets after its
+  // free stretch in sight, in order, "Ribbon tab row end: ribbonToolbarChat,
+  // quickAccess, ribbonSearch"; and the group captions' drop-down marks,
+  // one ˅ each (GroupCaption draws it, the name has none and no menu
+  // indicator is drawn), "Ribbon captions: 6 shown, one ˅ each: yes".
+  if (m_presentation == Presentation::Classic && m_tabRow != nullptr && isVisible()) {
+    QStringList end;
+    bool afterStretch = false;
+    for (int i = 0; i < m_tabRow->count(); ++i) {
+      QLayoutItem* item = m_tabRow->itemAt(i);
+      if (item->spacerItem() != nullptr) {
+        afterStretch = true;
+      } else if (const QWidget* widget = item->widget(); afterStretch && widget != nullptr && widget->isVisible()) {
+        end << widget->objectName();
+      }
+    }
+    lines << QStringLiteral("Ribbon tab row end: %1")
+                 .arg(end.isEmpty() ? QStringLiteral("none") : end.join(QStringLiteral(", ")));
+    int shownCaptions = 0;
+    bool oneMark = true;
+    for (auto it = m_groupButtons.cbegin(); it != m_groupButtons.cend(); ++it) {
+      const auto* caption = dynamic_cast<const GroupCaption*>(it.value());
+      if (!it.value()->isVisible()) {
+        continue;
+      }
+      ++shownCaptions;
+      if (caption == nullptr || caption->text().contains(QStringLiteral("▾")) ||
+          caption->text().contains(QStringLiteral("˅"))) {
+        oneMark = false;
+      }
+    }
+    lines << QStringLiteral("Ribbon captions: %1 shown, one ˅ each: %2")
+                 .arg(shownCaptions)
+                 .arg(oneMark ? QStringLiteral("yes") : QStringLiteral("no"));
   }
   // A free place beside the tabs (mitcad#1975), where a right-click is the
   // window's own (Docked: its menu of the panels), now that one on a tab
@@ -5008,6 +5593,13 @@ QStringList Ribbon::layoutLines() const {
       const QPoint at = mapTo(window(), free);
       lines << QStringLiteral("Ribbon free at %1,%2").arg(at.x()).arg(at.y());
     }
+  }
+  // The » of the folded tabs (mitcad#2079): "Ribbon tabs more at x,y".
+  if (const auto* pills = dynamic_cast<const PillTabBar*>(m_tabs);
+      pills != nullptr && pills->isVisible() && pills->moreButton()->isVisible()) {
+    const QToolButton* more = pills->moreButton();
+    const QPoint center = more->mapTo(window(), more->rect().center());
+    lines << QStringLiteral("Ribbon tabs more at %1,%2").arg(center.x()).arg(center.y());
   }
   // The + of the tabs' menu (mitcad#1975): "Ribbon tabs button at x,y".
   if (m_tabsButton != nullptr && m_tabsButton->isVisible()) {

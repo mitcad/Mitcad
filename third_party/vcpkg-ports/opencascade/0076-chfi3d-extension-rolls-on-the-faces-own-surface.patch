@@ -15,6 +15,14 @@ made the face builder drop part of a planar face with the rolling ball of
 0075; 0.015 before it). On an elementary surface the face's own surface,
 made into a face without edges, continues exactly; other surfaces keep the
 tangent plane (their natural bounds could stop the walk).
+
+Test: geometry/tests/test_fillet_rolling_ball.cpp (ctest
+geometry.suite.fillet_rolling_ball),
+test_rounding_between_a_plate_and_a_tilted_rod_is_a_rolling_ball,
+test_rounding_of_a_tilted_rods_top_is_a_rolling_ball,
+test_rounding_between_a_plate_and_a_tilted_cone_is_a_rolling_ball: the
+tests written with 0075 to 0077. Its failure without the patch is still to
+be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 25eb8c8..5e6b1d6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

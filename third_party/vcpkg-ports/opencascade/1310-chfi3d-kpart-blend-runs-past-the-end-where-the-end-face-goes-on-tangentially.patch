@@ -30,6 +30,17 @@ blend's intersection with B, is added before P, which keeps the end edge.
 Elsewhere such a tangent end is left to the corner as before, and so are
 chamfers (a chamfer's end there is made by its own cuts).
 
+The conditions (mitcad#1986) are geometric, not the case's: a fillet's
+analytic end piece on the spine's end edge, no piece given up before it,
+whose contact face N goes on into the face at the end B tangentially
+(IsTangentFaces) across an edge E that holds the end vertex V, the piece
+ending within ten times the 3D tolerance of the end edge's end; any
+analytic blend (torus, cylinder) and any B falling away from N's surface.
+Only one size is the case's choice, not derived: the spine run on past V
+is searched up to the end edge's own length for the section through Q (a
+longer run-on where B cuts the blend farther out is not found, and the end
+is left to the corner as before).
+
 Test: geometry/tests/test_fillet_fin_end.cpp, the reported fin's top
 rounded up to its end face: about the fin's end the result lies on the
 stored body within 0.002 mm both ways (0.011 off without the patch).

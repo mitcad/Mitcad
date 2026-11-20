@@ -44,6 +44,15 @@ body's 193 faces and a change of volume of 0.70767 mm3 against the stored
 unchanged.
 
 Upstream: new.
+
+Test: geometry/tests/test_fillet_end_overflow.cpp,
+test_wall_foot_ending_at_a_sliver (ctest geometry.fillet_end_overflow): a
+wall cut from a half-cylinder's rounded end, its foot rounded up to a sliver
+the cut's end face leaves: valid, the sliver consumed, the volume the result
+without the sliver has, with the material beyond the cut, within 1e-7. Its
+failure without the patch, stated in its documentation, is still to be shown
+in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

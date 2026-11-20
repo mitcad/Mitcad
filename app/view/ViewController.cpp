@@ -80,6 +80,8 @@
 #include "../framework/LengthUnits.hpp"
 #include "../framework/PanelTree.hpp"
 #include "../framework/PreferencesPageLayout.hpp"
+#include "../framework/PreferencesSearch.hpp"
+#include "../framework/CommandSearch.hpp"
 #include "../framework/SettingsWindow.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacChrome.hpp"
@@ -87,6 +89,7 @@
 #include "../framework/QuickAccess.hpp"
 #include "../framework/RibbonLabels.hpp"
 #include "../DocumentFrame.hpp"
+#include "../WindowManager.hpp"
 // 3D Print's slicer (mitcad#13).
 #include "../files/Print3d.hpp"
 #include "../update/UpdatePreferences.hpp"
@@ -285,25 +288,35 @@ struct PreferencePage {
 const PreferencePage kPreferencePages[] = {
     {"general", QT_TRANSLATE_NOOP("View", "General"),
      "autosave recovery activate component ask picked face units inch new design "
-     "browser features used sketches consumed"},
-    {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
+     "browser features used sketches consumed language tolerance import temperature fahrenheit celsius "
+     "tabs windows open_designs folder version native macos"},
+    {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"),
+     "mouse orbit pan zoom scheme shortcuts bindings custom trackpad 3d_mouse space speed arrow key step "
+     "orbit_center cursor constrained reverse smooth transitions scroll"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
      "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda worker optix ghost inactive components pick priority layout docked floating browser background rows card "
      "focal_length lens field_of_view anaglyph stereo "
      "quick_access_toolbar quick-access toolbar theme dark light mode colour color scheme "
-     "menu_bar menus hamburger origin_planes origin planes axes size screen model millimetres corner centred"},
-    {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics"},
+     "menu_bar menus hamburger origin_planes origin planes axes size screen model millimetres corner centred "
+     "font text_size icon_size interface_size style toolbar_labels selection_color line_width corners dots "
+     "drawings small_circles circles boost navigation_bar"},
+    {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics clear folder computed"},
     {"cloud", QT_TRANSLATE_NOOP("View", "Cloud"),
-     "git remote sync push fetch version control author email name mqtt live broker"},
-    {"updates", QT_TRANSLATE_NOOP("View", "Updates"), "release channel pre-release"},
-    {"print", QT_TRANSLATE_NOOP("View", "3D Print"), "slicer printing"},
+     "git remote sync push fetch version control author email name mqtt live broker brokers known "
+     "git_program sign_out"},
+    {"updates", QT_TRANSLATE_NOOP("View", "Updates"), "release channel pre-release check start-up startup"},
+    {"print", QT_TRANSLATE_NOOP("View", "3D Print"), "slicer printing open_in program"},
     // The debug log (mitcad#269).
-    {"diagnostics", QT_TRANSLATE_NOOP("View", "Diagnostics"), "debug log logging trace problem report"},
+    {"diagnostics", QT_TRANSLATE_NOOP("View", "Diagnostics"),
+     "debug log logging trace problem report log_folder privacy"},
     // Texture folders for Edit Appearances (mitcad#315).
-    {"textures", QT_TRANSLATE_NOOP("View", "Textures"), "texture folders maps materials appearance images"},
+    {"textures", QT_TRANSLATE_NOOP("View", "Textures"),
+     "texture folders maps materials appearance images internet online"},
     // The folders for designs, which AI assistants save to and open from
     // (mitcad#402).
-    {"agents", QT_TRANSLATE_NOOP("View", "AI Assistants"), "mcp agent agents ai folders save open connection assistant assistants designs codex claude comments resolve"},
+    {"agents", QT_TRANSLATE_NOOP("View", "AI Assistants"),
+     "mcp agent agents ai folders save open connection assistant assistants designs codex claude comments resolve "
+     "chat history api key endpoint approvals timeout custom_agent"},
     // Folders of font files for sketch text (mitcad#473).
     {"fonts", QT_TRANSLATE_NOOP("View", "Fonts"), "font folders text ttf otf woff typeface"},
     // The first dimension scales the sketch (mitcad#860).
@@ -312,7 +325,7 @@ const PreferencePage kPreferencePages[] = {
     // Show profiles when a sketch opens (mitcad#1670).
     {"sketch", QT_TRANSLATE_NOOP("View", "Sketch"),
      "sketch dimension first scale proportion drawn size click select selection add ctrl multiple "
-     "esc escape leave exit finish unchanged profile profiles shade shading"},
+     "esc escape leave exit finish unchanged profile profiles shade shading project edges face"},
     // The suppliers' shops: the region of the product links and the shops
     // the Supplier filters start with (mitcad#950).
     {"suppliers", QT_TRANSLATE_NOOP("View", "Suppliers"),
@@ -330,6 +343,22 @@ bool pageFills(const char* id) {
   const QLatin1String page(id);
   return page == QLatin1String("textures") || page == QLatin1String("agents") || page == QLatin1String("fonts") ||
          page == QLatin1String("navigation") || page == QLatin1String("cloud");
+}
+
+// A page's keywords as the command search and Preferences' search take
+// them (an underscore is a space within a keyword).
+QStringList pageKeywords(const PreferencePage& page) {
+  QStringList keywords = QString::fromLatin1(page.keywords).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+  for (QString& keyword : keywords) {
+    keyword.replace(QLatin1Char('_'), QLatin1Char(' '));
+  }
+  return keywords;
+}
+
+// The name of a page of kPreferencePages, in the interface's language.
+QString pageName(int row) {
+  const int last = int(std::size(kPreferencePages)) - 1;
+  return QCoreApplication::translate("View", kPreferencePages[std::clamp(row, 0, last)].name);
 }
 
 QString onOff(bool on) { return on ? QStringLiteral("on") : QStringLiteral("off"); }
@@ -804,12 +833,14 @@ void ViewController::registerCommands() {
     const QString name = QCoreApplication::translate("View", entry.name);
     page.id = QStringLiteral("tools.preferences.%1").arg(id);
     page.name = tr("Preferences: %1").arg(name);
-    page.keywords = QString::fromLatin1(entry.keywords).split(QLatin1Char(' '));
-    for (QString& keyword : page.keywords) {
-      keyword.replace(QLatin1Char('_'), QLatin1Char(' '));
-    }
+    page.keywords = pageKeywords(entry);
     page.tooltip = tr("Preferences, opened on its %1 page").arg(name);
-    page.run = [this, id] { showPreferences(id); };
+    // Chosen in the command search, the words typed that are not in its
+    // name go into Preferences' search (mitcad#2074): "temperature"
+    // opens General with Temperature unit highlighted.
+    page.run = [this, id, command = page.id, title = page.name] {
+      showPreferences(id, preferencesSearchQueryFor(takeCommandSearchText(command), title));
+    };
     m_registry.add(page);
   }
 
@@ -1366,7 +1397,7 @@ void ViewController::showGridSettings() {
 // The Preferences dialog (OK and Cancel) with a list of its pages; on macOS
 // the Settings window instead: the same pages as panes, chosen in a row of
 // buttons at the top, whose changes apply as they are made.
-void ViewController::showPreferences(const QString& page) {
+void ViewController::showPreferences(const QString& page, const QString& query) {
   const QString wanted = page.isEmpty() ? m_preferencesPage : page;
   int wantedIndex = 0;
   for (int i = 0; i < int(std::size(kPreferencePages)); ++i) {
@@ -1391,6 +1422,12 @@ void ViewController::showPreferences(const QString& page) {
     {
       open->raise();
       open->activateWindow();
+    }
+    if (auto* search = qobject_cast<PreferencesSearchField*>(open->searchField())) {
+      if (!query.isEmpty()) {
+        search->setText(query);
+      }
+      search->setFocus(Qt::OtherFocusReason);
     }
     return;
   }
@@ -2521,13 +2558,18 @@ void ViewController::showPreferences(const QString& page) {
   ribbonLabelsLabel->setBuddy(ribbonLabels);
   // Restore Default Layout (mitcad#1951): the user's changes to where the
   // commands sit (the command layout's user layer) and the toolbar's pins
-  // removed, at once in every window.
+  // removed, at once in every window; the Docked layout's panels too, their
+  // kept arrangement forgotten (mitcad#2070).
   auto* restoreLayout = new QPushButton(tr("Restore Default Layout"));
   restoreLayout->setObjectName(QStringLiteral("restoreDefaultLayout"));
-  restoreLayout->setToolTip(tr("Puts every toolbar and menu command back where MitCad has it"));
+  restoreLayout->setToolTip(
+      tr("Puts the toolbar, the menus and the Docked layout's panels back in their default places"));
   restoreLayout->setAutoDefault(false);
   connect(restoreLayout, &QPushButton::clicked, restoreLayout, [] {
     CommandLayoutStore::instance().restoreDefault();
+    if (WindowManager* manager = WindowManager::instance()) {
+      manager->restoreDefaultDocks();
+    }
     qDebug().noquote() << QStringLiteral("Preferences: layout restored to the default");
   });
   auto* toolbarRow = new QHBoxLayout;
@@ -2574,8 +2616,9 @@ void ViewController::showPreferences(const QString& page) {
   // The menu bar (mitcad#1620, Windows and Linux): shown by default;
   // cleared, it is hidden in either layout, a ☰ button before Undo and Redo
   // opens its menus, and Alt shows it until its menu closes (MenuBarReveal).
-  // Not offered in the Floating layout there, whose top bar holds the menus
-  // and never shows the menu bar (mitcad#1990).
+  // Not offered where the top bar holds the menus and the menu bar never
+  // shows: Windows and Linux in both layouts (mitcad#1990, mitcad#2082), so
+  // nowhere now; kept for a build without the top bar.
   // The Boost development button (mitcad#1990): shown by default, hidden
   // by its own ×; offered where the window has it (the Floating top bar of
   // Windows and Linux, the Docked toolbar), beside Show the menu bar where
@@ -2609,7 +2652,7 @@ void ViewController::showPreferences(const QString& page) {
       connect(dialog.get(), &QDialog::accepted, boostShown, applyBoost);
     }
   }
-  if (MenuBarSettings::offered() && !(chromeStyle() == ChromeStyle::Floating && floatingTopCards())) {
+  if (MenuBarSettings::offered() && !floatingTopCards()) {
     auto* menuBarShown = new QCheckBox(tr("Show the m&enu bar"));
     menuBarShown->setObjectName(QStringLiteral("menuBarVisible"));
     menuBarShown->setChecked(MenuBarSettings::loadShown());
@@ -3261,6 +3304,12 @@ void ViewController::showPreferences(const QString& page) {
         {"suppliers", "cart", "bag"},
         {"assembly", "gearshape.2", "gearshape"},
     };
+    // The search above the page list (mitcad#2074).
+    PreferencesSearchField* search = nullptr;
+    if (window->pageList() != nullptr) {
+      search = new PreferencesSearchField(window->pageList(), [window](int row) { window->showPane(row); });
+      window->setSearchField(search);
+    }
     for (const PreferencePage& entry : kPreferencePages) {
       QWidget* group = groups.value(QLatin1String(entry.id));
       if (auto* box = qobject_cast<QGroupBox*>(group)) {
@@ -3284,6 +3333,9 @@ void ViewController::showPreferences(const QString& page) {
         }
       }
       window->addPane(QCoreApplication::translate("View", entry.name), icon, content);
+      if (search != nullptr) {
+        search->addPage(content, QCoreApplication::translate("View", entry.name), pageKeywords(entry));
+      }
     }
     // No OK: a change is made when it is made. The text boxes when they are
     // left, and what is typed in one when the window closes.
@@ -3370,12 +3422,21 @@ void ViewController::showPreferences(const QString& page) {
     window->setWindowTitle(tr("Settings"));
     window->showPane(wantedIndex);
     showDialog(window);
+    if (search != nullptr) {
+      search->setFocus(Qt::OtherFocusReason);
+      if (!query.isEmpty()) {
+        search->setText(query);
+      }
+    }
     return;
   }
 
   auto* layout = new QVBoxLayout(dialog.get());
   auto* pages = new QListWidget;
+  pages->setObjectName(QStringLiteral("preferencesPages"));
   auto* stack = new QStackedWidget;
+  // The search above the page list (mitcad#2074).
+  auto* search = new PreferencesSearchField(pages, [pages](int row) { pages->setCurrentRow(row); });
   for (const PreferencePage& entry : kPreferencePages) {
     auto* content = new PreferencesPageContent;
     auto* contentLayout = new QVBoxLayout(content);
@@ -3386,6 +3447,7 @@ void ViewController::showPreferences(const QString& page) {
     stack->addWidget(content);
     auto* item = new QListWidgetItem(QCoreApplication::translate("View", entry.name), pages);
     item->setData(Qt::UserRole, QLatin1String(entry.id));
+    search->addPage(content, QCoreApplication::translate("View", entry.name), pageKeywords(entry));
   }
   pages->setSpacing(2);
   // Only the page shown counts for the window's minimum size (mitcad#690):
@@ -3412,13 +3474,16 @@ void ViewController::showPreferences(const QString& page) {
       // The minimum size the page shown sets (UI tests).
       const QSize minimum = pages->window()->minimumSize();
       qDebug().noquote() << QStringLiteral("Preferences page: %1, minimum %2 x %3")
-                                .arg(pages->item(row)->text())
+                                .arg(pageName(row))
                                 .arg(minimum.width())
                                 .arg(minimum.height());
     }
   });
   auto* pagesRow = new QHBoxLayout;
-  pagesRow->addWidget(pages);
+  auto* pagesColumn = new QVBoxLayout;
+  pagesColumn->addWidget(search);
+  pagesColumn->addWidget(pages, 1);
+  pagesRow->addLayout(pagesColumn);
   pagesRow->addWidget(stack, 1);
   layout->addLayout(pagesRow, 1);
 
@@ -3454,7 +3519,9 @@ void ViewController::showPreferences(const QString& page) {
   // list could clip them), with room for a scroll bar on a low screen; it
   // keeps that width when the window is made narrower.
   dialog->ensurePolished();
-  const int entriesWidth = pages->sizeHintForColumn(0) + 2 * pages->spacing();
+  // With room for a search's count ("Display (12)", mitcad#2074).
+  const int entriesWidth = pages->sizeHintForColumn(0) +
+                           pages->fontMetrics().horizontalAdvance(QStringLiteral(" (99)")) + 2 * pages->spacing();
   pages->setFixedWidth(entriesWidth + 2 * pages->frameWidth() +
                        pages->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, pages) +
                        pages->fontMetrics().averageCharWidth());
@@ -3468,17 +3535,21 @@ void ViewController::showPreferences(const QString& page) {
     showPage(row);
     const QSize asked = dialog->sizeHint();
     qDebug().noquote() << QStringLiteral("Preferences page size: %1, %2 x %3")
-                              .arg(pages->item(row)->text())
+                              .arg(pageName(row))
                               .arg(asked.width())
                               .arg(asked.height());
   }
   pages->setCurrentRow(wantedIndex);
   showPage(wantedIndex);
-  pages->setFocus();
+  // The search field has the keyboard (mitcad#2074); Down goes to the list.
+  search->setFocus();
   qDebug().noquote() << QStringLiteral("Preferences opened: %1, %2 x %3")
-                            .arg(pages->currentItem()->text())
+                            .arg(pageName(wantedIndex))
                             .arg(size.width())
                             .arg(size.height());
+  if (!query.isEmpty()) {
+    search->setText(query);
+  }
   // Never larger than the screen's available area (mitcad#690), and still
   // resizable: only the page shown sets the minimum size.
   QDialog* shown = dialog.get();

@@ -26,11 +26,19 @@ blends intersecting).
   only. An open rider of one edge, or whose crossings lie beside two
   edges, keeps the line's parameters as before.
 
+Test: geometry/tests/test_fillet_tangent_ride.cpp,
+test_tower_behind_a_rounded_rim (ctest geometry.fillet_tangent_ride): the
+plate's corners rounded in plan so that the back edge's rounding is a
+closed contour, the tower 2.3 and 2.5 from it at the middle and 3 off it,
+both orders: valid, the volume within a millionth (the fillet failed
+without the patch). Its failure without the patch is still to be shown in
+the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 1789b559..04c90262 100644
+index b520a65c..de923c1e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3133,13 +3133,14 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+@@ -3155,13 +3155,14 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
    const occ::handle<ChFiDS_FilSpine> aFsA = occ::down_cast<ChFiDS_FilSpine>(A->Spine());
    const occ::handle<ChFiDS_FilSpine> aFsB = occ::down_cast<ChFiDS_FilSpine>(B->Spine());
    if (aFsA.IsNull() || aFsB.IsNull() || !aFsA->IsConstant() || !aFsB->IsConstant()
@@ -49,7 +57,7 @@ index 1789b559..04c90262 100644
    ChFiDS_TypeOfConcavity aType[2] = {ChFiDS_Other, ChFiDS_Other};
    for (int i = 0; i < 2; i++)
    {
-@@ -3289,12 +3290,94 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+@@ -3311,12 +3312,94 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
    {
      return false;
    }
@@ -144,7 +152,7 @@ index 1789b559..04c90262 100644
    // (B's SurfDatas as computed on the faces of its edges, SB among them.)
    const NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aBOrig = B->SetOfSurfData()->Sequence();
    int                                                      iSB    = 0;
-@@ -3302,38 +3385,50 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+@@ -3324,30 +3407,42 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
    {
      iSB = aBOrig(j) == SB ? j : 0;
    }
@@ -197,8 +205,9 @@ index 1789b559..04c90262 100644
 +    occ::handle<ChFiDS_Stripe> aStripe = aWalker;
      PerformSetOfSurf(aStripe);
    }
-   catch (Standard_Failure const&)
-   {
+   catch (Standard_Failure const& anException)
+@@ -3359,8 +3454,8 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+     }
      aWalked = false;
    }
 -  B->Spine()->SetFirstParameter(aSpineFirst);
@@ -208,7 +217,7 @@ index 1789b559..04c90262 100644
    if (!aWalked)
    {
      undo();
-@@ -3343,11 +3438,11 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+@@ -3370,11 +3465,11 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
    occ::handle<ChFiDS_SurfData> SB2;
    int                          onB2 = 0;
    double                       tR[2] = {0., 0.};
@@ -223,7 +232,7 @@ index 1789b559..04c90262 100644
        for (int k = 1; k <= 2 && SB2.IsNull(); k++)
        {
          if (D->Index(k) <= 0 || !DStr.Shape(D->Index(k)).IsSame(Support) || D->Interference(k).LineIndex() <= 0)
-@@ -3376,11 +3471,19 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+@@ -3403,11 +3498,19 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
        }
      }
    }

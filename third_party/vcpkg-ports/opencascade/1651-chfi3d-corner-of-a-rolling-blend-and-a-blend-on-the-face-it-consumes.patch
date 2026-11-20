@@ -41,11 +41,18 @@ from that point.
   is reduced to that point, counts as an end at the nearer vertex, so that
   the consumed face goes.
 
+Test: geometry/tests/test_fillet_eave.cpp, test_eave_all_edges (ctest
+geometry.fillet_eave): the eave's four edges rounded with 0.9 and 1, the
+end edges' blends meeting the tip's where their contacts reach the obtuse
+edge, the material taken within 1e-4 of the removal sets' union (fails
+without the patch). Its failure without the patch is still to be shown in
+the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 64ecaeb8..dc9ef268 100644
+index 9f67a0e5..772eca20 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -4480,6 +4480,12 @@ void ChFi3d_Builder::Compute()
+@@ -4561,6 +4561,12 @@ void ChFi3d_Builder::Compute()
        myFailure = Failure_Corner;
      }
    }
@@ -58,7 +65,7 @@ index 64ecaeb8..dc9ef268 100644
    // construct fillets on each vertex + feed the Ds
    if (done)
    {
-@@ -4518,6 +4524,82 @@ void ChFi3d_Builder::Compute()
+@@ -4599,6 +4605,82 @@ void ChFi3d_Builder::Compute()
        }
        done = true;
      }
@@ -141,16 +148,16 @@ index 64ecaeb8..dc9ef268 100644
      if (!hasresult)
      {
        done = badvertices.IsEmpty();
-@@ -4705,7 +4787,7 @@ void ChFi3d_Builder::Compute()
-         // (The blend as it is.)
-       }
+@@ -4778,7 +4860,7 @@ void ChFi3d_Builder::Compute()
+       // Blends a face of the solid pokes through.
+       PierceBlends(st);
        // Narrow faces consumed by blends on their edges (edge overflow).
 -      ChFi3d_CutConsumedFaces(DStr, st, myEFMap);
 +      ChFi3d_CutConsumedFaces(DStr, st, myEFMap, &myListStripe);
        if (!done)
        {
          break;
-@@ -4717,6 +4799,53 @@ void ChFi3d_Builder::Compute()
+@@ -4790,6 +4872,53 @@ void ChFi3d_Builder::Compute()
      ChFi3d_InitChron(cl_reconstruction);
  #endif
  
@@ -205,10 +212,10 @@ index 64ecaeb8..dc9ef268 100644
      if (done)
      {
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 3a3470ff..3107f173 100644
+index a68dfec8..74305ca3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -1398,6 +1398,72 @@ bool ChFi3d_IsInFront(TopOpeBRepDS_DataStructure&       DStr,
+@@ -1396,6 +1396,72 @@ bool ChFi3d_IsInFront(TopOpeBRepDS_DataStructure&       DStr,
        face     = ff;
      }
    }
@@ -281,7 +288,7 @@ index 3a3470ff..3107f173 100644
    return ok;
  }
  
-@@ -2926,9 +2992,10 @@ static void cutEdgesAt(TopOpeBRepDS_DataStructure& DStr,
+@@ -2924,9 +2990,10 @@ static void cutEdgesAt(TopOpeBRepDS_DataStructure& DStr,
  //            the builder drops the face with them.
  //=======================================================================
  
@@ -295,7 +302,7 @@ index 3a3470ff..3107f173 100644
  {
    const occ::handle<ChFiDS_Spine>& aSpine = CorDat->Spine();
    if (aSpine.IsNull())
-@@ -3045,6 +3112,50 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+@@ -3043,6 +3110,50 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
          if (CP.IsVertex())
          {
            anEnds.Append(CP.Vertex());
@@ -346,7 +353,7 @@ index 3a3470ff..3107f173 100644
          }
        }
        // Each strip's other edges at the ends of the blend (on the strips
-@@ -4393,6 +4504,24 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+@@ -4392,6 +4503,24 @@ void ChFi3d_FilDS(const int                         SolidIndex,
  
    // Nullify degenerated ChFi/Faces interferences, eap occ293
    int j;
@@ -372,10 +379,10 @@ index 3a3470ff..3107f173 100644
    {
      for (j = 1; j <= SeqFil.Length(); j++)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 005bc80b..8d2d1088 100644
+index 33d8a244..34c7cfb0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -546,9 +546,13 @@ bool ChFi3d_ArcEndsSpine(const ChFiDS_CommonPoint& CP,
+@@ -659,9 +659,13 @@ bool ChFi3d_ArcEndsSpine(const ChFiDS_CommonPoint& CP,
  //! The faces that blends rolling on their edges (obstacles) consume
  //! entirely are dropped from the result: their other edges at the ends of
  //! those blends are cut there.

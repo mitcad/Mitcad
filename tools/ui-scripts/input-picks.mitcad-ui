@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: MIT
+# mitcad#2064 (GitHub mitcad/Mitcad#473): a selection input's picks listed
+# by name on demand, each highlighted in the view on hover, on
+# input-picks.json (three boxes Body1 to Body3, PathPattern1 of the three,
+# Fillet1 of two of Body1's edges, RectangularPattern1 of a boss's two
+# faces). Editing PathPattern1, the Objects list is closed at first; its
+# button opens it with the three bodies by name; the pointer over the
+# second row highlights that body only and leaving the row takes it away;
+# the second row chosen and the list's ✕ take that body out. The list is
+# open again when PathPattern1 is edited again, and opens by itself in
+# Fillet1's and RectangularPattern1's panels, with the same hover; closing
+# it takes the highlight away. All geometry is synthetic.
+# Run by tools/ui-input-picks-test.sh (Linux),
+# tools/ui-windows-input-picks-test.ps1 (Windows) and
+# tools/ui-macos-input-picks-test.sh (macOS).
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+
+# PathPattern1: the list closed at first, its button beside the chip.
+mark
+dblclick-logged '^Timeline PathPattern1 at '
+expect-log 'Editing F5 with Pattern on Path'
+wait-log '^Pattern on Path Objects: 3 bodies' 30
+wait-log '^Panel Pattern on Path picks_bodies at ' 30
+wait-idle 30
+expect-no-log '^Panel Pattern on Path picks bodies shown'
+
+# The button opens it: the bodies by name, no ids.
+mark
+button '^▸$' picks_bodies
+wait-log '^Panel Pattern on Path picks bodies list opened$' 30
+wait-log '^Panel Pattern on Path picks bodies shown: 1[.] Body1; 2[.] Body2; 3[.] Body3$' 30
+wait-idle 30
+
+# The second row under the pointer: only Body2 highlighted, until the
+# pointer leaves the list.
+mark
+hover-row order_bodies 1
+wait-log '^Panel Pattern on Path pick bodies hovered: 2[.] Body2$' 30
+wait-log '^Pattern on Path pick highlighted: body F2[.]b0$' 30
+wait-idle 30
+expect-no-log '^Pattern on Path pick highlighted: body F[13][.]b0'
+screenshot '${MITCAD_TEST_WORK}/input-picks-hover.png'
+mark
+leave-widget order_bodies
+wait-log '^Panel Pattern on Path pick bodies left$' 30
+wait-log '^Pattern on Path pick highlighted: none$' 30
+wait-idle 30
+
+# The second row chosen and the list's ✕: Body2 is out.
+mark
+click-row order_bodies 1
+button '^✕$' remove_pick_bodies
+wait-log '^Pattern on Path Objects: 2 bodies' 30
+wait-log '^Panel Pattern on Path picks bodies shown: 1[.] Body1; 2[.] Body3$' 30
+wait-idle 30
+mark
+button '^Cancel$'
+wait-idle 30
+
+# Edited again: the list is open as it was left, with the stored picks.
+mark
+dblclick-logged '^Timeline PathPattern1 at '
+expect-log 'Editing F5 with Pattern on Path'
+wait-log '^Panel Pattern on Path picks bodies shown: 1[.] Body1; 2[.] Body2; 3[.] Body3$' 30
+wait-idle 30
+mark
+button '^Cancel$'
+wait-idle 30
+
+# Fillet1: the list open in another command's panel, its edges in words.
+mark
+dblclick-logged '^Timeline Fillet1 at '
+expect-log 'Editing F6 with Fillet'
+wait-log '^Panel Fillet picks sets[.]0[.]edges shown: 1[.] Edge of Body1; 2[.] Edge of Body1$' 30
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+mark
+hover-row order_sets.0.edges 1
+wait-log '^Panel Fillet pick sets[.]0[.]edges hovered: 2[.] Edge of Body1$' 30
+wait-log '^Fillet pick highlighted: edge E[{]F1:side2[|]F1:top[}] of F1[.]b0$' 30
+wait-idle 30
+expect-no-log '^Fillet pick highlighted: edge E[{]F1:side0[|]F1:top[}]'
+mark
+leave-widget order_sets.0.edges
+wait-log '^Fillet pick highlighted: none$' 30
+mark
+click-row order_sets.0.edges 0
+button '^✕$' remove_pick_sets.0.edges
+wait-log '^Fillet Edges: 1 edge' 30
+wait-log '^Panel Fillet picks sets[.]0[.]edges shown: 1[.] Edge of Body1$' 30
+wait-idle 30
+mark
+button '^Cancel$'
+wait-idle 30
+
+# RectangularPattern1: the boss's faces; closing the list under the
+# pointer takes the highlight away.
+mark
+dblclick-logged '^Timeline RectangularPattern1 at '
+expect-log 'Editing F10 with Rectangular Pattern'
+wait-log '^Panel Rectangular Pattern picks faces shown: 1[.] Face of Body[0-9]+; 2[.] Face of Body[0-9]+$' 30
+wait-idle 30
+mark
+hover-row order_faces 0
+wait-log '^Panel Rectangular Pattern pick faces hovered: 1[.] Face of Body[0-9]+$' 30
+wait-log '^Rectangular Pattern pick highlighted: face F9:side[(]c2[)] of F7[.]b0$' 30
+wait-idle 30
+mark
+button '^▾$' picks_faces
+wait-log '^Panel Rectangular Pattern picks faces list closed$' 30
+wait-log '^Panel Rectangular Pattern picks faces hidden$' 30
+wait-log '^Panel Rectangular Pattern pick faces left$' 30
+wait-log '^Rectangular Pattern pick highlighted: none$' 30
+wait-idle 30
+mark
+button '^Cancel$'
+wait-idle 30
+expect-never 'TestDriver: FAIL|OCCT view event failed'

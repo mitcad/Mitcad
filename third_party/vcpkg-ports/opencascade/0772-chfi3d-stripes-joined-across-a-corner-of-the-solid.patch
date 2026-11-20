@@ -42,34 +42,59 @@ failed build).
   (vertex interferences TopAbs_EXTERNAL, as for the chamfer cut by the
   faces beyond it).
 
+Failures (mitcad#1986): the join of one pair of ends over a corner and its
+walk fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the two stripes cannot be joined
+so; any other failure (a broken invariant, a signal) is rethrown. Each
+pair is joined or left on its own, so the pass JoinAcrossCorners has no
+handler of its own in Compute: a join that fails part of the way, or
+whose side faces cannot grow up to the cuts, puts the two stripes back as
+they were (0700's ChFi3d_StripesState), and both side faces' growths are
+computed before either goes into the data structure.
+
+The conditions (mitcad#1986) are geometric, not the case's: two free ends
+(status at most a break point) of two non-periodic stripes of one constant
+radius, each with a last piece on two faces, sharing one face Fo, whose
+other faces are the same face or two planar faces of one plane (normals
+within 1e-7 rad, within the confusion distance), at two vertices held by a
+third face C; any housing, bulge or corner shape meets them. The plane is
+required: the walk takes that face unbounded, which only a plane allows.
+Only the sizes come from the case: the ends at most 8 radii apart (the
+corner's width over the radius in the case, about 3, with margin); the
+points of the cuts chained within 100 times the 3D tolerance (at least
+1e-4).
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_lens_overflow.cpp,
+test_roundings_joined_across_a_corner (ctest geometry.fillet_lens_overflow):
+a bulge on a housing's rounded corner, its foot rounded with 20, the edges
+given in both orders: valid, the junctions at the height of the blend within
+1e-4, nothing beyond the first side above the top, the material added alike
+on both sides of the corner's bisector. Its failure without the patch,
+stated in its documentation, is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index e5dfb65..fc8b1d6 100644
+index 75f492a0..ff88e36e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2279,6 +2279,17 @@ void ChFi3d_Builder::Compute()
-     {
-       // (The stripes as they are.)
-     }
+@@ -2378,6 +2378,10 @@ void ChFi3d_Builder::Compute()
+     // faces, are taken for one below); stripes under such a ball dropped.
+     // (Each pair is joined, or left as it was, on its own: mitcad#1986.)
+     JoinOverNarrowFaces();
 +    // Stripes whose edges a corner of the solid interrupts, one blend over
-+    // the corner.
-+    try
-+    {
-+      OCC_CATCH_SIGNALS
-+      JoinAcrossCorners();
-+    }
-+    catch (Standard_Failure const&)
-+    {
-+      // (The stripes as they are.)
-+    }
++    // the corner (each pair joined, or left as it was, on its own:
++    // mitcad#1986).
++    JoinAcrossCorners();
      // Two stripes whose contact lines on a face between their edges are
      // one line (the face exactly as wide as the two roundings together):
      // the blends meet on that line and the face vanishes, as where the
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 6c5162d..783aece 100644
+index 3f1818c4..add28758 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -1199,6 +1199,29 @@ private:
+@@ -1207,6 +1207,29 @@ private:
    //! St is in the data structure.
    Standard_EXPORT void PierceBlends(const occ::handle<ChFiDS_Stripe>& St);
  
@@ -101,10 +126,10 @@ index 6c5162d..783aece 100644
                                    occ::handle<BRepAdaptor_Surface>& HS1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
 new file mode 100644
-index 0000000..e8a27a3
+index 00000000..43c3ad7c
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
-@@ -0,0 +1,1339 @@
+@@ -0,0 +1,1390 @@
 +// This file is part of Open CASCADE Technology software library.
 +//
 +// This library is free software; you can redistribute it and/or modify it under
@@ -671,19 +696,35 @@ index 0000000..e8a27a3
 +              {
 +                continue;
 +              }
++              // (SA and SB as they were where the join fails part of the way,
++              // mitcad#1986.)
++              ChFi3d_StripesState aBefore;
++              aBefore.Save(SA);
++              aBefore.Save(SB);
++              bool aJoin = false;
 +              try
 +              {
 +                OCC_CATCH_SIGNALS
-+                if (JoinAcrossCorner(SA, aFirst, iA, 3 - opp, SB, bFirst, iB, 3 - oppB, NA, NB, Fo, C))
-+                {
-+                  any = true;
-+                  aJoined[aFirst ? 0 : 1].Append(SA);
-+                  aJoined[bFirst ? 0 : 1].Append(SB);
-+                }
++                aJoin = JoinAcrossCorner(SA, aFirst, iA, 3 - opp, SB, bFirst, iB, 3 - oppB, NA, NB, Fo, C);
 +              }
-+              catch (Standard_Failure const&)
++              catch (Standard_Failure const& anException)
 +              {
-+                // (These two ends as they are.)
++                // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++                if (!ChFi3d_IsComputationFailure(anException))
++                {
++                  throw;
++                }
++                aJoin = false;
++              }
++              if (aJoin)
++              {
++                any = true;
++                aJoined[aFirst ? 0 : 1].Append(SA);
++                aJoined[bFirst ? 0 : 1].Append(SB);
++              }
++              else
++              {
++                aBefore.Restore();
 +              }
 +            }
 +          }
@@ -854,8 +895,13 @@ index 0000000..e8a27a3
 +    walked = PerformSurf(SeqSD, HG, spA, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First, Last, false,
 +                         false, Forward, false, false, Soldep, intf, intl);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = aDone;
@@ -1354,8 +1400,20 @@ index 0000000..e8a27a3
 +  SB->Spine()->SetStatus(ChFiDS_FreeBoundary, bFirst);
 +  // The side faces grow up to the cuts: the edges between them run on to the
 +  // junction vertices; the edges under the blend bound no face.
++  // (Both growths computed before either goes into the data structure: a
++  // growth that cannot be made leaves the data structure as it was,
++  // mitcad#1986.)
++  struct Growth
++  {
++    occ::handle<Geom_TrimmedCurve> G;
++    double                         A = 0., B = 0.;
++    TopoDS_Vertex                  Va, Vb;
++    TopoDS_Face                    F[2];
++    occ::handle<Geom2d_Curve>      P[2];
++    TopAbs_Orientation             Or[2] = {TopAbs_FORWARD, TopAbs_FORWARD};
++  };
 +  const auto grow = [&](const TopoDS_Edge& J, const TopoDS_Vertex& Vt, const double wJ, const TopoDS_Vertex& VN,
-+                        const TopoDS_Face& Fa, const TopoDS_Face& Fb) {
++                        const TopoDS_Face& Fa, const TopoDS_Face& Fb, Growth& theGrowth) {
 +    double                        f = 0., l = 0.;
 +    const occ::handle<Geom_Curve> aC = BRep_Tool::Curve(J, f, l);
 +    occ::handle<Geom_Curve>       aBasis = aC;
@@ -1366,11 +1424,12 @@ index 0000000..e8a27a3
 +    const double wt = BRep_Tool::Parameter(Vt, J);
 +    const double a = std::min(wt, wJ), b = std::max(wt, wJ);
 +    occ::handle<Geom_TrimmedCurve> aG = new Geom_TrimmedCurve(aBasis, a, b);
-+    const int ic = DStr.AddCurve(TopOpeBRepDS_Curve(aG, tolapp3d));
-+    const TopoDS_Vertex& Va = wt < wJ ? Vt : VN;
-+    const TopoDS_Vertex& Vb = wt < wJ ? VN : Vt;
-+    DStr.ChangeCurveInterferences(ic).Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, ic, DStr.AddShape(Va), a, true));
-+    DStr.ChangeCurveInterferences(ic).Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, ic, DStr.AddShape(Vb), b, true));
++    theGrowth.G  = aG;
++    theGrowth.A  = a;
++    theGrowth.B  = b;
++    theGrowth.Va = wt < wJ ? Vt : VN;
++    theGrowth.Vb = wt < wJ ? VN : Vt;
++    int k = 0;
 +    for (const TopoDS_Face& F : {Fa, Fb})
 +    {
 +      TopoDS_Face FF = F;
@@ -1401,15 +1460,32 @@ index 0000000..e8a27a3
 +          }
 +        }
 +      }
-+      const int iF = DStr.AddShape(F);
-+      DStr.ChangeShapeInterferences(iF).Append(ChFi3d_FilCurveInDS(ic, iF, aP, JinF.Orientation()));
++      theGrowth.F[k]  = F;
++      theGrowth.P[k]  = aP;
++      theGrowth.Or[k] = JinF.Orientation();
++      k++;
 +    }
 +    return true;
 +  };
-+  if (!grow(J1, V1t, w1, VJ[0], C1, C) || !grow(J2, V2t, w2, VJ[1], C, C3))
++  const auto addGrowth = [&](const Growth& theGrowth) {
++    const int ic = DStr.AddCurve(TopOpeBRepDS_Curve(theGrowth.G, tolapp3d));
++    DStr.ChangeCurveInterferences(ic).Append(
++      ChFi3d_FilPointInDS(TopAbs_FORWARD, ic, DStr.AddShape(theGrowth.Va), theGrowth.A, true));
++    DStr.ChangeCurveInterferences(ic).Append(
++      ChFi3d_FilPointInDS(TopAbs_REVERSED, ic, DStr.AddShape(theGrowth.Vb), theGrowth.B, true));
++    for (int k = 0; k < 2; k++)
++    {
++      const int iF = DStr.AddShape(theGrowth.F[k]);
++      DStr.ChangeShapeInterferences(iF).Append(ChFi3d_FilCurveInDS(ic, iF, theGrowth.P[k], theGrowth.Or[k]));
++    }
++  };
++  Growth aGrowth1, aGrowth2;
++  if (!grow(J1, V1t, w1, VJ[0], C1, C, aGrowth1) || !grow(J2, V2t, w2, VJ[1], C, C3, aGrowth2))
 +  {
 +    return false;
 +  }
++  addGrowth(aGrowth1);
++  addGrowth(aGrowth2);
 +  // The edges of C between the junctions' vertices on its side towards the
 +  // blend (its edges with NA, Fo and NB) and E1, E2 past the crossings lie
 +  // under the blend.
@@ -1445,7 +1521,7 @@ index 0000000..e8a27a3
 +  return true;
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
-index 08213a9..534d45a 100644
+index 08213a95..534d45ab 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/FILES.cmake
 @@ -17,6 +17,7 @@ set(OCCT_ChFi3d_FILES

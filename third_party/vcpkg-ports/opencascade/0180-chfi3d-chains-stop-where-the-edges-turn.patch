@@ -48,6 +48,16 @@ the face beyond meets the rounding only past the vertex, in its extension;
 that corner is not built (the walk past the end fails, as before, and the
 fillet fails). Chamfers are not offered the option: their corner at such an
 end is not the face beyond's cut.
+
+Test: geometry/tests/test_fillet_chains.cpp (ctest
+geometry.suite.fillet_chains), test_contour_stops_at_a_drafted_crease,
+test_selected_edges_past_a_turn_stay_one_contour,
+test_mitcad_fillet_stops_at_a_drafted_crease;
+geometry/tests/test_fillet_chain_loops.cpp (ctest
+geometry.fillet_chain_loops),
+test_contour_round_a_closed_chain_stops_where_it_turns. They use the
+option the patch adds and do not build without it. Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
 index f192eb5f..b1af6fe6 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx

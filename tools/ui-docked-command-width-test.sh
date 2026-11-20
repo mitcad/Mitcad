@@ -68,6 +68,10 @@ grep -q "^dockWidth=$width\$" "$CONF" || ui_fail "the width $width is not kept i
 echo "ok   the dragged panel is $width px wide, remembered"
 
 echo "--- 3. Restarted: the remembered width again"
+# Without the docks' kept arrangement (mitcad#2070), which would give the
+# panel its width at quit instead: the remembered width's own restore, as at
+# a start with nothing kept (tools/ui-dock-state-test.sh tests the other).
+sed -i '/^\[dockState\]/,/^\[/{/^\[dockState\]/d;/^\[/!d}' "$CONF"
 export MITCAD_TEST_COMMAND_WIDTH=$width
 run "Docked, restarted" docked-command-width-restart.mitcad-ui
 restored=$(grep -oE '^Command panel width [0-9]+ ' "$UI_LOG" | tail -1 | cut -d" " -f4)

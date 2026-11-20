@@ -27,6 +27,13 @@ rounded).
   right eave's tip, with 0.85, the projection on the torus of the tip's
   corner wandered across its period along the torus's pole).
 
+Test: geometry/tests/test_fillet_roof_slab.cpp, test_slab (ctest
+geometry.fillet_roof_slab): the roof slab rounded on all its edges with
+0.862 and 0.865 (the obtuse edge's rounding dropped by 1658), valid and
+closed (the end edge's face a sliver whose wire crossed itself without the
+patch). Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 2d41f105..9233f729 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

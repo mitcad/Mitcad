@@ -48,13 +48,25 @@ removed within 1e-5 mm3 of the analytic cylinder's that OCCT builds for the
 same body with its planes (before: a folded corner face 0.32 out of the
 body, and at 1 both ends folded and an invalid shape).
 
+Failures (mitcad#1986): the walk over the longer extension fails with
+OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): the stripe is walked as before. Any
+other failure (a broken invariant, a signal) is rethrown.
+
 Upstream: new.
 
+Test: geometry/tests/test_fillet_step_corner.cpp,
+test_synthetic_corner_occt (ctest geometry.fillet_step_corner): a
+synthetic step corner rounded with OCCT alone at 0.5, 0.75 and 1 against
+the body of planes (without the patch 0.75 folds at the top vertex and 1
+is invalid); and test_synthetic_corner, the same through MitCad's fillet,
+also after its floor is rounded. Its failure without the patch is still to
+be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 401360c0..bbb12d78 100644
+index 94f06a74..1ba82fc4 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -21096,6 +21096,57 @@ static bool ChFi3d_ChamferEndOnTangentFace(TopOpeBRepDS_DataStructure&       DSt
+@@ -21246,6 +21246,57 @@ static bool ChFi3d_ChamferEndOnTangentFace(TopOpeBRepDS_DataStructure&       DSt
  //=================================================================================================
  
  
@@ -112,7 +124,7 @@ index 401360c0..bbb12d78 100644
  void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
  {
    TopOpeBRepDS_DataStructure& DStr = myDS->ChangeDS();
-@@ -21257,6 +21308,74 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -21407,6 +21458,79 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
        }
      }
    }
@@ -174,8 +186,13 @@ index 401360c0..bbb12d78 100644
 +          }
 +        }
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        isBetter = false;
 +      }
 +      if (!isBetter)

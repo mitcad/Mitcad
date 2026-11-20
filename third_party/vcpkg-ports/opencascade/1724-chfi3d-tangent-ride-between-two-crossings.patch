@@ -33,11 +33,23 @@ A rider whose spine is closed (a plate's rim rounded all round) is not
 made so: a walk over a part of a periodic spine wrote past the spine's
 law arrays; the pair fails as before.
 
+Test: geometry/tests/test_fillet_tangent_ride.cpp,
+test_tower_behind_the_back_edge (ctest geometry.fillet_tangent_ride): a
+half-cylinder tower 2.3 and 2.5 from the plate's back edge, its foot
+rounded with 2 and the edge with 1, both orders: valid, the volume of the
+two made one after the other within a millionth (the fillet failed without
+the patch). Its failure without the patch is still to be shown in the
+port's before/after run (mitcad#1986).
+
+Failures (mitcad#1986): the rider's walk between the crossings fails with
+OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): the ride is undone and fails. Any
+other failure (a broken invariant, a signal) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 8843c75d..1789b559 100644
+index f3ca436e..b520a65c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3125,6 +3125,404 @@ static bool contactsPassAllAlong(const TopOpeBRepDS_DataStructure& DStr,
+@@ -3147,6 +3147,409 @@ static bool contactsPassAllAlong(const TopOpeBRepDS_DataStructure& DStr,
    return aBeyond;
  }
  
@@ -244,8 +256,13 @@ index 8843c75d..1789b559 100644
 +    occ::handle<ChFiDS_Stripe> aStripe = B;
 +    PerformSetOfSurf(aStripe);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    aWalked = false;
 +  }
 +  B->Spine()->SetFirstParameter(aSpineFirst);
@@ -442,7 +459,7 @@ index 8843c75d..1789b559 100644
  bool ChFi3d_Builder::RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
                                       const occ::handle<ChFiDS_Stripe>& B,
                                       const TopoDS_Face&                F)
-@@ -6147,6 +6545,44 @@ void ChFi3d_Builder::Compute()
+@@ -6234,6 +6637,44 @@ void ChFi3d_Builder::Compute()
          }
          const occ::handle<ChFiDS_FilSpine> aF1 = occ::down_cast<ChFiDS_FilSpine>(S1->Spine());
          const occ::handle<ChFiDS_FilSpine> aF2 = occ::down_cast<ChFiDS_FilSpine>(S2->Spine());
@@ -487,7 +504,7 @@ index 8843c75d..1789b559 100644
          if (aBusy || aF1.IsNull() || aF2.IsNull() || !aF1->IsConstant() || !aF2->IsConstant())
          {
            continue;
-@@ -6172,7 +6608,7 @@ void ChFi3d_Builder::Compute()
+@@ -6259,7 +6700,7 @@ void ChFi3d_Builder::Compute()
          const occ::handle<ChFiDS_Stripe> aOn    = aOne ? S1 : S2;
          const occ::handle<ChFiDS_Stripe> aRider = aOne ? S2 : S1;
          const TopoDS_Face aFace = TopoDS::Face(myDS->DS().Shape(aCommon));
@@ -496,7 +513,7 @@ index 8843c75d..1789b559 100644
          {
            aParted.Append(S1);
            aParted.Append(S2);
-@@ -7879,6 +8315,7 @@ void ChFi3d_Builder::Reset()
+@@ -7975,6 +8416,7 @@ void ChFi3d_Builder::Reset()
    myRideEdges.Clear();
    myRideSupports.Clear();
    myTangentRides.Clear();
@@ -537,10 +554,10 @@ index 808e2e5e..51b2d0f4 100644
                                         const occ::handle<ChFiDS_Stripe>& B,
                                         const TopoDS_Face&                F);
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index f5fb610d..64ca556d 100644
+index 5bf490aa..bcc14b07 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -7691,7 +7691,9 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -7721,7 +7721,9 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
    // cuts it between that point and its point on the arc of its other side,
    // as at a vertex of two faces.)
    int aRideSide = 0;

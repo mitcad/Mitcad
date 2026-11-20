@@ -70,6 +70,33 @@ Upstream: the new paths are taken only where the chamfer failed before, or
 where its walk left a face mid-spine as described; a chamfer that is not
 cut that way is computed again as before.
 
+Failures (mitcad#1986): the chamfer computed again over the narrow face
+unbounded, the cut piece's curve on the face beyond (ChFi3d_KPartCutCurve)
+and, while computed over a narrow face, a guide's piece past an end of the
+spine fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the chamfer cannot be made so:
+ChamferOverNarrowFace then fails and the chamfer's own failure is rethrown
+as before; a piece past the spine's end is left out (it lies in the part
+cut off). Any other failure (a broken invariant, a signal) is rethrown.
+ChamferOverNarrowFace clears ChFi3d_NarrowFaces (which points to its own
+map) before it rethrows. Over the unbounded copy NF, SearchFace reports a common
+point on one of NF's own edges or vertices (in none of the solid's maps,
+no face beyond them) as a computation it cannot make (StdFail_NotDone)
+instead of failing a lookup there (Standard_NoSuchObject): the chamfer's
+own failure stands, as before. PerformSetOfSurf computes the chamfer again
+through ChamferOverNarrowFace only where its first computation fails with
+such a report ("PerformSurf Not Implemented", a walk that fails); any other
+failure of it (a broken invariant, a signal) is rethrown as it is, not
+retried over the narrow face.
+
+Test: geometry/tests/test_chamfer_overflow.cpp,
+test_chamfer_wider_than_a_fin_side_strip (ctest
+geometry.suite.chamfer_overflow): the fin's tip edge chamfered wider than
+its side strip, the guide kept to its edges where the foot's chamfer is
+beside it: the volume removed that of the chamfer's sections less the part
+inside the foot's chamfer extended. Its failure without the patch is still
+to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeChamfer.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeChamfer.hxx
 index 7a900b2d..8fd06755 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeChamfer.hxx
@@ -98,10 +125,10 @@ index 7a900b2d..8fd06755 100644
    //! algorithm to build chamfers, where the parameters
    //! of the chamfer must be set after the
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index c93a3b95..89a8621c 100644
+index 38b0ba8c..c71b17bd 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -1916,6 +1916,7 @@ void ChFi3d_Builder::Compute()
+@@ -1924,6 +1924,7 @@ void ChFi3d_Builder::Compute()
    myFailedCornerEdges.Clear();
    myFailedCornerMessages.Clear();
    myFailedStripe.Nullify();
@@ -109,7 +136,7 @@ index c93a3b95..89a8621c 100644
    myStripeFailed.Clear();
    myStripeFailure.Clear();
    const auto noteFailure = [this](const occ::handle<ChFiDS_Stripe>& S, const FailureKind K) {
-@@ -2007,6 +2008,11 @@ void ChFi3d_Builder::Compute()
+@@ -2015,6 +2016,11 @@ void ChFi3d_Builder::Compute()
      }
      done = true;
    }
@@ -167,7 +194,7 @@ index de298e10..085bb4e6 100644
    //! the face at an end of the spine before that end: the blend is walked
    //! on over that face's surface and cut by the face at the end up to where
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 042f60a9..ebea22f5 100644
+index 19324266..b83eeb1c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -21,6 +21,7 @@
@@ -178,7 +205,15 @@ index 042f60a9..ebea22f5 100644
  #include <BRepAdaptor_Curve.hxx>
  #include <GeomAdaptor_Curve.hxx>
  #include <BRepExtrema_DistShapeShape.hxx>
-@@ -915,6 +916,25 @@ bool ChFi3d_Builder::StripeOrientations(const occ::handle<ChFiDS_Spine>& Spine,
+@@ -34,6 +35,7 @@
+ #include <ChFi3d.hxx>
+ #include <ChFi3d_Builder.hxx>
+ #include <ChFi3d_Builder_0.hxx>
++#include <StdFail_NotDone.hxx>
+ #include <ChFiDS_ChamfSpine.hxx>
+ #include <ChFiDS_CommonPoint.hxx>
+ #include <ChFiDS_ElSpine.hxx>
+@@ -915,6 +917,25 @@ bool ChFi3d_Builder::StripeOrientations(const occ::handle<ChFiDS_Spine>& Spine,
  
  //=================================================================================================
  
@@ -204,7 +239,7 @@ index 042f60a9..ebea22f5 100644
  void ChFi3d_Builder::ConexFaces(const occ::handle<ChFiDS_Spine>&  Spine,
                                  const int                         IEdge,
                                  occ::handle<BRepAdaptor_Surface>& HS1,
-@@ -942,6 +962,16 @@ void ChFi3d_Builder::ConexFaces(const occ::handle<ChFiDS_Spine>&  Spine,
+@@ -942,6 +963,16 @@ void ChFi3d_Builder::ConexFaces(const occ::handle<ChFiDS_Spine>&  Spine,
      ff1                 = ff2;
      ff2                 = TmpFace;
    }
@@ -221,7 +256,22 @@ index 042f60a9..ebea22f5 100644
  
    Sb1.Initialize(ff1);
    Sb2.Initialize(ff2);
-@@ -9719,6 +9749,1694 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -3001,6 +3032,14 @@ bool ChFi3d_Builder::SearchFace(const occ::handle<ChFiDS_Spine>& Spine,
+   {
+     return false;
+   }
++  // (An edge or vertex of a narrow face's unbounded copy, ChFi3d_NarrowFaces,
++  // is in none of the solid's maps: there is no face beyond it, and the
++  // computation over the copy cannot be made there, mitcad#1986.)
++  if (ChFi3d_NarrowFaces != nullptr
++      && (Pc.IsVertex() ? !myVEMap.Contains(Pc.Vertex()) : !myEFMap.Contains(Pc.Arc())))
++  {
++    throw StdFail_NotDone("ChFi3d_Builder::SearchFace: a common point on a narrow face's unbounded copy");
++  }
+   FVoi.Nullify();
+   TopoDS_Edge E;
+   if (Pc.IsVertex())
+@@ -9779,6 +9818,1706 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
    return false;
  }
  
@@ -320,6 +370,13 @@ index 042f60a9..ebea22f5 100644
 +  }
 +  catch (Standard_Failure const& anEx)
 +  {
++    // (aMap is gone once this returns or throws.)
++    ChFi3d_NarrowFaces = nullptr;
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anEx))
++    {
++      throw;
++    }
 +    aComputed = false;
 +  }
 +  ChFi3d_NarrowFaces = nullptr;
@@ -754,8 +811,13 @@ index 042f60a9..ebea22f5 100644
 +    computed = ChFi3d_KPartCutCurve(S, CF, P1, uvS1, uvB1, P2, aCoord, std::min(cO, cN) - 1.e-6,
 +                                    std::max(cO, cN) + 1.e-6, tol3d, Cc, Ps, Pc, tolreached);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    computed = false;
 +  }
 +  if (!computed)
@@ -1916,7 +1978,7 @@ index 042f60a9..ebea22f5 100644
  //=======================================================================
  // function : WalkedCutToEnd
  // purpose  : As ChFi3d_KPartCutToEnd for a walked blend: the walk stopped
-@@ -11812,7 +13530,28 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -11906,7 +13645,33 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
    NCollection_List<occ::handle<ChFiDS_ElSpine>>::Iterator ILES(ll);
    for (; ILES.More(); ILES.Next())
    {
@@ -1938,15 +2000,20 @@ index 042f60a9..ebea22f5 100644
 +      OCC_CATCH_SIGNALS
 +      PerformSetOfSurfOnElSpine(ES, Stripe, It1, It2, Simul);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      Spine->SetErrorStatus(ChFiDS_Ok);
 +      done = true;
 +    }
    }
    if (!Simul)
    {
-@@ -11820,6 +13559,22 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -11914,6 +13679,22 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
      occ::handle<NCollection_HSequence<occ::handle<ChFiDS_SurfData>>>& HData =
        Stripe->ChangeSetOfSurfData();
      NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& SeqSurf  = HData->ChangeSequence();
@@ -1969,7 +2036,7 @@ index 042f60a9..ebea22f5 100644
      int                                                 len      = SeqSurf.Length();
      int                                                 last     = len, i;
      bool                                                periodic = Spine->IsPeriodic();
-@@ -13032,6 +14787,7 @@ static bool ChFi3d_ChamferEndOnTangentFace(TopOpeBRepDS_DataStructure&       DSt
+@@ -13131,6 +14912,7 @@ static bool ChFi3d_ChamferEndOnTangentFace(TopOpeBRepDS_DataStructure&       DSt
  
  //=================================================================================================
  
@@ -1977,7 +2044,7 @@ index 042f60a9..ebea22f5 100644
  void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
  {
    TopOpeBRepDS_DataStructure& DStr = myDS->ChangeDS();
-@@ -13039,23 +14795,110 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -13138,23 +14920,110 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
    const occ::handle<ChFiDS_Spine>& sp = Stripe->Spine();
    int                              SI = ChFi3d_SolidIndex(sp, DStr, myESoMap, myEShMap);
    Stripe->SetSolidIndex(SI);
@@ -1993,12 +2060,12 @@ index 042f60a9..ebea22f5 100644
 +    }
 +    PerformSetOfKGen(Stripe, Simul);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
 +    aCaught = true;
-+    // A chamfer wider than a face of its edges: computed again over that
-+    // face's surface unbounded and cut by the faces beyond it.
-+    if (Simul || !ChamferOverNarrowFace(Stripe))
++    // A chamfer wider than a face of its edges, which OCCT cannot make: computed
++    // again over that face's surface unbounded and cut by the faces beyond it.
++    if (Simul || !ChFi3d_IsComputationFailure(anException) || !ChamferOverNarrowFace(Stripe))
 +    {
 +      throw;
 +    }

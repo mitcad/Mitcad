@@ -111,6 +111,9 @@ public:
     setFixedWidth(uiRoomSize(220));
   }
 
+  // As wide as it may be (TitleBar::createSearchField lets it narrow).
+  QSize sizeHint() const override { return QSize(maximumWidth(), maximumHeight()); }
+
 protected:
   void changeEvent(QEvent* event) override {
     QToolButton::changeEvent(event);
@@ -415,6 +418,15 @@ void TitleBar::releaseRibbonTabs() {
   }
   m_tabs = nullptr;
   m_tabsButton = nullptr;
+}
+
+QWidget* TitleBar::createSearchField(QAction* search, int height, QWidget* parent) {
+  auto* field = new TitleButton(search, tr("Search commands"), parent);
+  field->setFixedHeight(height);
+  field->setMinimumWidth(uiRoomSize(140));
+  field->setMaximumWidth(uiRoomSize(220));
+  field->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+  return field;
 }
 
 QWidget* TitleBar::takeSearchField() {

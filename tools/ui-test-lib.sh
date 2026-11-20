@@ -290,8 +290,8 @@ ui_chooses_chrome() {
 # UI_WINDOW_WAIT is how long the window may take to appear (seconds, default 20; a large design opens first). The app
 # does not offer to recover work at start-up (--no-recovery: a test that
 # killed it and starts it again would get the question) unless
-# UI_RECOVERY=1. The window is Docked (--chrome=docked), which the tests
-# were written for, unless the arguments choose a layout (--chrome…) or
+# UI_RECOVERY=1. The window is Docked (--chrome=docked) with the toolbar's
+# icons only (ui_icons_only), which the tests were written for, unless the arguments choose a layout (--chrome…) or
 # UI_DEFAULT_CHROME=1 leaves it to the preference and the default
 # (Floating since mitcad#429).
 # ui_open_in_current_window: New and Open replace the window's design, as
@@ -326,6 +326,10 @@ ui_start_app() {
   [ "${UI_RECOVERY:-0}" = 1 ] && options=()
   if [ "${UI_DEFAULT_CHROME:-0}" != 1 ] && ! ui_chooses_chrome "$@"; then
     options+=(--chrome=docked)
+    # Laid out as the tests were written: the Docked toolbar has the
+    # toolbar panel's labels by default since mitcad#2082, which make its
+    # groups wider and fold more of them.
+    ui_icons_only
   fi
   # The windows of other instances (ui_instance) are not this one's.
   before=" $(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | tr '\n' ' ')"
@@ -727,8 +731,9 @@ ui_logged_at() {
     "3D sketch item "*|"3D sketch reference "*|"3D sketch edit control "*) ui_sketch3d_reveal "$1" ;;
   esac
   # (A single ellipsis and three dots match each other, mitcad#645.)
-  last=$(sed "s/…/.../g" "$UI_LOG" | grep -F -e "${1//…/...} at " -e "${1//…/...} out of sight" | tail -1)
+  last=$(sed "s/…/.../g" "$UI_LOG" | grep -F -e "${1//…/...} at " -e "${1//…/...} out of sight" -e "${1//…/...} folded" | tail -1)
   [[ $last != *" out of sight" ]] || ui_fail "'$1' is out of sight (scrolled away, folded or gone)"
+  [[ $last != *" folded" ]] || ui_fail "'$1' is folded into the tabs' » (ui_click_tab chooses it there)"
   at=$(sed -n 's/.* at \([0-9]*\),\([0-9]*\).*/\1 \2/p' <<< "$last")
   [ -n "$at" ] || ui_fail "no position logged for '$1'"
   read -r px py <<< "$at"
@@ -737,18 +742,13 @@ ui_logged_at() {
 
 ui_click_logged() { xdotool mousemove $(ui_logged_at "$1") click "${2:-1}"; }
 
-# ui_workspace DESIGN|MAKE|RENDER|DRAWING: the toolbar panel's workspace
-# (mitcad#1990) chosen through its selector: a click on the selector
-# ("Ribbon workspace at"), then on the workspace's entry in its list
-# ("Ribbon workspace entry RENDER at"); waited for until it is chosen.
-# The Docked layout ("Chrome: docked" in the log) has no selector and shows
-# every workspace's tabs at once: nothing to choose.
+# ui_workspace DESIGN|MAKE|RENDER|DRAWING: the workspace (mitcad#1990)
+# chosen through its selector, the toolbar panel's or the Docked tab row's
+# (mitcad#2082): a click on the selector ("Ribbon workspace at"), then on
+# the workspace's entry in its list ("Ribbon workspace entry RENDER at");
+# waited for until it is chosen.
 ui_workspace() {
   local before chosen
-  if grep -q "Chrome: docked" "$UI_LOG"; then
-    echo "     the Docked layout shows every workspace's tabs: $1 needs no choosing"
-    return 0
-  fi
   before=$(grep -c "^Ribbon workspace menu: " "$UI_LOG")
   chosen=$(grep -c "^Ribbon workspace chosen: $1$" "$UI_LOG")
   ui_click_logged "Ribbon workspace"
@@ -767,16 +767,55 @@ ui_workspace() {
   ui_sync
 }
 
-# ui_drawing_tool NAME TAB/GROUP: starts the drawing tool NAME of the
-# toolbar panel's group TAB/GROUP ("Datum Label" DRAWING/SYMBOLS): a click
-# on its button ("Drawing tool Datum Label at"), or, where the tab's groups
-# do not fit and that group is collapsed to its name ("Ribbon collapsed
-# DRAWING: SYMBOLS, TABLES"; mitcad#1990's Sheet group took the room at
-# 1280 pixels), its entry in the group's menu, chosen with the keys.
+# ui_drawing_tool_group NAME: the toolbar panel's group of the drawing tool
+# NAME on the Drawing tab ("Dimension" -> DRAWING/DIMENSIONS), as the app's
+# toolGroup() (app/drawings/DrawingTools.cpp) sorts the tools.
+ui_drawing_tool_group() {
+  case "$1" in
+  "Center Mark" | Centerline | Line | Arc | "Center Pattern" | "Edge Extension") echo DRAWING/GEOMETRY ;;
+  Dimension | Ordinate | Baseline | "Model Items") echo DRAWING/DIMENSIONS ;;
+  Text | Note) echo DRAWING/TEXT ;;
+  "Datum Label" | "Feature Control Frame" | "Surface Finish") echo DRAWING/SYMBOLS ;;
+  "Hole Table" | "Bill of Materials" | Balloon) echo DRAWING/TABLES ;;
+  *) echo DRAWING/CREATE ;;
+  esac
+}
+
+# ui_drawing_group_collapsed TAB/GROUP: whether the toolbar panel's group
+# is collapsed to its name, as logged last ("Ribbon collapsed DRAWING:
+# GEOMETRY, DIMENSIONS").
+ui_drawing_group_collapsed() {
+  local collapsed
+  collapsed=$(grep "^Ribbon collapsed ${1%%/*}: " "$UI_LOG" | tail -1)
+  [[ ", ${collapsed#*: }, " == *", ${1#*/}, "* ]]
+}
+
+# ui_drawing_tool_place NAME [TAB/GROUP]: the logged place a click on the
+# drawing tool NAME goes to: its button ("Drawing tool Line"), or, where its
+# group is collapsed, the group's name ("Ribbon DRAWING/GEOMETRY"). For a
+# test's wait until that place has settled.
+ui_drawing_tool_place() {
+  local group=${2:-$(ui_drawing_tool_group "$1")}
+  if ui_drawing_group_collapsed "$group"; then
+    echo "Ribbon $group"
+  else
+    echo "Drawing tool $1"
+  fi
+}
+
+# ui_drawing_tool NAME [TAB/GROUP]: starts the drawing tool NAME of the
+# toolbar panel's group TAB/GROUP ("Datum Label" DRAWING/SYMBOLS; by
+# default the tool's own group, ui_drawing_tool_group): a click on its
+# button ("Drawing tool Datum Label at"), or, where the tab's groups do not
+# fit and that group is collapsed to its name ("Ribbon collapsed DRAWING:
+# SYMBOLS, TABLES"; mitcad#1990's Sheet group took the room at 1280 pixels,
+# and the Docked workspace block of mitcad#2082 more, so that Geometry,
+# Dimensions and Text collapse too), its entry in the group's menu, chosen
+# with the keys.
 ui_drawing_tool() {
-  local tab=${2%%/*} group=${2#*/} collapsed before menu entry downs=0 found=0
-  collapsed=$(grep "^Ribbon collapsed $tab: " "$UI_LOG" | tail -1)
-  if [[ ", ${collapsed#*: }, " != *", $group, "* ]]; then
+  set -- "$1" "${2:-$(ui_drawing_tool_group "$1")}"
+  local before menu entry downs=0 found=0
+  if ! ui_drawing_group_collapsed "$2"; then
     ui_click_logged "Drawing tool $1"
     return
   fi
@@ -816,7 +855,13 @@ ui_start_page_shown() { grep -E "^Start page (shown|hidden)$" "$UI_LOG" | tail -
 # at") leaves the page first.
 ui_click_tab() {
   local last
-  last=$(grep -E "^Ribbon tab $1 (at |out of sight)" "$UI_LOG" | tail -1)
+  last=$(grep -E "^Ribbon tab $1 (at |out of sight|folded$)" "$UI_LOG" | tail -1)
+  # A Docked row too narrow for every tab (mitcad#2079): the tab is
+  # chosen in the menu of the » after the tabs in sight.
+  if [ "$last" = "Ribbon tab $1 folded" ]; then
+    ui_tabs_more_choose "$1"
+    return
+  fi
   if [[ $last == *" out of sight" ]] && [ "$1" != START ] && ui_start_page_shown; then
     ui_click_logged "Document tab shown"
     for _ in $(seq 1 25); do
@@ -834,6 +879,40 @@ ui_click_tab() {
     esac
   fi
   ui_click_logged "Ribbon tab $1"
+}
+
+# ui_tabs_more_choose TAB: a folded tab ("Ribbon tab MANAGE folded",
+# mitcad#2079) chosen in the menu of the Docked row's » ("Ribbon tabs more
+# at x,y"; "Ribbon tabs more menu: MAKE_CNC, MANAGE" when it opens), with
+# the keys; waited for until the tab is in sight ("Ribbon tab MANAGE at").
+ui_tabs_more_choose() {
+  local before menu entry downs=0 found=0
+  before=$(grep -c "^Ribbon tabs more menu: " "$UI_LOG")
+  ui_click_logged "Ribbon tabs more"
+  for _ in $(seq 1 25); do
+    [ "$(grep -c "^Ribbon tabs more menu: " "$UI_LOG")" -gt "$before" ] && break
+    sleep 0.2
+  done
+  [ "$(grep -c "^Ribbon tabs more menu: " "$UI_LOG")" -gt "$before" ] || ui_fail "the tabs' » did not open its menu"
+  menu=$(grep "^Ribbon tabs more menu: " "$UI_LOG" | tail -1)
+  menu=${menu#"Ribbon tabs more menu: "}
+  while IFS= read -r entry; do
+    downs=$((downs + 1))
+    if [ "$entry" = "$1" ]; then
+      found=1
+      break
+    fi
+  done < <(printf '%s\n' "${menu//, /$'\n'}")
+  [ "$found" = 1 ] || ui_fail "$1 is not in the tabs' » menu: $menu"
+  ui_sync
+  xdotool key --delay 80 --repeat "$downs" Down
+  ui_key Return
+  for _ in $(seq 1 25); do
+    grep -E "^Ribbon tab $1 (at |folded$)" "$UI_LOG" | tail -1 | grep -q " at " && break
+    sleep 0.2
+  done
+  grep -E "^Ribbon tab $1 (at |folded$)" "$UI_LOG" | tail -1 | grep -q " at " || ui_fail "$1 chosen in the tabs' » is not in sight"
+  ui_sync
 }
 
 # ui_command "name": runs a command through the command search (S).

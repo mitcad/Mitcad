@@ -15,6 +15,7 @@ class QListWidget;
 class QPropertyAnimation;
 class QStackedWidget;
 class QTimer;
+class QVBoxLayout;
 
 namespace mitcad {
 
@@ -45,6 +46,12 @@ public:
   void addFooterButton(QWidget* button);
   // Called when the window is closed (to take what is still being typed).
   void setClosedHandler(std::function<void()> handler) { m_closed = std::move(handler); }
+  // The page list (Selector::PageList), else nullptr.
+  QListWidget* pageList() const { return m_list; }
+  // The search field above the page list (mitcad#2074); the window owns
+  // it. Only with the page list.
+  void setSearchField(QWidget* field);
+  QWidget* searchField() const { return m_search; }
   // A change was saved (mitcad#1479): the footer's quiet note says so,
   // fades out after a few seconds and comes back on the next change. The
   // note's text is empty while it is not shown.
@@ -60,6 +67,8 @@ private:
 
   QWidget* m_header = nullptr;
   QListWidget* m_list = nullptr;
+  QVBoxLayout* m_listColumn = nullptr;
+  QWidget* m_search = nullptr;
   QStackedWidget* m_pages = nullptr;
   QLabel* m_savedNote = nullptr;
   QHBoxLayout* m_footer = nullptr;

@@ -121,8 +121,13 @@ def sign_in_runs(app, stub, out):
                 # in a shorter window.
                 *whole_confirmation(),
                 "screenshot '" + str(out / ("chat-sign-in-again-" + label + ".png")) + "'",
-                "fit-main-frame 1280 600 least",
-                "expect-main-frame 1280 600 least",
+                # Narrower than the Windows VM's 1024 px screen: a wider
+                # frame is narrowed by the system after the fit, and the
+                # Docked toolbar panel folds its labels at the new width
+                # (mitcad#2082), so the frame's height no longer is the
+                # minimum it was fitted to.
+                "fit-main-frame 1000 600 least",
+                "expect-main-frame 1000 600 least",
                 *whole_confirmation(),
                 "screenshot '" + str(out / ("chat-sign-in-again-" + label + "-short.png")) + "'",
                 "button '^Cancel$' chatSignInAgainCancel",

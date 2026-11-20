@@ -112,12 +112,16 @@ QStringList selectedBodies(const Selection& selection) {
 
 // A menu's entries as the log shows them (mitcad#175): the names without
 // their underlined letters and dots, "-" for a separator, a submenu as
-// "Name > [its entries]" (`collapsed`: "Name >" only).
+// "Name > [its entries]" (`collapsed`: "Name >" only). Two separators in a
+// row are one, as the menu shows them where the entry between them is
+// hidden (Print outside a drawing in the top bar's File menu).
 QString menuEntries(const QMenu* menu, const QMenu* collapsed) {
   QStringList entries;
   for (QAction* action : menu->actions()) {
     if (action->isSeparator()) {
-      entries << QStringLiteral("-");
+      if (!menu->separatorsCollapsible() || entries.isEmpty() || entries.last() != QLatin1String("-")) {
+        entries << QStringLiteral("-");
+      }
       continue;
     }
     if (!action->isVisible()) {

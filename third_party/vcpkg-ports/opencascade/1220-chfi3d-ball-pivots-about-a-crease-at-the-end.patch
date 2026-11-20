@@ -34,14 +34,23 @@ PerformPivotAtStepEnd (0951), tried after it in PerformFilletOnVertex.
 On the stored design (99ef321f item 22, both ends of the outline) the
 result is valid, the boolean differences with the file's body are empty
 both ways and the new faces match the file's (the pivot torus 0.220835
-against 0.220833 mm^2). Test: geometry/tests/test_fillet_corners.cpp, a
-bar with a concave arc meeting it with a small overlap and its rim
-rounded, the end face's outline rounded (no result without the patch).
+against 0.220833 mm^2).
+Test: geometry/tests/test_fillet_corners.cpp,
+test_rounding_pivots_about_a_crease_over_a_sliver (ctest
+geometry.suite.fillet_corners): a bar with a concave arc meeting it with a
+small overlap and its rim rounded, the end face's outline rounded (no
+result without the patch).
+
+Failures (mitcad#1986): the torus's quarter as a face
+(BRepLib_MakeFace) and its section by the solid (BRepAlgoAPI_Section)
+fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): that end is not turned and is left as
+before. Any other failure (a broken invariant, a signal) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 0783eee1..9d2e5c5f 100644
+index ec8985a5..fada8a5e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -4153,6 +4153,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -4238,6 +4238,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
              // the face at the end, a torus closing the end.)
              myCorner = Corner_End;
            }
@@ -55,10 +64,10 @@ index 0783eee1..9d2e5c5f 100644
            {
              // (The face at the end, tangent to the blend's face, caps the
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 6145e4ff..54dfb82c 100644
+index 9aa9f6cc..7aa974ed 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -1200,6 +1200,16 @@ private:
+@@ -1227,6 +1227,16 @@ private:
    //! Returns false, changing nothing, where the end is not such.
    Standard_EXPORT bool PerformPivotAtStepEnd(const int Index);
  
@@ -76,10 +85,10 @@ index 6145e4ff..54dfb82c 100644
    //! convex corner rounded with less than R (an edge between a plane U and
    //! a cylinder K of radius below R, between two lines of the chain whose
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 324d9a03..497455c9 100644
+index bb3b35c2..eb95406b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -80,6 +80,10 @@
+@@ -81,6 +81,10 @@
  #include <GeomInt_IntSS.hxx>
  #include <GeomLib.hxx>
  #include <GeomProjLib.hxx>
@@ -90,7 +99,7 @@ index 324d9a03..497455c9 100644
  #include <gp_Pnt.hxx>
  #include <gp_Ax2d.hxx>
  #include <gp_Pnt2d.hxx>
-@@ -4018,6 +4022,880 @@ bool ChFi3d_Builder::PerformPivotAtStepEnd(const int Index)
+@@ -4071,6 +4075,890 @@ bool ChFi3d_Builder::PerformPivotAtStepEnd(const int Index)
    return false;
  }
  
@@ -312,8 +321,13 @@ index 324d9a03..497455c9 100644
 +                                       Precision::Confusion())
 +                 .Face();
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      continue;
 +    }
 +    BRepAlgoAPI_Section aSec(aPatch, myShape, false);
@@ -325,8 +339,13 @@ index 324d9a03..497455c9 100644
 +      OCC_CATCH_SIGNALS
 +      aSec.Build();
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      continue;
 +    }
 +    if (!aSec.IsDone())

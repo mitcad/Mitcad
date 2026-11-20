@@ -10,6 +10,7 @@
 #include "../WindowManager.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QDockWidget>
+#include <QEvent>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
@@ -68,6 +70,26 @@ bool atOrInside(const QString& path, const QString& folder) {
 #endif
   return a.compare(b, cs) == 0 || a.startsWith(b + QLatin1Char('/'), cs);
 }
+
+// Calls `closed` when the dock is closed by its own close button (a close
+// event; the window hides its docks without one).
+class DockCloseWatcher : public QObject {
+public:
+  DockCloseWatcher(QDockWidget* dock, std::function<void()> closed) : QObject(dock), m_closed(std::move(closed)) {
+    dock->installEventFilter(this);
+  }
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == parent() && event->type() == QEvent::Close) {
+      m_closed();
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  std::function<void()> m_closed;
+};
 
 } // namespace
 
@@ -209,16 +231,34 @@ void MainWindow::dockProjectsPanel(QDockWidget* below) {
       qInfo().noquote() << QStringLiteral("Projects panel: dock width %1 remembered").arg(width);
     }
   });
-  TestSync::singleShot(100, this, [this] { restoreProjectsDockWidth(); });
-  // Closed with the dock's own button: as View > Projects.
-  // Not while the window closes or goes (its docks hide with it).
-  connect(dock->toggleViewAction(), &QAction::toggled, this, [this](bool on) {
-    if (!isVisible()) {
-      return;
+  // Not over a kept arrangement of the docks (mitcad#2070).
+  TestSync::singleShot(100, this, [this] {
+    if (!m_dockStateRestored) {
+      restoreProjectsDockWidth();
     }
-    QAction* action = m_registry->action(QStringLiteral("view.projects"));
-    if (action != nullptr && action->isChecked() != on) {
+  });
+  // The user's choice (mitcad#2082): the dock closed with its own button,
+  // or shown or hidden from the window's menu of its panels, as View >
+  // Projects. Not while the window closes or goes (its docks hide with it).
+  new DockCloseWatcher(dock, [this] {
+    if (isVisible()) {
+      setProjectsPanelShown(false, true);
+    }
+  });
+  connect(dock->toggleViewAction(), &QAction::triggered, this, [this](bool on) {
+    if (isVisible()) {
       setProjectsPanelShown(on, true);
+    }
+  });
+  // Shown or hidden by the window (the Start page, a drawing, the Render
+  // workspace, a kept arrangement of the docks): View > Projects' tick
+  // follows, and nothing is remembered (mitcad#2082: such a hide was saved
+  // as the user's choice).
+  connect(dock->toggleViewAction(), &QAction::toggled, this, [this](bool on) {
+    if (QAction* action = m_registry->action(QStringLiteral("view.projects"));
+        action != nullptr && action->isChecked() != on) {
+      const QSignalBlocker blocker(action);
+      action->setChecked(on);
     }
   });
 }
@@ -288,8 +328,9 @@ void MainWindow::addProjectsCard() {
 bool MainWindow::projectsPanelShownAtStart() const {
   const ProjectsSettings settings = ProjectsSettings::load();
   if (m_titleRow != nullptr) {
-    // The Floating top bar of Windows and Linux (mitcad#1990): hidden until
-    // it is shown in this layout.
+    // The top bar of Windows and Linux (mitcad#1990), one choice for both
+    // layouts (mitcad#2082; the Docked layout's older choice, panelShown,
+    // is not read there): hidden until it is shown.
     if (settings.panelShownTopBar.has_value()) {
       qInfo().noquote() << QStringLiteral("Projects panel at the start: %1 (as chosen)")
                                .arg(*settings.panelShownTopBar ? QStringLiteral("shown") : QStringLiteral("hidden"));
@@ -331,7 +372,8 @@ void MainWindow::setProjectsPanelShown(bool shown, bool remember) {
   }
   if (remember) {
     ProjectsSettings settings = ProjectsSettings::load();
-    // The top bar's layout keeps a choice of its own (mitcad#1990).
+    // The top bar keeps a choice of its own (mitcad#1990), the same in
+    // both layouts (mitcad#2082).
     std::optional<bool>& chosen = m_titleRow != nullptr ? settings.panelShownTopBar : settings.panelShown;
     if (!chosen.has_value() || *chosen != shown) {
       chosen = shown;

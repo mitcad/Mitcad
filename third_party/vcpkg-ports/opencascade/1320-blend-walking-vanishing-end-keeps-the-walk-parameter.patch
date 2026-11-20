@@ -27,6 +27,12 @@ rounding's V there (-0.034, the vertex's parameter on its edge) instead of
 36.96. Both such extremities now take previousP.Parameter(), as every
 other extremity of the walk does.
 
+The condition (mitcad#1986) is OCCT's own, not the case's: every walk
+that stops on a restriction of either surface with its two contacts within
+twice the 3D point tolerance of each other (the blend vanishing there),
+whatever the surfaces and radii. The change is a wrong overload's
+argument, with no size of its own.
+
 Test: geometry/tests/test_fillet_vanishing_side.cpp, the reported plate's
 sides rounded on the body MitCad builds: the result is valid and its faces
 lie on the stored body after the rounding within 0.01 mm (invalid without

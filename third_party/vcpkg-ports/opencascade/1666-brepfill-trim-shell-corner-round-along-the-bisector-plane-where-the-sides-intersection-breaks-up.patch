@@ -104,6 +104,11 @@ mitcad#1986).
 
 Test: geometry/tests/test_pipe_square_section.cpp
 (geometry.pipe_square_section: the pipes with rounded corners).
+
+Failures (mitcad#1986): the round's cut along the bisector plane fails
+with OCCT's reports of a construction it cannot make (1663's
+isComputationFailure): the cut is refused and the corner is left as OCCT
+leaves it, not done. Any other failure (a broken invariant) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
 index 0f16176f..ff2e80ae 100644
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
@@ -452,10 +457,10 @@ index 0f16176f..ff2e80ae 100644
            if (B)
            {
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
-index 34cca427..22ba455d 100644
+index 97212386..f022d7bf 100644
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
-@@ -62,6 +62,9 @@
+@@ -66,6 +66,9 @@
  #include <algorithm>
  #include <NCollection_Array1.hxx>
  #include <NCollection_DynamicArray.hxx>
@@ -465,7 +470,7 @@ index 34cca427..22ba455d 100644
  #include <NCollection_Array2.hxx>
  #include <BRepLib.hxx>
  #include <BRepTools.hxx>
-@@ -283,11 +286,30 @@ void BRepFill_TrimShellCorner::AddVEdges(
+@@ -287,6 +290,16 @@ void BRepFill_TrimShellCorner::AddVEdges(
    }
  }
  
@@ -481,6 +486,8 @@ index 34cca427..22ba455d 100644
 +
  //=================================================================================================
  
+ //! OCCT's reports of a construction it cannot make: a Standard_Failure thrown as such,
+@@ -305,6 +318,15 @@ static bool isComputationFailure(const Standard_Failure& theFailure)
  void BRepFill_TrimShellCorner::Perform()
  {
    PerformByIntersection();
@@ -496,7 +503,7 @@ index 34cca427..22ba455d 100644
    // Two sides of one section touch where their normals coincide (at the
    // corner's sides), and along a small corner they meet at a shallow
    // angle: there the intersection of approximated sides can come in
-@@ -310,6 +332,35 @@ void BRepFill_TrimShellCorner::Perform()
+@@ -333,6 +355,41 @@ void BRepFill_TrimShellCorner::Perform()
      {
        myHistMap.Clear();
      }
@@ -516,8 +523,14 @@ index 34cca427..22ba455d 100644
 +    {
 +      myDone = PerformRoundByBisectorPlane();
 +    }
-+    catch (const Standard_Failure&)
++    catch (const Standard_Failure& anException)
 +    {
++      // (Only OCCT's reports that the cut cannot be made refuse it; any
++      // other failure is rethrown, mitcad#1986.)
++      if (!isComputationFailure(anException))
++      {
++        throw;
++      }
 +      myDone = false;
 +    }
 +    if (!myDone)
@@ -532,7 +545,7 @@ index 34cca427..22ba455d 100644
    }
  }
  
-@@ -3710,3 +3761,1209 @@ bool BRepFill_TrimShellCorner::PerformByBisectorPlane()
+@@ -3733,3 +3790,1209 @@ bool BRepFill_TrimShellCorner::PerformByBisectorPlane()
    }
    return true;
  }

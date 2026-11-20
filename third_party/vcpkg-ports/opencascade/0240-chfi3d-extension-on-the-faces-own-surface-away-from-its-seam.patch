@@ -25,6 +25,25 @@ shape's maps, which do not hold that face (FindFromKey).
   the ball does not cross the seam, would part the extension's parameters
   from those of the walk on the face before it.
 
+- ChFi3d_FilCommonPoint (mitcad#1986): where a walk still ends on an
+  edge without vertices (a seam of a face made of a surface's natural
+  bounds: the extension's face here, the unbounded copy of a narrow face
+  in 0531), the end is reported as a computation that cannot be made
+  (StdFail_NotDone) instead of failing on the edge's missing vertex
+  (Standard_NullObject, which the handlers narrowed to computation
+  failures rethrow), as 0531's SearchFace does for that copy's edges: a
+  step past the spine's end then ends the extension there (0651), as it
+  did before the narrowing. Only the kind of the failure changes: such an
+  end failed before too. Seen on a rounding along a wall's foot on a rod
+  past a concave arc tighter than the ball (1380,
+  geometry.fillet_three_face_corner) and on a design's rounding in
+  f3d.corpus_designs.
+
+Test: geometry/tests/test_fillet_results.cpp (ctest
+geometry.suite.fillet_results), test_extension_rolling_on_past_a_seam: Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -2042,7 +2042,36 @@ static void ChFi3d_BuildPlane(TopOpeBRepDS_DataStructure&         DStr,
@@ -65,3 +84,20 @@ shape's maps, which do not hold that face (FindFromKey).
        if (!NewF.IsNull())
        {
          NewF.Orientation(F.Orientation());
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -2527,6 +2527,14 @@ Standard_EXPORT void ChFi3d_FilCommonPoint(const BRepBlend_Extremity& SP,
+ 
+       TopoDS_Vertex V[2];
+       TopExp::Vertices(E, V[0], V[1]);
++      // An edge without vertices: a seam of a face made of a surface's
++      // natural bounds (an extension's face, 0076; a narrow face's unbounded
++      // copy, 0531). The walk cannot end on it: reported as a computation
++      // that cannot be made, not as a vertex missing.
++      if (V[0].IsNull() || V[1].IsNull())
++      {
++        throw StdFail_NotDone("ChFi3d_FilCommonPoint: the walk ends on an edge without vertices");
++      }
+ 
+       DistF = (SP.Value()).Distance(BRep_Tool::Pnt(V[0]));
+       DistL = (SP.Value()).Distance(BRep_Tool::Pnt(V[1]));

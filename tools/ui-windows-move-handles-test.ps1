@@ -34,7 +34,16 @@ $design = Join-Path $work 'design.mitcad'
 & $Cli run $json --save $design
 if ($LASTEXITCODE -ne 0) { Ui-Fail 'the design could not be made' }
 $env:MITCAD_TEST_WORK = $work
-$env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/move-handles.mitcad-ui'
+# The browser opens the design folded in session 0's window, whose Docked
+# top bar (mitcad#2082) leaves it a row short: its Bodies opened before
+# Body1's context menu.
+$steps = Get-Content -Raw (Join-Path $PSScriptRoot 'ui-scripts/move-handles.mitcad-ui')
+$menu = "context-menu-logged '^Browser Root/Bodies/Body1 at ' 'Move/Copy'"
+if (-not $steps.Contains($menu)) { Ui-Fail "the shared steps have no '$menu'" }
+$open = "expect-ever '^Browser opened folded: '`nclick-logged '^Browser arrow Root/Bodies at '`nwait-log '^Browser Root/Bodies/Body1 at '`nwait-idle`n"
+$workflow = Join-Path $work 'workflow.mitcad-ui'
+Set-Content -Encoding ascii $workflow ($steps.Replace($menu, $open + $menu))
+$env:MITCAD_TEST_INPUT = $workflow
 $env:MITCAD_TEST_STEP_MS = '100'
 Ui-StartApp 'move-handles' @('--ui=qt', '--no-mcp', '--open', $design)
 $null = $script:UiProcess.Handle

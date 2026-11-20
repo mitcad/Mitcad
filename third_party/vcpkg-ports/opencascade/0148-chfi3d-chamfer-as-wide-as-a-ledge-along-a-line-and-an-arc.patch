@@ -28,6 +28,22 @@ ledge's outer edges and the ledge's top is consumed (0140).
 
 Before, the chamfer failed, or gave a shape with self-intersecting wires.
 
+The conditions (mitcad#1986) are geometric, not the case's: a hatched
+domain of a moved contact line with no sample OUT of the face and at least
+two ON its boundary (any line and any face, a chamfer or a rounding), a
+consumed face whose strip's vertices are those of any obstacle edge on the
+stripe's side (any number of pieces), and a contact along a whole open edge
+whose end lies within the 3D tolerance plus the vertex's of that edge's
+vertex. Nothing depends on the line and the arc or on the ledge's width.
+Only the sampling comes from OCCT's code as it was: seven inner samples of
+each domain, as the test that every sample be ON used.
+
+Test: geometry/tests/test_chamfer_overflow.cpp (ctest
+geometry.suite.chamfer_overflow),
+test_chamfer_as_wide_as_a_ledge_along_a_line_and_an_arc: Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -22,6 +22,16 @@ of a fillet with some of a closed chain's edges ran for hours.
   neither walk adds an edge that is in it; the walk stops there as at an
   edge it does not take. Round such a chain the contour is every edge of
   the chain once, both its ends at W.
+
+Test: geometry/tests/test_fillet_chain_loops.cpp,
+test_contour_round_a_closed_chain_stops_where_it_turns (ctest
+geometry.fillet_chain_loops): a plate whose top outline turns twice: the
+contour from a selected edge takes the outline's four edges once each
+(without the patch the contour does not end within the test's 30 s);
+test_mitcad_fillet_round_a_closed_chain_ends, MitCad's fillet of three of
+them. Its failure without the patch, stated in its documentation, is still
+to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 index 7bc592e4..26465aa8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx

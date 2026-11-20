@@ -27,7 +27,7 @@ mkdir -p "$UI_OUT/files"
 }
 MITCAD_TEST_WORK=$UI_OUT/files MITCAD_TEST_STEP_MS=100 MITCAD_CAM_LIBRARY_DIR=$UI_OUT/files/cam-library \
   MITCAD_TEST_INPUT=$here/ui-scripts/cam-turning.mitcad-ui \
-  ui_run_app cam-turning --ui=qt --no-recovery --no-mcp --open "$UI_OUT/files/cam-turning.mitcad"
+  ui_run_app cam-turning --ui=qt --no-native-dialogs --no-recovery --no-mcp --open "$UI_OUT/files/cam-turning.mitcad"
 ui_expect_log 'TestDriver: done' 'a lathe setup, five turning operations, generate, simulate and post'
 ui_expect_no_log '^TestDriver: FAIL' 'no failed driver assertion'
 FILE=$UI_OUT/files/setup1.nc

@@ -23,6 +23,15 @@ Fillets: three causes of segmentation faults in TKFillet (mitcad#122).
   surface data, the out-of-range Value() left its sequence with a current
   index past its end, and a later Value() (ChFi3d_StripeEdgeInter) followed
   a null node.
+
+Test: pending (mitcad#1986): no test reaches these three faults yet. They
+came from stored models; each needs a synthetic body: an obstacle face
+past the contact point that does not hold the arc the contact left by
+(StartSol), a corner curve parallel to the seam of the face at the end
+(PerformOneCorner, IntersectMoreCorner), and several contours where the
+builder's first stripe has fewer surface data than the one at the vertex
+(PerformMoreSurfdata). Wanted: each fillet built or failing cleanly with
+the patch, a crash without it.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

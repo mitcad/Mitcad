@@ -8,6 +8,7 @@
 # check-all sources: core/sketch/src/spatial_convert.rs core/model/src/document/sketch_conversion.rs
 # check-all sources: core/sketch/src/spatial_edit.rs
 # check-all sources: app/commands/CommandSupport.cpp app/commands/SweepCommands.cpp
+# check-all sources: app/commands/ProfilePicks.cpp app/commands/ExtrudeCommands.cpp
 # check-all sources: core/model/src/features/path.rs core/model/src/features/rib.rs
 # 3D sketches in the shared Qt UI (mitcad#1524), on a design that
 # mitcad-cli makes: Box1 (F1, F1.b0) 40 x 30 x 20 at (20, 20), off the origin
@@ -64,6 +65,9 @@
 #     plane badges, the 3D Sketch Palette's 3D Sketch box checked and
 #     disabled with why; Undo is one step back to the 2D editor; the Sketch
 #     Palette's 3D Sketch box converts it again; Finish.
+#   - Helix and Extrude (mitcad#2087, GitHub mitcad/Mitcad#487) after the
+#     conversion: each panel opens with a 3D sketch's region in Profiles,
+#     Esc cancels it, and the application keeps running.
 #   - Fillet (mitcad#1548) of 3DSketch1's triangle (F7, the test's key):
 #     a click on the corner p12 picks it without a commit, the pointer
 #     moved into the corner drags the radius and a click takes it as one
@@ -683,6 +687,30 @@ ui_sync
 grep -F "Browser sketch DOF: " "$UI_LOG" | tail -1 | grep -qE "(: |, )Sketch1 0(,|$)" ||
   ui_fail "Sketch1 is not fully constrained in the Browser: $(grep -F "Browser sketch DOF: " "$UI_LOG" | tail -1)"
 echo "ok   Sketch1 fully constrained as a 3D sketch"
+
+echo "--- Helix and Extrude start on the converted sketch's region (mitcad#2087, GitHub mitcad/Mitcad#487)"
+# Every sketch of the design is a 3D sketch now: the profile the commands
+# take by themselves as they start is a 3D sketch's region, for which the
+# planar sketch query is refused (Helix threw out of its start there and
+# the application ended).
+ui_mark
+ui_step "helix (search)"                 ui_command "Helix"
+ui_expect_new "Command Helix started" "Helix started"
+ui_expect_new "Helix Profiles: 1 profile [profile " "the converted sketch's region taken"
+ui_mark
+ui_step "cancel (Esc)"                   ui_key Escape
+ui_expect_new "Command Helix cancelled" "nothing added"
+ui_crashed && ui_fail "the application ended after Helix"
+ui_mark
+ui_step "extrude (E)"                    ui_key e
+ui_expect_new "Command Extrude started" "Extrude started"
+ui_expect_new "Extrude Profiles: 1 profile [profile " "the converted sketch's region taken"
+ui_focus_main
+ui_mark
+ui_step "cancel (Esc)"                   ui_key Escape
+ui_expect_new "Command Extrude cancelled" "nothing added"
+ui_crashed && ui_fail "the application ended after Extrude"
+echo "ok   the application keeps running"
 
 echo "--- Fillet (mitcad#1548): the triangle's corners, a dragged radius and a typed one"
 ui_double_click_expect "Timeline 3DSketch1" "Editing 3D sketch F2 (3DSketch1)" "3DSketch1 is edited for the fillets"

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451), the start after dock-state-restore.mitcad-ui: the
+# Render workspace (mitcad#2013) opened from the Docked tab row's workspace
+# selector (mitcad#2082): its docks at their
+# own areas (the list left, the settings right, the Shots bar at the
+# bottom), the other docks hidden meanwhile; the list's dock moved to the
+# right. MitCad ends with the workspace open: the docks it hid are kept as
+# shown, and its own docks are not kept.
+# Run by tools/ui-dock-state-test.sh (Linux),
+# tools/ui-windows-dock-state-test.ps1 (Windows) and
+# tools/ui-macos-dock-state-test.sh (macOS), all Docked.
+expect-ever '^Dock state restored: ' 20
+expect-ever 'View area' 30
+wait-idle
+window-resize 1500 900
+sleep 300
+wait-idle
+expect-ever '^Ribbon workspace at ' 10
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry RENDER at '
+key Down
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: RENDER$'
+wait-log '^Render workspace opened$' 30
+wait-idle
+expect-dock-area renderLeftPanel left
+expect-dock-area renderSettingsPanel right
+expect-dock-area renderBarPanel bottom
+expect-dock browserDock hidden
+dock-area renderLeftPanel right
+expect-dock-area renderLeftPanel right
+sleep 300
+wait-idle
+expect-never 'TestDriver: FAIL'

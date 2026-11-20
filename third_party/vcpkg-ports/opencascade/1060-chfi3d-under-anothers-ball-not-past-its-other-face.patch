@@ -33,6 +33,17 @@ design's four such corners).
   under a ball rolling over it (0700's case) lie there.
 
 Upstream: new (fixes Mitcad's patch 0700).
+
+Test: geometry/tests/test_fillet_corner_past_wall.cpp,
+test_roundings_run_past_the_corner_with_occt_alone (and, through MitCad's
+fillet, test_roundings_run_past_the_corner_by_name; ctest
+geometry.fillet_corner_past_wall): a wall with a slot whose floor is flush
+with a ledge's top, the slot floor's edge and the ledge's edge along the
+wall rounded with 1 at the convex corner left sharp: valid, the material
+added and each rounding's face against the two quarter cylinders running
+on past the corner into each other. Without the patch 0700 drops the
+ledge's stripe and its rounding is missing. Its failure without the patch
+is still to be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx

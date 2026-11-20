@@ -35,12 +35,12 @@ public:
   // the window is laid out exactly as a single document window. Returning
   // true here for one document shows the tabs always.
   static bool showsDocumentTabs(int documentCount);
-  // Whether the shown design's Floating title row holds the tab bar
-  // (mitcad#1990, Windows and Linux): then the tabs show for one design too,
-  // as a tab with the row's + beside it, and the frame's own menu bar and
-  // tab row stay hidden (each design keeps its own menu bar, so the window
-  // is laid out as a single document window). Elsewhere (Docked) the tabs
-  // are the frame's row under its menu bar, as showsDocumentTabs says.
+  // Whether the shown design's top bar title row holds the tab bar
+  // (mitcad#1990, Windows and Linux, both layouts since mitcad#2082): then
+  // the tabs show for one design too, and the frame's own menu bar and tab
+  // row stay hidden (each design keeps its own menu bar, so the window is
+  // laid out as a single document window). Elsewhere (macOS) the tabs are
+  // the frame's row under its menu bar, as showsDocumentTabs says.
   bool tabsInTitleRow() const;
   // Whether this frame shows its tab bar now.
   bool showsTabs() const;
@@ -78,5 +78,6 @@ private:
   bool m_continuingClose = false;
   bool m_closePosted = false;
   QString m_loggedTab; // logShownTab's last line
+  QString m_loggedWidths; // and its last line of the title row's tabs
 };
 } // namespace mitcad

@@ -29,6 +29,14 @@ On the design's stored body before the item: the chain rounds, the sphere
 piece from spine parameter 2.12 to 3.86, the walked faces on the rolling
 ball's envelope within 1e-5 mm and within 0.0013 mm of the stored body's.
 
+Test: geometry/tests/test_fillet_groove_rim_corners.cpp (ctest
+geometry.fillet_groove_rim_corners): test_synthetic_leg, a leg's groove
+rim rounded with 0.5, every new face on the ball's envelope within 1e-5
+mm, and test_reported_body on the stored case `groove-rim-corners`;
+without this patch both roundings fail (twisted sections). Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 98682918..cae1cba9 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

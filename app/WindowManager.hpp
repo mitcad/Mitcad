@@ -56,6 +56,10 @@ public:
   // An untitled design nothing is made in yet, not modified and not busy:
   // New reuses its window, and new default units restart it (mitcad#1452).
   bool reusable(MainWindow* window) const;
+  // Restore Default Layout (mitcad#2070): the Docked layout's kept dock
+  // arrangement forgotten and every window's docks back in their default
+  // arrangement at once.
+  void restoreDefaultDocks();
 
 signals:
   void windowAdded(MainWindow* window, MainWindow* source, bool separate);
@@ -73,7 +77,8 @@ private:
   // framework/WindowPlace.hpp): the kept place for the first window, the
   // last size cascaded from a shown one for another.
   void placeNewWindow(MainWindow* window, MainWindow* source);
-  // The active window's place kept for the next start.
+  // The active window's place, and its docks' arrangement (mitcad#2070),
+  // kept for the next start.
   void saveActiveWindowPlace() const;
   QList<QPointer<MainWindow>> m_windows;
   QPointer<MainWindow> m_active;

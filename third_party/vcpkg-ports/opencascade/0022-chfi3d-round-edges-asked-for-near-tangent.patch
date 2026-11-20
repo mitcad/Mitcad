@@ -13,6 +13,11 @@ PerformElement now refuses the edge only when, besides, the normals of its
 faces sampled along it come within the builder's angular tolerance
 (SetParams, 0.01 rad by default) somewhere. The loose test stays as it is
 everywhere else (tangent chains, corners).
+
+Test: geometry/tests/test_fillet_kernel.cpp (ctest
+geometry.suite.fillet_kernel), test_ridge_between_faces_at_a_small_angle:
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx

@@ -244,7 +244,11 @@ ui_step "drag it onto the project"       ui_drag_logged "Projects row Shop/parts
 ui_expect_new "Projects panel: drag parts/cog.mitcad to cog.mitcad" "dropped on the project" 20
 ui_expect_new "Projects panel: the open design follows: $SHOP/parts/cog.mitcad -> $SHOP/cog.mitcad" "it follows" 20
 expect_git "$SHOP" "log -1 --format=%s" "Move parts/cog.mitcad to cog.mitcad" "a version of its own"
-ui_expect_new "Projects row Shop/cog.mitcad at " "the panel shows it in the project's top" 20
+# In the tree's list (the row itself may lie below the Docked panel's
+# bottom: the top bar and toolbar panel above it since mitcad#2082 leave the
+# Projects panel about 180 px; it comes into sight once bracket is deleted).
+ui_expect_new "Projects tree: Shop (local, current): parts/ | bracket.mitcad v1 | cog.mitcad v" \
+  "the panel shows it in the project's top" 20
 ui_focus_main
 # A change first: an unchanged design has nothing to save (mitcad#1090).
 ui_step "new component (search)"         ui_command "New Component"
@@ -364,13 +368,10 @@ expect_exit "exited"
 echo "--- Floating: the Projects card"
 ui_start_app --no-native-dialogs --chrome=floating
 UI_MARK=0 # a new log
-# The Floating top bar's layout keeps a choice of its own (mitcad#1990):
-# hidden until shown there.
-ui_expect_log "Projects panel at the start: hidden (no choice yet in this layout)" \
-  "hidden in Floating until shown there"
-ui_mark
-ui_step "projects panel (search)"        ui_command "Projects"
-ui_expect_new "Projects panel: shown at the next start" "shown in the card, remembered"
+# The top bar keeps one choice for both layouts (mitcad#1990,
+# mitcad#2082): shown in Docked above, shown here too.
+ui_expect_log "Projects panel at the start: shown (as chosen)" \
+  "shown in Floating as it was left in Docked"
 row "Shop"
 ui_expect_log "Projects panel: 1 project: Shop" "the projects listed in the card"
 # Not the current project: collapsed until opened.

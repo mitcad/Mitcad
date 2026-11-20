@@ -72,6 +72,17 @@ if (-not (Select-String -Quiet -Path $ini -Pattern "^dockWidth=$width$")) { Ui-F
 Write-Host "ok   the dragged panel is $width px wide, remembered"
 Ui-StopApp
 
+# Without the docks' kept arrangement (mitcad#2070), which would give the
+# panel its width at quit instead: the remembered width's own restore, as at
+# a start with nothing kept (tools/ui-windows-dock-state-test.ps1 tests the
+# other).
+$section = ''
+$kept = @()
+foreach ($line in @(Get-Content $ini)) {
+  if ($line -match '^\[(.*)\]$') { $section = $Matches[1] }
+  if ($section -ne 'dockState') { $kept += $line }
+}
+Set-Content -Encoding ascii $ini $kept
 $env:MITCAD_TEST_COMMAND_WIDTH = "$width"
 Run-Script 'Docked, restarted' 'docked-command-width-restart.mitcad-ui'
 $restored = Panel-Width -Last

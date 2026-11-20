@@ -9,6 +9,16 @@ curve's last parameter; it was not taken, and the corner failed ("bouchon
 non ecrit"). IntersUpdateOnSame's Update now takes an intersection within
 the curve's parametric resolution of its bounds (at least
 Precision::PConfusion), at the bound.
+
+Test: geometry/tests/test_fillet_corners.cpp,
+test_roundings_roll_before_each_others_faces (ctest
+geometry.suite.fillet_corners), with 0430: a window's two vertical edges at
+its end rounded with 2, the end 3.54 wide: the rounding beside the strip
+rolls on the strip's far edge, the other keeps its face, and their ends on
+the window's top and bottom stay apart. Its failure without the patch,
+stated in its documentation, is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

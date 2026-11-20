@@ -50,15 +50,27 @@ copy, FilledArray and SortArray; mitcad#1986).
 
 Test: geometry/tests/test_pipe_square_section.cpp
 (geometry.pipe_square_section: the pipes mitred square to their paths).
+
+Failures (mitcad#1986): the mitre cut along the bisector plane fails
+with OCCT's reports of a construction it cannot make (a Standard_Failure
+thrown as such, StdFail_NotDone, Standard_ConstructionError or
+Standard_NotImplemented, tested by isComputationFailure, added here as
+0016's ChFi3d_IsComputationFailure is to TKFillet): the cut is refused and
+the corner is left as OCCT leaves it, not done. Any other failure (a
+broken invariant) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
-index ff0bf415..34cca427 100644
+index ff0bf415..97212386 100644
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
-@@ -56,6 +56,21 @@
+@@ -56,6 +56,25 @@
  #include <NCollection_Map.hxx>
  #include <BRepExtrema_ExtCC.hxx>
  #include <ShapeFix_Edge.hxx>
 +#include <Standard_Failure.hxx>
++#include <Standard_ConstructionError.hxx>
++#include <Standard_NotImplemented.hxx>
++#include <StdFail_NotDone.hxx>
++#include <typeinfo>
 +#include <BRepAdaptor_Curve.hxx>
 +#include <Bnd_Box.hxx>
 +#include <algorithm>
@@ -76,9 +88,23 @@ index ff0bf415..34cca427 100644
  
  static TopoDS_Edge FindEdgeCloseToBisectorPlane(const TopoDS_Vertex& theVertex,
                                                  TopoDS_Compound&     theComp,
-@@ -271,6 +286,36 @@ void BRepFill_TrimShellCorner::AddVEdges(
+@@ -270,7 +289,56 @@ void BRepFill_TrimShellCorner::AddVEdges(
+ 
  //=================================================================================================
  
++//! OCCT's reports of a construction it cannot make: a Standard_Failure thrown as such,
++//! StdFail_NotDone, Standard_ConstructionError or Standard_NotImplemented. Any other failure
++//! is a broken invariant or a signal (mitcad#1986).
++static bool isComputationFailure(const Standard_Failure& theFailure)
++{
++  return typeid(theFailure) == typeid(Standard_Failure)
++         || dynamic_cast<const StdFail_NotDone*>(&theFailure) != nullptr
++         || dynamic_cast<const Standard_ConstructionError*>(&theFailure) != nullptr
++         || dynamic_cast<const Standard_NotImplemented*>(&theFailure) != nullptr;
++}
++
++//=================================================================================================
++
  void BRepFill_TrimShellCorner::Perform()
 +{
 +  PerformByIntersection();
@@ -96,8 +122,14 @@ index ff0bf415..34cca427 100644
 +    {
 +      myDone = PerformByBisectorPlane();
 +    }
-+    catch (const Standard_Failure&)
++    catch (const Standard_Failure& anException)
 +    {
++      // (Only OCCT's reports that the cut cannot be made refuse it; any
++      // other failure is rethrown, mitcad#1986.)
++      if (!isComputationFailure(anException))
++      {
++        throw;
++      }
 +      myDone = false;
 +    }
 +    if (!myDone)
@@ -113,7 +145,7 @@ index ff0bf415..34cca427 100644
  {
    int  anIndex1, anIndex2, nF1, nF2, i, j, aNbP, aNbC;
    bool bhassec;
-@@ -1109,8 +1154,9 @@ bool BRepFill_TrimShellCorner::ChooseSection(const TopoDS_Shape&  Comp,
+@@ -1109,8 +1177,9 @@ bool BRepFill_TrimShellCorner::ChooseSection(const TopoDS_Shape&  Comp,
          {
            // trim <FirstEdge> and <LastEdge> in the points of extrema
            // these points become new vertex with centre between them
@@ -124,7 +156,7 @@ index ff0bf415..34cca427 100644
            {
              int imin = 1;
              for (i = 2; i <= Extrema.NbExt(); i++)
-@@ -2943,3 +2989,724 @@ static bool FindCommonVertex(const TopoDS_Edge&   theFirstEdge,
+@@ -2943,3 +3012,724 @@ static bool FindCommonVertex(const TopoDS_Edge&   theFirstEdge,
  
    return false;
  }

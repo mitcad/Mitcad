@@ -99,48 +99,61 @@ inverse of the case, mitcad#1368's synthetic pocket): valid, the corners
 the arcs' own balls, 0.044 mm3 less material than OCCT's walk round them
 added.
 
+Failures (mitcad#1986): the test of an arc as tight (tcTightConcaveArc),
+the search for such an arc at a contour's end (tcArcAtEnd) and the fits
+and projections of the corner's pieces fail with OCCT's reports of a
+computation it cannot make (ChFi3d_IsComputationFailure, 0016) where the
+corner is not such a corner: that arc is not taken as tight, that end is
+not extended (0700's ChFi3d_Computed), the piece is not made; any other
+failure (a broken invariant, a signal) is rethrown. Each arc and end is
+taken or left on its own, and SplitAtTightConcaveArcs builds the new
+contours aside and puts them in place at its end, so neither pass has a
+handler of its own in Compute. The handler round
+PerformTightConcaveCorners fails the fillet (Failure_Corner): a boundary
+that reports the failure. ExtendAtTightConcaveArcs takes constant
+roundings only, as SplitAtTightConcaveArcs does: an evolving rounding's
+radius (FilSpine's Radius) threw Standard_DomainError there, which the
+pass's handler hid, leaving the stripes after it unextended.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_three_face_corner.cpp,
+test_radius_of_the_reported_design and test_other_radii (ctest
+geometry.fillet_three_face_corner): a synthetic rod and wall as the
+case's, rounded with 3, 2 and 4: at 3 the corner's points, the strip's and
+the triangle's areas and the material added are the stored body's; the
+port's notes record each failing without the patch. Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 45e8b8d3..453dfc45 100644
+index 685f6ec2..63b6ec58 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3269,6 +3269,18 @@ void ChFi3d_Builder::Compute()
-   {
-     // (The contours as they are.)
-   }
+@@ -3279,8 +3279,12 @@ void ChFi3d_Builder::Compute()
+ 
+   // Contours whose chain runs round a wall's corner rounded with less than
+   // their radius: split there (PerformTightCorners builds the corners).
+-  // (Each arc taken as tight, or not, on its own: mitcad#1986.)
+   SplitAtTightCorners();
 +  // Concave contours whose chain runs through a wall's concave corner
 +  // tighter than their radius: split there (PerformTightConcaveCorners
 +  // builds the corners).
-+  try
-+  {
-+    OCC_CATCH_SIGNALS
-+    SplitAtTightConcaveArcs();
-+  }
-+  catch (Standard_Failure const&)
-+  {
-+    // (The contours as they are.)
-+  }
++  // (Each arc or end taken, or not, on its own: mitcad#1986.)
++  SplitAtTightConcaveArcs();
  
    // filling of myVDatatMap
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
-@@ -3294,6 +3306,16 @@ void ChFi3d_Builder::Compute()
+@@ -3306,6 +3310,9 @@ void ChFi3d_Builder::Compute()
    }
    // preanalysis to evaluate the extensions.
    ExtentAnalyse();
 +  // (The ends SplitAtTightConcaveArcs made walk on to the concave arc.)
-+  try
-+  {
-+    OCC_CATCH_SIGNALS
-+    ExtendAtTightConcaveArcs();
-+  }
-+  catch (Standard_Failure const&)
-+  {
-+    // (The ends as they are.)
-+  }
++  // (Each arc or end taken, or not, on its own: mitcad#1986.)
++  ExtendAtTightConcaveArcs();
  
  #ifdef OCCT_DEBUG // perf
    ChFi3d_ResultChron(cl_extent, t_extent);
-@@ -3896,6 +3918,23 @@ void ChFi3d_Builder::Compute()
+@@ -3937,6 +3944,23 @@ void ChFi3d_Builder::Compute()
        done      = false;
        myFailure = Failure_Corner;
      }
@@ -202,10 +215,10 @@ index 7baf0056..4f9e492b 100644
    //! whose balls are one ball rolling over a narrow face C between them (a
    //! strip that breaks the edge chain, its edges with the common face under
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index d6e63df7..c3e27686 100644
+index 5d8a1187..a77974de 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -5426,7 +5426,8 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -5492,7 +5492,8 @@ bool ChFi3d_Builder::PerformTightCorners()
      const occ::handle<ChFiDS_FilSpine> sp = S->Spine().IsNull()
                                                ? occ::handle<ChFiDS_FilSpine>()
                                                : occ::down_cast<ChFiDS_FilSpine>(S->Spine());
@@ -217,10 +230,10 @@ index d6e63df7..c3e27686 100644
      }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
 new file mode 100644
-index 00000000..83943226
+index 00000000..d9fd754c
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
-@@ -0,0 +1,2100 @@
+@@ -0,0 +1,2131 @@
 +// Created for MitCad (mitcad#1371): a concave rounding whose chain runs
 +// through a wall's concave corner tighter than the ball.
 +//
@@ -776,8 +789,13 @@ index 00000000..83943226
 +    OCC_CATCH_SIGNALS
 +    aPC = GeomProjLib::Curve2d(C, F, L, S);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    aPC.Nullify();
 +  }
 +  // (Taken only where it lies on the curve all along: a curve starting on a
@@ -827,8 +845,13 @@ index 00000000..83943226
 +        aPC = aFit.Curve();
 +      }
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      aPC.Nullify();
 +    }
 +    if (aPC.IsNull())
@@ -1086,8 +1109,13 @@ index 00000000..83943226
 +      aS = aFit.Surface();
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    aS.Nullify();
 +  }
 +  if (aS.IsNull())
@@ -1125,8 +1153,13 @@ index 00000000..83943226
 +      aC = aFit.Curve();
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    aC.Nullify();
 +  }
 +  return aC;
@@ -1340,7 +1373,10 @@ index 00000000..83943226
 +        continue;
 +      }
 +      TCArc D;
-+      if (tcTightConcaveArc(sp->Edges(i), sp->Edges(ia), sp->Edges(ib), myEFMap, R, tol, D))
++      // (Not tight where that cannot be computed, mitcad#1986.)
++      if (ChFi3d_Computed(
++            [&]() { return tcTightConcaveArc(sp->Edges(i), sp->Edges(ia), sp->Edges(ib), myEFMap, R, tol, D); },
++            false))
 +      {
 +        aTight(i) = true;
 +        nTight++;
@@ -1415,7 +1451,9 @@ index 00000000..83943226
 +  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(myListStripe); it.More(); it.Next())
 +  {
 +    const occ::handle<ChFiDS_FilSpine> fsp = occ::down_cast<ChFiDS_FilSpine>(it.Value()->Spine());
-+    if (fsp.IsNull())
++    // (Only constant roundings were split, SplitAtTightConcaveArcs; an
++    // evolving one has no one radius, mitcad#1986.)
++    if (fsp.IsNull() || !fsp->IsConstant())
 +    {
 +      continue;
 +    }
@@ -1426,7 +1464,13 @@ index 00000000..83943226
 +      occ::handle<ChFiDS_Stripe> S2;
 +      TopoDS_Edge                Ek;
 +      TCArc                      D;
-+      if (!tcArcAtEnd(myListStripe, it.Value(), isfirst, myVEMap, myEFMap, tol, nullptr, aDoneHere, S2, isfirst2, Ek, D))
++      // (No arc at that end where that cannot be computed, mitcad#1986.)
++      if (!ChFi3d_Computed(
++            [&]() {
++              return tcArcAtEnd(myListStripe, it.Value(), isfirst, myVEMap, myEFMap, tol, nullptr, aDoneHere, S2,
++                                isfirst2, Ek, D);
++            },
++            false))
 +      {
 +        continue;
 +      }

@@ -93,7 +93,8 @@ ui_start_display
 echo "--- A fresh profile without projects: the panel is hidden"
 ui_start_app
 UI_MARK=0
-ui_expect_log "Projects panel at the start: hidden (no choice yet, no projects)" "hidden by default"
+# The top bar's one choice for both layouts (mitcad#1990, mitcad#2082).
+ui_expect_log "Projects panel at the start: hidden (no choice yet in this layout)" "hidden by default"
 quit
 
 echo "--- Projects configured: a Local one, a Cloud one (a remote on a service; no network)"
@@ -159,16 +160,13 @@ grep -q '"Workshop (team)"' "$GRIPPER/.mitcad/local/name.json" || ui_fail "the d
 echo "ok   the folder, the repository and the versions are untouched"
 quit
 
-echo "--- Docked: no choice of its own yet; the display name stays; the settings button"
+echo "--- Docked: Floating's choice; the display name stays; the settings button"
 ui_start_app
 UI_MARK=0
-# Floating's choice is not Docked's (mitcad#1990): hidden with projects
-# configured until shown here.
-ui_expect_log "Projects panel at the start: hidden (no choice yet, projects configured)" \
-  "hidden in Docked, with projects configured"
-ui_mark
-ui_step "projects panel (search)"        ui_command "Projects"
-ui_expect_new "Projects panel: shown at the next start" "shown in Docked, the choice remembered"
+# One choice for both layouts (mitcad#2082): shown in Floating above, shown
+# here too.
+ui_expect_log "Projects panel at the start: shown (as chosen)" \
+  "shown in Docked as it was left in Floating"
 ui_expect_log "Projects names: Shop = Shop | gripper-work = Workshop (team) (set)" \
   "the display name after a restart" 20
 ui_expect_log "Projects top rows: Shop | gripper-work" "only the projects at the top" 20

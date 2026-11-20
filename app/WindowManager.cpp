@@ -3,6 +3,7 @@
 #include "MainWindow.hpp"
 #include "framework/AppSettings.hpp"
 #include "framework/CommandRegistry.hpp"
+#include "framework/DockState.hpp"
 #include "framework/InterfaceSize.hpp"
 #include "framework/WindowPlace.hpp"
 #include "platform/MacChrome.hpp"
@@ -102,6 +103,13 @@ MainWindow* WindowManager::createWindow(bool demo, MainWindow* source, bool sepa
   // Its size and place (mitcad#1710), once its top-level window is known
   // (a document frame or the window itself).
   if (!m_nativeUi) placeNewWindow(window, sourceGuard);
+  // The Docked layout's docks (mitcad#2070), once they all exist and before
+  // the Start page hides them: the first window as they were kept at the
+  // last quit; another as in the window it opens from, nothing floating.
+  if (!m_nativeUi) {
+    MainWindow* from = sourceGuard ? sourceGuard.data() : m_active.data();
+    window->restoreDockArrangement(m_windows.size() == 1, from);
+  }
   emit windowsChanged();
   qInfo().noquote() << QStringLiteral("Document window created: %1 (%2 open)").arg(handle(window)).arg(m_windows.size());
   return window;
@@ -130,7 +138,19 @@ void WindowManager::placeNewWindow(MainWindow* window, MainWindow* source) {
 
 void WindowManager::saveActiveWindowPlace() const {
   MainWindow* active = activeWindow();
-  if (active != nullptr && !active->usesNativeUi()) saveWindowPlace(active->window());
+  if (active != nullptr && !active->usesNativeUi()) {
+    saveWindowPlace(active->window());
+    // Its docks beside it (mitcad#2070).
+    active->saveDockArrangement();
+  }
+}
+
+void WindowManager::restoreDefaultDocks() {
+  // The kept arrangement forgotten, every window's docks as it made them
+  // (Restore Default Layout, mitcad#2070).
+  QSettings settings;
+  forgetDockState(settings);
+  for (MainWindow* window : windows()) window->restoreDefaultDocks();
 }
 
 void WindowManager::setPresenter(std::function<void(MainWindow*)> presenter) { m_presenter = std::move(presenter); }
@@ -306,7 +326,13 @@ void WindowManager::windowClosed(MainWindow* window) {
   if (wasActive) m_active.clear();
   // The window that closes has the last place (mitcad#1710); Quit kept the
   // active window's before it closed them all.
-  if (!m_quitting && window != nullptr && !window->usesNativeUi()) saveWindowPlace(window->window());
+  if (!m_quitting && window != nullptr && !window->usesNativeUi()) {
+    saveWindowPlace(window->window());
+    // The last window's docks too (mitcad#2070): MitCad ends with it, and
+    // no window is left for the quit to keep them from. Before it hides,
+    // so that its floating docks are kept as shown.
+    if (windows().isEmpty()) window->saveDockArrangement();
+  }
   emit windowRemoved(window);
   emit windowsChanged();
   if (window != nullptr) window->deleteLater();

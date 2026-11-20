@@ -24,7 +24,6 @@
 #include "../framework/HandleStep.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
-#include "ProfilePicks.hpp"
 #include "SketchNormal.hpp"
 #include "SpatialPaths.hpp"
 
@@ -888,56 +887,7 @@ void loadCount(CommandState& state, const QString& key, const QJsonValue& slot,
 // ---------------------------------------------------------------------------
 // The model
 
-void newestProfile(CommandState& state, const CommandContext& context) {
-  Selection& profiles = state.items(QStringLiteral("profiles"));
-  if (profiles.isEmpty()) {
-    // A profile the sketch's own curves bound, before the leftover region
-    // of the face it lies on (mitcad#1226).
-    const QJsonArray all = context.queryArray(QStringLiteral("profiles"));
-    if (const std::optional<SelectionItem> chosen = automaticProfile(all)) {
-      profiles.append(*chosen);
-      // A region of a QR code brings the code's other dark regions: the
-      // code extrudes whole (mitcad#473).
-      const QString sketch = chosen->owner;
-      const QJsonObject model =
-          context.queryObject({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), sketch}});
-      const QJsonArray regions = model.value(QStringLiteral("regions")).toArray();
-      QString text;
-      for (const QJsonValue& value : regions) {
-        const QJsonObject region = value.toObject();
-        if (region.value(QStringLiteral("key")).toString() == chosen->name) {
-          text = region.value(QStringLiteral("text")).toString();
-        }
-      }
-      bool code = false;
-      for (const QJsonValue& value : model.value(QStringLiteral("texts")).toArray()) {
-        const QJsonObject t = value.toObject();
-        code = code || (!text.isEmpty() && t.value(QStringLiteral("id")).toString() == text &&
-                        t.value(QStringLiteral("code")).isObject());
-      }
-      if (code) {
-        profiles.clear();
-        for (const QJsonValue& value : regions) {
-          const QJsonObject region = value.toObject();
-          const QString key = region.value(QStringLiteral("key")).toString();
-          const bool free = std::any_of(all.begin(), all.end(), [&](const QJsonValue& entry) {
-            const QJsonObject profile = entry.toObject();
-            return !profile.value(QStringLiteral("consumed")).toBool() &&
-                   profile.value(QStringLiteral("sketch")).toString() == sketch &&
-                   profile.value(QStringLiteral("region")).toString() == key;
-          });
-          if (free && region.value(QStringLiteral("text")).toString() == text &&
-              region.value(QStringLiteral("letter")).toBool()) {
-            profiles.append({SelectKind::Profile, sketch, key, QStringLiteral("plane")});
-          }
-        }
-        if (profiles.isEmpty()) {
-          profiles.append(*chosen);
-        }
-      }
-    }
-  }
-}
+// newestProfile: ProfilePicks.cpp (with its unit test, mitcad#2087).
 
 bool hasProfiles(const CommandContext& context) {
   return !context.queryArray(QStringLiteral("profiles")).isEmpty();

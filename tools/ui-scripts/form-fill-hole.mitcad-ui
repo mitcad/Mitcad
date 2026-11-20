@@ -79,6 +79,8 @@ dblclick-logged '^Timeline Form1 at '
 wait-log '^Command Edit Form started' 30
 wait-log '^Form edit Form1: cage of 26 vertices, 48 edges, 23 faces, open$' 30
 wait-idle
+command view.fit
+wait-idle
 qt-choice input_pick 'Edges'
 wait-log '^Edit Form: Select = Edges$' 30
 wait-log '^Form cage edge -?[0-9]+,-?[0-9]+ [(]boundary[)] at ' 30

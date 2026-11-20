@@ -25,7 +25,20 @@ the design's replayed rounding, the three pieces and the edges of the rod
 between them, builds in every order of its contours within 0.0032 mm3 of
 the file's change (7.5193 mm3); before, a corner failed.
 
+The condition (mitcad#1986) is geometric, not the case's, and has no size
+of its own: an end of a walk that 0077's ChFi3d_CutSingularExtension cut
+(by 0077's own singularity test), in the walk's direction, and that no arc
+closed (intf or intl 0). Any blend whose walk past its spine's end runs
+into singular sections meets it, whatever the faces there.
+
 Upstream: new.
+
+Test: pending (mitcad#1986): no synthetic body is known that reaches its
+case; its cut needs a contact speeding up some twentyfold past the spine's
+end on a small torus, which the synthetic posts of 0933's test did not
+reach, verified on the design's replayed body only, where the rounding with
+the rod's edges fails without it. A regression test needs such a body first.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 index 1b114baa..e70b1f13 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx

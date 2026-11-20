@@ -27,6 +27,12 @@ The split is now taken only where the contacts lie within the distance the
 walk took for singular (100 times the approximation's tolerance) of each
 other: each corner is one face (1.615949 mm2).
 
+The condition (mitcad#1986) is geometric, not the case's: any walked
+blend's minimum of the distance between its contacts splits it only where
+that distance is at most 100 times the approximation's tolerance, the
+same bound under which SplitSurf looks for a split at all; any surfaces
+and radius. Nothing comes from the case.
+
 Test: geometry/tests/test_fillet_stationary_ball.cpp (each corner one face,
 the case's result with the stored body's faces).
 

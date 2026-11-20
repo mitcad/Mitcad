@@ -9,6 +9,11 @@ range, and each such classification could make the face's 2D classifier
 (mitcad#1279). Only the points within the range are now classified, and a
 face with none is left at once. The points kept are the same, so the
 results are unchanged.
+
+Test: none, because its only effect is speed: the points kept are the same
+(those in the segment's range, now the only ones classified), and no test
+bounds the time. Its results are those of geometry.classifier_far_plane
+and geometry.join_many_bodies, OCCT's without the patch.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/IntCurvesFace/IntCurvesFace_Intersector.cxx b/src/ModelingAlgorithms/TKTopAlgo/IntCurvesFace/IntCurvesFace_Intersector.cxx
 index d1176bf2..2b9a961a 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/IntCurvesFace/IntCurvesFace_Intersector.cxx

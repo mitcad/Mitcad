@@ -81,10 +81,15 @@ protected:
   QSize tabSizeHint(int index) const override {
     if (!m_rowStyle) return QTabBar::tabSizeHint(index);
     // The name, the room around it and the close button's; long names
-    // elided in the middle at 240 px.
+    // elided in the middle at 240 px. The name as wide as in semibold, as
+    // the shown design's is painted (paintEvent): measured in the regular
+    // weight only, it was elided in its own tab where the semibold face is
+    // wider ("Un…ed" in Segoe UI Variable, the Docked layout's font,
+    // mitcad#2082), and a tab keeps its width when it is shown.
     const QWidget* close = tabButton(index, QTabBar::RightSide);
     const int closeRoom = close != nullptr ? close->sizeHint().width() + 6 : 0;
-    const int text = fontMetrics().horizontalAdvance(tabText(index));
+    const int text = std::max(QFontMetrics(nameFont(false)).horizontalAdvance(tabText(index)),
+                              QFontMetrics(nameFont(true)).horizontalAdvance(tabText(index)));
     // As high as the bar (TitleBar::hostDocumentTabs fixes its height to
     // the buttons' beside it), so that the name, the close button and the
     // block share the bar's centre line with Home, File, Undo and Redo.
@@ -127,17 +132,45 @@ protected:
         painter.drawRoundedRect(block, 5, 5);
       }
       // The name left of the close button, elided in the middle.
-      const QWidget* close = tabButton(i, QTabBar::RightSide);
-      const int right = close != nullptr && !close->isHidden() ? close->geometry().left() - 4 : tab.right() - 10;
-      const QRect name(tab.left() + 12, tab.top(), std::max(0, right - tab.left() - 12), tab.height());
-      QFont font = this->font();
-      font.setWeight(selected ? QFont::DemiBold : QFont::Normal);
+      const QRect name = nameRect(i);
+      const QFont font = nameFont(selected);
       painter.setFont(font);
       painter.setPen(selected ? text : quiet);
       painter.drawText(name, Qt::AlignVCenter | Qt::AlignLeft,
                        QFontMetrics(font).elidedText(tabText(i), Qt::ElideMiddle, name.width()));
     }
   }
+  // Where a tab's name is painted in the row: left of its close button.
+  QRect nameRect(int index) const {
+    const QRect tab = tabRect(index);
+    const QWidget* close = tabButton(index, QTabBar::RightSide);
+    const int right = close != nullptr && !close->isHidden() ? close->geometry().left() - 4 : tab.right() - 10;
+    return QRect(tab.left() + 12, tab.top(), std::max(0, right - tab.left() - 12), tab.height());
+  }
+  // The shown design's name in semibold.
+  QFont nameFont(bool selected) const {
+    QFont font = this->font();
+    font.setWeight(selected ? QFont::DemiBold : QFont::Normal);
+    return font;
+  }
+public:
+  // The tabs in the row for the UI tests (mitcad#2082): each one's width,
+  // the width it asks for, and whether its name is elided.
+  QString rowWidths() const {
+    if (!m_rowStyle) return {};
+    QStringList tabs;
+    for (int i = 0; i < count(); ++i) {
+      const bool elided =
+          QFontMetrics(nameFont(i == currentIndex())).horizontalAdvance(tabText(i)) > nameRect(i).width();
+      tabs << QStringLiteral("%1 %2 of %3 elided %4")
+                  .arg(tabText(i))
+                  .arg(tabRect(i).width())
+                  .arg(tabSizeHint(i).width())
+                  .arg(elided ? QStringLiteral("yes") : QStringLiteral("no"));
+    }
+    return QStringLiteral("Title row tabs: bar %1; %2").arg(width()).arg(tabs.join(QStringLiteral("; ")));
+  }
+protected:
   // The shown or hovered tab's block in the row: as high as the row
   // buttons' hover fill (the icon and 10, less a pixel at each edge),
   // centred on the bar's centre line like them.
@@ -271,11 +304,14 @@ DocumentFrame::DocumentFrame(WindowManager& manager)
     updateActiveDocument();
     logShownTab();
   });
-  // In the Floating title row (mitcad#1990) a click on the shown design's
-  // tab leaves the Start page for the design (the owner, 17.11.2026: the
-  // Start page has no workspace panel to leave it by).
+  // A click on the shown design's tab leaves the Start page for the
+  // design: in the top bar's title row (mitcad#1990, both layouts since
+  // mitcad#2082; the owner, 17.11.2026: the Start page has no workspace
+  // panel to leave it by) and in the macOS Docked tab row under the menu
+  // bar, which hides its toolbar over the page while the tabs show
+  // (MainWindow::updateStartToolbar).
   connect(m_tabs, &QTabBar::tabBarClicked, this, [this](int index) {
-    if (index >= 0 && index == m_tabs->currentIndex() && tabsInTitleRow()) {
+    if (index >= 0 && index == m_tabs->currentIndex()) {
       if (MainWindow* document = activeDocument()) {
         document->leaveStartPageForDesign();
       }
@@ -455,6 +491,11 @@ void DocumentFrame::logShownTab() {
     m_loggedTab = line;
     qDebug().noquote() << line;
   }
+  const QString widths = static_cast<const DocumentTabs*>(m_tabs)->rowWidths();
+  if (!widths.isEmpty() && widths != m_loggedWidths) {
+    m_loggedWidths = widths;
+    qDebug().noquote() << widths;
+  }
 }
 bool DocumentFrame::showsDocumentTabs(int documentCount) { return documentCount >= 2; }
 bool DocumentFrame::tabsInTitleRow() const {
@@ -503,6 +544,8 @@ void DocumentFrame::updateChrome() {
   const bool inWindow = !menuBar()->isNativeMenuBar() || windowMenuBarShown();
   for (MainWindow* page : documents()) {
     page->menuBar()->setVisible((!tabs || inRow) && page == shown && inWindow && !reveal.keepsHidden(page->menuBar()));
+    // The Docked toolbar over the Start page follows the tabs (mitcad#2082).
+    page->updateStartToolbar();
   }
 }
 namespace {

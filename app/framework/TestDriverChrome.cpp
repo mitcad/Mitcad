@@ -31,6 +31,7 @@
 #include "ChromeStyle.hpp"
 #include "IconSizeStyle.hpp"
 #include "Ribbon.hpp"
+#include "TestSync.hpp"
 #include "TitleBar.hpp"
 #include "UiSizes.hpp"
 
@@ -120,6 +121,88 @@ void TestDriver::testRibbonLabels(const QStringList& expected) {
     qInfo() << "Ribbon labels: passed" << expected;
     return true;
   }, 6, QStringLiteral("workspace labels/accessibility, complete captions or reachable group menus differ"));
+}
+
+void TestDriver::testRibbonScroll(const QString& expected) {
+  whenReady([this, expected] {
+    if (TestSync::settling()) {
+      m_waitDetail = QStringLiteral("ribbon layout is still settling");
+      return false;
+    }
+    auto* ribbon = m_main ? m_main->findChild<Ribbon*>() : nullptr;
+    if (ribbon == nullptr || !ribbon->isVisible()) {
+      m_waitDetail = QStringLiteral("no visible ribbon");
+      return false;
+    }
+    // Each stacked Classic page owns an arrow pair with the same names.
+    // Resolve the shown scroll area first, including its hidden arrows.
+    QScrollArea* scroll = nullptr;
+    for (QScrollArea* candidate : ribbon->findChildren<QScrollArea*>(QStringLiteral("ribbonPageScroll"))) {
+      if (!candidate->isVisible()) continue;
+      if (scroll != nullptr) {
+        m_waitDetail = QStringLiteral("more than one Classic ribbon page is visible");
+        return false;
+      }
+      scroll = candidate;
+    }
+    if (scroll == nullptr || scroll->widget() == nullptr || scroll->viewport()->width() <= 0) {
+      m_waitDetail = QStringLiteral("no visible Classic ribbon scroll area with content");
+      return false;
+    }
+    QWidget* wrapper = scroll->parentWidget();
+    if (wrapper == nullptr || !wrapper->isVisible()) {
+      m_waitDetail = QStringLiteral("the shown Classic scroll area has no visible wrapper");
+      return false;
+    }
+    const auto left = wrapper->findChildren<QToolButton*>(QStringLiteral("ribbonScrollLeft"), Qt::FindDirectChildrenOnly);
+    const auto right = wrapper->findChildren<QToolButton*>(QStringLiteral("ribbonScrollRight"), Qt::FindDirectChildrenOnly);
+    if (left.size() != 1 || right.size() != 1) {
+      m_waitDetail = QStringLiteral("the shown Classic page has %1 left and %2 right arrows")
+                         .arg(left.size()).arg(right.size());
+      return false;
+    }
+    QToolButton* back = left.first();
+    QToolButton* next = right.first();
+    QScrollBar* bar = scroll->horizontalScrollBar();
+    const auto metrics = [](const QWidget* widget) {
+      QString detail;
+      QDebug(&detail).nospace() << widget->geometry() << " hint=" << widget->sizeHint()
+          << " hidden=" << widget->isHidden() << " visible=" << widget->isVisible()
+          << " enabled=" << widget->isEnabled() << " exposed=" << widget->visibleRegion().boundingRect();
+      return detail;
+    };
+    m_waitDetail = QStringLiteral("tab=%1 expected=%2 range=%3..%4 value=%5 viewport=%6 content=%7; left={%8}; right={%9}")
+                       .arg(ribbon->currentTab(), expected).arg(bar->minimum()).arg(bar->maximum()).arg(bar->value())
+                       .arg(scroll->viewport()->width()).arg(scroll->widget()->width()).arg(metrics(back), metrics(next));
+    const auto accessible = [](QToolButton* arrow) {
+      QAccessibleInterface* accessibility = QAccessible::queryAccessibleInterface(arrow);
+      return !arrow->text().isEmpty() && arrow->accessibleName() == arrow->text() &&
+             arrow->toolTip() == arrow->text() && accessibility != nullptr &&
+             accessibility->text(QAccessible::Name) == arrow->text() && arrow->focusPolicy() == Qt::StrongFocus;
+    };
+    if (!accessible(back) || !accessible(next) || back->text() == next->text() ||
+        back->isEnabled() != (bar->value() > bar->minimum()) ||
+        next->isEnabled() != (bar->value() < bar->maximum())) return false;
+    if (expected == QLatin1String("none")) {
+      if (bar->minimum() != 0 || bar->maximum() != 0 || bar->value() != 0 ||
+          !back->isHidden() || !next->isHidden() || back->isEnabled() || next->isEnabled()) return false;
+    } else {
+      const auto exposed = [ribbon, wrapper](QToolButton* arrow) {
+        return arrow->isVisible() && arrow->width() > 0 && arrow->height() > 0 &&
+               arrow->width() >= arrow->sizeHint().width() && arrow->height() >= arrow->sizeHint().height() &&
+               wrapper->rect().contains(QRect(arrow->mapTo(wrapper, QPoint()), arrow->size())) &&
+               ribbon->rect().contains(QRect(arrow->mapTo(ribbon, QPoint()), arrow->size())) &&
+               QRegion(arrow->rect()).subtracted(arrow->visibleRegion()).isEmpty();
+      };
+      if (bar->maximum() <= bar->minimum() || !exposed(back) || !exposed(next)) return false;
+      if (expected == QLatin1String("start") ? bar->value() != bar->minimum() : bar->value() <= bar->minimum()) {
+        return false;
+      }
+    }
+    qInfo().noquote() << QStringLiteral("Ribbon scroll: passed %1 (%2), range %3..%4 value %5")
+                            .arg(expected, ribbon->currentTab()).arg(bar->minimum()).arg(bar->maximum()).arg(bar->value());
+    return true;
+  }, 6, QStringLiteral("the shown Classic ribbon's scroll state, arrows or accessibility differ"));
 }
 
 void TestDriver::testDesignChrome() {
@@ -424,16 +507,20 @@ void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QStrin
                          .arg(browserIcon.height());
       return false;
     }
-    const int ribbonSide = scaled(chromeStyle() == ChromeStyle::Floating ? 26 : 28);
+    // The toolbar panel's (the Mac presentation: the Floating layout, and
+    // the Docked one with the top bar of Windows and Linux, mitcad#2082) or
+    // the Classic toolbar's.
+    const int ribbonSide = scaled(ribbon->presentation() == Ribbon::Presentation::Mac ? 26 : 28);
     const QSize ribbonIcon(ribbonSide, ribbonSide);
     int buttons = 0;
     int quick = 0;
     for (QToolButton* button : ribbon->findChildren<QToolButton*>()) {
       // The command buttons: shown, with an icon, not a group's caption nor
-      // the overflow's arrows.
+      // the overflow's arrows, nor a tab bar's own scroll arrows.
       if (!button->isVisible() || button->icon().isNull() || button->toolButtonStyle() == Qt::ToolButtonTextOnly ||
           button->objectName().startsWith(QLatin1String("ribbonMenu_")) ||
-          button->objectName().startsWith(QLatin1String("ribbonScroll"))) {
+          button->objectName().startsWith(QLatin1String("ribbonScroll")) ||
+          qobject_cast<const QTabBar*>(button->parentWidget()) != nullptr) {
         continue;
       }
       // The quick-access group's buttons in the tabs' row: 18 pixels times
@@ -473,15 +560,14 @@ void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QStrin
       return false;
     }
     // The icons Qt's style sizes (mitcad#1561): the application's style
-    // inside Icon size's proxy unless Icon size is 100 %; a ribbon group's
-    // menu (else a menu made here) and a combo box without an icon size of
-    // its own at the style's small icon size times Icon size, the style
-    // made afresh from its key giving the size at 100 %.
+    // inside Icon size's proxy (at every Icon size since mitcad#2084); a
+    // ribbon group's menu (else a menu made here) and a combo box without
+    // an icon size of its own at the style's small icon size times Icon
+    // size, the style made afresh from its key giving the size at 100 %.
     const QString styleName = applicationStyleKey();
-    const bool wrapped = applicationStyleScalesIcons();
-    if (wrapped != (iconPercent != kDefaultUiSize)) {
-      m_waitDetail = QStringLiteral("the style %1 %2 inside Icon size's proxy at Icon size %3%")
-                         .arg(styleName, wrapped ? QStringLiteral("is") : QStringLiteral("is not"))
+    if (!applicationStyleWrapped()) {
+      m_waitDetail = QStringLiteral("the style %1 is not inside Icon size's proxy at Icon size %2%")
+                         .arg(styleName)
                          .arg(iconPercent);
       return false;
     }
@@ -588,14 +674,12 @@ void TestDriver::testSketchFinishLayout() {
         return false;
       }
       if (title->isFloatingRow()) {
-        QRegion controls;
         for (const auto& part : title->rowParts()) {
           if (part.first == QLatin1String("titleFinishSketch")) return false;
-          controls += part.second;
         }
-        // All remaining space passes through to the viewport, including the
-        // former Finish Sketch slot. No stale mouse mask may survive.
-        if (controls != title->mask()) return false;
+        // The flat top bar takes the mouse across its whole width
+        // (mitcad#1990). No stale control-only mouse mask may survive.
+        if (!title->mask().isEmpty()) return false;
       }
     }
     qInfo() << "Sketch finish layout: title none, ribbon and palette enabled, no reserved title slot";

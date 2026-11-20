@@ -350,6 +350,9 @@ vcpkg_from_github(
         1803-chfi3d-border-from-a-point-walked-onto-leaves-it-at-no-set-angle.patch
         1804-brepmesh-polygons-crossing-at-a-cusp-of-a-wire-untangled.patch
         1810-hlr-polygonal-hiding-pass-in-parallel-through-a-grid-of-the-hiding-faces.patch
+        1696-chfi3d-narrow-face-try-refused-by-its-analytic-pieces-walks-no-guide-past-the-spine.patch
+        1850-chfi3d-rounding-wider-than-a-walls-top-rolls-on-its-inner-edge-cut-by-the-slope-past-its-end.patch
+        1860-chfi3d-torus-corner-with-unequal-sides-runs-on-to-where-the-smaller-blend-crosses-it.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

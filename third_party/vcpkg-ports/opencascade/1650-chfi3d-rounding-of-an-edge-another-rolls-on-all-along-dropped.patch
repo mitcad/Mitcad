@@ -27,6 +27,14 @@ away (as the ride's own does as r grows to 0.87).
   corners, as RemoveCoincidentStripes drops a stripe (it stays a contour of
   the builder and gives no faces).
 
+Test: geometry/tests/test_fillet_eave.cpp, test_eave_long_edges (ctest
+geometry.fillet_eave): the eave's two long edges rounded with 0.9 and 1,
+no face left on the eave, the material taken 25.2 times the tip's
+rounding's section within 1e-5 (fails without the patches 1650 to 1653);
+and geometry.fillet_roof_slab (test_slab) at 0.9 and 1. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index d90f0284..64ecaeb8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

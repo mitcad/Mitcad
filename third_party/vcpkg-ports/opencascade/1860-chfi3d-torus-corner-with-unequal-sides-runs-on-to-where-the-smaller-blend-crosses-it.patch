@@ -1,0 +1,915 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a corner of three roundings in the layout of a torus corner (the
+corner's own face a plane normal to the pivot's guide) whose two sides
+have different radii is the torus of the larger radius round the pivot;
+past its section on the smaller side it runs on up to where it crosses the
+smaller rounding's blend, which ends there (mitcad#2091).
+
+Defect. A block standing on a plate, its vertical edge rounded 5 and the
+two foot edges at that corner 0.8 and 1. Expected: the torus of radius 1
+round the rounding of 5 (ring 6, tube 1), the rounding of 1 meeting it at
+its section, the rounding of 0.8 meeting it where the two blends cross;
+the material the union of the blends' fills. Observed: the corner was
+walked with a radius running from 0.8 to 1 along a circle
+(BRepBlend_EvolRad), a free-form face 0.39 mm3 short of the fills' union.
+ToricCorner takes a torus only for equal radii, and the pivot meets each
+side at that side's own radius from the face (0.8 and 1 up the rounding of
+5), so the pivot's two section parameters differ, which the test for a
+torus refused as well.
+
+- PerformThreeCorner: in that layout (ToricLayout, ToricCorner's test less
+  the radii) with radii more than tolapp3d apart, the pivot a cylinder and
+  its points at the sides' own radii from the face (within tolapp3d), the
+  corner is ComputeCorner's torus of the larger radius, its section on the
+  smaller side taken on the pivot at the larger radius as on the other.
+- unequalTail: past that section the torus runs on (the tail) into W, the
+  face the smaller rounding shares with the pivot, which cuts it, up to its
+  crossing with the smaller rounding's blend. The crossing runs from P3,
+  where the torus's contact on the corner's face meets the smaller
+  rounding's, to P2, where the smaller rounding's contact on W meets the
+  torus's cut by W; both as intersections of the contacts' curves on their
+  faces. The cut and the crossing are GeomInt_IntSS curves of windows of
+  the surfaces round the corner (a period less 0.05 wide in a periodic
+  direction, so that no seam splits them), moved into the corner's periods.
+  A branch is the cut or the crossing where its curve passes within ten
+  times the intersection's reached tolerance (or ten tolapp3d) of the
+  points found on the faces: the curves are approximations within that
+  tolerance, the points exact on the contacts. The tail is a corner stripe
+  of its own on a copy of the torus, from the crossing to the section,
+  which it shares with the corner (regular there); the smaller rounding
+  ends at the crossing (no regularity: the blends cross at an angle). The
+  tail's transitions on the corner's face and on W are the smaller
+  rounding's there, turned where the tail runs the other way.
+- Where P3 or P2 is missing (beyond the section within a quarter turn of
+  the torus, in the smaller rounding's range, inside its faces) or no
+  branch is found, the torus is removed from the data structure and the
+  corner is walked as before. A box's three convex edges (the torus's
+  contact on the top curving away from the smaller rounding's) are such a
+  case, and so is a side whose contact on the corner's face ends at an
+  edge of that face short of P3.
+Concave sides round a convex pivot, and their complement (convex sides
+round a concave pivot, the same blends), give the volume of the fills'
+union and of the box less it within 1e-5 mm3, either side the smaller,
+radii from 0.5 and 2 to 0.9998 and 1. Equal radii and radii within
+tolapp3d keep their ways.
+
+Upstream: new.
+Test: geometry.fillet_unequal_torus_corner.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+index a6889599..b507d947 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+@@ -15,6 +15,9 @@
+ // commercial license or contractual agreement.
+ 
+ #include <Adaptor3d_CurveOnSurface.hxx>
++#include <BRepAdaptor_Surface.hxx>
++#include <BRepTopAdaptor_FClass2d.hxx>
++#include <BRep_Tool.hxx>
+ #include <BRepBlend_ConstRad.hxx>
+ #include <BRepBlend_ConstRadInv.hxx>
+ #include <BRepBlend_EvolRad.hxx>
+@@ -37,6 +40,13 @@
+ #include <ElSLib.hxx>
+ #include <Geom2d_Curve.hxx>
+ #include <Geom_BSplineSurface.hxx>
++#include <Geom_RectangularTrimmedSurface.hxx>
++#include <Geom_TrimmedCurve.hxx>
++#include <Geom2d_TrimmedCurve.hxx>
++#include <Geom2dAPI_InterCurveCurve.hxx>
++#include <GeomAPI_ProjectPointOnCurve.hxx>
++#include <GeomAPI_ProjectPointOnSurf.hxx>
++#include <GeomInt_IntSS.hxx>
+ #include <GeomAdaptor_Surface.hxx>
+ #include <GeomFill_ConstrainedFilling.hxx>
+ #include <gp_Ax3.hxx>
+@@ -50,6 +60,7 @@
+ #include <Standard_NotImplemented.hxx>
+ #include <Standard_Integer.hxx>
+ #include <NCollection_List.hxx>
++#include <TopAbs.hxx>
+ #include <TopAbs_Orientation.hxx>
+ #include <TopoDS_Face.hxx>
+ #include <TopoDS_Shape.hxx>
+@@ -224,12 +235,10 @@ static bool SearchFD(TopOpeBRepDS_DataStructure&       DStr,
+ //           (or spherical limited by isos).
+ //=======================================================================
+ 
+-static bool ToricCorner(const TopoDS_Face& F, const double rd, const double rf, const gp_Vec& v)
++// The layout of a torus corner whatever the radii: the face is a plane
++// and the pivot's guide is normal to it.
++static bool ToricLayout(const TopoDS_Face& F, const gp_Vec& v)
+ {
+-  if (std::abs(rd - rf) > Precision::Confusion())
+-  {
+-    return false;
+-  }
+   BRepAdaptor_Surface bs(F);
+   if (bs.GetType() != GeomAbs_Plane)
+   {
+@@ -240,6 +249,420 @@ static bool ToricCorner(const TopoDS_Face& F, const double rd, const double rf,
+   return (scal1 <= Precision::Confusion() && scal2 <= Precision::Confusion());
+ }
+ 
++static bool ToricCorner(const TopoDS_Face& F, const double rd, const double rf, const gp_Vec& v)
++{
++  if (std::abs(rd - rf) > Precision::Confusion())
++  {
++    return false;
++  }
++  return ToricLayout(F, v);
++}
++
++//=======================================================================
++// Torus corner with unequal side radii.
++//
++// The corner of a torus layout (ToricLayout) whose two sides have
++// different radii is the torus of the larger radius round the pivot, as
++// for equal radii; the stripe of the smaller radius does not end at the
++// torus's section, as the stripe of the larger one does, but where its
++// blend and the torus cross. Past its section the torus runs on (the
++// tail) into the face the smaller stripe shares with the pivot (W), which
++// cuts it, and up to the crossing, which runs from the smaller stripe's
++// contact on the corner's face (point P3, where the torus's contact on it
++// meets the stripe's) to its contact on W (P2). The tail is a corner
++// piece of its own, on a copy of the torus, between the crossing and the
++// torus's section; the smaller stripe ends at the crossing.
++//=======================================================================
++
++namespace
++{
++struct ChFi3d_UnequalTail
++{
++  occ::handle<ChFiDS_SurfData> Tail;
++  occ::handle<Geom_Curve>      Cut;       // the crossing, either way between P3 and P2
++  occ::handle<Geom2d_Curve>    CutOnTail; // the crossing on the torus
++  occ::handle<Geom2d_Curve>    CutOnArm;  // the crossing on the smaller stripe's blend
++  double                       CutFirst = 0.;
++  double                       CutLast  = 0.;
++  bool                         CutFromP3 = true; // the crossing runs from P3 to P2
++  double                       ArmOnFac  = 0.;   // the smaller stripe's parameter at P3
++  double                       ArmOnW    = 0.;   // and at P2
++  double                       Tol       = 0.;
++};
++} // namespace
++
++// The curve itself where C is a trimmed one.
++static occ::handle<Geom2d_Curve> unequalBasis(const occ::handle<Geom2d_Curve>& C)
++{
++  occ::handle<Geom2d_TrimmedCurve> aT = occ::down_cast<Geom2d_TrimmedCurve>(C);
++  return aT.IsNull() ? C : aT->BasisCurve();
++}
++
++static occ::handle<Geom_Curve> unequalBasis(const occ::handle<Geom_Curve>& C)
++{
++  occ::handle<Geom_TrimmedCurve> aT = occ::down_cast<Geom_TrimmedCurve>(C);
++  return aT.IsNull() ? C : aT->BasisCurve();
++}
++
++// The window of S round the parameters A and B: in a periodic direction a
++// period less a margin, centred between them; in another one their span
++// widened by L, within the surface's bounds.
++static occ::handle<Geom_Surface> unequalWindow(const occ::handle<Geom_Surface>& S,
++                                               const gp_Pnt2d&                  A,
++                                               const gp_Pnt2d&                  B,
++                                               const double                     L)
++{
++  double u0, u1, v0, v1;
++  S->Bounds(u0, u1, v0, v1);
++  const auto range = [&](const bool   periodic,
++                         const double period,
++                         const double a,
++                         double       b,
++                         const double lo,
++                         const double hi,
++                         double&      r0,
++                         double&      r1) {
++      if (periodic)
++      {
++        b              = ElCLib::InPeriod(b, a - 0.5 * period, a + 0.5 * period);
++        const double m = 0.5 * (a + b);
++        r0             = m - 0.5 * period + 0.05;
++        r1             = m + 0.5 * period - 0.05;
++      }
++      else
++      {
++        r0 = std::max(lo, std::min(a, b) - L);
++        r1 = std::min(hi, std::max(a, b) + L);
++      }
++    };
++  double ua, ub, va, vb;
++  range(S->IsUPeriodic(), S->IsUPeriodic() ? S->UPeriod() : 0., A.X(), B.X(), u0, u1, ua, ub);
++  range(S->IsVPeriodic(), S->IsVPeriodic() ? S->VPeriod() : 0., A.Y(), B.Y(), v0, v1, va, vb);
++  return new Geom_RectangularTrimmedSurface(S, ua, ub, va, vb);
++}
++
++// C moved by whole periods of S so that its point at t is the nearest to
++// Near (the intersection's curves come in a period of their own).
++static occ::handle<Geom2d_Curve> unequalNear(const occ::handle<Geom2d_Curve>& C,
++                                             const double                     t,
++                                             const gp_Pnt2d&                  Near,
++                                             const occ::handle<Geom_Surface>& S)
++{
++  const gp_Pnt2d aP  = C->Value(t);
++  double         aDU = 0., aDV = 0.;
++  if (S->IsUPeriodic())
++  {
++    aDU = S->UPeriod() * std::floor((Near.X() - aP.X()) / S->UPeriod() + 0.5);
++  }
++  if (S->IsVPeriodic())
++  {
++    aDV = S->VPeriod() * std::floor((Near.Y() - aP.Y()) / S->VPeriod() + 0.5);
++  }
++  if (aDU == 0. && aDV == 0.)
++  {
++    return C;
++  }
++  occ::handle<Geom2d_Curve> aC = occ::down_cast<Geom2d_Curve>(C->Copy());
++  aC->Translate(gp_Vec2d(aDU, aDV));
++  return aC;
++}
++
++// The parameter on C of its point nearest to P, its ends included, and
++// the distance.
++static double unequalParam(const occ::handle<Geom_Curve>& C, const gp_Pnt& P, double& theDist)
++{
++  const double f = C->FirstParameter(), l = C->LastParameter();
++  double       t = f;
++  theDist        = P.Distance(C->Value(f));
++  if (P.Distance(C->Value(l)) < theDist)
++  {
++    t       = l;
++    theDist = P.Distance(C->Value(l));
++  }
++  GeomAPI_ProjectPointOnCurve aPr(P, C, f, l);
++  if (aPr.NbPoints() > 0 && aPr.LowerDistance() < theDist)
++  {
++    theDist = aPr.LowerDistance();
++    t       = aPr.LowerDistanceParameter();
++  }
++  return t;
++}
++
++// The tail of the corner Coin (made with the larger radius) at its end
++// AtFirst, and the crossing; false where the corner is not of this kind:
++// no crossing between the smaller stripe's contacts beyond its section,
++// on the faces, within a quarter turn of the torus.
++//   Arm, SideFac, SideW: the smaller stripe's SurfData at the corner and
++//   its sides on the corner's face Fac and on W; PFac and PW its parameters
++//   on them at the torus's section, SensArm its direction there (1: the
++//   corner is at its first end).
++static bool unequalTail(TopOpeBRepDS_DataStructure&         DStr,
++                        const occ::handle<ChFiDS_SurfData>& Coin,
++                        const bool                          AtFirst,
++                        const occ::handle<ChFiDS_SurfData>& Arm,
++                        const int                           SideFac,
++                        const int                           SideW,
++                        const double                        PFac,
++                        const double                        PW,
++                        const int                           SensArm,
++                        const TopoDS_Face&                  Fac,
++                        const TopoDS_Face&                  W,
++                        const double                        Tol3d,
++                        ChFi3d_UnequalTail&                 theTail)
++{
++  const occ::handle<Geom_Surface> aTor = DStr.Surface(Coin->Surf()).Surface();
++  if (GeomAdaptor_Surface(aTor).GetType() != GeomAbs_Torus || Arm->Index(SideFac) <= 0
++      || Arm->Index(SideW) <= 0)
++  {
++    return false;
++  }
++  const ChFiDS_FaceInterference& aFi1 = Coin->InterferenceOnS1();
++  const ChFiDS_FaceInterference& aFi2 = Coin->InterferenceOnS2();
++  occ::handle<Geom_Curve> aOnFac3d;
++  if (aFi1.LineIndex() > 0)
++  {
++    aOnFac3d = unequalBasis(DStr.Curve(aFi1.LineIndex()).Curve());
++  }
++  const occ::handle<Geom2d_Curve> aOnFac = unequalBasis(aFi1.PCurveOnFace());
++  const occ::handle<Geom2d_Curve> aOnTor = unequalBasis(aFi1.PCurveOnSurf());
++  if (aOnFac3d.IsNull() || aOnFac.IsNull() || aOnTor.IsNull() || !aOnFac->IsPeriodic())
++  {
++    return false;
++  }
++  // The torus's section at the smaller stripe: its points on Fac (A) and
++  // on the pivot, which lies on W (Q).
++  const double   tS1   = AtFirst ? aFi1.FirstParameter() : aFi1.LastParameter();
++  const double   tS2   = AtFirst ? aFi2.FirstParameter() : aFi2.LastParameter();
++  const gp_Pnt2d aUVA  = aOnTor->Value(tS1);
++  const gp_Pnt2d aUVQ  = aFi2.PCurveOnSurf()->Value(tS2);
++  const gp_Pnt   aQ    = aTor->Value(aUVQ.X(), aUVQ.Y());
++  const double   aSpan = 10. * aTor->Value(aUVA.X(), aUVA.Y()).Distance(aQ);
++
++  // P3: where the smaller stripe's contact on Fac meets the torus's,
++  // beyond the section on both.
++  const ChFiDS_FaceInterference& aArmFac = Arm->Interference(SideFac);
++  const ChFiDS_FaceInterference& aArmW   = Arm->Interference(SideW);
++  const double aArmLo = std::min(aArmFac.FirstParameter(), aArmFac.LastParameter());
++  const double aArmHi = std::max(aArmFac.FirstParameter(), aArmFac.LastParameter());
++  Geom2dAPI_InterCurveCurve aX3(aArmFac.PCurveOnFace(), aOnFac, Precision::PConfusion());
++  bool   aHas3 = false;
++  double tArm3 = 0., tTor3 = 0., aBest3 = 0.;
++  for (int k = 1; k <= aX3.NbPoints(); k++)
++  {
++    const double ta = aX3.Intersector().Point(k).ParamOnFirst();
++    const double tc =
++      ElCLib::InPeriod(aX3.Intersector().Point(k).ParamOnSecond(), tS1 - M_PI, tS1 + M_PI);
++    const double aBeyond = AtFirst ? tS1 - tc : tc - tS1;
++    if (aBeyond <= Precision::PConfusion() || aBeyond >= 0.5 * M_PI
++        || (ta - PFac) * SensArm <= Precision::PConfusion() || ta < aArmLo - Precision::PConfusion()
++        || ta > aArmHi + Precision::PConfusion())
++    {
++      continue;
++    }
++    if (!aHas3 || aBeyond < aBest3)
++    {
++      aHas3  = true;
++      aBest3 = aBeyond;
++      tArm3 = ta;
++      tTor3 = tc;
++    }
++  }
++  if (!aHas3)
++  {
++    return false;
++  }
++  const occ::handle<Geom_Surface> aFacS = BRep_Tool::Surface(Fac);
++  const gp_Pnt2d                  aUV3  = aArmFac.PCurveOnFace()->Value(tArm3);
++  const gp_Pnt                    aP3   = aFacS->Value(aUV3.X(), aUV3.Y());
++  if (BRepTopAdaptor_FClass2d(Fac, Precision::PConfusion()).Perform(aUV3) != TopAbs_IN)
++  {
++    return false;
++  }
++
++  // The torus cut by W, from Q.
++  const occ::handle<Geom_Surface> aWS = BRep_Tool::Surface(W);
++  GeomAPI_ProjectPointOnSurf      aPrQ(aQ, aWS);
++  if (aPrQ.NbPoints() == 0 || aPrQ.LowerDistance() > Tol3d)
++  {
++    return false;
++  }
++  double uq, vq;
++  aPrQ.LowerDistanceParameters(uq, vq);
++  const occ::handle<Geom_Surface> aTorWin = unequalWindow(aTor, aUVA, aUVQ, aSpan);
++  GeomInt_IntSS                   aIW;
++  aIW.Perform(aTorWin,
++              unequalWindow(aWS, gp_Pnt2d(uq, vq), gp_Pnt2d(uq, vq), aSpan),
++              Tol3d,
++              true,
++              true,
++              true);
++  if (!aIW.IsDone())
++  {
++    return false;
++  }
++  const double aTolW = std::max(10. * Tol3d, 10. * aIW.TolReached3d());
++  // P2: where the smaller stripe's contact on W meets the cut, beyond the
++  // section, nearest to Q along the cut.
++  int    iW = 0;
++  double tWQ = 0., tW2 = 0., tArm2 = 0.;
++  for (int k = 1; k <= aIW.NbLines(); k++)
++  {
++    if (!aIW.HasLineOnS2(k))
++    {
++      continue;
++    }
++    double       dq;
++    const double tq = unequalParam(aIW.Line(k), aQ, dq);
++    if (dq > aTolW)
++    {
++      continue;
++    }
++    Geom2dAPI_InterCurveCurve aX2(aArmW.PCurveOnFace(), aIW.LineOnS2(k), Precision::PConfusion());
++    for (int n = 1; n <= aX2.NbPoints(); n++)
++    {
++      const double ta = aX2.Intersector().Point(n).ParamOnFirst();
++      const double tw = aX2.Intersector().Point(n).ParamOnSecond();
++      if ((ta - PW) * SensArm <= Precision::PConfusion()
++          || ta < std::min(aArmW.FirstParameter(), aArmW.LastParameter()) - Precision::PConfusion()
++          || ta > std::max(aArmW.FirstParameter(), aArmW.LastParameter()) + Precision::PConfusion())
++      {
++        continue;
++      }
++      if (iW == 0 || std::abs(tw - tq) < std::abs(tW2 - tWQ))
++      {
++        iW    = k;
++        tWQ   = tq;
++        tW2   = tw;
++        tArm2 = ta;
++      }
++    }
++  }
++  if (iW == 0)
++  {
++    return false;
++  }
++  const gp_Pnt2d aUV2 = aArmW.PCurveOnFace()->Value(tArm2);
++  const gp_Pnt   aP2  = aWS->Value(aUV2.X(), aUV2.Y());
++  if (BRepTopAdaptor_FClass2d(W, Precision::PConfusion()).Perform(aUV2) != TopAbs_IN)
++  {
++    return false;
++  }
++
++  // The crossing of the smaller stripe's blend with the torus, from P3 to
++  // P2.
++  const occ::handle<Geom_Surface> aArmS = DStr.Surface(Arm->Surf()).Surface();
++  GeomInt_IntSS                    aIC;
++  aIC.Perform(unequalWindow(aArmS,
++                            aArmFac.PCurveOnSurf()->Value(tArm3),
++                            aArmW.PCurveOnSurf()->Value(tArm2),
++                            aSpan),
++              aTorWin,
++              Tol3d,
++              true,
++              true,
++              true);
++  if (!aIC.IsDone())
++  {
++    return false;
++  }
++  const double aTolC = std::max(10. * Tol3d, 10. * aIC.TolReached3d());
++  int          iC    = 0;
++  double       tC3 = 0., tC2 = 0.;
++  for (int k = 1; k <= aIC.NbLines() && iC == 0; k++)
++  {
++    if (!aIC.HasLineOnS1(k) || !aIC.HasLineOnS2(k))
++    {
++      continue;
++    }
++    double       d3, d2;
++    const double t3 = unequalParam(aIC.Line(k), aP3, d3);
++    const double t2 = unequalParam(aIC.Line(k), aP2, d2);
++    if (d3 <= aTolC && d2 <= aTolC && std::abs(t3 - t2) > Precision::PConfusion())
++    {
++      iC  = k;
++      tC3 = t3;
++      tC2 = t2;
++    }
++  }
++  if (iC == 0)
++  {
++    return false;
++  }
++
++  // The tail's cut by W, from P2 to Q where the tail runs from the
++  // crossing to the section (AtFirst), else from Q to P2: the cut's
++  // curves turned where they run the other way.
++  occ::handle<Geom_Curve>   aW3d   = aIW.Line(iW);
++  occ::handle<Geom2d_Curve> aWOnT  = unequalNear(aIW.LineOnS1(iW), tWQ, aUVQ, aTor);
++  occ::handle<Geom2d_Curve> aWOnW  = aIW.LineOnS2(iW);
++  double                    tWFrom = AtFirst ? tW2 : tWQ;
++  double                    tWTo   = AtFirst ? tWQ : tW2;
++  if (tWFrom > tWTo)
++  {
++    const double f = aW3d->FirstParameter(), l = aW3d->LastParameter();
++    if (std::abs(aWOnT->FirstParameter() - f) > Precision::PConfusion()
++        || std::abs(aWOnT->LastParameter() - l) > Precision::PConfusion()
++        || std::abs(aWOnW->FirstParameter() - f) > Precision::PConfusion()
++        || std::abs(aWOnW->LastParameter() - l) > Precision::PConfusion())
++    {
++      return false;
++    }
++    aW3d   = aW3d->Reversed();
++    aWOnT  = aWOnT->Reversed();
++    aWOnW  = aWOnW->Reversed();
++    tWFrom = f + l - tWFrom;
++    tWTo   = f + l - tWTo;
++  }
++
++  // The tail: a copy of the torus, its contact on Fac from P3 to the
++  // section (the torus's own contact run on), its cut by W.
++  const bool aTailAway = !AtFirst;
++  const bool aArmAway  = SensArm == 1;
++  const auto aTrans    = [&](const TopAbs_Orientation T) {
++    return aTailAway == aArmAway ? T : TopAbs::Reverse(T);
++  };
++  occ::handle<ChFiDS_SurfData> aTail = new ChFiDS_SurfData();
++  const double                 aTorTol = DStr.Surface(Coin->Surf()).Tolerance();
++  aTail->ChangeSurf(DStr.AddSurface(
++    TopOpeBRepDS_Surface(occ::down_cast<Geom_Surface>(aTor->Copy()), aTorTol)));
++  aTail->ChangeOrientation() = Coin->Orientation();
++  aTail->ChangeIndexOfS1(DStr.AddShape(Fac));
++  aTail->ChangeIndexOfS2(DStr.AddShape(W));
++  const int aIFac = DStr.AddCurve(TopOpeBRepDS_Curve(occ::down_cast<Geom_Curve>(aOnFac3d->Copy()),
++                                                    DStr.Curve(aFi1.LineIndex()).Tolerance()));
++  aTail->ChangeInterferenceOnS1().SetInterference(aIFac,
++                                                  aTrans(aArmFac.Transition()),
++                                                  occ::down_cast<Geom2d_Curve>(aOnFac->Copy()),
++                                                  occ::down_cast<Geom2d_Curve>(aOnTor->Copy()));
++  aTail->ChangeInterferenceOnS1().SetFirstParameter(AtFirst ? tTor3 : tS1);
++  aTail->ChangeInterferenceOnS1().SetLastParameter(AtFirst ? tS1 : tTor3);
++  const int aIW_ = DStr.AddCurve(TopOpeBRepDS_Curve(aW3d, aIW.TolReached3d()));
++  aTail->ChangeInterferenceOnS2().SetInterference(aIW_, aTrans(aArmW.Transition()), aWOnW, aWOnT);
++  aTail->ChangeInterferenceOnS2().SetFirstParameter(tWFrom);
++  aTail->ChangeInterferenceOnS2().SetLastParameter(tWTo);
++  const gp_Pnt aA = aOnFac3d->Value(tS1);
++  aTail->ChangeVertex(AtFirst, 1).SetPoint(aP3);
++  aTail->ChangeVertex(AtFirst, 2).SetPoint(aP2);
++  aTail->ChangeVertex(!AtFirst, 1).SetPoint(aA);
++  aTail->ChangeVertex(!AtFirst, 2).SetPoint(aQ);
++  // The corner's own point on Fac at the section is the torus's (it was
++  // the smaller stripe's).
++  Coin->ChangeVertex(AtFirst, 1).SetPoint(aA);
++
++  theTail.Tail      = aTail;
++  theTail.Cut       = aIC.Line(iC);
++  theTail.CutOnArm =
++    unequalNear(aIC.LineOnS1(iC), tC3, aArmFac.PCurveOnSurf()->Value(tArm3), aArmS);
++  theTail.CutOnTail = unequalNear(aIC.LineOnS2(iC), tC3, aOnTor->Value(tTor3), aTor);
++  theTail.CutFromP3 = tC3 < tC2;
++  theTail.CutFirst  = std::min(tC3, tC2);
++  theTail.CutLast   = std::max(tC3, tC2);
++  theTail.ArmOnFac  = tArm3;
++  theTail.ArmOnW    = tArm2;
++  theTail.Tol       = aIC.TolReached3d();
++  return true;
++}
++
+ //=======================================================================
+ // function : PerformThreeCorner
+ // purpose  : Calculate fillet on a top with three edges
+@@ -1103,6 +1526,88 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+   ChFi3d_ResultChron(ch, t_t3cornerinit); // result perf initialisations
+ #endif
+ 
++  // A torus layout whose sides have different radii: the torus of the
++  // larger one, with a tail on the smaller one's side up to where its blend
++  // crosses the torus (unequalTail). aSmall is the smaller one, deb or fin.
++  int                aSmall = -1;
++  ChFi3d_UnequalTail aTail;
++  if (!c1toric && !c1spheric && !c1pointu && styp == GeomAbs_Cylinder
++      && std::abs(Rdeb - Rfin) > tolapp3d && ToricLayout(face[pivot], Vdp))
++  {
++    // Each side meets the pivot at its own radius from the face: the
++    // torus's section on the smaller one's side is the pivot's point at the
++    // larger radius, on that side's contact.
++    const int      aS    = Rdeb < Rfin ? deb : fin;
++    const int      aBig  = aS == deb ? fin : deb;
++    const gp_Pln   aPln  = Fac->Plane();
++    const gp_Pnt2d aUVS  = CD[pivot]
++                            ->SetOfSurfData()
++                            ->Value(i[pivot][aS])
++                            ->Interference(jf[pivot][aS])
++                            .PCurveOnSurf()
++                            ->Value(p[pivot][aBig]);
++    const gp_Pnt2d& aUVB = aS == deb ? psurf2 : psurf1;
++    const gp_Pnt2d& aUVs = aS == deb ? psurf1 : psurf2;
++    const double    aRS  = std::min(Rdeb, Rfin), aRB = std::max(Rdeb, Rfin);
++    if (std::abs(aPln.Distance(Surf->Value(aUVs.X(), aUVs.Y())) - aRS) <= tolapp3d
++        && std::abs(aPln.Distance(Surf->Value(aUVB.X(), aUVB.Y())) - aRB) <= tolapp3d
++        && std::abs(aPln.Distance(Surf->Value(aUVS.X(), aUVS.Y())) - aRB) <= tolapp3d)
++    {
++      done = ChFiKPart_ComputeData::ComputeCorner(DStr,
++                                                  coin,
++                                                  Fac,
++                                                  Surf,
++                                                  oo1,
++                                                  oo2,
++                                                  o1,
++                                                  o2,
++                                                  aRB,
++                                                  Rdp,
++                                                  pfac1,
++                                                  pfac2,
++                                                  aS == deb ? aUVS : psurf1,
++                                                  aS == fin ? aUVS : psurf2);
++    }
++    if (done)
++    {
++      const int                           aB  = aS == deb ? fin : deb;
++      const occ::handle<ChFiDS_SurfData>& aFd = CD[aS]->SetOfSurfData()->Value(i[aS][pivot]);
++      done                                    = unequalTail(DStr,
++                               coin,
++                               aS == deb,
++                               aFd,
++                               jf[aS][aB],
++                               jf[aS][pivot],
++                               p[aS][aB],
++                               p[aS][pivot],
++                               sens[aS],
++                               face[pivot],
++                               TopoDS::Face(DStr.Shape(aFd->Index(jf[aS][pivot]))),
++                               tolapp3d,
++                               aTail);
++      if (!done)
++      {
++        // Not of this kind: the torus is dropped, the corner is walked as
++        // before.
++        DStr.RemoveSurface(coin->Surf());
++        for (int s = 1; s <= 2; s++)
++        {
++          if (coin->Interference(s).LineIndex() > 0)
++          {
++            DStr.RemoveCurve(coin->Interference(s).LineIndex());
++          }
++        }
++        coin = new ChFiDS_SurfData();
++        cornerset->ChangeValue(1) = coin;
++      }
++    }
++    if (done)
++    {
++      aSmall          = aS;
++      p[pivot][aS]    = p[pivot][aBig];
++      (aS == deb ? psurf1 : psurf2) = aUVS;
++    }
++  }
+   if (c1toric)
+   {
+ 
+@@ -1519,7 +2024,7 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+     Icf = DStr.AddCurve(Tcurv1);
+     regdeb.SetCurve(Icf);
+     regdeb.SetS1(coin->Surf(), false);
+-    regdeb.SetS2(fddeb->Surf(), false);
++    regdeb.SetS2(aSmall == deb ? aTail.Tail->Surf() : fddeb->Surf(), false);
+     myRegul.Append(regdeb);
+     corner->ChangeFirstCurve(Icf);
+     corner->ChangeFirstParameters(P1deb, P2deb);
+@@ -1546,7 +2051,7 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+     Icl = DStr.AddCurve(Tcurv2);
+     regfin.SetCurve(Icl);
+     regfin.SetS1(coin->Surf(), false);
+-    regfin.SetS2(fdfin->Surf(), false);
++    regfin.SetS2(aSmall == fin ? aTail.Tail->Surf() : fdfin->Surf(), false);
+     myRegul.Append(regfin);
+     corner->ChangeLastCurve(Icl);
+     corner->ChangeLastParameters(P1fin, P2fin);
+@@ -1558,47 +2063,50 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+     // --------------------------------
+     bool isfirst = (sens[deb] == 1), rev = (jf[deb][fin] == 2);
+     int  isurf1 = 1, isurf2 = 2;
+-    parpp1 = p[deb][fin];
+-    parpp2 = p[deb][pivot];
+-    if (rev)
++    if (aSmall != deb)
+     {
+-      isurf1 = 2;
+-      isurf2 = 1;
+-      parpp1 = p[deb][pivot];
+-      parpp2 = p[deb][fin];
+-      CD[deb]->SetOrientation(TopAbs_REVERSED, isfirst);
+-    }
+-    pp1 = fddeb->InterferenceOnS1().PCurveOnSurf()->Value(parpp1);
+-    pp2 = fddeb->InterferenceOnS2().PCurveOnSurf()->Value(parpp2);
+-    CD[deb]->SetCurve(Icf, isfirst);
+-    CD[deb]->SetIndexPoint(If1, isfirst, isurf1);
+-    CD[deb]->SetIndexPoint(If2, isfirst, isurf2);
+-    CD[deb]->SetParameters(isfirst, P1deb, P2deb);
+-    fddeb->ChangeVertex(isfirst, isurf1) = Pf1;
+-    fddeb->ChangeVertex(isfirst, isurf2) = Pf2;
+-    fddeb->ChangeInterferenceOnS1().SetParameter(parpp1, isfirst);
+-    fddeb->ChangeInterferenceOnS2().SetParameter(parpp2, isfirst);
+-    TopOpeBRepDS_Curve&     tcdeb   = DStr.ChangeCurve(Icf);
+-    occ::handle<Geom_Curve> crefdeb = tcdeb.Curve();
+-    double                  tolrdeb;
+-    ChFi3d_ComputePCurv(crefdeb,
+-                        pp1,
+-                        pp2,
+-                        CD[deb]->ChangePCurve(isfirst),
+-                        DStr.Surface(fddeb->Surf()).Surface(),
+-                        P1deb,
+-                        P2deb,
+-                        tolapp3d,
+-                        tolrdeb,
+-                        rev);
+-    tcdeb.Tolerance(std::max(tolrdeb, tcdeb.Tolerance()));
+-    if (rev)
+-    {
+-      ChFi3d_EnlargeBox(DStr, CD[deb], fddeb, *pbf2, *pbf1, isfirst);
+-    }
+-    else
+-    {
+-      ChFi3d_EnlargeBox(DStr, CD[deb], fddeb, *pbf1, *pbf2, isfirst);
++      parpp1 = p[deb][fin];
++      parpp2 = p[deb][pivot];
++      if (rev)
++      {
++        isurf1 = 2;
++        isurf2 = 1;
++        parpp1 = p[deb][pivot];
++        parpp2 = p[deb][fin];
++        CD[deb]->SetOrientation(TopAbs_REVERSED, isfirst);
++      }
++      pp1 = fddeb->InterferenceOnS1().PCurveOnSurf()->Value(parpp1);
++      pp2 = fddeb->InterferenceOnS2().PCurveOnSurf()->Value(parpp2);
++      CD[deb]->SetCurve(Icf, isfirst);
++      CD[deb]->SetIndexPoint(If1, isfirst, isurf1);
++      CD[deb]->SetIndexPoint(If2, isfirst, isurf2);
++      CD[deb]->SetParameters(isfirst, P1deb, P2deb);
++      fddeb->ChangeVertex(isfirst, isurf1) = Pf1;
++      fddeb->ChangeVertex(isfirst, isurf2) = Pf2;
++      fddeb->ChangeInterferenceOnS1().SetParameter(parpp1, isfirst);
++      fddeb->ChangeInterferenceOnS2().SetParameter(parpp2, isfirst);
++      TopOpeBRepDS_Curve&     tcdeb   = DStr.ChangeCurve(Icf);
++      occ::handle<Geom_Curve> crefdeb = tcdeb.Curve();
++      double                  tolrdeb;
++      ChFi3d_ComputePCurv(crefdeb,
++                          pp1,
++                          pp2,
++                          CD[deb]->ChangePCurve(isfirst),
++                          DStr.Surface(fddeb->Surf()).Surface(),
++                          P1deb,
++                          P2deb,
++                          tolapp3d,
++                          tolrdeb,
++                          rev);
++      tcdeb.Tolerance(std::max(tolrdeb, tcdeb.Tolerance()));
++      if (rev)
++      {
++        ChFi3d_EnlargeBox(DStr, CD[deb], fddeb, *pbf2, *pbf1, isfirst);
++      }
++      else
++      {
++        ChFi3d_EnlargeBox(DStr, CD[deb], fddeb, *pbf1, *pbf2, isfirst);
++      }
+     }
+ 
+     // then the end CornerData,
+@@ -1607,47 +2115,145 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+     rev     = (jf[fin][deb] == 2);
+     isurf1  = 1;
+     isurf2  = 2;
+-    parpp1  = p[fin][deb];
+-    parpp2  = p[fin][pivot];
+-    if (rev)
+-    {
+-      isurf1 = 2;
+-      isurf2 = 1;
+-      parpp1 = p[fin][pivot];
+-      parpp2 = p[fin][deb];
+-      CD[fin]->SetOrientation(TopAbs_REVERSED, isfirst);
+-    }
+-    pp1 = fdfin->InterferenceOnS1().PCurveOnSurf()->Value(parpp1);
+-    pp2 = fdfin->InterferenceOnS2().PCurveOnSurf()->Value(parpp2);
+-    CD[fin]->SetCurve(Icl, isfirst);
+-    CD[fin]->SetIndexPoint(Il1, isfirst, isurf1);
+-    CD[fin]->SetIndexPoint(Il2, isfirst, isurf2);
+-    CD[fin]->SetParameters(isfirst, P1fin, P2fin);
+-    fdfin->ChangeVertex(isfirst, isurf1) = Pl1;
+-    fdfin->ChangeVertex(isfirst, isurf2) = Pl2;
+-    fdfin->ChangeInterferenceOnS1().SetParameter(parpp1, isfirst);
+-    fdfin->ChangeInterferenceOnS2().SetParameter(parpp2, isfirst);
+-    TopOpeBRepDS_Curve&     tcfin   = DStr.ChangeCurve(Icl);
+-    occ::handle<Geom_Curve> creffin = tcfin.Curve();
+-    double                  tolrfin;
+-    ChFi3d_ComputePCurv(creffin,
+-                        pp1,
+-                        pp2,
+-                        CD[fin]->ChangePCurve(isfirst),
+-                        DStr.Surface(fdfin->Surf()).Surface(),
+-                        P1fin,
+-                        P2fin,
+-                        tolapp3d,
+-                        tolrfin,
+-                        rev);
+-    tcfin.Tolerance(std::max(tolrfin, tcfin.Tolerance()));
+-    if (rev)
++    if (aSmall != fin)
+     {
+-      ChFi3d_EnlargeBox(DStr, CD[fin], fdfin, *pbl2, *pbl1, isfirst);
++      parpp1  = p[fin][deb];
++      parpp2  = p[fin][pivot];
++      if (rev)
++      {
++        isurf1 = 2;
++        isurf2 = 1;
++        parpp1 = p[fin][pivot];
++        parpp2 = p[fin][deb];
++        CD[fin]->SetOrientation(TopAbs_REVERSED, isfirst);
++      }
++      pp1 = fdfin->InterferenceOnS1().PCurveOnSurf()->Value(parpp1);
++      pp2 = fdfin->InterferenceOnS2().PCurveOnSurf()->Value(parpp2);
++      CD[fin]->SetCurve(Icl, isfirst);
++      CD[fin]->SetIndexPoint(Il1, isfirst, isurf1);
++      CD[fin]->SetIndexPoint(Il2, isfirst, isurf2);
++      CD[fin]->SetParameters(isfirst, P1fin, P2fin);
++      fdfin->ChangeVertex(isfirst, isurf1) = Pl1;
++      fdfin->ChangeVertex(isfirst, isurf2) = Pl2;
++      fdfin->ChangeInterferenceOnS1().SetParameter(parpp1, isfirst);
++      fdfin->ChangeInterferenceOnS2().SetParameter(parpp2, isfirst);
++      TopOpeBRepDS_Curve&     tcfin   = DStr.ChangeCurve(Icl);
++      occ::handle<Geom_Curve> creffin = tcfin.Curve();
++      double                  tolrfin;
++      ChFi3d_ComputePCurv(creffin,
++                          pp1,
++                          pp2,
++                          CD[fin]->ChangePCurve(isfirst),
++                          DStr.Surface(fdfin->Surf()).Surface(),
++                          P1fin,
++                          P2fin,
++                          tolapp3d,
++                          tolrfin,
++                          rev);
++      tcfin.Tolerance(std::max(tolrfin, tcfin.Tolerance()));
++      if (rev)
++      {
++        ChFi3d_EnlargeBox(DStr, CD[fin], fdfin, *pbl2, *pbl1, isfirst);
++      }
++      else
++      {
++        ChFi3d_EnlargeBox(DStr, CD[fin], fdfin, *pbl1, *pbl2, isfirst);
++      }
+     }
+-    else
++
++    // The smaller side of a torus corner with unequal radii: the stripe
++    // ends at the crossing of its blend with the torus, and the tail, a
++    // corner piece of its own, runs from the crossing to the torus's
++    // section, where it meets the corner as a stripe of the larger radius
++    // would (unequalTail).
++    if (aSmall >= 0)
+     {
+-      ChFi3d_EnlargeBox(DStr, CD[fin], fdfin, *pbl1, *pbl2, isfirst);
++      const bool                          aAtFirst = aSmall == deb;
++      const int                           aB       = aAtFirst ? fin : deb;
++      const int                           aSFac    = jf[aSmall][aB];
++      const int                           aSW      = jf[aSmall][pivot];
++      const bool                          aArmFirst = (sens[aSmall] == 1);
++      const occ::handle<ChFiDS_SurfData>& aFd       = aAtFirst ? fddeb : fdfin;
++      ChFiDS_CommonPoint                  aCP3, aCP2;
++      aCP3.SetPoint(aTail.Tail->Vertex(aAtFirst, 1).Point());
++      aCP2.SetPoint(aTail.Tail->Vertex(aAtFirst, 2).Point());
++      aCP3.SetTolerance(aTail.Tol);
++      aCP2.SetTolerance(aTail.Tol);
++      aTail.Tail->ChangeVertex(aAtFirst, 1) = aCP3;
++      aTail.Tail->ChangeVertex(aAtFirst, 2) = aCP2;
++      aTail.Tail->ChangeVertex(!aAtFirst, 1) = aAtFirst ? Pf1 : Pl1;
++      aTail.Tail->ChangeVertex(!aAtFirst, 2) = aAtFirst ? Pf2 : Pl2;
++      const int I3   = ChFi3d_IndexPointInDS(aCP3, DStr);
++      const int I2   = ChFi3d_IndexPointInDS(aCP2, DStr);
++      const int Icut = DStr.AddCurve(TopOpeBRepDS_Curve(aTail.Cut, std::max(aTail.Tol, tolapp3d)));
++      Bnd_Box   b3, b2;
++
++      // The smaller stripe's end.
++      const bool aFromSide1 = aTail.CutFromP3 == (aSFac == 1);
++      CD[aSmall]->SetOrientation(aFromSide1 ? TopAbs_FORWARD : TopAbs_REVERSED, aArmFirst);
++      CD[aSmall]->SetCurve(Icut, aArmFirst);
++      CD[aSmall]->SetIndexPoint(I3, aArmFirst, aSFac);
++      CD[aSmall]->SetIndexPoint(I2, aArmFirst, aSW);
++      CD[aSmall]->SetParameters(aArmFirst, aTail.CutFirst, aTail.CutLast);
++      CD[aSmall]->ChangePCurve(aArmFirst) = aTail.CutOnArm;
++      aFd->ChangeVertex(aArmFirst, aSFac) = aCP3;
++      aFd->ChangeVertex(aArmFirst, aSW)   = aCP2;
++      aFd->ChangeInterference(aSFac).SetParameter(aTail.ArmOnFac, aArmFirst);
++      aFd->ChangeInterference(aSW).SetParameter(aTail.ArmOnW, aArmFirst);
++      ChFi3d_EnlargeBox(DStr,
++                        CD[aSmall],
++                        aFd,
++                        aSFac == 1 ? b3 : b2,
++                        aSFac == 1 ? b2 : b3,
++                        aArmFirst);
++
++      // The tail, between the crossing and the section.
++      occ::handle<ChFiDS_Stripe> aCorner2 = new ChFiDS_Stripe();
++      aCorner2->ChangeSetOfSurfData() = new NCollection_HSequence<occ::handle<ChFiDS_SurfData>>();
++      aCorner2->ChangeSetOfSurfData()->Append(aTail.Tail);
++      const TopAbs_Orientation aCutOr = aTail.CutFromP3 ? TopAbs_FORWARD : TopAbs_REVERSED;
++      if (aAtFirst)
++      {
++        aCorner2->ChangeFirstCurve(Icut);
++        aCorner2->ChangeFirstPCurve() = aTail.CutOnTail;
++        aCorner2->ChangeFirstParameters(aTail.CutFirst, aTail.CutLast);
++        aCorner2->FirstPCurveOrientation(aCutOr);
++        aCorner2->ChangeIndexFirstPointOnS1(I3);
++        aCorner2->ChangeIndexFirstPointOnS2(I2);
++        aCorner2->ChangeLastCurve(Icf);
++        aCorner2->ChangeLastPCurve() = occ::down_cast<Geom2d_Curve>(corner->FirstPCurve()->Copy());
++        aCorner2->ChangeLastParameters(P1deb, P2deb);
++        aCorner2->ChangeIndexLastPointOnS1(If1);
++        aCorner2->ChangeIndexLastPointOnS2(If2);
++        ChFi3d_EnlargeBox(DStr, aCorner2, aTail.Tail, b3, b2, true);
++        ChFi3d_EnlargeBox(DStr, aCorner2, aTail.Tail, *pbf1, *pbf2, false);
++      }
++      else
++      {
++        aCorner2->ChangeFirstCurve(Icl);
++        aCorner2->ChangeFirstPCurve() = occ::down_cast<Geom2d_Curve>(corner->LastPCurve()->Copy());
++        aCorner2->ChangeFirstParameters(P1fin, P2fin);
++        aCorner2->ChangeIndexFirstPointOnS1(Il1);
++        aCorner2->ChangeIndexFirstPointOnS2(Il2);
++        aCorner2->ChangeLastCurve(Icut);
++        aCorner2->ChangeLastPCurve() = aTail.CutOnTail;
++        aCorner2->ChangeLastParameters(aTail.CutFirst, aTail.CutLast);
++        aCorner2->LastPCurveOrientation(aCutOr);
++        aCorner2->ChangeIndexLastPointOnS1(I3);
++        aCorner2->ChangeIndexLastPointOnS2(I2);
++        ChFi3d_EnlargeBox(DStr, aCorner2, aTail.Tail, *pbl1, *pbl2, true);
++        ChFi3d_EnlargeBox(DStr, aCorner2, aTail.Tail, b3, b2, false);
++      }
++      aCorner2->SetSolidIndex(CD[pivot]->SolidIndex());
++      ChFi3d_SetPointTolerance(DStr, b3, I3);
++      ChFi3d_SetPointTolerance(DStr, b2, I2);
++      if (!myEVIMap.IsBound(Vtx))
++      {
++        NCollection_List<int> li;
++        myEVIMap.Bind(Vtx, li);
++      }
++      myEVIMap.ChangeFind(Vtx).Append(aTail.Tail->Surf());
++      myListStripe.Append(aCorner2);
+     }
+ 
+     // anf finally the pivot.

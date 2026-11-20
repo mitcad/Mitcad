@@ -57,6 +57,21 @@ the rounding of the outer rim): valid, 343 and 358 faces, the faces of each
 body round the rim on the other's within 2 micrometres both ways; each
 rounding takes 0.2 s.
 
+Failures (mitcad#1986): the handler round a bad stripe's computation
+again keeps the stripe bad where that fails, so the fillet fails as
+before: a boundary that reports the failure. The handler round the start
+point's search rethrows.
+
+Test: geometry/tests/test_fillet_roll_over_blend.cpp,
+test_rounding_rolls_on_the_far_edges and
+test_rounding_rolls_on_the_far_edges_other_version (ctest
+geometry.fillet_roll_over_blend): the cases fillet-roll-over-blend and
+fillet-roll-over-blend-2, the inner rim rounded with OCCT alone: valid, of
+the expected volume and faces, within 2 um of the stored body round the
+rim; the port's notes record it failing without the patch. Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986). The test reads a stored case (MITCAD_GEOMETRY_CASES), not a
+synthetic body: a synthetic test is still wanted (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx
 index 983b131a..84674d25 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx
@@ -389,10 +404,10 @@ index 98389db0..a3f598ad 100644
    Standard_EXPORT bool IsRational() const override = 0;
  
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 9d2e5c5f..b0d8907b 100644
+index fada8a5e..32a1a8c5 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -87,6 +87,9 @@
+@@ -86,6 +86,9 @@
  #include <IntRes2d_Transition.hxx>
  #include <TopOpeBRepDS_Transition.hxx>
  #include <IntRes2d_IntersectionSegment.hxx>
@@ -402,7 +417,7 @@ index 9d2e5c5f..b0d8907b 100644
  #include <utility>
  
  #ifdef OCCT_DEBUG
-@@ -862,6 +865,162 @@ bool ChFi3d_Builder::RollsBefore(const occ::handle<ChFiDS_Stripe>& S, const Topo
+@@ -861,6 +864,162 @@ bool ChFi3d_Builder::RollsBefore(const occ::handle<ChFiDS_Stripe>& S, const Topo
    return false;
  }
  
@@ -565,7 +580,7 @@ index 9d2e5c5f..b0d8907b 100644
  void ChFi3d_Builder::RemoveCoincidentStripes()
  {
    TopOpeBRepDS_DataStructure&  DStr = myDS->ChangeDS();
-@@ -2571,6 +2730,62 @@ void ChFi3d_Builder::Compute()
+@@ -2593,6 +2752,62 @@ void ChFi3d_Builder::Compute()
    // Roundings of both edges of a lens whose concave one failed: joined
    // once the others are done (FinishLensRoundings).
    DeferLensRoundings(badstripes);
@@ -628,7 +643,7 @@ index 9d2e5c5f..b0d8907b 100644
    done = (badstripes.IsEmpty());
    // Stripes whose blends ran over a narrow face of their edge onto a face
    // where another stripe's contact lies are computed again rolling on the
-@@ -4301,6 +4516,8 @@ void ChFi3d_Builder::Reset()
+@@ -4386,6 +4601,8 @@ void ChFi3d_Builder::Reset()
    myRideSupports.Clear();
    myRollStripes.Clear();
    myRollFaces.Clear();
@@ -702,7 +717,7 @@ index 7aa974ed..92d42534 100644
    //! contact line (RideOnOverlap) and that other meet on the line, their
    //! sides on each other's surface; the face they shared is left without
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 6e8099da..62e31d12 100644
+index 1497a287..20c0e328 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -4403,7 +4403,12 @@ void ChFi3d_FilDS(const int                         SolidIndex,
@@ -746,7 +761,7 @@ index 6e8099da..62e31d12 100644
            Iarc2 = DStr.AddShape(V2.Arc());
            if (!ChFi3d_Contains(DStr.ShapeInterferences(Iarc2), Iarc2, Ipoin2))
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 8c40e525..401360c0 100644
+index 901be232..94f06a74 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -14,6 +14,8 @@
@@ -1223,7 +1238,7 @@ index 8c40e525..401360c0 100644
      Pieces.Append(G);
    }
    return true;
-@@ -5134,7 +5443,20 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5142,7 +5451,20 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
        {
          const occ::handle<BRepAdaptor_Curve2d>& HCk = k == 1 ? HC1 : HC2;
          const bool                              Okk = k == 1 ? Ok1 : Ok2;
@@ -1245,7 +1260,7 @@ index 8c40e525..401360c0 100644
              || !ref->Vertex(!forward, k).IsOnArc()
              || HCk->Edge().IsSame(DStr.Shape(ref->IndexOfC(k))))
          {
-@@ -5227,6 +5549,142 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5235,6 +5557,142 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
        }
      }
  
@@ -1388,7 +1403,7 @@ index 8c40e525..401360c0 100644
      // No more connected faces. Construction of the tangent plane to continue the path
      // till the output on the other face.
      NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aBridge;
-@@ -5823,6 +6281,58 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5836,6 +6294,58 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      else
      {
        refbis = ref;
@@ -1447,7 +1462,7 @@ index 8c40e525..401360c0 100644
        if (forward)
        {
          for (ii = 1; ii <= SeqSD.Length(); ii++)
-@@ -5883,7 +6393,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5896,7 +6406,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
          const occ::handle<ChFiDS_FilSpine> aFsp    = occ::down_cast<ChFiDS_FilSpine>(Spine);
          NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aWedge;
          if (aFsp.IsNull() || !aFsp->IsConstant()
@@ -1457,7 +1472,7 @@ index 8c40e525..401360c0 100644
            throw Standard_Failure("PerformSetOfSurfOnElSpine : the ball's piece at a concave turn not made");
          }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
-index 322a1410..f6e7512d 100644
+index 26c5633f..e838cc99 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 @@ -16,6 +16,7 @@
@@ -1533,7 +1548,7 @@ index 322a1410..f6e7512d 100644
    Func.SetNextCurves(curve[0], curve[1]);
  }
  
-@@ -1332,7 +1362,7 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -1337,7 +1367,7 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,
      BRepBlend_SurfRstConstRad func(HS2, HS1, PC1, HGuide);
      func.Set(HSref1, PCref1);
      func.SetRefSide(ChFi3d_RefSide(HSref1, PCref1));
@@ -1542,7 +1557,7 @@ index 322a1410..f6e7512d 100644
      occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
      HC->Load(PC1, HS1);
      BRepBlend_SurfCurvConstRadInv  finvc(HS2, HC, HGuide);
-@@ -1574,7 +1604,7 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -1579,7 +1609,7 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,
      BRepBlend_SurfRstConstRad func(HS1, HS2, PC2, HGuide);
      func.Set(HSref2, PCref2);
      func.SetRefSide(ChFi3d_RefSide(HSref2, PCref2));
@@ -1551,7 +1566,7 @@ index 322a1410..f6e7512d 100644
      occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
      HC->Load(PC2, HS2);
      BRepBlend_SurfCurvConstRadInv  finvc(HS1, HC, HGuide);
-@@ -2585,7 +2615,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+@@ -2590,7 +2620,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
      BRepBlend_SurfRstConstRad func(HS2, HS1, PC1, HGuide);
      func.Set(HSref1, PCref1);
      func.SetRefSide(ChFi3d_RefSide(HSref1, PCref1));
@@ -1560,7 +1575,7 @@ index 322a1410..f6e7512d 100644
      occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
      HC->Load(PC1, HS1);
      BRepBlend_SurfCurvConstRadInv  finvc(HS2, HC, HGuide);
-@@ -2774,7 +2804,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+@@ -2779,7 +2809,7 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
      BRepBlend_SurfRstConstRad func(HS1, HS2, PC2, HGuide);
      func.Set(HSref2, PCref2);
      func.SetRefSide(ChFi3d_RefSide(HSref2, PCref2));

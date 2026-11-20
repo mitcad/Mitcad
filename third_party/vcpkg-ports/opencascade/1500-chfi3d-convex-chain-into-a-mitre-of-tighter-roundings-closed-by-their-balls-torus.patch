@@ -52,30 +52,59 @@ exactly that torus (12.9017 mm2, major radius 0.5, minor 2.5).
   edge. Where a corner cannot be built the fillet fails as before.
 - ChFi3d_Builder::PerformTightCorners leaves such ends to it.
 
+Failures (mitcad#1986): the test of a contour's end as ending in such a
+mitre (ChFi3d_ConvexMitre) fails with OCCT's reports of a computation it
+cannot make (ChFi3d_IsComputationFailure, 0016) where the chain does not
+end in such a mitre: that end is not cut back (0700's ChFi3d_Computed);
+any other failure (a broken invariant, a signal) is rethrown.
+SplitAtConvexMitres builds the new contours aside and puts them in place
+at its end, so it has no handler of its own in Compute. The handler round
+PerformConvexMitreCorners fails the fillet (Failure_Corner): a boundary
+that reports the failure.
+
+The conditions (mitcad#1986) are geometric but only partly general. General
+within the shape: any angle between A and B (above a thousandth of a
+radian from flat or folded), any R and any rk below it (by more than ten
+times the tolerance), any convex open chain of constant radius, at either
+end. The shape itself is the case's: A, B and T planes, T square to the
+line Ex, KA and KB cylinders of one radius with axes square to Ex, so that
+the closing torus is exact; a mitre of tighter roundings between curved
+walls, of variable radius, or under a top not square to the edge is left to
+the corner as before, and fails (a general one would close the mitre with
+the ball of rk rolled between the chain's end and the top as a walked
+blend; left, mitcad#1986). Only the margins are choices, not derived:
+max(10 tolapp3d, 1e-5) for points and 1e-6 for directions.
+
+Test: geometry/tests/test_fillet_convex_mitre.cpp,
+test_vertical_edge_into_the_mitre, test_top_mitre_alone and
+test_corner_face_named (ctest geometry.fillet_convex_mitre): a block on a
+plate, its foot rounded with 1.5 and its top with 2.5, each vertical edge
+rounded with 3, 4 and 6, each way round: valid, one torus of area rk phi
+(rho pi / 2 + rk), the material taken at the top corner the formula's
+within 1e-4; the block with only its top rounded, rounded with 3; MitCad's
+fillet names every face and edge. The port's notes record each part
+failing without the patch. Its failure without the patch is still to be
+shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index c16134db..84142028 100644
+index 1291013c..f04c5e9d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3283,6 +3283,18 @@ void ChFi3d_Builder::Compute()
-   {
-     // (The contours as they are.)
-   }
+@@ -3310,8 +3310,12 @@ void ChFi3d_Builder::Compute()
+   // Concave contours whose chain runs through a wall's concave corner
+   // tighter than their radius: split there (PerformTightConcaveCorners
+   // builds the corners).
+-  // (Each arc or end taken, or not, on its own: mitcad#1986.)
+   SplitAtTightConcaveArcs();
 +  // Convex contours whose chain ends in the mitre of earlier roundings
 +  // tighter than their radius: they end before it
 +  // (PerformConvexMitreCorners builds the corners).
-+  try
-+  {
-+    OCC_CATCH_SIGNALS
-+    SplitAtConvexMitres();
-+  }
-+  catch (Standard_Failure const&)
-+  {
-+    // (The contours as they are.)
-+  }
++  // (Each end taken, or not, on its own: mitcad#1986.)
++  SplitAtConvexMitres();
  
    // filling of myVDatatMap
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
-@@ -3937,6 +3949,23 @@ void ChFi3d_Builder::Compute()
+@@ -3988,6 +3992,23 @@ void ChFi3d_Builder::Compute()
        done      = false;
        myFailure = Failure_Corner;
      }
@@ -127,10 +156,10 @@ index 375a53af..48db7a29 100644
    //! whose balls are one ball rolling over a narrow face C between them (a
    //! strip that breaks the edge chain, its edges with the common face under
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index bf1d6071..510fd893 100644
+index 24c4b588..c9a1ea91 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -5247,6 +5247,242 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+@@ -5310,6 +5310,242 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
    return aSeamA && aSeamB;
  }
  
@@ -373,7 +402,7 @@ index bf1d6071..510fd893 100644
  //=======================================================================
  // function : SplitAtTightCorners
  // purpose  : See the header.
-@@ -5439,6 +5675,15 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -5505,6 +5741,15 @@ bool ChFi3d_Builder::PerformTightCorners()
        }
        const TopoDS_Vertex Vx = isfirst ? sp->FirstVertex() : sp->LastVertex();
        const TopoDS_Edge   Ex = sp->Edges(isfirst ? 1 : sp->NbEdges());
@@ -389,7 +418,7 @@ index bf1d6071..510fd893 100644
        // The arc at Vx and the stripe whose end is at its other vertex.
        bool                       aFound = false, aDoneHere = false;
        occ::handle<ChFiDS_Stripe> S2;
-@@ -6054,6 +6299,393 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -6120,6 +6365,396 @@ bool ChFi3d_Builder::PerformTightCorners()
    return true;
  }
  
@@ -417,8 +446,11 @@ index bf1d6071..510fd893 100644
 +    }
 +    const double           R = sp->Radius();
 +    ChFi3d_ConvexMitreData D;
-+    const bool             aFirst = ChFi3d_ConvexMitre(sp->Edges(2), sp->Edges(1), myEFMap, R, tol, D);
-+    const bool aLast = ChFi3d_ConvexMitre(sp->Edges(n - 1), sp->Edges(n), myEFMap, R, tol, D);
++    // (No mitre at an end where that cannot be computed, mitcad#1986.)
++    const bool aFirst =
++      ChFi3d_Computed([&]() { return ChFi3d_ConvexMitre(sp->Edges(2), sp->Edges(1), myEFMap, R, tol, D); }, false);
++    const bool aLast = ChFi3d_Computed(
++      [&]() { return ChFi3d_ConvexMitre(sp->Edges(n - 1), sp->Edges(n), myEFMap, R, tol, D); }, false);
 +    const int  i1 = aFirst ? 2 : 1, i2 = aLast ? n - 1 : n;
 +    if ((!aFirst && !aLast) || i2 < i1)
 +    {

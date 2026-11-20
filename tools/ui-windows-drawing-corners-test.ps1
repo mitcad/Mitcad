@@ -31,7 +31,10 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{} -StepPause 0
+# Export by keys of the test's own: in session 0's 1028 px window the
+# toolbar panel folds the DRAWING tab's Export group into its overflow
+# (Ribbon more DRAWING, mitcad#2082).
+Ui-Init $App $Out $QtBin @{ 'drawing.export_pdf' = 'F11'; 'drawing.export_svg' = 'F12' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -174,12 +177,10 @@ function Open-Drawing {
 # Export-As pdf|svg file: Export... of the open drawing to the file.
 function Export-As([string]$Kind, [string]$File) {
   Ui-Mark
-  Settled 'Drawing Export'
-  Ui-Step 'Export...'                       { Ui-ClickLogged 'Drawing Export' }
   if ($Kind -eq 'pdf') {
-    Ui-Step 'PDF... (Down, Enter)'          { Ui-Key 'Down'; Ui-Key 'Return' }
+    Ui-Step 'Export PDF... (F11)'           { Ui-Key 'F11' }
   } else {
-    Ui-Step 'SVG... (Down x2, Enter)'       { Ui-Key 'Down'; Ui-Key 'Down'; Ui-Key 'Return' }
+    Ui-Step 'Export SVG... (F12)'           { Ui-Key 'F12' }
   }
   Ui-FocusDialog '^Export Drawing$'
   Ui-Step 'the path'                      { Ui-Key 'ctrl+a'; Ui-Type $File; Ui-Key 'Return' }

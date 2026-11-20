@@ -37,7 +37,38 @@ fused, within 7e-6 mm3, for 15 of 20 sizes (posts of radius 0.8 to 3,
 caps 0.65 to 0.8; the other 5 fail as before); before, none of the 20
 was right (invalid, wrong or failed).
 
+Failures (mitcad#1986): the closed cuts of the blend by the narrow face
+(closedCuts) and its cut between the contact's crossings (cutBetween) fail
+with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the face does not poke through
+the blend: no hole is found and the ends are not joined, as before. Any
+other failure (a broken invariant, a signal) is rethrown.
+
+The conditions (mitcad#1986) are geometric, not the case's: the face C is
+the arc's face, or else any face across an edge of N that holds both ends'
+vertices, other than Fo and not tangent to N; the hole is made where C's
+surface cuts the walked blend in a closed curve lying wholly between the
+walk's start and its end (beyond the start by the spine tolerance) and the
+second end's contact meets the walked line within the meeting tolerance;
+any narrow face of any shape poking through any blend meets them (the
+synthetic posts and caps are a second geometry). Only the sizes come from
+the case: the walk taken half a radius past the hole (a margin, not
+derived), the curves' reach sampled at 201 points, the contact's
+crossings found within 100 times the approximation tolerance (at least
+1e-4). The 5 of 20 synthetic sizes that still fail are not covered.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_pierced.cpp,
+test_post_foot_rounded_over_two_caps and
+test_thin_post_foot_rounded_over_two_caps (ctest
+geometry.suite.fillet_pierced): a post on a plate, the edge round its foot
+broken by two caps that poke through its rounding of 0.5, posts of radius 1
+and 0.8: valid, the rounded post with the caps fused within 2e-5 mm3, both
+caps' lenses (invalid without the patch by its documentation). Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index a0004ca1..33734a2a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
@@ -60,7 +91,7 @@ index a0004ca1..33734a2a 100644
    Standard_EXPORT bool JoinOverNarrowFaces();
  
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
-index aa3c9867..499edbb1 100644
+index 715db112..e15ffe49 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 @@ -826,7 +826,8 @@ double signedArea(const occ::handle<Geom2d_Curve>& C)
@@ -73,7 +104,7 @@ index aa3c9867..499edbb1 100644
  //=======================================================================
  
  bool ChFi3d_Builder::JoinOverNarrowFaces()
-@@ -1022,23 +1023,42 @@ bool ChFi3d_Builder::JoinOverNarrowFaces()
+@@ -1027,23 +1028,42 @@ bool ChFi3d_Builder::JoinOverNarrowFaces()
                  }
                }
              }
@@ -124,7 +155,7 @@ index aa3c9867..499edbb1 100644
              // (The two ends near each other.)
              if (FdA->Vertex(aFirst, ons).Point().Distance(FdB->Vertex(bFirst, onsB).Point()) > 8. * R)
              {
-@@ -1474,80 +1494,16 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
+@@ -1489,85 +1509,16 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
        tIn1 = t;
      }
    }
@@ -195,8 +226,13 @@ index aa3c9867..499edbb1 100644
 -    OCC_CATCH_SIGNALS
 -    aCut = cutBetween(SX, C, P1, P2, tolapp3d, Cc, Ps, Pc, tolCut);
 -  }
--  catch (Standard_Failure const&)
+-  catch (Standard_Failure const& anException)
 -  {
+-    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
+-    if (!ChFi3d_IsComputationFailure(anException))
+-    {
+-      throw;
+-    }
 -    aCut = false;
 -  }
 -  if (!aCut)
@@ -211,7 +247,7 @@ index aa3c9867..499edbb1 100644
    const occ::handle<Geom2d_Curve>& aPO = FiO.PCurveOnSurf();
    const gp_Pnt2d                   o1 = aPO->Value(Xlo), o2 = aPO->Value(Xhi);
    const bool                       alongU = std::abs(o2.X() - o1.X()) >= std::abs(o2.Y() - o1.Y());
-@@ -1563,21 +1519,183 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
+@@ -1583,21 +1534,193 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
      }
      return 0.5 * (lo + hi);
    };
@@ -251,8 +287,13 @@ index aa3c9867..499edbb1 100644
 +      OCC_CATCH_SIGNALS
 +      closedCuts(SX, C, tolapp3d, aLoops);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      aLoops.Clear();
 +    }
 +    double holeLo = RealLast(), holeHi = -RealLast();
@@ -384,8 +425,13 @@ index aa3c9867..499edbb1 100644
 +      OCC_CATCH_SIGNALS
 +      aCut = cutBetween(SX, C, P1, P2, tolapp3d, Cc, Ps, Pc, tolCut);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      aCut = false;
 +    }
 +    if (!aCut)
@@ -406,7 +452,7 @@ index aa3c9867..499edbb1 100644
    const ChFiDS_CommonPoint aXeO = linePoint(DStr, FiO, We);
    const ChFiDS_CommonPoint aXeN = linePoint(DStr, FiN, We);
    double                   tbO = 0., tbN = 0., dO = 0., dN = 0.;
-@@ -1620,10 +1738,14 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
+@@ -1640,10 +1763,14 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
    const double       wa = tOut < tIn ? w1 : w2, wb = tOut < tIn ? w2 : w1;
    const gp_Pnt&      Pa = tOut < tIn ? P1 : P2;
    const gp_Pnt&      Pb = tOut < tIn ? P2 : P1;
@@ -424,7 +470,7 @@ index aa3c9867..499edbb1 100644
    {
      // (Each a B-spline over the same range, which reversing keeps.)
      Cc = Cc->Reversed();
-@@ -1672,40 +1794,55 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
+@@ -1692,40 +1819,55 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
      G->LastSpineParam(w2p);
      return G;
    };
@@ -507,7 +553,7 @@ index aa3c9867..499edbb1 100644
      }
    }
    // Into A's stripe, for FdA or past FdA cut back to the start.
-@@ -1736,17 +1873,16 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
+@@ -1756,17 +1898,16 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
        FdA->LastSpineParam(W0);
      }
    }
@@ -534,7 +580,7 @@ index aa3c9867..499edbb1 100644
    }
    // The meeting section: its points, shared, and its edge.
    const int Iopp = ChFi3d_IndexPointInDS(FdB->Vertex(bFirst, oppB), DStr);
-@@ -1756,7 +1892,7 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
+@@ -1776,7 +1917,7 @@ bool ChFi3d_Builder::JoinOverNarrowFaceFrom(const occ::handle<ChFiDS_Stripe>& SA
    SA->SetIndexPoint(Iopp, aFirst, opp);
    SA->SetIndexPoint(Ions, aFirst, ons);
    {

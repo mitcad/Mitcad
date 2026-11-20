@@ -75,6 +75,8 @@ foreach ($layout in @('docked', 'floating')) {
     ForEach-Object { Write-Host "     $_" }
   if ($layout -eq 'docked') {
     Ui-ExpectLog 'Window context menu: Browser | ' "docked: the right-click on the free end of the ribbon's tab row opened the window's menu"
+    Ui-ExpectLog 'Docked toolbar panel hidden (Start)' 'docked: the toolbar panel hidden over the Start page, the top bar staying'
+    Ui-ExpectLog 'Docked toolbar panel shown' "docked: the toolbar panel back after the design's tab"
   }
   Ui-ExpectLog 'Placed Bar 20 test as ' "${layout}: a member placed with Build > Profile"
   Ui-ExpectLog 'Document window created: window-2 ' "${layout}: a second design"

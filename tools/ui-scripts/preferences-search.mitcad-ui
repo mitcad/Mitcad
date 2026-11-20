@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MIT
+# Preferences' search (mitcad#2074, GitHub mitcad/Mitcad#450) on a new
+# design, in the Preferences dialog and in macOS's Settings window:
+#   1. Preferences opened on Display; "temperature" typed into the search
+#      field, which has the keyboard: General shown (Display has no match)
+#      with Temperature unit highlighted, the other pages greyed.
+#   2. Return focuses the Temperature unit box; Preferences stays open.
+#   3. Display, greyed, clicked: shown, and the text stays.
+#   4. "dark" finds Display's theme; "orbit" Navigation's bindings table.
+#   5. Esc clears the field; Preferences stays open.
+#   6. "3d mouse" opens Navigation's 3D Mouse tab.
+#   7. The command search's "temperature" lists Preferences: General first;
+#      chosen, it opens Preferences with the word in its search field and
+#      Temperature unit highlighted.
+# Run by tools/ui-preferences-search-test.sh (Linux),
+# tools/ui-windows-preferences-search-test.ps1 (Windows) and
+# tools/ui-macos-preferences-search-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+
+# 1. "temperature" from Display.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property preferencesPages currentRow 2
+type temperature
+wait-log '^Preferences search: "temperature": [0-9]+ matches on General$'
+expect-log '^Preferences search on General: Temperature unit$'
+expect-widget-property preferencesPages currentRow 0
+expect-widget-property temperatureUnit preferencesSearchMatch true
+
+# 2. Return focuses the match and takes no OK.
+mark
+key Return
+wait-log '^Preferences search: Return focuses temperatureUnit on General$'
+expect-widget-property temperatureUnit focus true
+expect-widget-property preferencesSearch text temperature
+expect-no-log '^Preferences: navigation '
+
+# 3. A greyed page shown by a click; the text stays.
+click-row preferencesPages 2
+expect-widget-property preferencesPages currentRow 2
+expect-widget-property preferencesSearch text temperature
+
+# 4. A combo box's item, and a table's row.
+mark
+invoke-widget preferencesSearch setText dark
+wait-log '^Preferences search: "dark": [0-9]+ matches on (.*, )?Display(, .*)?$'
+expect-widget-property preferencesPages currentRow 2
+expect-widget-property preferencesTheme preferencesSearchMatch true
+mark
+invoke-widget preferencesSearch setText orbit
+wait-log '^Preferences search: "orbit": [0-9]+ matches on (.*, )?Navigation(, .*)?$'
+expect-log '^Preferences search on Navigation: .* / Orbit'
+click-row preferencesPages 1
+expect-widget-property preferencesPages currentRow 1
+expect-widget-property navigationBindings preferencesSearchMatch true
+
+# 5. Esc clears the field and leaves Preferences open.
+focus-widget preferencesSearch
+key Escape
+expect-widget-property preferencesSearch text ''
+expect-widget-property preferencesPages currentRow 1
+
+# 6. A sub-tab by its name.
+expect-widget-property navigationTabs currentIndex 0
+mark
+type '3d mouse'
+wait-log '^Preferences search: "3d mouse": [0-9]+ matches on (.*, )?Navigation(, .*)?$'
+expect-widget-property preferencesPages currentRow 1
+expect-widget-property navigationTabs currentIndex 1
+focus-widget preferencesSearch
+key Escape
+key ${MITCAD_TEST_PREFERENCES_DONE}
+expect-dialog-gone '^(Preferences|Settings)$'
+focus-main
+wait-idle
+
+# 7. From the command search.
+command tools.search
+focus-widget commandSearchInput
+type temperature
+expect-command-search temperature tools.preferences.general
+mark
+key Return
+wait-log '^Command search chose "?tools[.]preferences[.]general"?$'
+focus-dialog '^(Preferences|Settings)$'
+wait-log '^Preferences search: "temperature": [0-9]+ matches on General$'
+expect-widget-property preferencesSearch text temperature
+expect-widget-property preferencesPages currentRow 0
+expect-widget-property temperatureUnit preferencesSearchMatch true
+focus-widget preferencesSearch
+key Escape
+key ${MITCAD_TEST_PREFERENCES_DONE}
+expect-dialog-gone '^(Preferences|Settings)$'
+focus-main
+wait-idle
+expect-never 'TestDriver: FAIL'

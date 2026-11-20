@@ -39,7 +39,26 @@ corners at the two points filled the rest wrongly, an invalid result.
   the contact curves are cut by full knots where they are twice the
   end's distance from the vertex, so that only that last piece bends.
 
+The conditions (mitcad#1986) are geometric, not the case's: an arc
+holding the end vertex whose direction there lies in the tangent plane of
+the blend's other face within 0.01 rad (any edge, any face: not only a
+block's straight edge running into a post's cylinder), and, at a vertex,
+roundings of constant radius that all vanish there (contacts within a
+hundredth of the radius of the vertex, the faces' normals parallel within
+0.002 rad, or ending in a point at it), whatever their number. Only the
+sizes are chosen, none taken from the case: the angular margin 0.01 rad,
+a hundredth of the radius, a thousand times the parametric confusion.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_lens_overflow.cpp,
+test_rounding_rolling_into_a_vertex_where_it_vanishes (ctest
+geometry.fillet_lens_overflow): a block on a post as wide as the block, the
+post's foot rounded with 10: valid, its quarters alike, the material added
+between the torus within 30 degrees of the block's axis and the whole torus.
+Its failure without the patch, stated in its documentation, is still to be
+shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index c26ef9ba..853f7eb8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

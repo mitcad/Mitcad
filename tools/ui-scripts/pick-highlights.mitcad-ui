@@ -4,7 +4,9 @@ wait-idle 30
 expect-model-bodies 1 22500
 window-resize 1280 900
 expect-viewport
+mark
 click-logged 'Orientation cube front-top'
+wait-log '^Camera direction 0 0[.]707 -0[.]707 up 0 0[.]707 0[.]707 [(]orthographic[)]$' 30
 command view.fit
 # On a low screen (the macOS VM) the fit leaves edges under the floating
 # top cards: a little room around the body.
@@ -58,6 +60,10 @@ key Escape
 # Measure accepts both edges and vertices. The selected edge's overlay
 # must leave its endpoint available to the second input.
 command inspect.measure
+wait-idle
+command view.fit
+wheel 50 55 -2
+wait-idle
 click-pick-offset 'edge F1.b0/E\{F2:side0\|F2:top\}' 0 0 '^edge E\{F2:side0\|F2:top\} of F1.b0$'
 expect-log 'Measure Selection 1: 1 edge'
 # The computed row grows the Measure card; fit after its layout has settled

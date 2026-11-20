@@ -25,6 +25,16 @@
 // with 2 as well: that concave rounding meets the foot's at the block's
 // back corners, and comes after the top's roundings with the feet (built
 // first, its blend's end would take a part of the feet's edges away).
+//
+// With no front face (h = 0, the top running down into the plate, as in
+// GitHub #371's Fillet1) both roundings of a side end at one vertex, a foot
+// corner (FootCorners in geometry/src/dressup.cpp): the `.f3d` files' body
+// there is the feet's rounding first and the top's on that result, which
+// runs on over the foot's blend down to the plate. MitCad's fillet builds
+// it so: valid, every face named, the volume of the two passes made with
+// OCCT's fillet alone (the wall's foot with the feet). OCCT's single build
+// reported an overlap (alone) or failed ("intersect each other", against
+// the wall).
 
 #include <cmath>
 #include <cstdio>
@@ -70,7 +80,9 @@ ShapePtr block_body(double h, bool wall) {
   TopoDS_Shape body = BRepPrimAPI_MakeBox(gp_Pnt(-10, -6, 0), gp_Pnt(10, 10, kPlate)).Shape();
   BRepBuilderAPI_MakePolygon polygon;
   polygon.Add(gp_Pnt(-kHalf, 0, kPlate));
-  polygon.Add(gp_Pnt(-kHalf, 0, kPlate + h));
+  if (h > 0) {
+    polygon.Add(gp_Pnt(-kHalf, 0, kPlate + h));
+  }
   polygon.Add(gp_Pnt(-kHalf, 4, kPlate + h + 4));
   polygon.Add(gp_Pnt(-kHalf, 4, kPlate));
   polygon.Close();
@@ -256,6 +268,66 @@ void test_block(double h, bool wall) {
   CHECK_NEAR(volume_of(result->occt()), expected);
 }
 
+
+// The block with no front face (h = 0): the feet first, then the top.
+void test_foot_corner(bool wall) {
+  std::printf("block with no front face%s\n", wall ? ", against a wall" : "");
+  const ShapePtr body = block_body(0.0, wall);
+  const std::vector<int> foot = feet(*body), top = tops(*body), behind = wall ? wall_feet(*body) : std::vector<int>();
+  CHECK(foot.size() == 2);
+  CHECK(top.size() == 2);
+  CHECK(!wall || behind.size() == 2);
+  std::vector<int> concave = foot;
+  concave.insert(concave.end(), behind.begin(), behind.end());
+
+  // OCCT's fillet alone, the concave roundings first and the top's on that
+  // result (its edges found again there by their ends).
+  const ShapePtr copy = import_body(BRepBuilderAPI_Copy(body->occt()).Shape(), "F9", 0);
+  const Occt first = occt_fillet(copy->occt(), shapes_of(*copy, concave), std::vector<double>(concave.size(), kFoot));
+  CHECK(first.built);
+  if (!first.built) {
+    return;
+  }
+  const ShapePtr rounded_feet = import_body(first.shape, "F8", 0);
+  const std::vector<int> later = tops(*rounded_feet);
+  CHECK(later.size() == 2);
+  const Occt second =
+      occt_fillet(rounded_feet->occt(), shapes_of(*rounded_feet, later), std::vector<double>(later.size(), kTop));
+  CHECK(second.built);
+  if (!second.built) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(second.shape).IsValid());
+  const double expected = volume_of(second.shape);
+
+  // MitCad's fillet of both sets.
+  FilletSet feet_set, top_set;
+  for (const int e : concave) {
+    feet_set.edges.push_back(body->edge_name(e));
+  }
+  feet_set.radius = kFoot;
+  for (const int e : top) {
+    top_set.edges.push_back(body->edge_name(e));
+  }
+  top_set.radius = kTop;
+  ShapePtr result;
+  try {
+    result = fillet("F3", *body, {feet_set, top_set});
+  } catch (const std::exception& failure) {
+    std::printf("  MitCad: %s\n", failure.what());
+  }
+  CHECK(result != nullptr);
+  if (!result) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(result->occt()).IsValid());
+  CHECK(result->notes().empty());
+  for (int f = 0; f < result->face_count(); ++f) {
+    CHECK(!result->face_names(f).empty());
+  }
+  CHECK_NEAR(volume_of(result->occt()), expected);
+}
+
 } // namespace
 } // namespace test
 
@@ -265,6 +337,7 @@ int main() {
       for (const double h : {1.5, 2.0, 3.0}) {
         test::test_block(h, wall);
       }
+      test::test_foot_corner(wall);
     }
   } catch (const Standard_Failure& e) {
     std::fprintf(stderr, "unexpected OCCT error: %s\n", e.what());

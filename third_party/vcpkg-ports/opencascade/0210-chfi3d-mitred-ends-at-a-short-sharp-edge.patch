@@ -36,6 +36,11 @@ Fv's edge. E vanishes.
   tangent to S at the crossing of their contacts), stays for other
   surfaces.
 
+Test: geometry/tests/test_fillet_corners.cpp (ctest
+geometry.suite.fillet_corners), test_two_roundings_mitred_at_a_short_edge:
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 64a188b6..dc5de34d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

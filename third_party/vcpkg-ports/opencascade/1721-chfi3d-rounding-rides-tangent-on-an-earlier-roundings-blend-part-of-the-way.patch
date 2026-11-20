@@ -49,11 +49,25 @@ pairs whose blends OCCT already finds overlapping on the face (the plate's
 back edge beside a tower's foot whose distance from it grows past the two
 radii) are not made so.
 
+Test: geometry/tests/test_fillet_tangent_ride.cpp (ctest
+geometry.fillet_tangent_ride): test_narrowing_wall (either edge slanting,
+either end narrow) and test_falling_step, each in both orders: valid, the
+volume of the two roundings made one after the other within a millionth
+(the wall's result 0.45 mm3 more without the patch). Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
+Failures (mitcad#1986): the rider's walk part of the way and its
+computation again on undoing it fail with OCCT's reports of a computation
+it cannot make (ChFi3d_IsComputationFailure, 0016): the ride is undone and
+fails; where the computation again fails too, the fillet fails (done
+false) rather than keep a stripe half made. Any other failure (a broken
+invariant, a signal) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 475287d6..b225371a 100644
+index 8b3fcb19..b4c01cdb 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2857,6 +2857,519 @@ static occ::handle<ChFiDS_SurfData> splitForPart(TopOpeBRepDS_DataStructure&
+@@ -2879,6 +2879,531 @@ static occ::handle<ChFiDS_SurfData> splitForPart(TopOpeBRepDS_DataStructure&
    return aPieces[aPart];
  }
  
@@ -336,8 +350,15 @@ index 475287d6..b225371a 100644
 +      occ::handle<ChFiDS_Stripe> aStripe = B;
 +      PerformSetOfSurf(aStripe);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
++      // (B cannot be computed again as it was: the fillet fails rather than
++      // keep a stripe half made, mitcad#1986.)
++      done = false;
 +    }
 +  };
 +  B->Reset();
@@ -348,8 +369,13 @@ index 475287d6..b225371a 100644
 +    occ::handle<ChFiDS_Stripe> aStripe = B;
 +    PerformSetOfSurf(aStripe);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    undo();
 +    return false;
 +  }
@@ -573,7 +599,7 @@ index 475287d6..b225371a 100644
  // Whether the contacts of stripes A and B on a face they share cross each
  // other twice inside both (the face narrowing between their edges to less
  // than the two roundings' width, part of the way): the SurfData of each
-@@ -5422,6 +5935,60 @@ void ChFi3d_Builder::Compute()
+@@ -5509,6 +6034,60 @@ void ChFi3d_Builder::Compute()
    // away by the other blend, the rest replaced by the rolling blend's side.)
    NCollection_List<TopoDS_Shape> aWholeObstacles;
    NCollection_List<int>          aWholePoints;
@@ -656,7 +682,7 @@ index e12f856b..c6265024 100644
    //! onto a face beyond and whose contact there lies across another
    //! stripe's contact on that face (nearer to that stripe's edge than its
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 2c61c05f..bee1d48d 100644
+index 9fa71885..08bc2cd3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -2135,6 +2135,22 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri

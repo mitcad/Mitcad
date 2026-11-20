@@ -11,7 +11,12 @@
 #     free end of the ribbon's tab row: the window's menu of its
 #     panels has no Toolbar, whose entry had hidden the whole Docked ribbon
 #     of that design (its menu is logged in the Docked layout only: the
-#     Floating window has no docks to offer).
+#     Floating window has no docks to offer);
+#   - with the two designs, the Start page from the top bar's Home and back
+#     by a click on its design's tab (mitcad#2082): the toolbar panel
+#     hidden over the page in either layout, the Docked top bar's title row
+#     staying, and the panel back after it (the wrappers check the Docked
+#     lines).
 # Run by tools/ui-docked-ribbon-test.sh (Linux) and
 # tools/ui-windows-docked-ribbon-test.ps1 (Windows).
 expect-ever 'View area'
@@ -70,6 +75,20 @@ expect-model-bodies 1 400000
 expect-design-chrome
 mark
 document-tab-click 1
+wait-idle
+expect-model-bodies 0 0
+expect-design-chrome
+
+# The Start page with two designs: the designs' tabs lead back.
+sleep 300
+mark
+click-logged '^Ribbon tab START at '
+wait-log '^Start page shown$'
+wait-idle
+mark
+document-tab-click 1
+wait-log '^Start page left by the design.s tab$'
+wait-log '^Start page hidden$'
 wait-idle
 expect-model-bodies 0 0
 expect-design-chrome

@@ -9,8 +9,9 @@
 # tools/ui-windows-boost-button-test.ps1 and, Docked, by
 # tools/ui-macos-boost-button-test.sh) on a box that mitcad-cli makes
 # (tools/ui-scripts/boost-button.json), in a 1024 x 768 window, in the
-# Floating layout (the top bar's part titleBoost, left of the indicators)
-# and in the Docked one (the tabs' row's right end), each with a fresh
+# Floating layout and in the Docked one, both with the top bar (its part
+# titleBoost, left of the indicators: "Floating cards: ..." and "Docked
+# top bar: ...", mitcad#2082), each with a fresh
 # profile: the button shown, a click logs the Ko-fi link (the URL log of
 # the tests, no browser), its × hides it and saves it, Preferences ›
 # Display › Show the Boost development button brings it back. The
@@ -54,15 +55,13 @@ for layout in floating docked; do
   ui_expect_log 'Boost button hidden' "$layout: the × hides it"
   ui_expect_log 'Preferences: Boost development button shown' "$layout: Preferences shows it again"
   ui_expect_log 'TestDriver: done' "$layout: the Boost development button"
-  if [ "$layout" = floating ]; then
-    # In the top bar, left of the project indicator.
-    cards=$(grep '^Floating cards: ' "$UI_LOG" | tail -1)
-    boost=$(tr ';' '\n' <<< "${cards#*; }" | sed 's/^ *//' | awk '$1 == "titleBoost" { print $2 }')
-    indicator=$(tr ';' '\n' <<< "${cards#*; }" | sed 's/^ *//' | awk '$1 == "titleIndicator" { print $2 }')
-    [ -n "$boost" ] && [ -n "$indicator" ] || ui_fail "no titleBoost or titleIndicator in the top bar: '$cards'"
-    [ "${boost%,*}" -lt "${indicator%,*}" ] || ui_fail "the Boost button is not left of the project indicator: '$cards'"
-    echo "ok   floating: the Boost button in the top bar, left of the project indicator"
-  fi
+  # In the top bar, left of the project indicator, in both layouts.
+  cards=$(grep -E '^(Floating cards|Docked top bar): ' "$UI_LOG" | tail -1)
+  boost=$(tr ';' '\n' <<< "${cards#*; }" | sed 's/^ *//' | awk '$1 == "titleBoost" { print $2 }')
+  indicator=$(tr ';' '\n' <<< "${cards#*; }" | sed 's/^ *//' | awk '$1 == "titleIndicator" { print $2 }')
+  [ -n "$boost" ] && [ -n "$indicator" ] || ui_fail "no titleBoost or titleIndicator in the top bar: '$cards'"
+  [ "${boost%,*}" -lt "${indicator%,*}" ] || ui_fail "the Boost button is not left of the project indicator: '$cards'"
+  echo "ok   $layout: the Boost button in the top bar, left of the project indicator"
   [ -s "$MITCAD_TEST_WORK/boost-button.png" ] || ui_fail "no picture boost-button.png ($layout)"
   cp "$MITCAD_TEST_WORK/boost-button.png" "$pictures/boost-button-$layout.png"
 done

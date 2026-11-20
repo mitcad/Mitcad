@@ -496,7 +496,7 @@ Checklist for a new command or feature type:
 
 | Builder | Panel | State |
 |---|---|---|
-| `selectionInput(id, label, filter, min, max)` | a button "N selected" in the input's color, and a clear button; `max` 0: any number | `state.items(id)`: `Selection` |
+| `selectionInput(id, label, filter, min, max)` | a button "N selected" in the input's color, its tooltip the picks in words, and a clear button; `max` 0: any number; an input of several picks (`max` not 1) that is not ordered has a button that opens its list of picks by name under the line, a row under the pointer highlighting its pick in the view (mitcad#2064, [Selection inputs](#selection-inputs)) | `state.items(id)`: `Selection` |
 | `valueInput(id, label, kind, default)` | a text field taking expressions with units (`20`, `2 in`, `d1 * 2`) | `state.text(id)` as typed, `state.expression(id)` for the model, `state.value(id)` in mm or rad (NaN if invalid) |
 | `choiceInput(id, label, {{value, label}}, default)` | a drop-down | `state.choice(id)` |
 | `checkInput(id, label, default)` | a check box | `state.checked(id)` |
@@ -1101,7 +1101,9 @@ becomes the active one (Extrude's To Object).
   unused one, the last that the sketch's own curves bound; a region that
   the face the sketch lies on bounds in part, `face_bounded`, the face's
   leftover around the drawn shapes, only when the sketch has no other,
-  mitcad#1226: `cmd::automaticProfile`, tested in `app.unit`).
+  mitcad#1226: `cmd::automaticProfile`, tested in `app.unit`; a region of
+  a 3D sketch, mitcad#1550, is taken alone, the planar `sketch` query
+  asked only for a planar sketch, mitcad#2087: `commands/ProfilePicks.cpp`).
 - `ended(committed)`: called once when the command ends (OK, Cancel,
   Close, discarded), before the main window's `finished`: what the
   command opened beside its panel goes with it (BUILD's component picker,
@@ -2578,17 +2580,23 @@ Icons only).
 ### The quick-access group
 
 A capsule of one-click commands that stays on every tab and in sketch and
-drawing modes (mitcad#1090, `framework/QuickAccessGroup`): in the
-Floating layout's title row at the right end of the free part after the
-document tabs (mitcad#1990), just left of the project, agent and chat
+drawing modes (mitcad#1090, `framework/QuickAccessGroup`): in the top
+bar's title row of Windows and Linux (the Floating layout's and, since
+mitcad#2082, the Docked layout's) at the right end of the free part after
+the document tabs (mitcad#1990), just left of the project, agent and chat
 indicators or Preferences and Help (`TitleBar::setQuickAccess`,
 `placeQuickAccess`: after the
 row's stretch; the row part `titleQuickAccess`; mitcad#1989, where the
 title box with the design's name was, which the row no longer has: the
 window's title and the document tabs show the name, `*` and `•` the
 unsaved changes), on macOS's toolbar row after the tabs, with the
-design's name and Edited in the middle, in the Docked toolbar's
-tab row after the tabs, right of Undo and Redo (`Ribbon::addTabRowWidget`,
+design's name and Edited in the middle, in the macOS Docked toolbar's
+tab row (no top bar there) at its right end, before the command search
+field, flat, with Undo and Redo first in it
+(`Ribbon::addTabRowEndWidget`, `QuickAccessGroup::setLeadingWidgets`,
+mitcad#2082; logged `Quick access leading ribbonToolbarUndo at x,y:
+inside the group, first`; Hide Quick-Access Toolbar hides only the
+group's commands and ⋮ there),
 as high as the tabs with smaller icons, `setCompact`: in the bar beside
 the groups it took about 210 px from them, and at 1280 px the Drawing
 tab's Text group collapsed). Its buttons are the commands' registry
@@ -5718,7 +5726,8 @@ Texts, patterns and offsets stay editable:
   take codes. `newestProfile` (Extrude, Emboss, …): when the newest unused
   profile is a region of a code, the command starts with all of the
   code's material regions (`letter` in the sketch query's regions), so a
-  code extrudes whole. Logged `Added QR code "https://mitcad.org", module
+  code extrudes whole (not a 3D sketch's region: the `sketch3d` query's
+  regions have no link to a text, mitcad#2087). Logged `Added QR code "https://mitcad.org", module
   1, level M` and `Edited QR code t2: "…", module 0.5, level M`. Test:
   `tools/ui-qr-code-test.sh`.
 - A text's regions stand for the text (mitcad#1369,
@@ -12479,7 +12488,38 @@ settings in the user's settings (`ViewSettings`, group `view`);
   component than the active one**, mitcad#1856, [The component that holds
   the picks](#the-component-that-holds-the-picks)) so the window fits 1366 × 768; each page is also a command
   `tools.preferences.<page>` that the search finds by its settings. OK
-  saves every page. The window opens at its largest page's size, never
+  saves every page. **Search settings** (`preferencesSearch`, mitcad#2074,
+  GitHub mitcad/Mitcad#450, `framework/PreferencesSearch.*`): a field
+  above the page list (`preferencesPages`) of the dialog and of
+  `SettingsWindow`'s page list, which has the keyboard when Preferences
+  opens. Its index is made from the pages' widgets at each search, never
+  from a list kept by hand: form row labels with their field's tooltips
+  and combo box items (a control with a label of its own in the row is
+  that label's), check boxes, radio buttons, labels of a buddy, group box
+  titles, sub-tab names, table headers and rows (Navigation's bindings
+  by their input and the action chosen). Each word of the text matches
+  anywhere, ignoring case, in the shown language; a page's keywords
+  (`kPreferencePages`: alternate spellings, the English words) match the
+  page as a whole and count as one. The list shows each page's count
+  ("Display (3)") and grays the pages without one (clickable); when the
+  page shown has none, the first page with one is shown. The matches'
+  labels and texts take `SearchMatch` (a table row's cells; a group box's
+  title only counts), with the dynamic property
+  `preferencesSearchMatch` true on the label and its control; a sub-tab
+  with a match is marked and opened when the tab shown has none, a scroll
+  area scrolls to its first match. Return focuses the first match's
+  control and never takes OK while there is text (an empty field leaves
+  Return to OK); Esc clears a non-empty field and closes Preferences from
+  an empty one; Down goes to the page list. No match: every page grayed
+  and "No setting matches" in the field. A page's command chosen in the
+  command search opens Preferences with the words typed that are not in
+  its name (`showPreferences(page, query)`, `takeCommandSearchText`).
+  Logged: `Preferences search: "temperature": 1 matches on General`
+  (`no page`), `Preferences search on General: Temperature unit` for each
+  page with matched settings, `Preferences search opens the tab 3D Mouse
+  on Navigation`, `Preferences search: Return focuses temperatureUnit on
+  General` (`app.unit` `preferences_search`, `ui-preferences-search`,
+  `app.ui-windows-preferences-search`, `app.ui-macos-preferences-search`). The window opens at its largest page's size, never
   larger than the screen's available area, with its frame on the screen;
   only the page shown sets its minimum size (the hidden pages are
   `Ignored`), so it can be made smaller (mitcad#690). The Display page,
@@ -12697,7 +12737,9 @@ settings in the user's settings (`ViewSettings`, group `view`);
   has no docks and is unchanged (its Command card shows while a command
   has something to show). Test steps `dock-title-context`,
   `expect-popup-entries`, `dock-close` and `expect-dock`
-  (`framework/TestDriverDocks.cpp`); tests `tools/ui-docked-panels-test.sh`
+  (`framework/TestDriverDocks.cpp`; also `dock-float`, `dock-area` and
+  their `expect-` steps, [the Docked layout's
+  docks](#the-docked-layouts-docks-mitcad2070)); tests `tools/ui-docked-panels-test.sh`
   and `app.ui-windows-docked-panels`, the shared script
   `tools/ui-scripts/docked-panels.mitcad-ui`: the Command dock hidden from
   the window's menu and with its close button, View › Command each time;
@@ -12913,7 +12955,64 @@ settings in the user's settings (`ViewSettings`, group `view`);
   View › Panels › Projects shows it and is remembered. The Projects, Browser
   and Command cards start below the last row (the gap), the orientation
   cube and its buttons too, and Fit, Home and the named views fit the
-  model below the rows. Docked is unchanged everywhere.
+  model below the rows.
+- **The Docked layout's top** (mitcad#2082, GitHub mitcad/Mitcad#476): on
+  Windows and Linux the Docked layout has the Floating layout's top bar
+  and toolbar panel, only placed above the docks instead of over the
+  view: `MainWindow::createDockedTopBar` puts the same `TitleBar` row
+  (`setFloatingRow`, the same controls in the same order: ☰, Home, File,
+  Save, Undo and Redo, the design tabs, the quick-access group while it
+  has commands, Boost development, the indicators, Chat, Preferences, ?
+  and the version) at the window's top and the same `Ribbon` panel
+  (Presentation::Mac, `setPanel`: the workspace block, the card with the
+  tabs, their + and the command search field, the groups' row) under it
+  across the window, both in the `ribbonToolbar` tool bar above the docks
+  (a holder whose minimum width never sends them into the tool bar's
+  overflow; the tool bar paints no surface behind them,
+  `WindowStyle::styleToolBar`). The window's menu bar is hidden for good
+  (`MenuBarReveal::watch` with the row's opener; logged `Menu bar hidden:
+  Docked`), the design tabs are the row's (`DocumentFrame::tabsInTitleRow`,
+  also with one design), Home shows the Start page (the START tab's place,
+  `Ribbon::setStartButton`), the indicators and Chat leave the status bar
+  and the tab row for the row, and the toolbar labels are on by default as
+  in the Floating panel. The parts are logged as `Docked top bar: window
+  1280x800, view top 180; titleRow 6,0 1268x36; titleMenu …; titleFile …;
+  …; ribbon …; ribbonWorkspace …; ribbonTabs …; ribbonSearch …;
+  ribbonGroup_SOLID/CREATE …` (`MainWindow::logDockedTopBar`, the names of
+  `Floating cards: …`) when they change. The tool bar is always as high
+  as the panel asks and the view starts below it: after any change of the
+  bar, the panel or the window, a bar left at the height of a layout pass
+  before (the panel's labels shown or folded during that pass) has the
+  window laid out again (`DockedTopBarKeeper`, logged `Docked top bar laid
+  out again: tool bar 223 px high, asks 173, view top 173`; the UI tests'
+  `expect-design-chrome` checks the view's top). The workspace selector and its
+  workspaces work as in the Floating panel. On macOS, where the system
+  shows the menus, the Docked toolbar keeps its own form
+  (`Ribbon::setWorkspaceSelector`, the Classic presentation): the same
+  block at its left, as high as the tab row and the groups' row together
+  (logged `Ribbon workspace block: left of the card …`), the Start tab
+  first in the tab row (no Home), at the row's right end the Chat button,
+  the quick-access group with Undo and Redo first in it, Boost development
+  and the command search field (`Ribbon tab row end: ribbonToolbarChat,
+  quickAccess, boostButton, ribbonSearch`), one ˅ per group caption and
+  the fonts of docs/ui-conventions.md §10 (`Ribbon fonts: …`). In both, a
+  drawing hides the model's docks shown (Command, Timeline, Projects,
+  Configuration; the Browser and Chat stay) and shows them again when it
+  closes (`MainWindow::updateDrawingDocks`; `Drawing docks hidden:
+  commandDock, timelineDock`, `Drawing docks shown again: …`); the docks
+  the Start page, the Render workspace and a drawing hide are kept apart,
+  and a page that closes while another still hides one of its docks hands
+  it to that page's list (`MainWindow::showDocksAgain`), so that none
+  shows a dock the other hid. None of these automatic hides is the user's
+  choice of the Projects panel: only View › Projects, the window's menu of
+  its panels and the dock's close button save it, and a kept arrangement
+  of the docks (mitcad#2070) leaves its visibility to that choice
+  (`restoreDockArrangement`). The top bar keeps one choice for both
+  layouts (`projects/panelTopBar`; the Docked layout's older
+  `projects/panel` is not read on Windows and Linux; logged `Projects
+  panel at the start: hidden (no choice yet in this layout)`)
+  (`tools/ui-docked-workspaces-test.sh`,
+  `app.ui-windows-docked-workspaces`, `app.ui-macos-docked-workspaces`).
 - **The navigation bar** (mitcad#1086, `view/NavigationBar.*`,
   `MainWindowNavigationBar.cpp`): Look At, Fit, Visual Style, Layout Grid
   and Snap to Grid at the bottom of the view, in every workspace and in
@@ -17228,6 +17327,41 @@ model's `profile` query names the region a key means now
   picks faces: 1. Face of Body1 (missing); 2. Face of Body2`. Tests:
   `tools/ui-gone-pick-edit-test.sh`, `app.ui-windows-gone-pick-edit` (one
   input script, `tools/ui-scripts/gone-pick-edit.mitcad-ui`).
+- **The list of picks** (mitcad#2064, GitHub mitcad/Mitcad#473): an
+  input of several picks (`max` not 1) that is not ordered has a small
+  button (`picks_<input>`, ▸ closed, ▾ open, "List the picks") between its
+  chip and its ✕. It opens the list of the input's picks under the line,
+  the one an ordered input always shows (`order_<input>`), each pick a
+  row in words: `1. Body3`, `2. Face of Body1`, as the idle card names
+  them (`CommandContext::itemText`), never a topological name, an id or a
+  coordinate. Its ✕ (`remove_pick_<input>`) takes out the row chosen. One
+  open or closed state serves every list of every panel (about 70 inputs
+  of several picks), closed by default so that panels keep their size,
+  remembered in the settings (`commandPanel/picksShown`, in Export
+  Settings' layout group): opening the list in one panel opens it in every
+  panel, also those opened later. An open list shows while its input has
+  picks; a list with a gone pick opens by itself whatever the state
+  (above). The chip keeps its count (`3 selected`; many UI tests read it),
+  and its tooltip lists the picks in the same words, the first 10 and
+  then `and N more`, above the input's pick hint. The session names every
+  selection input's picks (`CommandSession::listItems`,
+  `CommandState::itemWords`), asking the model once for the picks of one
+  kind on one owner (`pickWords` in `framework/InputPicks.cpp`: a
+  Fillet's edges of one body). The pointer over a row of any list of
+  picks, an ordered input's too, highlights that pick in the view in the
+  hover's color and look, over the input's color (`CommandSession::
+  hoverPick`; not the note's target color), a feature pick as the
+  highlight list draws a feature; leaving the row, the list, or closing
+  it takes the highlight away. Floating and Docked alike. Logged as
+  `Panel Pattern on Path picks bodies list opened` (or `closed`), `Panel
+  Pattern on Path picks bodies shown: 1. Body1; 2. Body2; 3. Body3`
+  (again when its rows change) and `… hidden`, `Panel Pattern on Path pick
+  bodies hovered: 2. Body2` and `… pick bodies left`, and `Pattern on Path
+  pick highlighted: body F2.b0` (`none` when it goes); the button's place
+  as `Panel <command> picks_<input> at x,y`. Tests: `app.unit`
+  (`tests/input_picks.cpp`), `tools/ui-input-picks-test.sh`,
+  `app.ui-windows-input-picks`, `app.ui-macos-input-picks` (one input
+  script, `tools/ui-scripts/input-picks.mitcad-ui`).
 - **Shift + click places at once** (mitcad#451,
   `InputDef::withShiftClickApplies`): on an input of one item (max 1)
   that has it, a Shift + click the input takes is the pick and then the
@@ -19147,7 +19281,7 @@ next screenshot.
 | Line | When |
 |---|---|
 | `View area x y w h` | the 3D view's place in the window (`ui_view_click`) |
-| `Ribbon SOLID/CREATE at x,y`, `Ribbon tab BUILD at x,y` | group menus and the workspace tabs (wherever the tab bar is: the ribbon's, the title bar's), when the ribbon or its tab bar is shown, moves or is resized (`PlaceWatcher`, when the places changed), and when another tab is shown (`ui_click_logged`); in the Floating toolbar panel of Windows and Linux (mitcad#1990) another workspace's tab is `Ribbon tab MAKE_CNC out of sight` (`ui_click_tab`, `Ui-ClickTab` choose its workspace first), START's place is the title row's Home, and the selector is `Ribbon workspace at x,y` |
+| `Ribbon SOLID/CREATE at x,y`, `Ribbon tab BUILD at x,y` | group menus and the workspace tabs (wherever the tab bar is: the ribbon's, the title bar's), when the ribbon or its tab bar is shown, moves or is resized (`PlaceWatcher`, when the places changed), and when another tab is shown (`ui_click_logged`); in the Floating toolbar panel of Windows and Linux (mitcad#1990) and the Docked tab row with its selector (mitcad#2082) another workspace's tab is `Ribbon tab MAKE_CNC out of sight` (`ui_click_tab`, `Ui-ClickTab` choose its workspace first), START's place is the title row's Home, and the selector is `Ribbon workspace at x,y` |
 | `Ribbon workspace: MAKE (tabs MAKE_PRINT, MAKE_LASER, MAKE_CNC)`, `Ribbon workspace: RENDER (tabs RENDER)`, `Ribbon workspace chosen: MAKE`, `Ribbon workspace menu: Design (current) \| Make \| Render \| Drawing`, `Ribbon workspace entry MAKE at x,y`, `Ribbon workspace entry MAKE tabs: 3D Print · Laser · CNC` (the entry's line of tabs, as it shows it), `Workspace RENDER: the rendered view on` (`not available`), `Workspace RENDER left: the rendered view off`, `Workspace DRAWING: opened D1`, `Workspace DRAWING: no drawing, Create Drawing asked`, `Workspace DESIGN: the drawing closed` (`Workspace MAKE: …`), `Ribbon panel hidden (Start)`, `Ribbon panel shown`, `Document tab shown at x,y`, `Start page left by the design's tab` | the Floating toolbar panel's workspace (mitcad#1990): the workspace shown and its tabs when it changed (also at the start, DESIGN, and RENDER and DRAWING while their tab is alone), the selector's choice, its list opened (a model workspace with all its tabs hidden `Make (no tabs)`) and its entries' places in the main window's coordinates, what the window did for Render, for Drawing (a design with several drawings: `Context menu: Drawing1 \| Drawing2 \| Create Drawing…`) and for Design or Make while a drawing was open; the panel hidden over the Start page and the design's tab that leaves it (`tools/ui-workspaces-test.sh`, `app.ui-windows-workspaces`; the driver's `workspace MAKE` step chooses one in a script (before a click on the Make tab: `ui_click_tab`, `Ui-ClickTab` do it), its `leave-start-page` leaves the Start page in either layout) |
 | `Menus by the keys (Alt+F): File`, `Menus by the keys (Alt): ☰` | the Floating top bar of Windows and Linux, which has no menu bar (mitcad#1990): a menu opened by its keys from the title row's File, ? or ☰ (`tools/ui-menu-bar-test.sh`) |
 | `Ribbon tabs: DRAWING (shown DRAWING)`, `Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)` | a drawing opened (its DRAWING tab alone, CUT SHEET for a cut sheet) or closed (the model's tabs back, the one it was opened from shown; mitcad#1008, [Drawings](#drawings)) |
@@ -19264,7 +19398,7 @@ next screenshot.
 | `Timeline colours: dark, marker #c8d0da, buttons #f0f0f0, window #1f2024, handle #5aa2ff` (`light, marker #2b3a4a, buttons the style's, …`), `Asking the platform for the dark colour scheme` | the timeline's palette colors at start and when the theme changes (the marker's handle: the Docked window's accent color, orange in the Floating layout); the switch of `MITCAD_TEST_COLOR_SCHEME` |
 | `Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin, Root/Sketches/Sketch1; error #ff9c9c: Root/Sketches/Sketch1/Fillet1` (`light, hidden #4c525c: …`; `none`; groups hidden, error, warning, success, info, each its color on the rows' palette now and at most 12 paths in order, then `<n> more`; a value that is none of these last, as `unknown <n>: <paths>`, mitcad#1143) | the Browser rows whose names have a color role (a hidden, failed or warned row; mitcad#1104: the item keeps the role, the delegate paints its color in the theme of the moment), after each rebuild and when the theme changes, when it changed; the test driver's `color-scheme light\|dark` switches the scheme at a step (`tools/ui-theme-test.sh`, `tools/ui-windows-test.ps1`) |
 | `Browser colors: Root #f29e1a, Root/Bodies/Body1 #f29e1a, Root/Bolt:1 #e0892a, Root/Bolt:1/Bodies/Body2 #e0892a` (`none` for a row without a bar), `Timeline component colors: Bolt #e0892a, Plate #3aa35b` (`none` without components) | the color bars of the Browser's component, occurrence and body rows in the tree's order (mitcad#1876), after a rebuild when the line changed; the timeline's band colors of the components (the root has no band) when they changed: a row's color is its component's timeline color, the root's rows the section caps' orange (`tools/ui-browser-component-colors-test.sh`) |
-| `Window style: dark, window #141518, panels #1f2024, accent #5aa2ff, font Segoe UI Variable Text` (`light, …`; `font the platform's`), `Window frame: Windows 11 caption colour, Mica, rounded corners` (`skipped (Windows build 19045)`, `not applied (DWM error 0x…)`) | the Docked window's style at start and when the theme changes (mitcad#251, `framework/WindowStyle`); on Windows what the window frame got, when the window shows and at each change of theme. `panels` is the toolbar's surface, which the Classic ribbon's body and the bar's Undo, Redo, separator and Chat buttons show in both themes (the test driver's `expect-widget-background`, `TestDriver: widget background ribbonPageScroll #1f2024 (…)`; `tools/ui-docked-toolbar-colors-test.sh`, `app.ui-windows-docked-toolbar-colors`, mitcad#1245) |
+| `Window style: dark, window #141518, panels #1f2024, accent #5aa2ff, font the platform's` (`light, …`; the family chosen in Preferences instead; the same font as the Floating layout since mitcad#2082), `Window frame: Windows 11 caption colour, Mica, rounded corners` (`skipped (Windows build 19045)`, `not applied (DWM error 0x…)`) | the Docked window's style at start and when the theme changes (mitcad#251, `framework/WindowStyle`); on Windows what the window frame got, when the window shows and at each change of theme. `panels` is the toolbar's surface, which the Classic ribbon's body and the bar's Undo, Redo, separator and Chat buttons show in both themes (the test driver's `expect-widget-background`, `TestDriver: widget background ribbonPageScroll #1f2024 (…)`; `tools/ui-docked-toolbar-colors-test.sh`, `app.ui-windows-docked-toolbar-colors`, mitcad#1245) |
 | `Windows 10 app mode: followed (Windows build 19045, the style windowsvista)` (`not followed (Windows build 26100)`, `not followed (the style <name>)`; `, MITCAD_TEST_WINDOWS10=1` when forced), `Windows 10 app mode: dark, the style <name> with a dark palette (window #1f2024)`, `Windows 10 app mode: light, the style windowsvista with its own palette` | Windows 10's dark app mode (mitcad#1282, GitHub mitcad/Mitcad#138; `platform/windows/WindowsTheme`), at start: on Windows 10 (build < 22000) over its default style (windowsvista, which keeps a light palette whatever the app mode), while the app mode is dark, Qt's own style (its class QFusionStyle) with a dark palette of the theme's neutral roles, and the default style with its own palette again when it is light, at start and at each change of the app mode; not on Windows 11, Linux and macOS, where the default style follows the app mode, nor over a style chosen with `-style` or `QT_STYLE_OVERRIDE`. It follows the scheme the Theme preference asks for as it follows the app mode (mitcad#1330), and sets its style and palette again when the preference's own palette is taken away. `MITCAD_TEST_WINDOWS10=1` takes the path on Windows 11 too, over any style (the test driver's `expect-widget-theme`, `TestDriver: widget theme startPage #141518 (…), lightness 22: dark`; `app.ui-windows-windows10-dark`) |
 | `Theme: dark (preference)` (`light`), `Theme: dark (preference; MitCad's own palette, window #1f2024 over the platform's light one)`, `Theme: system (light)` (`dark`), `Preferences: theme dark` (`light`, `system`) | Preferences › Display › Theme (mitcad#1330, `framework/AppTheme`, [above](#the-view)): at start (System at once, Light and Dark once the platform's palette has followed or 250 ms have passed) and after each change, which choice decided and whether MitCad set its own palette because the platform kept its own; `Preferences: theme …` when the choice is saved (`tools/ui-theme-preference-test.sh`, `app.ui-windows-theme-preference`) |
 | `Timeline hover highlighted: F3 1, F4 2` / `none`, `F5 12 (edges 4)` | timeline hover preview (uid and number of faces; a Fillet's or Chamfer's picked edges drawn with it, mitcad#1076), without changing selection; folded groups include every active member; the AppKit timeline's hover sets the same preview; drawn in the hover color with the Browser hover's look (in sight as the view's hover, fainter through what hides it, with outlines; `HighlightDisplay::hoverLook`, mitcad#1041) |
@@ -23124,6 +23258,24 @@ the band show, hide, move or resize. While it shows, the Floating
 layout's cards are hidden (`FloatingLayout::showOnlyCards`), the Docked
 layout's docks and its navigation bar too, and the AppKit frontend's cards
 (`NativeMacWindow::setStartPageShown`); they come back as they were. The
+Docked layout of Windows and Linux (mitcad#2082,
+`MainWindow::updateStartToolbar`) does as the Floating one: its top bar's
+title row stays (Home, the design's tab), the toolbar panel under it is
+hidden over the page (`m_dockedPanel`; the ribbon logs `Ribbon panel
+hidden (Start)` as in the Floating layout, the window `Docked toolbar
+panel hidden (Start)` and `Docked toolbar panel shown`), and a click on
+the shown design's tab leaves the page (`leaveStartPageForDesign`), also
+with one design. A kept dock state that names the tool bar hidden does not
+hide it (`applyFollowedDockVisibility`). The macOS Docked toolbar (no
+Home): while the window's frame shows the designs' tabs (two designs or
+more, `DocumentFrame::showsTabs`) it is hidden whole; with one design only
+its tab row stays as the way back (`Ribbon::setTabRowOnly`), logged as
+`Docked toolbar on the Start page: hidden (the designs' tabs lead back)`,
+`Docked toolbar on the Start page: tab row only` and `Docked toolbar
+back: workspace block, tab row and groups`. Tests:
+`tools/ui-scripts/docked-workspaces.mitcad-ui` (Home, the design's tab and
+a drawing opened over the page), `docked-workspaces-macos.mitcad-ui` and
+`tools/ui-scripts/docked-ribbon.mitcad-ui` (two designs: the design's tab leads back). The
 AppKit frontend's workspace selector shows the retained ribbon's tabs, the
 Start tab among them, and the page is the shared Qt page over the embedded
 view.
@@ -23983,7 +24135,7 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
   labels, 9 pt) and the lower limits under derived sizes are multiplied by
   Text size (`uiTextScale`). Lettering that belongs to the design (sketch
   texts, drawings, measurements, prints) keeps its size. On Windows 11 a
-  chosen family is kept instead of Segoe UI Variable (`WindowStyle`).
+  chosen family is kept; both layouts use the same font (mitcad#2082).
 - **Icons:** the code's fixed icon sizes go through `uiIconSize(px)`
   (`framework/UiSizes.hpp`), the size times Icon size rounded to whole
   pixels: the Browser's 18-pixel icons, the ribbon's buttons (28 pixels
@@ -24001,13 +24153,15 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
   from the style's icon pixel metrics (`PM_SmallIconSize`,
   `PM_LargeIconSize`, `PM_IconViewIconSize`, `PM_ListViewIconSize`,
   `PM_ToolBarIconSize`, `PM_ButtonIconSize`, `PM_TabBarIconSize`,
-  `PM_MessageBoxIconSize`, `PM_LineEditIconSize`). At an Icon size other
-  than 100% `main()` puts the application's style (the platform's, the
-  shared macOS UI's, or the one Windows 10's app mode chose) inside
-  `IconSizeStyle` (`framework/IconSizeStyle`), a proxy style that
-  multiplies those metrics by Icon size, rounded as `uiIconSize`; a metric
-  the style works out from another one (a tab bar's from the small icon
-  size) is multiplied once. At 100% the style is not wrapped. Windows 10's
+  `PM_MessageBoxIconSize`, `PM_LineEditIconSize`). `main()` puts the
+  application's style (the platform's, the shared macOS UI's, or the one
+  Windows 10's app mode chose) inside `IconSizeStyle`
+  (`framework/IconSizeStyle`), a proxy style that multiplies those metrics
+  by Icon size, rounded as `uiIconSize`; a metric the style works out from
+  another one (a tab bar's from the small icon size) is multiplied once.
+  The style is wrapped at 100% too (since mitcad#2084: the proxy also
+  paints a pop-up list's highlighted row as the accent's band,
+  docs/ui-conventions.md, States), with the style's own sizes. Windows 10's
   app mode replaces the style by its key through `setApplicationStyle`,
   which wraps the new one too; the main window's own style (`WindowStyle`'s
   separators, which a child with a style sheet takes as its base) derives
@@ -24017,6 +24171,20 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
   show it. The menus of the macOS menu bar are the system's and keep its
   size. Line edits grow with their icons (Qt counts the small icon size in
   their height).
+- **Popup borders** (mitcad#2081, GitHub mitcad/Mitcad#477): over Qt's
+  portable style (on Linux, in Windows 10's dark app mode, or chosen with
+  `-style` or `QT_STYLE_OVERRIDE`) `IconSizeStyle` draws the 1 px
+  frame of every popup in the theme role `PopupBorder` (#7c828b on a light
+  palette, #707580 on a dark one, by `isDarkPalette`; at least 3:1 on the
+  chrome's surfaces), over the style's own frame, which is the window's
+  color darkened (about 1.2:1 on a dark panel); the fill stays the
+  palette's. It draws over `PE_PanelMenu` and `PE_FrameMenu` (menus,
+  context menus, submenus, and a combo box's drop-down list, whose
+  container the portable style draws as a menu panel) and over `PE_Frame`
+  of a popup window (a completer's list). The widget-local styles made
+  from its key draw the border too. Other styles (windows11, windowsvista,
+  macOS) are left as they are. A highlighted row's band (mitcad#2084) is
+  inset 2 px inside the list, so it leaves the border whole on that row.
 - **Layouts that follow:** rows are as high as their icon and text need
   (the Browser, the lists); the ribbon's button rows, its Floating group
   captions and segmented tabs, the title row and its search field, the
@@ -24029,8 +24197,8 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
 - **Logs:** `Text and icon size: Text size 80%, Icon size 150%, Font the
   system's` at start, after the `Style:` line (`Font DejaVu Sans`, or
   `Font X (not installed; the system's)`), then `Style icon size: windows11
-  with the style's icons at 150%` (or `windows11, not wrapped (Icon size
-  100%)`); once the window shows,
+  with the style's icons at 150%` (`windows11 with the style's icons at
+  100%` at 100%); once the window shows,
   `Application font: DejaVu Sans, 12 pt (Text size 120% of 10 pt)` (the
   family as drawn, its point size and the platform's) and `Icon sizes:
   150% (the Browser's 18-pixel icons at 27 px)`; `Preferences: text size
@@ -24045,7 +24213,8 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
   Icon size, the quick-access buttons in the tabs' row at 18 pixels times
   Icon size or, where the row is compact (Docked: as high as the tabs),
   down to 12 times it, and each button at least as large as its icon; the
-  application's style inside `IconSizeStyle` unless Icon size is 100%, and
+  application's style inside `IconSizeStyle` (at every Icon size since
+  mitcad#2084), and
   a ribbon group's menu and a combo box without an icon size of their own
   at the style's small icon size (from a style made afresh from its key)
   times Icon size (mitcad#1561); it logs `Text and icon size layout: font
@@ -24073,8 +24242,12 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
   `applyTextAndIconSize` gives; (`tests/icon_size_style.cpp`) the metrics
   `IconSizeStyle` multiplies, once, at 100%, 150%, 80% and 200%, a combo
   box's and a menu's icons in it, the style keys through it, and the
-  application's style wrapped only at an Icon size other than 100%, also
-  when it is replaced by its key.
+  application's style wrapped at every Icon size, 100% too (mitcad#2084),
+  also when it is replaced by its key; (`tests/popup_border.cpp`) a menu's,
+  a combo box's drop-down list's and a completer's frame under the portable
+  style drawn at least 3:1 against the window on MitCad's dark and light
+  palettes and on a dark palette with a #202326 window, and no popup border
+  over another style.
 
 ### The Command panel's width (mitcad#1825)
 
@@ -24740,7 +24913,11 @@ where they were drawn after them.
   object name `menuBarVisible`; `view/menuBar`, shown by default; Windows
   and Linux only, `MenuBarSettings::offered`: on macOS the system's menu
   bar has the menus, and the Display page keeps its own Show the menu bar
-  in the window there). Saved at once on OK (`MenuBarSettings::saveShown`,
+  in the window there). Not offered while the window has the top bar of
+  Windows and Linux, which is in both layouts since mitcad#2082
+  (`floatingTopCards`): the menu bar never shows there, whatever the
+  setting, and the ☰, File and ? of the bar have the menus; the rest of
+  this section applies to a build without the top bar. Saved at once on OK (`MenuBarSettings::saveShown`,
   logged `Preferences: menu bar hidden` or `shown`) and applied at once
   to every window (`MenuBarNotifier`). The command search finds it as
   "menu bar".
@@ -24753,10 +24930,11 @@ where they were drawn after them.
   would stop working. The 3D view then starts that much higher, in either
   layout.
 - **The ☰ button** (`MenuBarButton`, the icon `menu`, object name
-  `menuBarButton`): shown only while the bar is hidden, at the left of
-  the Floating title row before Undo and Redo (`TitleBar::setMenuButton`,
-  a capsule of its own, the row part `titleMenu`), and first in the Docked
-  toolbar, before Undo and Redo. A click opens a menu of the menu bar's
+  `menuBarButton`): at the left of the title row before Undo and Redo
+  (`TitleBar::setMenuButton`, a capsule of its own, the row part
+  `titleMenu`), always in the top bar of Windows and Linux, in either
+  layout (mitcad#1990, mitcad#2082), where the window's menu bar never
+  shows and Preferences does not offer Show the menu bar. A click opens a menu of the menu bar's
   own menus as submenus (File, Edit, View, Tools, Window, Help: the same
   actions, read as the menu opens). Logs `Menu bar button at x,y`,
   `Context menu: File | Edit | View | Tools | Window | Help` and, as one
@@ -24912,6 +25090,91 @@ the same on Linux, Windows and macOS (`framework/WindowPlace`,
   the same place, a new window at the last size, and a kept place on a
   removed monitor, half off-screen and larger than the screen wholly
   within the primary screen's available area.
+
+### The Docked layout's docks (mitcad#2070)
+
+Beside the window's place, the Docked layout keeps its docks' arrangement
+between starts (GitHub mitcad/Mitcad#451; `framework/DockState`,
+`MainWindowDocks.cpp`). Nothing of it in the Floating layout (its cards
+cannot leave the window) or the AppKit frontend.
+
+- **Kept:** at quit and when the last window closes (the same places as
+  the window's place, before the window hides), the active window's
+  `QMainWindow::saveState` with the version `kDockStateVersion` (each
+  dock's area, size, docked or floating, shown or hidden), in the group
+  `dockState`: `version`, `state`, `docks` (the docks it stands for),
+  `shown` (docks hidden only by the Start page or the Render workspace,
+  kept as the user had them outside those pages), and for each floating
+  dock `floating/<dock>/frame`, `geometry` and `screen` (its frame with
+  the title bar, its own area, the name of its screen). The Render
+  workspace's docks (mitcad#2013) are left out: they always open at their
+  own areas. Not part of Export/Import Settings: it names this machine's
+  screens, and Qt warns against `restoreState` with data of unknown
+  origin.
+- **Versioning:** `kDockStateVersion` is raised whenever a dock is renamed
+  or added at another default area, so that an older arrangement is
+  dropped rather than misapplied. A dock the state does not name (a
+  Render workspace dock, a dock added in a later version) stays at the
+  area it was added in: the left-out docks are nameless while the state is
+  applied, and a dock found elsewhere afterwards is moved to its area once
+  the window has shown (`Dock state: <docks> back at their own areas`).
+  Docks are not moved right after `restoreState` on a window not shown
+  yet: Qt applies the restored layout again at the window's first layout.
+- **Restored** in the first window of the next start, once every dock
+  exists and before the Start page hides them (`WindowManager::
+  createWindow`), so that the page's hide and show work as before. The
+  start-up width of the Command dock (`commandPanel/dockWidth`,
+  `CommandDockWidth::restore`) and the Projects dock's (`projects/
+  dockWidth`) are then not applied over it; they still apply at a start
+  with nothing kept, and are still written for the Floating layout,
+  AppKit and Export Settings. Visibility that follows other state is
+  applied after the restore: the Configuration dock the design's options,
+  the Projects dock View › Projects (`projects/panel`), and View › Chat
+  checked as the Chat dock is shown. A kept arrangement that does not
+  restore (another version, a dock renamed) is ignored and logged, and
+  the default arrangement is used.
+- **Floating panels and the screens:** each floating dock's kept frame and
+  screen are checked, not where `restoreState` put it (Qt may move a
+  floating dock onto a screen): a dock whose kept frame lies wholly within
+  the available area of its connected screen keeps its place; any other
+  (its monitor gone, half off a screen, across two screens) goes back into
+  its dock (`setFloating(false)`), never onto another screen where it would
+  cover the design window. Other docks are not touched: removing one
+  monitor does not dock the panels on the monitors still connected.
+  `floatingFrameStays` does it (rectangles and screens in, keep or dock
+  out; next to `fitFrameToScreens`, `app/tests/floating_panel_screens.cpp`).
+- **A new window** (Window › New Window, a design opened in a window or a
+  tab of its own) takes the arrangement of the window it opens from, with
+  its floating docks docked, so that two designs' floating panels never lie
+  on top of each other.
+- **Restore Default Layout** (Preferences › Display) also forgets the kept
+  arrangement and puts every window's docks back in their default
+  arrangement at once (the arrangement taken right after the docks were
+  made); the Chat panel stays as View › Chat has it, and the page in front
+  (Start, Render) keeps the docks hidden until it closes.
+- **Logs:** `Dock state saved: browserDock right, timelineDock floating
+  300,420 400x160 on <screen>, …` (`; shown at the next start: …`),
+  `Dock state restored: …` (`, timelineDock docked: screen gone`,
+  `, timelineDock docked: new window`), `Dock state ignored: <why>; the
+  default arrangement`, `Dock state: none saved, the default arrangement`,
+  `Dock state: the default arrangement restored: …`.
+- **Test steps** (`framework/TestDriverDocks.cpp`): `dock-float <dock> <x>
+  <y> <w> <h>` and `expect-dock-float` (the frame's top left from the main
+  window's screen's available area's top left, as `window-move`),
+  `dock-area <dock> left|right|top|bottom` and `expect-dock-area` (also
+  `floating`).
+- **Tests:** `app/tests/floating_panel_screens.cpp`; the UI tests
+  `tools/ui-dock-state-test.sh` (Linux, Xvfb), `app.ui-windows-dock-state`
+  (`tools/ui-windows-dock-state-test.ps1`) and `app.ui-macos-dock-state`
+  (`tools/ui-macos-dock-state-test.sh`) run the shared scripts
+  `tools/ui-scripts/dock-state-*.mitcad-ui`: the Browser moved, the
+  Timeline floated, the Chat panel shown and the Command dock dragged
+  wider; the same at the next start behind and after the Start page, the
+  Command width the kept one; the floating Timeline's screen renamed: it
+  is docked; a new window with nothing floating; Restore Default Layout in
+  both windows at once, and the defaults at the next start. Linux also
+  checks the Render workspace's docks at their own areas after a restore
+  and the docks it hid kept as shown.
 
 ## Flex (mitcad#1713)
 
@@ -26649,8 +26912,9 @@ they landed.
 
 ## The Render workspace
 
-The Render workspace of the toolbar panel (mitcad#1990: its RENDER tab
-while Render is chosen in the workspace selector, `setRenderWorkspace`)
+The Render workspace of the workspace selector (mitcad#1990, the Docked
+tab row's since mitcad#2082: its RENDER tab while Render is chosen,
+`setRenderWorkspace`)
 holds the rendering work itself (mitcad#2013, `app/render/RenderWorkspace.*`,
 `app/MainWindowRender.cpp`). The workspace's stages are the RENDER tab's
 own tab row: they stand in the panel's tab row in place of the
@@ -26664,7 +26928,19 @@ the stage's actions alone as the toolbar's groups, not the layout's RENDER group
 in the panel's parts). It opens with
 the RENDER tab (`Ribbon tab shown: RENDER`, and `setRenderWorkspace`) and
 closes when the tab goes; the rendered view is turned on and back by
-`setRenderWorkspace`.
+`setRenderWorkspace` (`MainWindow::holdRenderedView`).
+
+In the Docked layout the workspace's docks take the places of the docks
+they hide (mitcad#2077, `MainWindow::placeRenderDocks`, `resizeDocks` to
+the first hidden dock's width or height in each area: the Browser's, the
+Command panel's, the timeline's), so that the view and the bottom bar stay
+where they were, and those docks get their sizes back when it closes
+(`giveBackRenderDockSizes`); logged `Render docks in the places of the
+docks they hide: renderLeftPanel 240 (browserDock 240), …` and `Docks
+given back at their sizes: browserDock 240, …` (`not in`, `not given
+back` with the sizes otherwise; `ui-dock-state`'s first start checks
+both). Docked has no RENDER tab of its own among the model's tabs: the
+workspace selector opens it there too (mitcad#2082).
 
 - **Stages:** Look, Light, Frame and Output, numbered 1 to 4, in the
   panel tabs' look (`Ribbon::createPanelTabBar` with steps: the shown one
@@ -26717,8 +26993,9 @@ closes when the tab goes; the rendered view is turned on and back by
   the fields narrowing below their text's width; the swatches wrap to the columns that fit, the library's
   filter chips wrap, its scopes elide, Favorites a ★). Or in
   the Docked layout its docks with the other docks hidden and shown again
-  after (Docked has no toolbar panel and so no Render workspace yet: the
-  docks are made for when it has); logged `Render workspace
+  after; outside the workspace its docks' entries are hidden from the
+  window's menu of its panels (`toggleViewAction`, mitcad#2082), so that
+  they never show beside the model; logged `Render workspace
   opened|closed` and `Render workspace panels: …`. The Start tab and the
   workspace hand the view over to each other.
 - **Live view:** the rendered view (on while the workspace is),
@@ -26738,7 +27015,14 @@ closes when the tab goes; the rendered view is turned on and back by
   body(ies), <m> face(s)`. Paint and Pick Up take the view's picks
   (`RenderWorkspace::takePick` before the selection in `onPicked`). The
   favorites and the recent appearances are the user's settings
-  (`render/favoriteAppearances`, `render/recentAppearances`). Places:
+  (`render/favoriteAppearances`, `render/recentAppearances`). Which of
+  them the library lists is a drop-down choice (`renderAppearanceScope`:
+  In Design, Library, Recent, Favorites; logged `Render appearances scope
+  <index>`), not tabs: four whole names do not fit a row of tabs at the
+  panel's 240 px (mitcad#2083). Favorites without any shows how to add
+  one (`Render appearances empty: <text>`). Places: `Render appearance
+  search at`,
+  `Render appearance scope at`,
   `Render appearance <id> at`, `Render appearance filter <key> at`,
   `Render look mode body|face|component at`, `Render look paint|pick_up|apply at`.
 - **Light:** the list (`renderLights`: the Environment with its preset's
@@ -26759,9 +27043,10 @@ closes when the tab goes; the rendered view is turned on and back by
 - **Whole fields:** each card and list logs `Render card <title> fields
   cut: none` and `Render list <title> fields cut: none` (or the cut fields'
   names: a spin box narrower than its value, a button than its text, a
-  choice than its entry; `RenderWorkspace::logLayout`) whenever its title
-  or width changes; the Render workspace test expects `none` for every
-  stage in a 1024 x 768 window.
+  choice than its entry, a tab than its name;
+  `RenderWorkspace::logLayout`) whenever its title or width changes; the
+  Render workspace test expects `none` for every stage in a 1024 x 768
+  window.
 - **Frame and the Shots bar** (the Frame group: Save Shot, Update Shot to
   View and Look Through; Frame's list: the shots, Rename… and Delete under
   them, the saved views; its card: the chosen shot's camera; the bottom
@@ -26807,9 +27092,12 @@ closes when the tab goes; the rendered view is turned on and back by
   button; Preferences › Display shows it again"). In the Floating top bar
   of Windows and Linux it is the row's part `titleBoost`, left of the
   indicators, the chat's button and Preferences
-  (`TitleBar::setBoostButton`; the quick-access group folds before it); in
-  the Docked toolbar at the right end of the tabs' row, as high as the tabs
-  (`Ribbon::addTabRowEndWidget`). The macOS toolbar row of the Floating
+  (`TitleBar::setBoostButton`; the quick-access group folds before it),
+  the same in the Docked layout's top bar (mitcad#2082); where the system
+  shows the menu bar (macOS) in the Docked toolbar's tab row after the
+  quick-access group, as high as the tabs
+  (`Ribbon::addTabRowEndWidget`; `Boost button row: the tab row (Docked,
+  the system's menu bar)`). The macOS toolbar row of the Floating
   layout has none. In a row short of room its label is cut first, down to
   the rocket and the × (its `minimumSizeHint`), so that the Docked tabs'
   row never squeezes the tabs under the + after them (a 1024 px wide
@@ -26833,6 +27121,15 @@ closes when the tab goes; the rendered view is turned on and back by
 - **Places:** `Boost button at x,y` (the label) and `Boost button close at
   x,y` (the ×), in the window's coordinates, logged when they change and
   again when the button comes back.
+- **Compact form** (mitcad#2079): in the macOS Docked tabs' row (the
+  Classic presentation), when the tabs
+  would not all fit beside the whole pill, the rocket and the × close
+  together (`BoostButton::setCompact`, from `Ribbon::fitTabRow`), its name
+  in the tooltip; logged `Boost button compact` (`Boost button wide` when
+  the whole pill comes back), its places `Boost button at x,y` (the
+  rocket) and `Boost button close at x,y` (the ×). Only then do the tabs fold into their » (`Ribbon tab MANAGE
+  folded`, `Ribbon tabs more at x,y`, `Ribbon tabs more menu: MAKE_CNC,
+  MANAGE`); docs/ui-conventions.md 13.
 - **Tests:** the shared steps `tools/ui-scripts/boost-button.mitcad-ui`
   (the click logs the link, the × hides and saves, the Preferences check
   box shows it again) in the Floating and the Docked layout:

@@ -45,7 +45,7 @@ expect-profiles 1
 
 # 2. Its profile converts: the outline is free, one undo restores it.
 mark
-sketch-click 40 30
+sketch-click 30 20
 expect-selection 1 1
 capture-undo-depth converting
 mark
@@ -134,11 +134,11 @@ expect-no-log 'starts with the face.s outline'
 wait-idle
 expect-profiles 1
 mark
-sketch-click 40 30
+sketch-click 30 20
 expect-selection 1 1
 capture-undo-depth freeing
 mark
-sketch-click 40 30 right
+sketch-click 30 20 right
 wait-log '^Context menu: .*Convert to Sketch Geometry'
 popup 'Convert to Sketch Geometry'
 wait-log '^Converted to sketch geometry: c[0-9]+, c[0-9]+, c[0-9]+, c[0-9]+'

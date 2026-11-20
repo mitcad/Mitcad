@@ -38,9 +38,21 @@ five windows with pillar ends in halves, both sills rounded with OCCT's
 fillet alone: valid, the material taken within 2e-3 mm3 of the integral
 over the sills' outlines; before, the fillet failed.
 
+Failures (mitcad#1986): the projection of one contact line onto the other
+blend's surface (GeomProjLib::Curve2d) fails with OCCT's reports of a
+computation it cannot make (ChFi3d_IsComputationFailure, 0016) where the
+two lines are not one: that pair is not merged. Any other failure (a
+broken invariant, a signal) is rethrown.
+
+Test: geometry/tests/test_fillet_consumed_strip.cpp (ctest
+geometry.fillet_consumed_strip): windows in a ring wall 3 thick, each
+window's floor and ceiling rounded with 1.5 on both edges: built, the
+material taken within 2e-3 of the section's. Fails without the patch
+(not done), done with it (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 2104b967..bdcfd871 100644
+index 8b2a244f..2aa27a6e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -28,6 +28,7 @@
@@ -51,7 +63,7 @@ index 2104b967..bdcfd871 100644
  #include <BRep_Tool.hxx>
  #include <BRepTopAdaptor_TopolTool.hxx>
  #include <GeomAPI_ProjectPointOnCurve.hxx>
-@@ -1277,6 +1278,204 @@ static void redirectPoint(TopOpeBRepDS_DataStructure& DStr, const int theOld, co
+@@ -1285,6 +1286,209 @@ static void redirectPoint(TopOpeBRepDS_DataStructure& DStr, const int theOld, co
    }
  }
  
@@ -200,8 +212,13 @@ index 2104b967..bdcfd871 100644
 +            OCC_CATCH_SIGNALS
 +            aPC = GeomProjLib::Curve2d(Ca, fA, lA, Sb);
 +          }
-+          catch (Standard_Failure const&)
++          catch (Standard_Failure const& anException)
 +          {
++            // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++            if (!ChFi3d_IsComputationFailure(anException))
++            {
++              throw;
++            }
 +            aPC.Nullify();
 +          }
 +          if (aPC.IsNull())
@@ -256,7 +273,7 @@ index 2104b967..bdcfd871 100644
  // The part of SurfData Fd after the section through parameter t of its line
  // on side ons (inserted after Fd by the caller); Fd keeps the part before.
  // Both are on Fd's surface, so that they make one face with no section
-@@ -2804,6 +3003,9 @@ void ChFi3d_Builder::Compute()
+@@ -2871,6 +3075,9 @@ void ChFi3d_Builder::Compute()
      if (done)
      {
        turnRidesAgainst(DStr, myRideStripes);
@@ -267,7 +284,7 @@ index 2104b967..bdcfd871 100644
      if (done)
      {
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 9927b376..1647e27b 100644
+index 259426ea..9a0a7701 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -14,6 +14,8 @@

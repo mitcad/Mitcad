@@ -46,6 +46,30 @@ The case: a lid whose rims are rounded with 1 through the mitres of
 earlier roundings of 1 (a reported design's item; a sphere of 1 at each
 corner in the stored body). With 1521, both rims' chains build, valid, the
 faces within 2.5e-4 mm of the stored body's.
+
+The conditions (mitcad#1986) are geometric, not the case's: on both
+supports, at the contacts, the ball's centre moves less than a thousandth
+as fast as the contact along one parameter of the surface and more than a
+hundredth as fast along the other (StillDirection), i.e. any surface that
+is a tube of the ball's radius about a curve through the centre along an
+iso-parameter (a cylinder, a torus of that minor radius, a pipe, a
+rounding's B-spline), whatever the tubes' axes, angle or the guide. A tube
+whose section is not an iso-parameter line is not caught (left, mitcad#1986).
+Only the ratios 1e-3 and ten times it are choices, not derived from the
+case: they separate a still direction (ratio 0) from a moving one (ratio
+about 1 on a surface far wider than the ball).
+
+Test: geometry/tests/test_fillet_stationary_ball.cpp,
+test_top_rim_through_the_mitres and test_both_rims_on_the_half_lid (ctest
+geometry.fillet_stationary_ball; with 1521): a lid of 23 cut by a plane,
+the flat side's edges rounded with 1 and its top rim rounded with 1
+through both corners' mitres, and the lid's half with its cone and post,
+both rims rounded: valid, each corner one new face on the ball's sphere
+within 1e-4, the top corner's area pi / 2 + asin(1 / 22) within 2e-3; the
+port's notes record each rounding failing without 1520 and 1521. Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
 index d188e8fb..454c0d8e 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx

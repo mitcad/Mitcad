@@ -66,6 +66,7 @@ enum class ColorRole {
   TimelineMarker,
   GroupBand, // over an open timeline group's features
   ViewInk,   // text and outlines in the light boxes and pills over the 3D view
+  PopupBorder, // the 1 px frame of a drop-down list, menu or completer under Qt's portable style
   // Object states (with their opacity, kStateDimOpacity).
   BoundText, // a value bound to a formula or a configuration (fx)
   BoundFill,

@@ -3,6 +3,7 @@
 # check-all sources: app/view/ViewController.cpp app/files/RemotePreferences.cpp app/files/RemotePreferences.hpp
 # check-all sources: app/files/Print3d.cpp core/vcs/src/remote/cli.rs
 # check-all sources: app/view/NavigationPreferences.hpp app/framework/PreferencesPageLayout.hpp
+# check-all sources: app/framework/PreferencesSearch.cpp
 # Preferences on a low screen (mitcad#690), with git and without it, on a
 # test screen 768 pixels high:
 #   1. git found on PATH: the Cloud page names it.
@@ -101,6 +102,8 @@ preferences_fit() {
   echo "ok   the page list ($list) shows its entries whole ($entries)"
   ui_focus_dialog '^Preferences$'
   ui_mark
+  # The search field has the keyboard (mitcad#2074): Down goes to the list.
+  ui_step "the page list (Down)"             ui_key Down
   ui_step "the General page (Home)"          ui_key Home
   ui_expect_new "Preferences page: General, minimum " "Preferences on its General page"
   read -r width _ height <<< "$(since 's/^Preferences page: General, minimum \([0-9]* x [0-9]*\)$/\1/p')"

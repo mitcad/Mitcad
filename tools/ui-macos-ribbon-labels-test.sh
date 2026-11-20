@@ -6,8 +6,8 @@
 # Preferences › Display › Toolbar labels (mitcad#1936) on macOS, through the
 # test driver (tools/ui-scripts/ribbon-labels.mitcad-ui, the same script as
 # the Linux and Windows tests'), in the Floating and the Docked layout:
-# Icons only by default (labels by default are the Floating panel's of
-# Windows and Linux, mitcad#1990); Labels under icons in Settings makes the rows
+# Labels under icons by default in Floating (its shared toolbar panel,
+# mitcad#1990), Icons only in Docked; Labels under icons in Settings makes the rows
 # higher and puts Sketch, Extrude, Revolve and Hole under the SOLID tab's
 # Create buttons, Create and Modify stay whole in a wide window and the
 # groups fold from the right in a narrow one; Icons only again.
@@ -22,7 +22,9 @@ fi
 ui_init "$1" "${2:-ui-macos-ribbon-labels}"
 UI_TIMEOUT=180
 for layout in floating docked; do
-  MITCAD_TEST_LABELS_DEFAULT=0 MITCAD_TEST_STEP_MS=70 MITCAD_TEST_INPUT=$here/ui-scripts/ribbon-labels.mitcad-ui \
+  labels_default=0
+  if [ "$layout" = floating ]; then labels_default=1; fi
+  MITCAD_TEST_LABELS_DEFAULT=$labels_default MITCAD_TEST_STEP_MS=70 MITCAD_TEST_INPUT=$here/ui-scripts/ribbon-labels.mitcad-ui \
     ui_run_app "ribbon-labels-$layout" --ui=qt --no-recovery --no-mcp "--chrome=$layout"
   ui_expect_log 'Ribbon group SOLID/CREATE labels: Sketch, Extrude, Revolve, Hole' \
     "the Create group's labels ($layout)"

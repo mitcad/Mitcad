@@ -372,7 +372,7 @@ ui_expect_new "Drawing tool: selection" "back to the selection"
 
 echo "--- A section and a detail, each placed by a click"
 ui_mark
-ui_step "Section View"                     ui_click_logged "Drawing tool Section View"
+ui_step "Section View"                     ui_drawing_tool "Section View"
 ui_expect_new "Drawing tool: Section View" "the section tool is on"
 ui_step "the line's first end, on the view" sheet_click 120 110
 ui_step "its second end, above the view"   sheet_click 120 150
@@ -384,7 +384,7 @@ ui_expect_new '"at":[' "where it goes"
 ui_expect_new "Drawing view 3 at" "the section drawn"
 ui_expect_new "Drawing view 3 selected" "and selected"
 ui_mark
-ui_step "Detail View"                      ui_click_logged "Drawing tool Detail View"
+ui_step "Detail View"                      ui_drawing_tool "Detail View"
 ui_expect_new "Drawing tool: Detail View" "the detail tool is on"
 ui_step "the circle's middle, on the view" sheet_click 86 106
 ui_step "its edge"                         sheet_click 96 106
@@ -414,7 +414,7 @@ no_refusal
 
 echo "--- A break, a panel edit, Delete and Undo"
 ui_mark
-ui_step "Break"                            ui_click_logged "Drawing tool Break"
+ui_step "Break"                            ui_drawing_tool "Break"
 ui_expect_new "Drawing tool: Break" "the break tool is on"
 ui_step "the band's first side, on the view" sheet_click 140 120
 ui_step "its second side"                  sheet_click 150 120
@@ -510,7 +510,7 @@ echo "--- Dimensions, a centre mark and a note on the views (phase 2)"
 # y 140 on the sheet, its left side at x 80; the hole's axis in the middle
 # of the section view, its wall 10 mm of paper either side.
 ui_mark
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 ui_expect_new "Drawing hint: Click a straight edge for its length, or the edges, circles or corners to dimension" "its hint"
 # A click that picks nothing is a hint, not an error (mitcad#1174): off the
@@ -568,14 +568,14 @@ ui_expect_new '"type":"diameter"' "a diameter asked for"
 ui_expect_new "2 = Ø10" "drawn: the hole is 10 across"
 no_refusal
 ui_mark
-ui_step "Center Mark"                      ui_click_logged "Drawing tool Center Mark"
+ui_step "Center Mark"                      ui_drawing_tool "Center Mark"
 ui_expect_new "Drawing tool: Center Mark" "the centre mark tool is on"
 ui_step "the hole's wall"                  shifted_click "Drawing view 3" -10 0
 ui_expect_new '"type":"center_mark"' "a centre mark asked for"
 ui_expect_new "3 = center_mark" "its centreline drawn"
 no_refusal
 ui_mark
-ui_step "Note"                             ui_click_logged "Drawing tool Note"
+ui_step "Note"                             ui_drawing_tool "Note"
 ui_expect_new "Drawing tool: Note" "the note tool is on"
 settled "Drawing panel drawingOption_text"
 ui_step "its text"                         ui_click_logged "Drawing panel drawingOption_text"
@@ -682,7 +682,7 @@ echo "--- A hole table on a top view (phase 3)"
 # The top view at 1:1 above the front view's right half: the block's
 # 40 x 30 at 110..150 x 165..195 on the sheet, the hole at 20, 15 of it.
 ui_mark
-ui_step "Base View"                        ui_click_logged "Drawing tool Base View"
+ui_step "Base View"                        ui_drawing_tool "Base View"
 ui_expect_new "Drawing tool: Base View" "the tool is on"
 settled "Drawing panel drawingOption_direction"
 ui_step "Orientation: Top"                 ui_click_logged "Drawing panel drawingOption_direction"
@@ -724,8 +724,8 @@ ui_step "+ (a second sheet)"               ui_click_logged "Drawing Add Sheet"
 ui_expect_new '"cmd":"add_drawing_sheet"' "a sheet asked for"
 ui_expect_new "Drawing sheet drawn: 0 views" "the new sheet shown"
 ui_mark
-settled "Drawing tool Base View"
-ui_step "Base View"                        ui_click_logged "Drawing tool Base View"
+settled "$(ui_drawing_tool_place "Base View")"
+ui_step "Base View"                        ui_drawing_tool "Base View"
 ui_expect_new "Drawing tool: Base View" "the tool is on"
 ui_step "click the sheet at 150, 100"      sheet_click 150 100
 ui_expect_new '"direction":"top"' "a top view asked for"
@@ -745,8 +745,8 @@ ui_expect_new "Drawing sheet drawn: 5 views" "its five views"
 # Dimension, a diameter as last chosen: one pick on the first sheet, then
 # the second sheet's tab.
 ui_mark
-settled "Drawing tool Dimension"
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+settled "$(ui_drawing_tool_place "Dimension")"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 settled "Drawing view 3"
 ui_step "the hole's wall in the section"   shifted_click "Drawing view 3" 10 0

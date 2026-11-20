@@ -37,12 +37,42 @@ with 0.3 up to a step back of 0.0043, below and above, one rim and both,
 as built and mirrored: valid, a quarter torus at each end, the material
 taken within 2e-6 mm3 of the integral; before, the shape was invalid.
 
+Failures (mitcad#1986): the projection of the torus's contact (its
+p-curve) and the curves of its edge with the wall (ChFi3d_ComputeCurves)
+fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): that candidate is not taken and the
+end is left as before. Any other failure (a broken invariant, a signal)
+is rethrown.
+
+The conditions (mitcad#1986) are partly the case's. General: a lone
+stripe's end where the contact on a plane Fs ends on a line edge with a
+plane strip Fv, the other face a plane square to Fs whose normal is the
+edge's direction (within 1e-6), the face beyond the strip a plane parallel
+to Fs stepped back into the material by the strip's width (within 10
+times the approximation tolerance); any rim, either side, mirrored or not.
+The case's: the strip must be a four-edged rectangle (its far edge a line
+parallel to the contact's edge) and every face a plane, as the step of a
+milled or extruded rim is; a general one would take a strip of any
+outline and a step face of any surface, the torus cut by it (left,
+mitcad#1986). Only the sizes come from the case: the strip narrower than a
+tenth of the radius, where the ball's turn about its contact's end stays
+within the strip's width.
+
+Test: geometry/tests/test_fillet_step_end.cpp (ctest
+geometry.fillet_step_end): a block's edge rounded up to a vertex where its
+wall steps back by micrometres, the step below or above the edge, one rim
+or both, as built or mirrored: valid, one quarter torus per rounding's
+end, the material taken that of the rim's section. These fail without the
+patch (invalid, or 2100 taken) and pass with it; the cases with the
+body's faces in the reverse order and the second rounding run on across
+the step pass only with 0962 (mitcad#1986).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 0c0ab338..9d90d1ce 100644
+index 2aa27a6e..e268b598 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2307,6 +2307,7 @@ void ChFi3d_Builder::Compute()
+@@ -2320,6 +2320,7 @@ void ChFi3d_Builder::Compute()
    myFailedCornerMessages.Clear();
    myFailedStripe.Nullify();
    myNarrowParts.Clear();
@@ -50,7 +80,7 @@ index 0c0ab338..9d90d1ce 100644
    myStripeFailed.Clear();
    myStripeFailure.Clear();
    const auto noteFailure = [this](const occ::handle<ChFiDS_Stripe>& S, const FailureKind K) {
-@@ -3040,6 +3041,37 @@ void ChFi3d_Builder::Compute()
+@@ -3078,6 +3079,37 @@ void ChFi3d_Builder::Compute()
        // (Roundings that consume the face between them meet where their
        // contacts end.)
        joinEndsAlongContacts(DStr, myListStripe, 10. * tolapp3d);
@@ -88,7 +118,7 @@ index 0c0ab338..9d90d1ce 100644
      }
      if (done)
      {
-@@ -3788,7 +3820,13 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -3830,7 +3862,13 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
            ChFi3d_InitChron(cl_perform1corner);
  #endif
            myCorner = Corner_EndMitred;
@@ -126,10 +156,10 @@ index 33734a2a..2b9dbf4a 100644
    //! whose balls are one ball rolling over a narrow face C between them (a
    //! strip that breaks the edge chain, its edges with the common face under
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 495dd7a3..85ec914c 100644
+index 9a0a7701..d6b6f700 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -8999,3 +8999,11 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
+@@ -9012,3 +9012,11 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
    }
    return false;
  }
@@ -142,10 +172,10 @@ index 495dd7a3..85ec914c 100644
 +  return theEnds;
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index e87bb6c0..6a06ee2e 100644
+index 4be97c9d..bbda9f45 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -662,4 +662,22 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
+@@ -681,4 +681,22 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
                                          const double                        Reach,
                                          const double                        Width);
  
@@ -169,7 +199,7 @@ index e87bb6c0..6a06ee2e 100644
 +
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 15699978..6f11773e 100644
+index 8937ad99..0355aa01 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 @@ -42,7 +42,9 @@
@@ -182,7 +212,7 @@ index 15699978..6f11773e 100644
  #include <GeomAdaptor_Curve.hxx>
  #include <IntAna_QuadQuadGeo.hxx>
  #include <BRep_Tool.hxx>
-@@ -3363,6 +3365,645 @@ bool ChFi3d_Builder::PerformCapAtTangentEndFace(const int Index)
+@@ -3373,6 +3375,655 @@ bool ChFi3d_Builder::PerformCapAtTangentEndFace(const int Index)
    return true;
  }
  
@@ -231,8 +261,13 @@ index 15699978..6f11773e 100644
 +    OCC_CATCH_SIGNALS
 +    aPC = GeomProjLib::Curve2d(C, F, L, S);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return occ::handle<Geom2d_Curve>();
 +  }
 +  if (aPC.IsNull())
@@ -615,8 +650,13 @@ index 15699978..6f11773e 100644
 +        continue;
 +      }
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      continue;
 +    }
 +    if (Cb.IsNull() || PcbT.IsNull() || PcbB.IsNull())

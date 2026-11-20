@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451): a start whose kept arrangement has the floating
+# Timeline on a screen no longer connected (the runner renamed its kept
+# screen): the Timeline is back in its dock at the bottom and the log names
+# it ("timelineDock docked: screen gone"); the other docks are as kept, the
+# Browser at the right.
+# Run by tools/ui-dock-state-test.sh (Linux),
+# tools/ui-windows-dock-state-test.ps1 (Windows) and
+# tools/ui-macos-dock-state-test.sh (macOS), all Docked.
+expect-ever '^Dock state restored: .*, timelineDock docked: screen gone' 20
+expect-ever 'View area' 30
+wait-idle
+expect-dock-area timelineDock bottom
+expect-dock timelineDock shown
+expect-dock-area browserDock right
+expect-dock browserDock shown
+expect-never 'TestDriver: FAIL'

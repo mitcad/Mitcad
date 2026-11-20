@@ -23,6 +23,12 @@ was invalid (BRepCheck_UnorientableShape). Such a point (RollsOnAcross:
 not a vertex, on the obstacle edge of both SurfDatas) no longer cuts the
 edge; the edge is cut at its vertices, where the ball passes onto the
 next edge, as before.
+
+Test: geometry/tests/test_fillet_overflow.cpp (ctest
+geometry.suite.fillet_overflow),
+test_rounding_rolls_on_a_bevel_edge_round_the_corners: Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 4215c54..5859439 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

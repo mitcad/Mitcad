@@ -14,6 +14,13 @@ mutex is now a std::recursive_mutex: setting the handlers and handling a
 signal on another thread still exclude each other, and the handler's own
 nested lock goes through.
 
+Test: geometry/tests/port/p0034-raised-signal-reaches-occts-exception.cpp
+(ctest geometry.port.0034), test_raised_segv_is_the_operations_error:
+SIGSEGV raised inside an operation is the operation's error, not
+std::system_error. It shows the patch on Windows only (OCCT's other
+handlers take no such lock). A new test: its failure without the patch is
+still to be shown in the port's before/after run (mitcad#1986).
+
 --- a/src/FoundationClasses/TKernel/OSD/OSD_signal.cxx
 +++ b/src/FoundationClasses/TKernel/OSD/OSD_signal.cxx
 @@ -95,8 +95,9 @@

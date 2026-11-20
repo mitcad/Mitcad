@@ -35,12 +35,28 @@ vertices of other faces).
   extension's length there); else the smooth extension continues from as
   far as one goes (as before where neither does).
 
+The conditions (mitcad#1986) are geometric, not the case's: an open end of
+the spine whose end edge's curve, or the iso-line of a non-rational
+B-spline face along which the edge runs (its p-curve a line along one
+parameter, the iso-line through the edge's end within 10 tol, its tangent
+the edge's within 1e-6 of the cosine), is a non-periodic, non-rational
+curve going on past the edge by more than 1.1 times the extension the walk
+needs; the guide and that curve meeting within 10 tol and tangentially
+(within 1e-6 of the cosine), the guide's own part kept within 10 tol at
+five points. Any such curve qualifies (a helix, any B-spline or iso-line),
+whatever the lead, radius or end faces. Only the margins are chosen: the
+extension taken up to 1.2 times what the walk needs, accepted from 1.1.
+
 Before, the result was invalid, its vertices up to tens of millimetres
-off. Test: a ring's bore threaded from below the ring to above it, the
-thread's root rounded up to the ring's faces (geometry test_sweeps): valid,
-the vertices within 1e-3, the volume added that of the section the ball
-fills turned over the ring's height, and each face's gain that section
-turned through the angle the root rises across it.
+off.
+Test: geometry/tests/test_sweeps.cpp,
+test_thread_roots_rounded_up_to_the_nuts_faces (ctest
+geometry.suite.sweeps.3): a ring's bore threaded from below the ring to
+above it, the thread's root rounded up to the ring's faces: valid, the
+vertices within 1e-3, the volume added that of the section the ball fills
+turned over the ring's height, and each face's gain that section turned
+through the angle the root rises across it. Its failure without the patch
+is still to be shown in the port's before/after run (mitcad#1986).
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -40,6 +40,12 @@ at V, past the ball that touches both (on a rib, radius 3: 2.6e-3 off).
   more than a right angle round the ball from q, so that the sphere cuts
   neither face between the sections) the stripe fails.
 
+Test: geometry/tests/test_fillet_rolling_ball.cpp (ctest
+geometry.suite.fillet_rolling_ball),
+test_rounding_rolling_on_an_edge_into_a_concave_turn: Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 Upstream: the change is local to the walk on a restriction and the
 stripe's chaining; without an edge turning towards the ball nothing
 changes.

@@ -2052,6 +2052,257 @@ std::vector<int> knife_line_apart(const BRepFilletAPI_MakeFillet& maker, const S
   return later;
 }
 
+// The edges of `result` that are pieces of edge `edge` of `body`: on its
+// curve, within its range (an earlier pass of a fillet cuts a selected edge
+// in two where another rounding's blend meets it, and the piece beyond
+// then lies between other faces, under another name).
+std::vector<int> pieces_of(const Shape& body, int edge, const Shape& result) {
+  std::vector<int> out;
+  double first = 0.0, last = 0.0;
+  const Handle(Geom_Curve) curve = BRep_Tool::Curve(body.edge(edge), first, last);
+  if (curve.IsNull()) {
+    return out;
+  }
+  Bnd_Box box;
+  BRepBndLib::Add(body.edge(edge), box);
+  box.Enlarge(1.0e-4);
+  const double within = 1.0e-5;
+  for (int e = 0; e < result.edge_count(); ++e) {
+    const TopoDS_Edge& candidate = result.edge(e);
+    if (BRep_Tool::Degenerated(candidate)) {
+      continue;
+    }
+    const BRepAdaptor_Curve c(candidate);
+    bool on = true;
+    for (const double t : {0.5, 0.2, 0.8}) {
+      const gp_Pnt p = c.Value(c.FirstParameter() + t * (c.LastParameter() - c.FirstParameter()));
+      if (box.IsOut(p)) {
+        on = false;
+        break;
+      }
+      GeomAPI_ProjectPointOnCurve projection(p, curve, first, last);
+      if (projection.NbPoints() == 0 || !(projection.LowerDistance() < within)) {
+        on = false;
+        break;
+      }
+    }
+    if (on) {
+      out.push_back(e);
+    }
+  }
+  return out;
+}
+
+// Foot corners (mitcad#1987): a vertex of three edges where a selected
+// concave edge (a leg's side standing on a plate: its foot) and a selected
+// convex one (the side's edge with the leg's top sloping down to the plate)
+// end together, the angle between them on their common face acute (less
+// than kFootCornerAngle), the third edge (the top's with the plate)
+// concave and not selected. The `.f3d` files' bodies there are the foot's
+// rounding first, run on to the front and cut by the top, and the top's
+// rounding on that result, running on over the foot's blend down to the
+// plate (a corner patch of 2.3 mm² in GitHub #371's Fillet1, matched to
+// 1e-3 mm²); OCCT's single build joins the two roundings where their
+// contacts cross instead, 0.3 to 0.4 mm off. So the convex edges at such
+// corners come after the others (FootCorners, round_edges).
+constexpr double kFootCornerAngle = kHalfPi * 2.0 / 3.0;
+
+class FootCorners {
+public:
+  FootCorners(const Shape& body, const std::vector<int>& owner)
+      : m_body(body), m_owner(owner), m_edgeFaces(body) {
+    TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_VERTEX, TopAbs_EDGE, m_edgesAt);
+  }
+
+  // The later edges of each group of foot corners: a corner's convex edge
+  // with every selected convex edge that meets a later one at a vertex or
+  // on a face (the same roundings' other ends, whose corners then stay as
+  // the single build makes them), groups that share an edge made one.
+  std::vector<std::set<int>> groups() {
+    std::vector<std::set<int>> out;
+    for (int v = 1; v <= m_edgesAt.Extent(); ++v) {
+      const std::vector<int> at = edges_of(v);
+      if (at.size() != 3) {
+        continue;
+      }
+      int convex = -1, concave = -1, other = -1;
+      for (const int e : at) {
+        if (!selected(e)) {
+          other = other < 0 ? e : -2;
+        } else if (kind_of(e) == 1) {
+          convex = convex < 0 ? e : -2;
+        } else if (kind_of(e) == 0) {
+          concave = concave < 0 ? e : -2;
+        }
+      }
+      if (convex < 0 || concave < 0 || other < 0 || kind_of(other) != 0) {
+        continue;
+      }
+      const std::vector<int> cf = m_edgeFaces.at(convex), kf = m_edgeFaces.at(concave);
+      if (std::none_of(cf.begin(), cf.end(), [&](int f) { return std::find(kf.begin(), kf.end(), f) != kf.end(); })) {
+        continue;
+      }
+      const TopoDS_Vertex& vertex = TopoDS::Vertex(m_edgesAt.FindKey(v));
+      const std::optional<gp_Vec> a = leaving(m_body.edge(convex), vertex), b = leaving(m_body.edge(concave), vertex);
+      if (!a || !b || !(a->Angle(*b) < kFootCornerAngle)) {
+        continue;
+      }
+      m_feet.insert(concave);
+      m_seeds.insert(convex);
+      if (std::any_of(out.begin(), out.end(), [&](const std::set<int>& g) { return g.count(convex) > 0; })) {
+        continue;
+      }
+      std::set<int> group = closure({convex});
+      std::vector<std::set<int>> kept;
+      for (std::set<int>& g : out) {
+        if (std::any_of(g.begin(), g.end(), [&](int e) { return group.count(e) > 0; })) {
+          group.insert(g.begin(), g.end());
+        } else {
+          kept.push_back(std::move(g));
+        }
+      }
+      kept.push_back(std::move(group));
+      out = std::move(kept);
+    }
+    return out;
+  }
+
+  // The passes after the first for the later edges `later`, in their
+  // order. A concave edge that meets a later one at a vertex where they
+  // are the only selected edges (not a foot) is built with it, in a pass
+  // of its own before the other later edges: built first, the later
+  // rounding would run on over its blend onto the edges beyond, as one
+  // tangent chain (the legs' outer tops at the tower's front face, rounded
+  // with 5 at the top's foot).
+  std::vector<std::vector<int>> passes(const std::set<int>& later) {
+    std::set<int> together;
+    for (int v = 1; v <= m_edgesAt.Extent(); ++v) {
+      std::vector<int> chosen;
+      for (const int e : edges_of(v)) {
+        if (selected(e)) {
+          chosen.push_back(e);
+        }
+      }
+      if (chosen.size() != 2) {
+        continue;
+      }
+      for (std::size_t k = 0; k < 2; ++k) {
+        const int a = chosen[k], b = chosen[1 - k];
+        if (later.count(a) > 0 && later.count(b) == 0 && m_feet.count(b) == 0 && kind_of(b) == 0) {
+          together.insert(a);
+          together.insert(b);
+        }
+      }
+    }
+    std::vector<std::vector<int>> out;
+    if (!together.empty()) {
+      out.emplace_back(together.begin(), together.end());
+    }
+    std::vector<int> rest;
+    for (const int e : later) {
+      if (together.count(e) == 0) {
+        rest.push_back(e);
+      }
+    }
+    if (!rest.empty()) {
+      out.push_back(rest);
+    }
+    return out;
+  }
+
+  // The corners' own convex edges (after groups()): built after the
+  // others of their pass, where three roundings meet at the far ends of
+  // the legs' tops (OCCT's corner there found an edge twice otherwise).
+  const std::set<int>& seeds() const { return m_seeds; }
+
+private:
+  bool selected(int e) const { return e >= 0 && m_owner[static_cast<std::size_t>(e)] >= 0; }
+
+  // Convex (1), concave (0) or neither (-2), along the whole edge.
+  int kind_of(int e) {
+    const auto found = m_kinds.find(e);
+    if (found != m_kinds.end()) {
+      return found->second;
+    }
+    int kind = -2;
+    try {
+      OCC_CATCH_SIGNALS
+      const std::vector<int> faces = m_edgeFaces.at(e);
+      if (faces.size() == 2 && faces[0] != faces[1]) {
+        const ChFiDS_TypeOfConcavity type = ChFi3d::DefineConnectType(m_body.edge(e), m_body.face(faces[0]),
+                                                                      m_body.face(faces[1]), 1.0e-4, false);
+        kind = type == ChFiDS_Convex ? 1 : type == ChFiDS_Concave ? 0 : -2;
+      }
+    } catch (const Standard_Failure&) {
+    }
+    m_kinds[e] = kind;
+    return kind;
+  }
+
+  // The non-degenerate edges at vertex v (its index in m_edgesAt).
+  std::vector<int> edges_of(int v) const {
+    std::vector<int> out;
+    for (const TopoDS_Shape& e : m_edgesAt(v)) {
+      const int i = m_body.edge_index(e);
+      if (i >= 0 && !BRep_Tool::Degenerated(TopoDS::Edge(e)) && std::find(out.begin(), out.end(), i) == out.end()) {
+        out.push_back(i);
+      }
+    }
+    return out;
+  }
+
+  // The edge's tangent leaving the vertex.
+  static std::optional<gp_Vec> leaving(const TopoDS_Edge& edge, const TopoDS_Vertex& vertex) {
+    const BRepAdaptor_Curve curve(edge);
+    const double t = BRep_Tool::Parameter(vertex, edge);
+    gp_Pnt p;
+    gp_Vec d;
+    curve.D1(t, p, d);
+    if (d.Magnitude() < 1.0e-9) {
+      return std::nullopt;
+    }
+    const bool at_last = std::abs(t - curve.LastParameter()) < std::abs(t - curve.FirstParameter());
+    return at_last ? -d : d;
+  }
+
+  // The selected convex edges meeting one of `later` at a vertex or on a
+  // face, until there are no more, with `later`.
+  std::set<int> closure(std::set<int> later) {
+    for (bool grew = true; grew;) {
+      grew = false;
+      std::set<int> faces;
+      NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
+      for (const int e : later) {
+        const std::vector<int> f = m_edgeFaces.at(e);
+        faces.insert(f.begin(), f.end());
+        vertices.Add(TopExp::FirstVertex(m_body.edge(e)));
+        vertices.Add(TopExp::LastVertex(m_body.edge(e)));
+      }
+      for (int e = 0; e < m_body.edge_count(); ++e) {
+        if (!selected(e) || later.count(e) > 0 || kind_of(e) != 1) {
+          continue;
+        }
+        const std::vector<int> f = m_edgeFaces.at(e);
+        if (vertices.Contains(TopExp::FirstVertex(m_body.edge(e))) ||
+            vertices.Contains(TopExp::LastVertex(m_body.edge(e))) ||
+            std::any_of(f.begin(), f.end(), [&](int x) { return faces.count(x) > 0; })) {
+          later.insert(e);
+          grew = true;
+        }
+      }
+    }
+    return later;
+  }
+
+  const Shape& m_body;
+  const std::vector<int>& m_owner;
+  const detail::EdgeFaces m_edgeFaces;
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> m_edgesAt;
+  std::map<int, int> m_kinds;
+  std::set<int> m_feet;
+  std::set<int> m_seeds;
+};
+
 // Where the rounded corners at both ends of a selected straight edge meet
 // (or all but meet) in its middle (GitHub #353: a cube of 10 rounded by 5
 // on all its edges, every face taken away, the body a ball): the edge
@@ -2225,7 +2476,7 @@ ShapePtr where_corners_meet(const std::string& feature, const Shape& body, const
 // order the sets list their edges (`listed`) or in the body's.
 ShapePtr round_edges(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
                      const std::vector<int>& owner, bool rolling_ball_corners, double scale, bool tight,
-                     bool listed = true) {
+                     bool listed = true, bool foot_corners = true, const std::vector<int>& late = {}) {
   // (Corners that meet in an edge's middle: never given to the kernel's
   // fillet, which never returns there, corners_meet; built as the body's
   // core swept by the ball, or refused in words with no smaller retry,
@@ -2233,6 +2484,58 @@ ShapePtr round_edges(const std::string& feature, const Shape& body, const std::v
   if (rolling_ball_corners) {
     if (ShapePtr cored = where_corners_meet(feature, body, sets, owner, scale)) {
       return cored;
+    }
+  }
+  // Foot corners' convex roundings after the others (FootCorners,
+  // mitcad#1987), group by group as long as the passes build; with none
+  // that builds, the single build as before. (The passes' own builds look
+  // for no foot corners again, nor does the retry in the body's order
+  // below.)
+  if (rolling_ball_corners && foot_corners) {
+    FootCorners corners(body, owner);
+    const std::vector<std::set<int>> groups = corners.groups();
+    ShapePtr best;
+    std::set<int> taken;
+    for (const std::set<int>& group : groups) {
+      std::set<int> later = taken;
+      later.insert(group.begin(), group.end());
+      try {
+        OCC_CATCH_SIGNALS
+        const std::vector<std::vector<int>> passes = corners.passes(later);
+        std::vector<int> first = owner;
+        for (const std::vector<int>& pass : passes) {
+          for (const int edge : pass) {
+            first[static_cast<std::size_t>(edge)] = -1;
+          }
+        }
+        ShapePtr result = round_edges(feature, body, sets, first, rolling_ball_corners, scale, tight, listed, false);
+        for (const std::vector<int>& pass : passes) {
+          std::vector<int> next(static_cast<std::size_t>(result->edge_count()), -1);
+          std::vector<int> pass_late;
+          for (const int edge : pass) {
+            const std::vector<int> found = pieces_of(body, edge, *result);
+            if (found.empty()) {
+              throw std::runtime_error("a foot corner's edge not found again");
+            }
+            for (const int piece : found) {
+              next[static_cast<std::size_t>(piece)] = owner[static_cast<std::size_t>(edge)];
+              if (corners.seeds().count(edge) > 0) {
+                pass_late.push_back(piece);
+              }
+            }
+          }
+          result = round_edges(feature, *result, sets, next, rolling_ball_corners, scale, tight, listed, false, pass_late);
+        }
+        best = result;
+        taken = later;
+      } catch (const Cancelled&) {
+        throw;
+      } catch (const Standard_Failure&) {
+      } catch (const std::exception&) {
+      }
+    }
+    if (best) {
+      return best;
     }
   }
   BRepFilletAPI_MakeFillet maker(body.occt());
@@ -2262,6 +2565,10 @@ ShapePtr round_edges(const std::string& feature, const Shape& body, const std::v
   if (!listed) {
     std::sort(order.begin(), order.end());
   }
+  // (The edges `late` names last: a foot corner's convex edges after the
+  // others of their pass, FootCorners.)
+  std::stable_partition(order.begin(), order.end(),
+                        [&](int edge) { return std::find(late.begin(), late.end(), edge) == late.end(); });
   for (const int edge : order) {
     const int s = owner[static_cast<std::size_t>(edge)];
     if (s < 0 || maker.Contour(body.edge(edge)) != 0) {
@@ -2351,7 +2658,7 @@ ShapePtr round_edges(const std::string& feature, const Shape& body, const std::v
     if (body_order != order) {
       try {
         OCC_CATCH_SIGNALS
-        return round_edges(feature, body, sets, owner, rolling_ball_corners, scale, tight, false);
+        return round_edges(feature, body, sets, owner, rolling_ball_corners, scale, tight, false, false, late);
       } catch (const Cancelled&) {
         throw;
       } catch (...) {

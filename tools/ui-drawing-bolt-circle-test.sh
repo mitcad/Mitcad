@@ -108,8 +108,8 @@ ui_expect_new "Drawing sheet drawn: 1 views" "its top view"
 
 echo "--- 1. A centre pattern on the holes"
 ui_mark
-settled "Drawing tool Center Pattern"
-ui_step "Center Pattern"                   ui_click_logged "Drawing tool Center Pattern"
+settled "$(ui_drawing_tool_place "Center Pattern")"
+ui_step "Center Pattern"                   ui_drawing_tool "Center Pattern"
 ui_expect_new "Drawing tool: Center Pattern" "the tool is on"
 ui_step "the rim of the hole at 0 degrees" polar_click 0 35
 ui_expect_new '"type":"center_pattern"' "a centre pattern asked for"
@@ -119,8 +119,8 @@ ui_step "end the tool (Esc)"               ui_key Escape
 
 echo "--- 2. The bolt circle's diameter (Auto)"
 ui_mark
-settled "Drawing tool Dimension"
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+settled "$(ui_drawing_tool_place "Dimension")"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 ui_step "the pattern's circle at 30 degrees" polar_click 30 30
 ui_expect_new "Drawing picked circle (1)" "a circle picked"

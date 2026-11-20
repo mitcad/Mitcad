@@ -51,26 +51,34 @@ is parametric and verified, the final body the file's within 2e-8 of its
 volume. Needs 1600 (the corner balls of the same chain at the other
 corner of the wall). Before, the corners at both vertices failed.
 
+Failures (mitcad#1986): the meeting of one pair at the ball's section
+fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016); any other failure (a broken
+invariant, a signal) is rethrown. Each pair is joined or left on its own,
+so the pass JoinAtStillBalls has no handler of its own in Compute: a
+meeting that fails part of the way, after it changed the two stripes,
+puts them back as they were (0700's ChFi3d_StripesState).
+
+Test: geometry/tests/test_fillet_still_ball_corners.cpp (ctest
+geometry.fillet_still_ball_corners), test_reported_body: the case
+`fillet-opening-still-corners` of MITCAD_GEOMETRY_CASES (a stored body,
+skipped without it), the opening's wall rounded as one loop: built,
+valid, the ball's face at each corner. Fails without the patch (no
+result), passes with it; a synthetic case of its own is still to be
+written (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 8c1ec05b..17aa37fa 100644
+index d4457747..90571e0d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3787,6 +3787,18 @@ void ChFi3d_Builder::Compute()
-     {
-       // (The stripes as they are.)
-     }
+@@ -3761,6 +3761,11 @@ void ChFi3d_Builder::Compute()
+     // Stripes whose edges a corner of the solid interrupts, one blend over
+     // the corner.
+     JoinAcrossCorners();
 +    // Two stripes of one radius at a vertex, one running on into the ball
 +    // of an earlier rounding of that radius, the other ending on two planes
 +    // that ball touches: they meet at that ball's section.
-+    try
-+    {
-+      OCC_CATCH_SIGNALS
-+      JoinAtStillBalls();
-+    }
-+    catch (Standard_Failure const&)
-+    {
-+      // (The stripes as they are.)
-+    }
++    // (Each pair joined, or left as it was, on its own: mitcad#1986.)
++    JoinAtStillBalls();
      // Blends whose contact crossed a tangent edge of a narrow face of their
      // edge and came back: on that face's surface, cut by the face beyond.
      for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itK(myListStripe); itK.More(); itK.Next())
@@ -106,10 +114,10 @@ index 2e19c5b0..af755114 100644
    //! radii): such pairs are taken out of the stripes (and out of theBad)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx
 new file mode 100644
-index 00000000..31e5eb7f
+index 00000000..6c8640c2
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx
-@@ -0,0 +1,452 @@
+@@ -0,0 +1,466 @@
 +// This file is part of Open CASCADE Technology software library.
 +//
 +// This library is free software; you can redistribute it and/or modify it under
@@ -242,14 +250,28 @@ index 00000000..31e5eb7f
 +      int sensA = 0, sensB = 0;
 +      ChFi3d_IndexOfSurfData(V, SA, sensA);
 +      ChFi3d_IndexOfSurfData(V, SB, sensB);
++      // (SA and SB as they were where the join fails part of the way,
++      // mitcad#1986.)
++      ChFi3d_StripesState aBefore;
++      aBefore.Save(SA);
++      aBefore.Save(SB);
 +      try
 +      {
 +        OCC_CATCH_SIGNALS
 +        found = JoinAtStillBall(SA, sensA == 1, SB, sensB == 1);
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        found = false;
++      }
++      if (!found)
++      {
++        aBefore.Restore();
 +      }
 +    }
 +    any = any || found;

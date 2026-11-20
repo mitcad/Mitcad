@@ -148,6 +148,8 @@ function Preferences-Fit([string]$Pattern, [string]$Description) {
   Write-Host "ok   the page list ($($list.Groups[1].Value)) shows its entries whole ($($list.Groups[2].Value))"
   Ui-FocusDialog '^Preferences$'
   Ui-Mark
+  # The search field has the keyboard (mitcad#2074): Down goes to the list.
+  Ui-Step 'the page list (Down)'           { Ui-Key 'Down' }
   Ui-Step 'the General page (Home)'        { Ui-Key 'Home' }
   Ui-ExpectNew 'Preferences page: General, minimum ' 'Preferences on its General page'
   $general = Since-Match '^Preferences page: General, minimum (\d+) x (\d+)$'

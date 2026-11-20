@@ -35,7 +35,18 @@ spline edge at the far end, where the rolling ball touches the face.
   further on keeps its failure (a key's lens rounded on both edges, 0821,
   is built after such a failure by its own route).
 
+Failures (mitcad#1986): the next start is taken only where the walk fails
+with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016), tested first in the handler 0904
+added; any other failure is rethrown before 0904's stop at the face at the
+end or this retry is tried.
+
 Upstream: new.
+
+Test: pending (mitcad#1986): no synthetic body is known that reaches its
+case; it is verified on the stored design's bodies only
+(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded with
+0.86). A regression test needs such a body first.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index 6aa3ca39..a0004ca1 100644
@@ -200,11 +211,15 @@ index 6fce034c..77d17c31 100644
  
      if (!aBridge.IsEmpty())
      {
-@@ -5264,7 +5327,14 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5264,7 +5327,18 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
          }
-         catch (Standard_Failure const&)
+         catch (Standard_Failure const& anException)
          {
--          if (!RolledToFaceAtEnd())
+-          if (!ChFi3d_IsComputationFailure(anException) || !RolledToFaceAtEnd())
++          if (!ChFi3d_IsComputationFailure(anException))
++          {
++            throw;
++          }
 +          if (RolledToFaceAtEnd())
 +          {
 +          }
@@ -216,11 +231,15 @@ index 6fce034c..77d17c31 100644
            {
              throw;
            }
-@@ -5345,7 +5415,14 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5345,7 +5419,18 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
          }
-         catch (Standard_Failure const&)
+         catch (Standard_Failure const& anException)
          {
--          if (!RolledToFaceAtEnd())
+-          if (!ChFi3d_IsComputationFailure(anException) || !RolledToFaceAtEnd())
++          if (!ChFi3d_IsComputationFailure(anException))
++          {
++            throw;
++          }
 +          if (RolledToFaceAtEnd())
 +          {
 +          }

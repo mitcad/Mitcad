@@ -22,6 +22,14 @@ a law is refused. The spine with a law is not constant on any edge
 at points, which it has none of), and a radius set at a point, or a reset
 of all data, drops it.
 
+Test: geometry/tests/test_dressup.cpp, test_fillet_spline_radius (ctest
+geometry.suite.dressup): a block's edge rounded with a B-spline radius: the
+material removed is 1 - pi/4 times the integral of the radius squared along
+the edge, and each cross-section misses 1 - pi/4 times the radius there
+squared, within 2e-3 (without the patch the contour has no radius). Its
+failure without the patch, stated in its documentation, is still to be shown
+in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx

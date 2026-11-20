@@ -166,8 +166,10 @@ public:
   void showOrientationCubeMenu(const QPoint& globalPosition);
   void showShortcutOverview();
   // Preferences on a page (`general`, `navigation`, `display`, `cache`,
-  // `cloud`, `updates`, `print`); the last one shown when empty.
-  void showPreferences(const QString& page = QString());
+  // `cloud`, `updates`, `print`); the last one shown when empty. `query`
+  // goes into its search field (mitcad#2074): the words a page's command
+  // was found by in the command search.
+  void showPreferences(const QString& page = QString(), const QString& query = QString());
   void showGridSettings();
   // The design's length unit (mitcad#1210), after each change of the
   // model: Grid Settings shows the fixed spacing in it, and the automatic

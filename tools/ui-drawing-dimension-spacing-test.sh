@@ -146,7 +146,7 @@ ui_expect_new "Drawing tool: selection" "back to the selection"
 
 echo "--- The first dimension: where it is clicked"
 ui_mark
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 dimension_between 80 140 160 140
 ui_step "point 12 mm above the view"       sheet_hover 120 152

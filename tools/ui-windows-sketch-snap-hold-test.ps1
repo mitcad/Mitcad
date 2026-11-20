@@ -30,7 +30,9 @@ $design = Join-Path $work 'hold.mitcad'
 if ($LASTEXITCODE -ne 0) { Ui-Fail 'the design was not made' }
 $env:MITCAD_TEST_WORK = $work
 $env:MITCAD_TEST_STEP_MS = '100'
-$env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/sketch-snap-hold.mitcad-ui'
+# The arcs' clicks (steps 5 and 6) clear of the orientation cube
+# (Ui-StepsPannedBefore).
+$env:MITCAD_TEST_INPUT = Ui-StepsPannedBefore 'sketch-snap-hold.mitcad-ui' @('command sketch.arc')
 Ui-StartApp 'sketch-snap-hold' @('--ui=qt', '--no-mcp', '--open', $design)
 $null = $script:UiProcess.Handle
 if (-not $script:UiProcess.WaitForExit(300000)) { Ui-Fail 'snap hold driver timed out' }

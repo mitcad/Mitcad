@@ -19,6 +19,14 @@ intersection"). ChFi3d_Recale now brings the point not taken for reference
 within half a period of the other by as many periods as they lie apart; for
 points less than one and a half periods apart nothing changes.
 
+Test: geometry/tests/test_fillet_crest_corners.cpp,
+test_end_on_a_cylinder_stored_turns_down (ctest
+geometry.fillet_crest_corners): a post with a rib under a chamfer cone whose
+cylinder is trimmed two turns below its basis's parameters, the rib's side
+rounded up to it: the cone's face and the volume removed as on the plain
+post. Its failure without the patch, stated in its documentation, is still
+to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 6abc67a..66780ac 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

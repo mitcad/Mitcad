@@ -104,7 +104,7 @@ ui_expect_new "Drawing sheet drawn: 1 views" "its top view"
 
 echo "--- 1. The shared corner: its body outlined and named"
 ui_mark
-ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
+ui_step "Dimension"                        ui_drawing_tool "Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
 ui_expect_new "Drawing hint: Click a straight edge for its length" "the hint says one straight edge gives its length"
 ui_mark

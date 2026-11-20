@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
 # The Boost development button (mitcad#1990) through the real UI, in the
-# layout the wrapper starts (the Floating top bar of Windows and Linux,
-# left of the indicators; the Docked toolbar's tabs' row at its right
-# end), in a 1024 x 768 window, with a fresh profile:
+# layout the wrapper starts (the top bar of Windows and Linux, left of the
+# indicators, in both layouts since mitcad#2082; in the macOS Docked
+# layout, where the system shows the menu bar, the toolbar's tabs' row
+# after the quick-access group), in a 1024 x 768 window,
+# with a fresh profile:
 #   1. The button shows ("Boost button shown", its places logged); a
 #      picture of it (boost-button.png in MITCAD_TEST_WORK).
 #   2. A click on it opens the project's Ko-fi page: "Boost link opened:

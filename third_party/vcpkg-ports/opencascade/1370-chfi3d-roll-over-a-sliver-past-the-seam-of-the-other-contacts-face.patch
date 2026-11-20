@@ -46,6 +46,17 @@ the rounding of the outer rim, its faces on one surface joined): valid,
 
 Upstream: new.
 
+Test: geometry/tests/test_fillet_roll_over_blend.cpp,
+test_rounding_turns_past_the_seam and
+test_rounding_turns_past_the_seam_other_version (ctest
+geometry.fillet_roll_over_blend): the cases fillet-roll-over-seam and
+fillet-roll-over-seam-2, the rim rounded with OCCT alone against the
+stored body after it; the port's notes record it failing without the
+patch. Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986). The test reads a stored case
+(MITCAD_GEOMETRY_CASES), not a synthetic body: a synthetic test is still
+wanted (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
 index af4b102b..35fe78d5 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx

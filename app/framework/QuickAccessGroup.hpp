@@ -32,8 +32,10 @@ class CommandRegistry;
 // Floating layout's title row has it at the right end of the free part
 // between the document tabs and the indicators or Preferences, flat on the
 // bar, without the commands the bar shows itself (TitleBar, mitcad#1989,
-// mitcad#1990), the Docked toolbar's tab row after the tabs, right of Undo and Redo
-// (Ribbon::addTabRowWidget), where it takes no width from the groups. A button is the command's action
+// mitcad#1990), the Docked toolbar's tab row at its right end, flat, with
+// the ☰, Undo and Redo first in it (setLeadingWidgets, mitcad#2082;
+// Ribbon::addTabRowEndWidget), where it takes no width from the groups. A
+// button is the command's action
 // (icon, enabled state, its run); its tooltip names the command, its key
 // and, while it is disabled, why. The ⋮ (and a right-click on the group)
 // opens its menu: the File, Edit, View and Tools menus' commands as checks
@@ -85,6 +87,16 @@ public:
   // At most `height` high, with smaller icons (the Docked tab row's height,
   // so that the toolbar does not grow).
   void setCompact(int height);
+  // The buttons' icon size (setCompact).
+  int iconSize() const { return m_iconSize; }
+  // Widgets first in the group, before its commands, a hairline after them
+  // (the Docked tab row's ☰, Undo and Redo, mitcad#2082, as the Floating
+  // top bar has them before its commands). They stay while the user hides
+  // the group's commands (Hide Quick-Access Toolbar): then only its own
+  // buttons, its hairlines and its ⋮ hide. Logged with its places as
+  // "Quick access leading ribbonToolbarUndo at x,y: inside the group,
+  // first".
+  void setLeadingWidgets(const QList<QWidget*>& widgets);
   // The commands the row shows with buttons of its own (the Floating title
   // row's Save and Preferences, mitcad#1990): no button of the group's
   // for them, so that none is there twice. They stay chosen and in the
@@ -120,6 +132,9 @@ private:
   QStringList availableIds() const;
   // Hidden for having no buttons (setHiddenWhileEmpty).
   bool isEmptyHidden() const;
+  // Its own buttons, hairlines and ⋮ shown or hidden as m_ownShown and
+  // m_folded say.
+  void updateOwnParts();
   // A source menu's commands as checks in `mirror`; false when it has none.
   bool mirrorMenu(QMenu* mirror, const QMenu* source, const QString& path, QStringList& lines);
   void choose(const QString& id, bool on);
@@ -139,6 +154,9 @@ private:
   QHash<QString, QPointer<QWidget>> m_rowCommands; // setRowCommands
   QList<QMetaObject::Connection> m_rowStates;      // their states followed
   QWidget* m_divider = nullptr;
+  QList<QPointer<QWidget>> m_leading; // setLeadingWidgets
+  QWidget* m_leadingDivider = nullptr; // the hairline after them
+  bool m_ownShown = true;              // its own parts shown (applyVisible)
   QToolButton* m_menuButton = nullptr;
   QHash<QString, bool> m_loggedEnabled;
   QSet<QString> m_menuIds; // the commands the open menu has under File, Edit, View, Tools

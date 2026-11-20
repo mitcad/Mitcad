@@ -31,6 +31,15 @@ built on a trimmed surface; otherwise (a contour winding round the
 surface, a vertex with more than one way on, a hole that cannot be placed,
 a surface periodic in both directions) the seam is taken as before.
 
+Test: geometry/tests/test_helical_joins.cpp,
+test_merge_of_a_ring_cut_through_from_end_to_end (ctest
+geometry.helical_joins): two slabs of four quarters with treads on their
+rim: the rim merged into one face without a seam, valid;
+test_merge_of_a_whole_ring, the boundary case: a whole ring merged into one
+face with a seam as before; test_stair_joined_with_its_stringers: the rim's
+560 pieces merged. Its failure without the patch is still to be shown in the
+port's before/after run (mitcad#1986).
+
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -705,6 +705,275 @@

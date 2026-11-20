@@ -15,6 +15,11 @@ the faces above (an unorientable shape of three faces).
   a side rolling on an obstacle no longer cuts the arc it was found on; the
   obstacle's end at that vertex is handled by CutEdge, as at the last
   surface data's end, which already skipped such points.
+
+Test: geometry/tests/test_fillet_results.cpp (ctest
+geometry.suite.fillet_results),
+test_closed_rounding_rolling_from_a_seam_vertex: Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index d867df2..2da19f1 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

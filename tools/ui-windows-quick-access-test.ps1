@@ -7,35 +7,38 @@
 # Input-driven Windows UI test of the quick-access group (mitcad#1090) in
 # the build VM (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-quick-access-test.sh does on Linux, on a saved plate that
-# mitcad-cli makes, in the Docked layout (after the tabs in the toolbar's
-# tab row) and the Floating one (in the title row at the free part's right
-# end, before the indicators and the search field, where the title box was:
-# mitcad#1989; session 0's 1028 px window may fold it). The group's menu is a context menu here (a right-click on the
-# group), which stays open in session 0 and takes the keys (as in
+# mitcad-cli makes, in the Docked layout and the Floating one, both with
+# the top bar of Windows and Linux (mitcad#2082: in the title row at the
+# free part's right end, before the indicators, where the title box was:
+# mitcad#1989; session 0's 1028 px window may fold it). The group's menu is
+# a context menu here (a right-click on the group), which stays open in
+# session 0 and takes the keys (as in
 # tools/ui-windows-timber-fasteners-test.ps1).
-#   1. Docked, fresh settings: the group shows the default commands this
-#      build has (New, Open, Save, Print, Design Properties, Preferences;
-#      "not in this build" names those it lacks). Save is disabled for the
+#   1. Docked, fresh settings: the top bar's group has no commands (as in
+#      the Floating layout, mitcad#1990) and is not shown, the title row
+#      without its part ("Docked top bar: ..."), no quick-access group in
+#      the toolbar's tab row. Save (the bar's own) is disabled for the
 #      unchanged saved design, enabled after an edit (a fillet on the top
-#      face), disabled again once saved (Ctrl+S). View > Look At checked in
-#      the group's menu shows a seventh button, before Preferences, kept in
-#      the settings. Preferences > Display > Show quick-access toolbar
-#      (mitcad#1189) off hides the group at once, on shows it again with
-#      the same seven buttons; Hide Quick-Access Toolbar at the end of the
-#      group's menu hides it, the choice of commands kept in the settings.
+#      face), disabled again once saved (Ctrl+S). Add to Quick Access, last
+#      in the menu of Measure's row in the SOLID > INSPECT menu: the group
+#      shown with Measure in the title row; View > Look At checked in the
+#      group's menu: a button before Measure, kept in the settings.
+#      Preferences > Display > Show quick-access toolbar (mitcad#1189) off
+#      hides the group at once, on shows it again with the same buttons;
+#      Hide Quick-Access Toolbar at the end of the group's menu hides it,
+#      the choice of commands kept in the settings.
 #   2. Floating: the group hidden at the start (the setting read back), the
 #      title row without its part; Preferences shows it again with the
-#      choice of Docked read back, which wins over the top bar's empty
-#      default (mitcad#1990), and the title row's part (no title box, the
-#      group's right end just left of the next part). Reset to Default in
-#      the group's menu: the top bar's default, no commands, so the group is
-#      not shown, its menu neither (the title row without its part); Save
-#      (the bar's own) disabled, enabled after an edit, disabled once saved;
-#      Add to Quick Access, last in the menu of Measure's row in the SOLID >
-#      INSPECT menu (the Menu key; Up from Pin to Navigation Bar skips the
-#      unavailable Pin to Toolbar and goes round to the last entry): the
-#      group shown with Measure; Look At checked in its menu: a button
-#      before Measure; Preferences hides it, the title row's part gone.
+#      choice of Docked read back, and the title row's part (no title box,
+#      the group's right end just left of the next part). Reset to Default
+#      in the group's menu: the top bar's default, no commands, so the group
+#      is not shown, its menu neither (the title row without its part);
+#      Save disabled, enabled after an edit, disabled once saved; Add to
+#      Quick Access in Measure's row menu (the Menu key; Up from Pin to
+#      Navigation Bar skips the unavailable Pin to Toolbar and goes round to
+#      the last entry): the group shown with Measure; Look At checked in its
+#      menu: a button before Measure; Preferences hides it, the title row's
+#      part gone.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-quick-access-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -70,7 +73,9 @@ Set-Content -Encoding ascii $plateScript @'
 $made = & $Cli run $plateScript --save $plate
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $plate)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
 $ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
-$defaults = @('file.new_design', 'file.open', 'file.save', 'file.design_properties', 'file.print', 'tools.preferences')
+# The top bar has no default commands in either layout (mitcad#1990,
+# mitcad#2082).
+$defaults = @()
 
 # Expect-Group "description" extra...: the last "Quick access: " line shows
 # the default commands this build has ($defaults), in order, with the extra
@@ -221,19 +226,20 @@ function Toggle-Preference([string]$Layout, [string]$State) {
   Ui-ExpectNew "Quick access toolbar $State" "${Layout}: the group $State at once"
 }
 
-# Expect-TitlePart with|without: the last "Floating cards" line, waited
+# Expect-TitlePart with|without: the last "Floating cards" or "Docked top
+# bar" line, waited
 # for, has the title row's quick-access part (titleQuickAccess) or has not;
 # a title box never (mitcad#1989), and the group's right end lies just left
 # of the indicators or the search field (Ui-QuickAccessPlace).
 function Expect-TitlePart([string]$Want) {
   $line = $null
   for ($i = 0; $i -lt 30; $i++) {
-    $line = "$(Ui-LastMatch '^(Floating cards: .*)$')"
+    $line = "$(Ui-LastMatch '^((Floating cards|Docked top bar): .*)$')"
     $has = $line.Contains('; titleQuickAccess ')
     if (($Want -eq 'with' -and $has) -or ($Want -eq 'without' -and -not $has)) { break }
     Start-Sleep -Milliseconds 200
   }
-  if (-not $line.Contains('titleTabs ')) { Ui-Fail "no title row tabs among the Floating cards: '$line'" }
+  if (-not $line.Contains('titleTabs ')) { Ui-Fail "no title row tabs in the top bar: '$line'" }
   $has = $line.Contains('; titleQuickAccess ')
   if ($Want -eq 'with' -and -not $has) { Ui-Fail "the title row has no quick-access part: '$line'" }
   if ($Want -eq 'without' -and $has) { Ui-Fail "the title row still has its quick-access part: '$line'" }
@@ -272,19 +278,31 @@ function Expect-HiddenSetting([string]$Description) {
   Write-Host "ok   ${Description}: hidden in the settings, the choice of commands kept"
 }
 
-Write-Host '--- 1. Docked: the default group, Save, Look At'
+Write-Host '--- 1. Docked: the top bar: empty and hidden, Save, Measure, Look At, hidden'
 $docked = Join-Path $work 'docked.mitcad'
 Copy-Item $plate $docked
 Ui-StartApp 'quick-access-docked' @('--open', $docked)
 Ui-ExpectLog 'Opened ' 'opened' | Out-Null
-Expect-Group 'docked: the default group'
+Ui-ExpectLog 'Quick access: none' 'docked: no commands by default' | Out-Null
+Ui-ExpectLog 'Quick access group hidden: no commands' 'docked: the empty group hidden' | Out-Null
+Expect-TitlePart 'without'
+$tabRow = @(Get-Content $script:UiLog | Where-Object { $_ -match '^(Quick access group: flat|Ribbon tab row end: )' })
+if ($tabRow.Count -gt 0) { Ui-Fail "docked: a quick-access group in the toolbar's tab row: $($tabRow[0])" }
+Write-Host 'ok   docked: no quick-access group in the top bar by default, none in the tab row'
 Save-Steps 'docked'
-Add-LookAt 'docked'
+Ui-Mark
+Add-Measure 'docked'
+Ui-ExpectNew 'Quick access group shown: it has commands' 'docked: the group shown'
+Ui-ExpectNew 'Quick access: ' 'docked: the group made again'
+Expect-Group 'docked: Measure added' @('inspect.measure')
+Expect-TitlePart 'with'
+Add-LookAt 'docked' @('view.look_at', 'inspect.measure')
 Toggle-Preference 'docked' 'hidden'
+Expect-TitlePart 'without'
 Expect-HiddenSetting 'docked, from Preferences'
 Toggle-Preference 'docked' 'shown'
 Ui-ExpectNew 'Quick access: ' 'docked: the group made again'
-Expect-Group 'docked: shown again with the same buttons' @('view.look_at')
+Expect-Group 'docked: shown again with the same buttons' @('view.look_at', 'inspect.measure')
 Open-Menu
 Ui-Mark
 Choose-Top 'Hide Quick-Access Toolbar'
@@ -302,14 +320,13 @@ Ui-ExpectLog 'Quick access toolbar hidden' 'floating: the group hidden at the st
 Expect-TitlePart 'without'
 Toggle-Preference 'floating' 'shown'
 Expect-TitlePart 'with'
-# The saved choice wins over the top bar's empty default (mitcad#1990).
-Expect-Group 'floating: the choice of Docked read back from the settings' @('view.look_at')
+# The choice saved in Docked (mitcad#1990, mitcad#2082).
+Expect-Group 'floating: the choice of Docked read back from the settings' @('view.look_at', 'inspect.measure')
 Open-Menu
 Ui-Mark
 Choose-Top 'Reset to Default'
 Ui-ExpectNew 'Quick access reset to the default' 'floating: Reset to Default'
-# The Floating top bar's default: no commands (mitcad#1990), so no group.
-$defaults = @()
+# The top bar's default: no commands (mitcad#1990), so no group.
 Ui-ExpectNew 'Quick access: none' 'floating: no commands by default'
 Ui-ExpectNew 'Quick access group hidden: no commands' 'floating: the empty group hidden'
 Expect-TitlePart 'without'

@@ -26,6 +26,18 @@ walk failed. The spine from the bottom up rounded it. Now the stretch of
 a walk back to the first end runs from its start to First, and the walk
 gets the forward walk's step: the corner is the ball's eighth either way.
 
+Test: geometry/tests/test_fillet_mitre_same_radius.cpp,
+test_vertical_edge_through_the_mitre (ctest
+geometry.fillet_mitre_same_radius): a box's top edges rounded with 1 at
+each corner, then the vertical edge and the mitre with 1, each edge given
+first, each way round, on the box and on the box mirrored about its middle
+height so that its vertical edges run down: valid, the material taken the
+vertical edge's rounding and the mitre's corner less the ball's eighth
+within 1e-4; the port's notes record three corners of the mirrored box
+failing without the patch, the unmirrored box is the boundary case. Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx

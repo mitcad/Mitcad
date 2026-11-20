@@ -29,7 +29,13 @@ mkdir -p "$MITCAD_TEST_WORK"
 "$cli" run "$here/ui-scripts/sketch-face-outline.json" --save "$MITCAD_TEST_WORK/block.mitcad" \
   > "$UI_OUT/setup.log" 2>&1 || { cat "$UI_OUT/setup.log" >&2; exit 1; }
 UI_TIMEOUT=240
-MITCAD_TEST_INPUT=$here/ui-scripts/sketch-face-outline.mitcad-ui \
+# macOS Settings applies each change immediately and closes with Cmd+W;
+# the shared workflow uses the other platforms' Preferences dialog and OK.
+script=$MITCAD_TEST_WORK/workflow.mitcad-ui
+sed -e 's/\^Preferences\$/^Settings$/g' \
+    -e "s/^button '\\^OK[$]'$/key ctrl+w/" \
+  "$here/ui-scripts/sketch-face-outline.mitcad-ui" > "$script"
+MITCAD_TEST_INPUT=$script \
   ui_run_app sketch-face-outline --ui=qt --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/block.mitcad"
 ui_expect_log "starts with the face's outline: " 'a new sketch on a face starts with its outline'
 ui_expect_log 'Undo: Convert to Sketch Geometry in Sketch2' 'the converted outline restored by one undo'

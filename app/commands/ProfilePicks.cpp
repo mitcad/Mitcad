@@ -2,10 +2,13 @@
 #include "ProfilePicks.hpp"
 
 #include <algorithm>
+#include <exception>
 
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QObject>
+
+#include "../framework/Command.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -18,6 +21,24 @@ bool sameFace(const SelectionItem& a, const SelectionItem& b) {
 }
 
 bool isFace(const SelectionItem& item) { return item.kind == SelectKind::Face; }
+
+// The planar `sketch` query's answer for the sketch of an automatic
+// profile; empty for a 3D sketch, which that query refuses (mitcad#2087:
+// Helix after Convert to 3D Sketch threw out of the command's start), and
+// for a sketch the model cannot answer for. The kind is read from the
+// `feature` query first, as sketchCurveType does with isSpatialSketch.
+QJsonObject planarSketchOf(const QString& uid, const CommandContext& context) {
+  try {
+    if (context.queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}})
+            .value(QStringLiteral("type"))
+            .toString() == QStringLiteral("spatial_sketch")) {
+      return QJsonObject();
+    }
+    return context.queryObject({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), uid}});
+  } catch (const std::exception&) {
+    return QJsonObject(); // not a feature, or one just taken back
+  }
+}
 
 } // namespace
 
@@ -83,6 +104,65 @@ std::optional<SelectionItem> automaticProfile(const QJsonArray& profiles) {
     }
   }
   return drawn ? drawn : leftover;
+}
+
+void newestProfile(CommandState& state, const CommandContext& context) {
+  Selection& profiles = state.items(QStringLiteral("profiles"));
+  if (!profiles.isEmpty()) {
+    return;
+  }
+  // A profile the sketch's own curves bound, before the leftover region
+  // of the face it lies on (mitcad#1226).
+  const QJsonArray all = context.queryArray(QStringLiteral("profiles"));
+  const std::optional<SelectionItem> chosen = automaticProfile(all);
+  if (!chosen) {
+    return;
+  }
+  profiles.append(*chosen);
+  // A region of a QR code brings the code's other dark regions: the code
+  // extrudes whole (mitcad#473). Only a planar sketch holds a code: a 3D
+  // sketch's region is taken alone, on purpose, since the `sketch3d`
+  // query gives plain region keys with no link to a text.
+  const QString sketch = chosen->owner;
+  const QJsonObject model = planarSketchOf(sketch, context);
+  if (model.isEmpty()) {
+    return;
+  }
+  const QJsonArray regions = model.value(QStringLiteral("regions")).toArray();
+  QString text;
+  for (const QJsonValue& value : regions) {
+    const QJsonObject region = value.toObject();
+    if (region.value(QStringLiteral("key")).toString() == chosen->name) {
+      text = region.value(QStringLiteral("text")).toString();
+    }
+  }
+  bool code = false;
+  for (const QJsonValue& value : model.value(QStringLiteral("texts")).toArray()) {
+    const QJsonObject t = value.toObject();
+    code = code || (!text.isEmpty() && t.value(QStringLiteral("id")).toString() == text &&
+                    t.value(QStringLiteral("code")).isObject());
+  }
+  if (!code) {
+    return;
+  }
+  profiles.clear();
+  for (const QJsonValue& value : regions) {
+    const QJsonObject region = value.toObject();
+    const QString key = region.value(QStringLiteral("key")).toString();
+    const bool free = std::any_of(all.begin(), all.end(), [&](const QJsonValue& entry) {
+      const QJsonObject profile = entry.toObject();
+      return !profile.value(QStringLiteral("consumed")).toBool() &&
+             profile.value(QStringLiteral("sketch")).toString() == sketch &&
+             profile.value(QStringLiteral("region")).toString() == key;
+    });
+    if (free && region.value(QStringLiteral("text")).toString() == text &&
+        region.value(QStringLiteral("letter")).toBool()) {
+      profiles.append({SelectKind::Profile, sketch, key, QStringLiteral("plane")});
+    }
+  }
+  if (profiles.isEmpty()) {
+    profiles.append(*chosen);
+  }
 }
 
 } // namespace mitcad::cmd

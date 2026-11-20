@@ -1515,4 +1515,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_dressup_blend_remnants PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.dressup_blend_remnants COMMAND test_dressup_blend_remnants)
   set_tests_properties(geometry.dressup_blend_remnants PROPERTIES TIMEOUT 300)
+
+  # A torus corner whose sides have different radii (a block on a plate,
+  # its vertical edge rounded 5, the feet there 0.8 and 1), with OCCT's
+  # fillet alone: the torus of the larger radius, run on past its section
+  # up to where the smaller rounding's blend crosses it (port patch 1860),
+  # against the volume of the blends' fills; the pocket that is its
+  # complement; a box's convex corner walked as before (mitcad#2091).
+  add_executable(test_fillet_unequal_torus_corner tests/test_fillet_unequal_torus_corner.cpp)
+  target_link_libraries(test_fillet_unequal_torus_corner PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_unequal_torus_corner COMMAND test_fillet_unequal_torus_corner)
+  set_tests_properties(geometry.fillet_unequal_torus_corner PROPERTIES TIMEOUT 300)
 endif()

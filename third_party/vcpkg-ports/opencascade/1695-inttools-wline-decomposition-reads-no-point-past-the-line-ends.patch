@@ -17,6 +17,14 @@ debug build raised Standard_OutOfRange. Each loop now stops before an
 index outside 1..NbPnts, as when it finds no distinct point; every case
 that read only points of the line keeps its result.
 
+Test: geometry/tests/test_dressup_consumes_face.cpp, the chains part
+(ctest geometry.dressup_consumes_face.chains): its third row, a concave
+two-distance chamfer of 0.99 of the strip's width along a tangent chain
+over a cylinder strip, whose reference boolean read past the walking
+line's ends (a crash in a release build, Standard_OutOfRange in a debug
+build). Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx
 --- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx
 +++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx

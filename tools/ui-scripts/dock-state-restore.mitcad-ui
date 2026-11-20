@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451), the start after dock-state-save.mitcad-ui, with the
+# Start page at launch (MITCAD_START_PAGE=1):
+#   1. The kept arrangement restored in the first window, before the Start
+#      page hides the docks: the Browser hidden by the page at the right.
+#   2. The page left: the docks back as they were kept: the Browser at the
+#      right, the Timeline floating at 300, 420, 400 x 160, the Chat panel
+#      shown with View › Panels › Chat checked.
+#   3. The remembered Command width (set to 560 by the first start) is not
+#      applied over the kept arrangement: no "Command panel: dock width ...
+#      restored" (the runner compares the Command panel's width with the
+#      one it had when MitCad ended).
+# Run by tools/ui-dock-state-test.sh (Linux),
+# tools/ui-windows-dock-state-test.ps1 (Windows) and
+# tools/ui-macos-dock-state-test.sh (macOS), all Docked.
+expect-ever '^Dock state restored: .*browserDock right.*timelineDock floating ' 20
+expect-ever '^Start page shown$' 30
+wait-idle
+sleep 300
+wait-idle
+
+# 1. Behind the Start page.
+expect-dock browserDock hidden
+expect-dock timelineDock hidden
+expect-dock-area browserDock right
+
+# 2. The page left: the docks as they were kept.
+mark
+leave-start-page
+wait-log '^Start page hidden$' 10
+wait-idle
+expect-dock browserDock shown
+expect-dock-area browserDock right
+expect-dock timelineDock shown
+expect-dock-float timelineDock 300 420 400 160
+expect-dock chatDock shown
+expect-dock commandDock shown
+
+# 3. The Command panel's width from the kept arrangement.
+sleep 500
+wait-idle
+expect-never '^Command panel: dock width [0-9]+ restored$'
+expect-never 'TestDriver: FAIL'

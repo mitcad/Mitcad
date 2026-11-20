@@ -50,7 +50,13 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'file.create_drawing' = 'F9' } -StepPause 0
+# Export, Add Revision and the tables' tools by keys of the test's own: in
+# session 0's 1024 px window the toolbar panel folds the DRAWING tab's
+# Tables and Export groups into its overflow (Ribbon more DRAWING) and
+# Sheet to its name (mitcad#2082).
+Ui-Init $App $Out $QtBin @{ 'file.create_drawing' = 'F9'; 'drawing.export_pdf' = 'F11'; 'drawing.export_dwg' = 'F12'
+                            'drawing.add_revision' = 'F8'; 'drawing.parts_list' = 'F7'
+                            'drawing.balloon' = 'Shift+F7' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -197,7 +203,7 @@ Ui-Step 'OK: A3, landscape, first angle'  { Ui-FocusDialog '^Create Drawing$'; U
 Ui-ExpectNew 'Create Drawing dialog: template iso, A3' 'the ISO template on its A3'
 Ui-ExpectNew 'Drawing created: D1 Drawing1 in C0' "Drawing1 in the root's folder"
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'
-Ui-ExpectNew 'Drawing tool Base View at' 'the tools laid out'
+Ui-ExpectNew 'Drawing area ' 'the tools laid out'
 Ui-ExpectNew 'Drawing sheet view ' 'the sheet placed'
 # The drawing takes the whole workspace (mitcad#1008): the ribbon's DRAWING
 # tab alone, Close Drawing on it, the drawing's area the 3D view's.
@@ -227,7 +233,7 @@ Ui-Mark
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
 Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
 Ui-Mark
-Ui-Step 'Section View'                    { Ui-ClickLogged 'Drawing tool Section View' }
+Drawing-Tool 'Section View' 'Create'
 Ui-ExpectNew 'Drawing tool: Section View' 'the section tool is on'
 Ui-Step 'the line on the view'            { Sheet-Click 120 110; Sheet-Click 120 150 }
 Ui-ExpectNew 'Drawing placing view' 'the line drawn: its view is placed next'
@@ -235,7 +241,7 @@ Ui-Step 'where the section goes'          { Sheet-Click 48 120 }
 Ui-ExpectNew '"type":"section"' 'the section asked for'
 Ui-ExpectNew 'Drawing view 3 at' 'the section drawn'
 Ui-Mark
-Ui-Step 'Detail View'                     { Ui-ClickLogged 'Drawing tool Detail View' }
+Drawing-Tool 'Detail View' 'Create'
 Ui-ExpectNew 'Drawing tool: Detail View' 'the detail tool is on'
 Ui-Step 'the circle on the view'          { Sheet-Click 86 106; Sheet-Click 96 106 }
 Ui-ExpectNew 'Drawing placing view' 'the circle drawn: its view is placed next'
@@ -243,7 +249,7 @@ Ui-Step 'where the detail goes'           { Sheet-Click 230 70 }
 Ui-ExpectNew '"type":"detail"' 'the detail asked for'
 Ui-ExpectNew 'Drawing view 4 at' 'the detail drawn'
 Ui-Mark
-Ui-Step 'Break'                           { Ui-ClickLogged 'Drawing tool Break' }
+Drawing-Tool 'Break' 'Create'
 Ui-ExpectNew 'Drawing tool: Break' 'the break tool is on'
 Ui-Step 'the band on the view'            { Sheet-Click 140 120; Sheet-Click 150 120 }
 Ui-ExpectNew '"add_break":' 'a break asked for'
@@ -341,8 +347,7 @@ Ui-ExpectNew 'Drawing sheet drawn: 4 views' 'its four views kept'
 Write-Host '--- 5. Export a PDF'
 $pdf = Join-Path $work 'drawing.pdf'
 Ui-Mark
-Ui-Step 'Export...'                         { Ui-ClickLogged 'Drawing Export' }
-Ui-Step 'PDF... (Down, Enter)'              { Ui-Key 'Down'; Ui-Key 'Return' }
+Ui-Step 'Export PDF... (F11)'               { Ui-Key 'F11' }
 Ui-FocusDialog '^Export Drawing$'
 Ui-Step 'the path'                        { Ui-Key 'ctrl+a'; Ui-Type $pdf; Ui-Key 'Return' }
 Ui-FocusMain
@@ -354,8 +359,7 @@ Write-Host "ok   $pdf is a PDF"
 Write-Host '--- 5b. Export a DWG (mitcad#728)'
 $dwg = Join-Path $work 'drawing.dwg'
 Ui-Mark
-Ui-Step 'Export...'                         { Ui-ClickLogged 'Drawing Export' }
-Ui-Step 'DWG... (Down x4, Enter)'           { Ui-Key 'Down'; Ui-Key 'Down'; Ui-Key 'Down'; Ui-Key 'Down'; Ui-Key 'Return' }
+Ui-Step 'Export DWG... (F12)'               { Ui-Key 'F12' }
 Ui-FocusDialog '^Export Drawing$'
 Ui-Step 'the path'                        { Ui-Key 'ctrl+a'; Ui-Type $dwg; Ui-Key 'Return' }
 Ui-FocusMain
@@ -366,8 +370,7 @@ if ($head -ne 'AC1015') { Ui-Fail "$dwg is no R2000 DWG" }
 if (-not (Test-Path (Join-Path $work 'drawing-2.dwg'))) { Ui-Fail 'no DWG file of the second sheet' }
 Write-Host "ok   $dwg is an R2000 DWG, a file per sheet"
 Ui-Mark
-Settled 'Drawing Add Revision'
-Ui-Step 'Add Revision'                    { Ui-ClickLogged 'Drawing Add Revision' }
+Ui-Step 'Add Revision (F8)'               { Ui-Key 'F8' }
 Ui-ExpectNew 'Drawing revision dialog opened: Add Revision' 'its dialog'
 Ui-Step 'its description'                 { Ui-FocusDialog '^Add Revision$'; Ui-Type 'First release'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Drawing revisions: A First release' 'the revision table has it'
@@ -402,7 +405,7 @@ Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
 Ui-Step 'OK'                              { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'
-Ui-ExpectNew 'Drawing group Tables at' "the tables' group on the ribbon"
+Ui-ExpectNew 'Drawing area ' "the drawing's places laid out"
 Ui-ExpectNew 'Drawing sheet view ' 'the sheet placed'
 Ui-ExpectNew 'Drawing tool: Base View' 'Base View on for the new drawing (mitcad#725)'
 Ui-Mark
@@ -413,7 +416,7 @@ Ui-Mark
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
 Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
 Ui-Mark
-Drawing-Tool 'Bill of Materials' 'Tables'
+Ui-Step 'Bill of Materials (F7)'           { Ui-Key 'F7' }
 Ui-ExpectNew 'Drawing tool: Bill of Materials' 'the parts list tool is on'
 # Its balloons off (on by default, mitcad#725): the balloon by hand below.
 Ui-ExpectNew 'Drawing panel drawingOption_balloons at' 'its Balloons option'
@@ -426,7 +429,7 @@ Ui-Step 'where the list goes'             { Sheet-Click 150 190 }
 Ui-ExpectNew '"type":"parts_list"' 'a parts list asked for'
 Ui-ExpectNew '1 = 1 Component1 x2; 2 Component2 x1' 'sorted, numbered and counted'
 Ui-Mark
-Drawing-Tool 'Balloon' 'Tables'
+Ui-Step 'Balloon (Shift+F7)'              { Ui-Key 'shift+F7' }
 Ui-ExpectNew 'Drawing tool: Balloon' 'the balloon tool is on'
 Ui-Step "Component1:2's right side"       { Sheet-Click 154.8 117.5 }
 Ui-ExpectNew 'Drawing picked line (1)' 'its edge picked'

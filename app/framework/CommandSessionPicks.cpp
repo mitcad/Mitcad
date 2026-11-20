@@ -17,6 +17,7 @@
 #include <QtLogging>
 
 #include "CommandSession.hpp"
+#include "InputPicks.hpp"
 #include "ParameterPicker.hpp"
 
 namespace mitcad {
@@ -323,10 +324,7 @@ QString CommandSession::markMissingPicks(const QJsonObject& report) {
     // ones marked: from the picks as they are now, never by their count
     // alone (mitcad#1844: a pick removed and another added left the words
     // of the earlier picks).
-    QStringList words;
-    for (const SelectionItem& item : items) {
-      words << m_host.itemText(item);
-    }
+    const QStringList words = pickWords(items, [this](const SelectionItem& item) { return m_host.itemText(item); });
     if (words != std::as_const(m_state).itemWords(slot.key)) {
       m_state.setItemWords(slot.key, words);
       changed = true;

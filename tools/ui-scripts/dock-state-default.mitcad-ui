@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451), the start after dock-state-screen-gone.mitcad-ui:
+#   1. The Timeline floated again; Window › New Window opens with the
+#      Browser at the right and the Timeline docked ("timelineDock docked:
+#      new window"): two windows' floating panels never lie on each other.
+#   2. Preferences › Display › Restore Default Layout: in both windows at
+#      once the Browser back at the left and the Timeline docked at the
+#      bottom ("Dock state: the default arrangement restored: ...").
+# MitCad ends with the first window active, whose default arrangement is
+# kept.
+# Run by tools/ui-dock-state-test.sh (Linux),
+# tools/ui-windows-dock-state-test.ps1 (Windows) and
+# tools/ui-macos-dock-state-test.sh (macOS), all Docked.
+expect-ever '^Dock state restored: .*browserDock right' 20
+expect-ever 'View area' 30
+wait-idle
+capture-document-window first
+
+# 1. A new window: the arrangement, nothing floating.
+dock-float timelineDock 300 420 400 160
+expect-dock-float timelineDock 300 420 400 160
+mark
+command window.new
+expect-log '^Dock state restored: .*, timelineDock docked: new window' 10
+wait-idle
+expect-dock-area browserDock right
+expect-dock-area timelineDock bottom
+expect-dock timelineDock shown
+
+# 2. Restore Default Layout, in every window at once.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+focus-widget restoreDefaultLayout
+key space
+wait-log '^Preferences: layout restored to the default$'
+key Escape
+expect-log '^Dock state: the default arrangement restored: .*browserDock left.*timelineDock bottom' 10
+wait-idle
+expect-dock-area browserDock left
+expect-dock-area timelineDock bottom
+focus-document-window first
+wait-idle
+expect-dock-area browserDock left
+expect-dock-area timelineDock bottom
+expect-dock timelineDock shown
+expect-never 'TestDriver: FAIL'

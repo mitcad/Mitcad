@@ -33,6 +33,30 @@ the common segment, which covers only part of the rim's contact, and threw
   closed line or crosses the seam, each stripe cut the seam as if alone,
   keeping the face on the side the other consumes: the seam keeps the face
   on a side only where both keep it (combineSeamPoints, joinSeamPoints).
+
+The conditions (mitcad#1986) are geometric, not the case's: two stripes on
+a common face F along different spine edges with no strip of F between
+them, the rider open (neither closed nor periodic), its contact (or each
+of its SurfData's) with both ends inside F or on F's seam, lying within
+the corner tolerance (tolc, ten times tolapp3d as for 0153) of the other's
+contact line at nine points running one way along it, and covering part
+of that line only (the other's may be closed); any radii, any surfaces.
+Only the sample count is a choice: nine points along the contact, enough
+to tell a contact running one way along the other's line from one that
+leaves it, not derived from the case.
+
+Test: geometry/tests/test_fillet_boss_foot_rim.cpp, test_seam_on_the_top,
+test_seam_at_the_foot_end and test_seam_below_the_top (ctest
+geometry.fillet_boss_foot_rim): bars with a coaxial boss (height 2 with
+radius 1, 2.5 with 1.25), the cylinder's seam on the top, at either end of
+the foot and below the top, the boss's foot and rim rounded: valid and
+closed, the volume continuing the smaller radii's within 2e-5 mm3, the
+cylinder's area that of the bar's top from the rim's contact on; the
+port's notes record the fillet failing without the patch, and the smaller
+radii, which build without it, are the boundary cases. Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index b0d8907b..b4816e40 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

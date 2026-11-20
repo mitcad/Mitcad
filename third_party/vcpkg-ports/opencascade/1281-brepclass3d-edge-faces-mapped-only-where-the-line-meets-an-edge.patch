@@ -10,6 +10,12 @@ placement of a union's cavities (BOPAlgo_BuilderSolid) and the checker's
 test of a solid's shells (BRepCheck_Solid) classify tens of points against
 such a solid (mitcad#1279). The map is now made the first time it is read.
 The results are unchanged.
+
+Test: none, because its only effect is speed: the edge-to-faces map is
+made the first time it is read instead of for every point, the
+classification the same, and no test bounds its time. Its results are
+those of geometry.classifier_far_plane and geometry.join_many_bodies,
+OCCT's without the patch.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
 index a7bed33d..ba64963e 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx

@@ -675,8 +675,12 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       }
     });
     statusBar()->addPermanentWidget(m_messageHistoryButton);
-    statusBar()->addPermanentWidget(m_indicator);
-    statusBar()->addPermanentWidget(m_agentIndicator);
+    if (!floatingTopCards()) {
+      // The top bar of Windows and Linux has them in either layout
+      // (mitcad#2082); the Docked layout of macOS here.
+      statusBar()->addPermanentWidget(m_indicator);
+      statusBar()->addPermanentWidget(m_agentIndicator);
+    }
     statusBar()->addPermanentWidget(m_rendererLabel);
   }
   connect(m_viewer, &OcctViewer::glInitialized, this, [this](const QString& renderer) {
@@ -976,9 +980,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
         bar->addButton(find);
       }
     }
-  } else if (auto* titleBar = findChild<TitleBar*>()) {
-    // Before the search field in the title bar row (the Floating row of
-    // Windows and Linux: before Preferences and Help, mitcad#1990).
+  }
+  if (auto* titleBar = m_nativeUi ? nullptr : findChild<TitleBar*>()) {
+    // Before the search field in the title bar row (the top bar of Windows
+    // and Linux, both layouts: before Preferences and Help, mitcad#1990,
+    // mitcad#2082).
     titleBar->setIndicator(m_indicator);
     titleBar->setAgentIndicator(m_agentIndicator);
   }
@@ -2080,8 +2086,12 @@ void MainWindow::fillWindowMenu(QMenu* window) {
 
 void MainWindow::createRibbon() {
   const bool floating = chromeStyle() == ChromeStyle::Floating;
-  m_ribbon = new Ribbon(*m_registry, floating ? Ribbon::Presentation::Mac : Ribbon::Presentation::Classic,
-                        this);
+  // The top bar of Windows and Linux (mitcad#1990) in both layouts
+  // (mitcad#2082): the Docked layout has the Floating layout's title row and
+  // toolbar panel, its panels docks instead of cards.
+  const bool topBar = floatingTopCards();
+  m_ribbon = new Ribbon(*m_registry,
+                        floating || topBar ? Ribbon::Presentation::Mac : Ribbon::Presentation::Classic, this);
 
   // The SELECT group: the selection filters.
   auto* filterMenu = new QMenu(tr("Selection Filters"), this);
@@ -2169,9 +2179,10 @@ void MainWindow::createRibbon() {
   }
 
   // The quick-access group (mitcad#1090): the File, Edit, View and Tools
-  // menus' commands the user chose, in the Floating title row at the right
-  // end of the free part before the indicators (mitcad#1989, mitcad#1990),
-  // after the tabs in the Docked toolbar's tab row.
+  // menus' commands the user chose, in the top bar's title row at the right
+  // end of the free part before the indicators (mitcad#1989, mitcad#1990;
+  // both layouts, mitcad#2082), after the tabs in the macOS Docked
+  // toolbar's tab row.
   QuickAccessGroup::Hooks quickHooks;
   quickHooks.menus = [this] {
     QList<QMenu*> menus;
@@ -2182,10 +2193,10 @@ void MainWindow::createRibbon() {
     }
     return menus;
   };
-  // The Floating top bar of Windows and Linux (mitcad#1990): no default
-  // commands, as the bar has its own File menu, Save and Preferences;
-  // the group shows once the user adds commands. A saved choice still wins.
-  const bool topBar = floating && floatingTopCards();
+  // The top bar of Windows and Linux (mitcad#1990, both layouts): no
+  // default commands, as the bar has its own File menu, Save and
+  // Preferences; the group shows once the user adds commands. A saved
+  // choice still wins.
   QuickAccessSettings::setTopBarDefaults(topBar);
   quickHooks.disabledReason = [this](const QString& id) {
     const CommandDef* def = m_registry->find(id);
@@ -2207,7 +2218,7 @@ void MainWindow::createRibbon() {
         action->icon()));
   }
 
-  if (floating) {
+  if (floating || topBar) {
 #if defined(MITCAD_MAC_UI) && QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
     // The content goes under the native title bar, which the title bar row
     // replaces (the traffic lights stay). Before the window is shown.
@@ -2241,7 +2252,8 @@ void MainWindow::createRibbon() {
       // Help and the version. Below it the toolbar panel: the workspace
       // selector, and a card of the workspace's tabs with the search field
       // and under them the tab's groups (createFloatingPanels places
-      // both).
+      // both over the view in the Floating layout, createDockedTopBar above
+      // the docks in the Docked one, mitcad#2082).
       titleBar->setFloatingRow(true);
       auto* home = new QAction(themeIcon(QStringLiteral("home")), tr("Home"), titleBar);
       home->setToolTip(tr("Shows the Start page: recent designs, new designs and projects"));
@@ -2276,7 +2288,7 @@ void MainWindow::createRibbon() {
         }
       });
       if (menuBar()->isHidden()) {
-        qDebug().noquote() << "Menu bar hidden: Floating";
+        qDebug().noquote() << (floating ? "Menu bar hidden: Floating" : "Menu bar hidden: Docked");
       }
       // Start is no workspace's: Home shows it, and is its tab's place.
       m_ribbon->setStartButton(titleBar->homeButton());
@@ -2285,6 +2297,11 @@ void MainWindow::createRibbon() {
       // view, its Design or Make closes the one open.
       connect(m_ribbon, &Ribbon::workspaceRequested, this,
               [this](const QString& workspace) { requestWorkspace(workspace); });
+      if (!floating) {
+        // The Docked layout (mitcad#2082): the same bar at the window's top,
+        // the panel under it across the window, the docks below them.
+        createDockedTopBar(titleBar);
+      }
       return;
     }
     m_header = new QWidget;
@@ -2297,6 +2314,9 @@ void MainWindow::createRibbon() {
     return;
   }
 
+  // The Docked layout of macOS, where the system shows the menus: the
+  // ribbon's tabs and groups in a tool bar (the top bar of Windows and
+  // Linux is createDockedTopBar's).
   QToolBar* bar = addToolBar(tr("Toolbar"));
   bar->setObjectName(QStringLiteral("ribbonToolbar"));
   bar->setMovable(false);
@@ -2307,40 +2327,212 @@ void MainWindow::createRibbon() {
   // design, and the hidden ribbon came back with the design whenever it
   // was in front again (mitcad#1451).
   bar->toggleViewAction()->setVisible(false);
-  // The ☰ of the hidden menu bar (mitcad#1620) first, before Undo and Redo,
-  // while Preferences › Display › Show the menu bar is cleared.
-  QAction* menuButton = bar->addWidget(new MenuBarButton(menuBar(), bar->iconSize().height()));
-  menuButton->setVisible(MenuBarButton::wanted());
-  connect(&MenuBarNotifier::instance(), &MenuBarNotifier::shownChanged, menuButton,
-          [menuButton](bool) { menuButton->setVisible(MenuBarButton::wanted()); });
-  // Undo and Redo at hand in the application bar; named for the tests of
-  // the bar's colours (mitcad#1245).
+  bar->addWidget(m_ribbon);
+  // The workspace block at the toolbar's left (mitcad#2082), as the
+  // toolbar panel has it: Design, Make, Render and Drawing.
+  m_ribbon->setWorkspaceSelector();
+  connect(m_ribbon, &Ribbon::workspaceRequested, this,
+          [this](const QString& workspace) { requestWorkspace(workspace); });
+  // The quick-access group at the tabs' row's right end, as high as the
+  // tabs: the groups below keep the toolbar's whole width (mitcad#1090: in
+  // the bar itself they collapsed at 1280 px). Flat on the row, as the tabs
+  // are, Undo and Redo first in it (mitcad#2082).
+  const int rowHeight = m_ribbon->tabBar()->sizeHint().height();
+  quickAccess->setFocusPolicy(Qt::NoFocus);
+  quickAccess->setCompact(rowHeight);
+  quickAccess->setFlat(true);
+  qDebug().noquote() << QStringLiteral("Quick access group: %1 (Docked)")
+                            .arg(quickAccess->isFlat() ? QStringLiteral("flat") : QStringLiteral("a capsule"));
+  QList<QWidget*> leading;
+  // Named for the tests of the bar's colours (mitcad#1245).
   for (const char* id : {"edit.undo", "edit.redo"}) {
-    QAction* action = m_registry->action(QString::fromLatin1(id));
-    bar->addAction(action);
-    if (auto* button = qobject_cast<QToolButton*>(bar->widgetForAction(action))) {
-      button->setFocusPolicy(Qt::NoFocus);
-      button->setObjectName(QLatin1String(id) == QLatin1String("edit.undo") ? QStringLiteral("ribbonToolbarUndo")
-                                                                             : QStringLiteral("ribbonToolbarRedo"));
+    auto* button = new RibbonButton(m_registry->action(QString::fromLatin1(id)), quickAccess->iconSize());
+    button->setObjectName(QLatin1String(id) == QLatin1String("edit.undo") ? QStringLiteral("ribbonToolbarUndo")
+                                                                           : QStringLiteral("ribbonToolbarRedo"));
+    leading.append(button);
+  }
+  quickAccess->setLeadingWidgets(leading);
+  m_ribbon->addTabRowEndWidget(quickAccess);
+  // Unless the user hid it (mitcad#1189): then only Undo and Redo stay.
+  quickAccess->applyVisible();
+  // The Boost development button (mitcad#1990) after the quick-access
+  // group: the system's menu bar has no place for it.
+  auto* boost = new BoostButton(rowHeight, [](const QUrl& url) { openExternalUrl(url); });
+  m_ribbon->addTabRowEndWidget(boost);
+  qDebug().noquote() << QStringLiteral("Boost button row: the tab row (Docked, the system's menu bar)");
+  boost->applyVisible();
+  // The command search field at the tabs' row's right end, as the toolbar
+  // panel's card row has it (docs/ui-conventions.md §13, mitcad#2082).
+  QWidget* search = TitleBar::createSearchField(m_registry->action(QStringLiteral("tools.search")), rowHeight);
+  search->setObjectName(QStringLiteral("ribbonSearch"));
+  m_ribbon->addTabRowEndWidget(search);
+}
+
+namespace {
+
+// The Docked top bar's holder in its tool bar (createDockedTopBar): as
+// narrow as the window may be, so that the tool bar never moves it into its
+// overflow menu (a tool bar does so with a widget whose minimum width does
+// not fit); the title row and the panel clip and fold at the right.
+class DockedTopHolder : public QWidget {
+public:
+  using QWidget::QWidget;
+  QSize minimumSizeHint() const override { return QSize(160, QWidget::minimumSizeHint().height()); }
+};
+
+// Keeps the Docked top bar's tool bar as high as its contents ask and the
+// view below it (mitcad#2082). The window's layout can place the docks and
+// the view for the tool bar's new height while the tool bar keeps the
+// height of the pass before: the toolbar panel changes its height (its
+// labels shown or folded for the new width, its pages filled, the Start
+// page hiding it) while the window's layout is applying the old one, and
+// that pass then counts as done. The tool bar stayed 50 px into the view
+// (the panel centred in it), and clicks meant for the view landed on it.
+// After any change of the bar, its contents or the window, the bar's
+// height is compared with what it asks and the view's top with the bar's
+// bottom; where they differ the window is laid out again.
+class DockedTopBarKeeper : public QObject {
+public:
+  DockedTopBarKeeper(QMainWindow* window, QToolBar* bar, QWidget* holder) : QObject(bar), m_window(window), m_bar(bar) {
+    window->installEventFilter(this);
+    bar->installEventFilter(this);
+    holder->installEventFilter(this);
+  }
+
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    switch (event->type()) {
+    case QEvent::LayoutRequest:
+    case QEvent::Resize:
+    case QEvent::Show:
+    case QEvent::Hide:
+      checkLater();
+      break;
+    default:
+      break;
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  void checkLater() {
+    if (m_pending) {
+      return;
+    }
+    m_pending = true;
+    TestSync::singleShot(0, this, [this] { check(); });
+  }
+
+  void check() {
+    m_pending = false;
+    const QWidget* central = m_window->centralWidget();
+    if (!m_bar->isVisible() || central == nullptr || m_window->layout() == nullptr) {
+      return;
+    }
+    // The height QMainWindow's tool bar area gives the bar: its hint within
+    // its minimum and maximum.
+    const int wanted = m_bar->sizeHint()
+                           .expandedTo(m_bar->minimumSizeHint())
+                           .boundedTo(m_bar->maximumSize())
+                           .expandedTo(m_bar->minimumSize())
+                           .height();
+    const int barBottom = m_bar->geometry().bottom() + 1;
+    const int viewTop = central->geometry().top();
+    if (m_bar->height() == wanted && viewTop >= barBottom) {
+      m_tries = 0;
+      return;
+    }
+    // Never a loop of layouts: three passes, then left as it is until the
+    // two agree again.
+    if (m_tries >= 3) {
+      return;
+    }
+    ++m_tries;
+    if (viewTop < barBottom) {
+      // The fault itself (a height still on its way through the layouts
+      // has the view at the bar's bottom).
+      qDebug().noquote() << QStringLiteral("Docked top bar laid out again: tool bar %1 px high, asks %2, view top %3")
+                                .arg(m_bar->height())
+                                .arg(wanted)
+                                .arg(viewTop);
+    }
+    m_window->layout()->invalidate();
+  }
+
+  QMainWindow* m_window;
+  QToolBar* m_bar;
+  bool m_pending = false;
+  int m_tries = 0;
+};
+
+} // namespace
+
+void MainWindow::createDockedTopBar(TitleBar* titleBar) {
+  QToolBar* bar = addToolBar(tr("Toolbar"));
+  bar->setObjectName(QStringLiteral("ribbonToolbar"));
+  bar->setMovable(false);
+  bar->setFloatable(false);
+  // Never offered in the window's menu of its panels (mitcad#1451).
+  bar->toggleViewAction()->setVisible(false);
+  auto* holder = new DockedTopHolder;
+  holder->setObjectName(QStringLiteral("dockedTopBar"));
+  holder->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  auto* column = new QVBoxLayout(holder);
+  column->setContentsMargins(0, 0, 0, 0);
+  column->setSpacing(0);
+  // No minimum of its own from the rows: DockedTopHolder's.
+  column->setSizeConstraint(QLayout::SetNoConstraint);
+  column->addWidget(titleBar);
+  // The toolbar panel under the title row, as far from the window's sides
+  // and from the row as the Floating layout has it from the view's
+  // (FloatingLayout::kMargin and kGap, less the window's own side gap of
+  // the Docked layout, panel::kGap: WindowStyle); the tool bar's gap below
+  // it.
+  m_dockedPanel = new QWidget(holder);
+  m_dockedPanel->setObjectName(QStringLiteral("dockedPanel"));
+  auto* panelRow = new QHBoxLayout(m_dockedPanel);
+  const int side = FloatingLayout::kMargin - panel::kGap;
+  panelRow->setContentsMargins(side, FloatingLayout::kGap, side, 0);
+  panelRow->setSpacing(0);
+  panelRow->addWidget(m_ribbon);
+  column->addWidget(m_dockedPanel);
+  bar->addWidget(holder);
+  new DockedTopBarKeeper(this, bar, holder);
+  // The parts' places for the UI tests, as they change.
+  const auto logLater = [this] { TestSync::singleShot(0, this, [this] { logDockedTopBar(); }); };
+  connect(titleBar, &TitleBar::rowPartsChanged, this, logLater);
+  connect(m_ribbon, &Ribbon::groupCardsChanged, this, logLater);
+  new PlaceWatcher(m_dockedPanel, logLater);
+}
+
+void MainWindow::logDockedTopBar() {
+  if (m_titleRow == nullptr || m_floating != nullptr || !isVisible()) {
+    return;
+  }
+  QWidget* host = window();
+  const auto entry = [host](const QString& part, const QWidget* widget, const QRect& box) {
+    const QPoint at = widget->mapTo(host, box.topLeft());
+    return QStringLiteral("%1 %2,%3 %4x%5").arg(part).arg(at.x()).arg(at.y()).arg(box.width()).arg(box.height());
+  };
+  QStringList parts;
+  parts << entry(m_titleRow->objectName(), m_titleRow, m_titleRow->rect());
+  for (const auto& [part, box] : m_titleRow->rowParts()) {
+    parts << entry(part, m_titleRow, box);
+  }
+  if (m_dockedPanel != nullptr && !m_dockedPanel->isHidden()) {
+    parts << entry(QStringLiteral("ribbon"), m_ribbon, m_ribbon->rect());
+    for (const auto& [part, box] : m_ribbon->panelParts()) {
+      parts << entry(part, m_ribbon, box);
     }
   }
-  if (QWidget* separator = bar->widgetForAction(bar->addSeparator())) {
-    separator->setObjectName(QStringLiteral("ribbonToolbarSeparator"));
+  const QString line = QStringLiteral("Docked top bar: window %1x%2, view top %3; %4")
+                           .arg(host->width())
+                           .arg(host->height())
+                           .arg(m_viewer->mapTo(host, QPoint(0, 0)).y())
+                           .arg(parts.join(QStringLiteral("; ")));
+  if (line != m_loggedDockedTopBar) {
+    m_loggedDockedTopBar = line;
+    qDebug().noquote() << line;
   }
-  bar->addWidget(m_ribbon);
-  // The quick-access group in the tabs' row, right of Undo and Redo, as
-  // high as the tabs: the groups below keep the toolbar's whole width
-  // (mitcad#1090: in the bar itself they collapsed at 1280 px).
-  quickAccess->setFocusPolicy(Qt::NoFocus);
-  quickAccess->setCompact(m_ribbon->tabBar()->sizeHint().height());
-  m_ribbon->addTabRowWidget(quickAccess);
-  // Unless the user hid it (mitcad#1189): then the tabs' row closes up.
-  quickAccess->applyVisible();
-  // The Boost development button (mitcad#1990) at the tabs' row's right
-  // end, as high as the tabs.
-  auto* boost = new BoostButton(m_ribbon->tabBar()->sizeHint().height(), [](const QUrl& url) { openExternalUrl(url); });
-  m_ribbon->addTabRowEndWidget(boost);
-  boost->applyVisible();
 }
 
 void MainWindow::createPanels() {
@@ -2435,7 +2627,13 @@ void MainWindow::createPanels() {
       m_palette->logLayout();
     }
   };
-  TestSync::singleShot(100, commandWidth, [commandWidth] { commandWidth->restore(); });
+  // Not over a kept arrangement of the docks, which has the width the dock
+  // had at quit (mitcad#2070).
+  TestSync::singleShot(100, commandWidth, [this, commandWidth] {
+    if (!m_dockStateRestored) {
+      commandWidth->restore();
+    }
+  });
   // View › Command shows it again once its close button or the window's
   // menu of its panels hid it, as View › Browser and View › Timeline do
   // theirs (mitcad#1455: nothing brought it back). After View › Projects,

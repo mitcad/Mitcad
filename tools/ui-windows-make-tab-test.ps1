@@ -207,8 +207,13 @@ Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 Ui-ExpectLog 'Browser Make markers: none' 'no markers on the Solid tab'
 
 Write-Host "--- 1. The Make workspace's tabs and their groups"
-foreach ($tab in 'SOLID', 'SURFACE', 'SHEET METAL', 'BUILD', 'MAKE_PRINT', 'MAKE_LASER', 'MAKE_CNC', 'MANAGE') {
+# The Docked tab row's selector (mitcad#2082): Design's tabs in sight,
+# Make's in its own workspace until it is chosen (Ui-ClickTab chooses it).
+foreach ($tab in 'SOLID', 'SURFACE', 'SHEET METAL', 'BUILD', 'MANAGE') {
   Ui-ExpectLog "Ribbon tab $tab at" "the $tab tab"
+}
+foreach ($tab in 'MAKE_PRINT', 'MAKE_LASER', 'MAKE_CNC') {
+  Ui-ExpectLog "Ribbon tab $tab out of sight" "the $tab tab in the Make workspace"
 }
 $annotate = 'Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material Note | Process Note | - | Annotations...'
 $inspect = 'Measure | Interference | Section Analysis | Physical Properties | Center of Mass | Add Comment'

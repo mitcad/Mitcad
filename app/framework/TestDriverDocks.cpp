@@ -2,10 +2,13 @@
 // Test steps for the Docked layout's docks (mitcad#1455): the window's menu
 // of its panels opened from a dock's title row (dock-title-context) and its
 // entries (expect-popup-entries), a dock's close button (dock-close), and a
-// dock shown or hidden with its View menu entry (expect-dock); see
+// dock shown or hidden with its View menu entry (expect-dock); a dock
+// floated at a place or docked at an area, and where it is (dock-float,
+// expect-dock-float, dock-area, expect-dock-area; mitcad#2070); see
 // TestDriver.hpp.
 #include "TestDriver.hpp"
 
+#include <cstdlib>
 #include <memory>
 
 #include <QAbstractButton>
@@ -16,6 +19,7 @@
 #include <QDebug>
 #include <QDockWidget>
 #include <QEnterEvent>
+#include <QMainWindow>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPoint>
@@ -23,10 +27,12 @@
 #include <QPointer>
 #include <QRect>
 #include <QRegularExpression>
+#include <QScreen>
 #include <QStringList>
 #include <QtLogging>
 
 #include "ChromeStyle.hpp"
+#include "DockState.hpp"
 
 namespace mitcad {
 namespace {
@@ -62,11 +68,36 @@ QPoint titlePoint(QDockWidget* dock) {
   return QPoint(8, 6);
 }
 
+bool toInt(const QString& text, int& value) {
+  bool ok = false;
+  value = text.toInt(&ok);
+  return ok && value > -100000 && value < 100000;
+}
+
+// A dock area by its name in a step.
+Qt::DockWidgetArea areaNamed(const QString& name) {
+  if (name == QLatin1String("left")) {
+    return Qt::LeftDockWidgetArea;
+  }
+  if (name == QLatin1String("right")) {
+    return Qt::RightDockWidgetArea;
+  }
+  if (name == QLatin1String("top")) {
+    return Qt::TopDockWidgetArea;
+  }
+  if (name == QLatin1String("bottom")) {
+    return Qt::BottomDockWidgetArea;
+  }
+  return Qt::NoDockWidgetArea;
+}
+
 } // namespace
 
 bool TestDriver::runDockStep(const QString& name, const QStringList& a, int line) {
   const bool matches = name == QLatin1String("dock-title-context") || name == QLatin1String("expect-popup-entries") ||
-                       name == QLatin1String("dock-close") || name == QLatin1String("expect-dock");
+                       name == QLatin1String("dock-close") || name == QLatin1String("expect-dock") ||
+                       name == QLatin1String("dock-float") || name == QLatin1String("expect-dock-float") ||
+                       name == QLatin1String("dock-area") || name == QLatin1String("expect-dock-area");
   if (!matches) {
     return false;
   }
@@ -169,6 +200,96 @@ bool TestDriver::runDockStep(const QString& name, const QStringList& a, int line
         QCoreApplication::sendEvent(button, &event);
       });
     }
+    return true;
+  }
+
+  auto* window = qobject_cast<QMainWindow*>(m_main.data());
+  if (name == QLatin1String("dock-float") || name == QLatin1String("expect-dock-float")) {
+    // <dock> <x> <y> <w> <h>: the frame's top left from the main window's
+    // screen's available area's top left, as window-move gives it.
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    if (window == nullptr || !toInt(a.at(1), x) || !toInt(a.at(2), y) || !toInt(a.at(3), width) ||
+        !toInt(a.at(4), height) || width < 1 || height < 1) {
+      fail(line, QStringLiteral("%1 <dock> <x> <y> <w> <h>").arg(name));
+      return true;
+    }
+    const QPointer<QMainWindow> main = window;
+    if (name == QLatin1String("dock-float")) {
+      queue([dock, main, dockName, x, y, width, height, line, this] {
+        const QScreen* screen = main ? main->window()->screen() : nullptr;
+        if (dock.isNull() || screen == nullptr) {
+          fail(line, QStringLiteral("the dock '%1' or its window's screen is gone").arg(dockName));
+          return;
+        }
+        dock->setFloating(true);
+        dock->show();
+        dock->resize(width, height);
+        dock->move(screen->availableGeometry().topLeft() + QPoint(x, y));
+      });
+      return true;
+    }
+    whenReady(
+        [this, dock, main, x, y, width, height] {
+          const QScreen* screen = main ? main->window()->screen() : nullptr;
+          if (dock.isNull() || screen == nullptr || !dock->isFloating() || !dock->isVisible()) {
+            m_waitDetail = QStringLiteral("not floating and shown");
+            return false;
+          }
+          const QPoint at = dock->frameGeometry().topLeft() - screen->availableGeometry().topLeft();
+          m_waitDetail = QStringLiteral("floating at %1, %2, %3x%4")
+                             .arg(at.x()).arg(at.y()).arg(dock->width()).arg(dock->height());
+          return std::abs(at.x() - x) <= 1 && std::abs(at.y() - y) <= 1 && std::abs(dock->width() - width) <= 1 &&
+                 std::abs(dock->height() - height) <= 1;
+        },
+        6, QStringLiteral("the dock '%1' does not float at %2, %3 with the size %4x%5")
+               .arg(dockName).arg(x).arg(y).arg(width).arg(height),
+        [this, dockName] {
+          qInfo().noquote() << QStringLiteral("TestDriver: dock %1 %2").arg(dockName, m_waitDetail);
+        });
+    return true;
+  }
+  if (name == QLatin1String("dock-area") || name == QLatin1String("expect-dock-area")) {
+    const QString areaName = a.at(1);
+    const Qt::DockWidgetArea area = areaNamed(areaName);
+    const bool floating = areaName == QLatin1String("floating") && name == QLatin1String("expect-dock-area");
+    if (window == nullptr || (area == Qt::NoDockWidgetArea && !floating)) {
+      fail(line, QStringLiteral("%1 <dock> left|right|top|bottom%2")
+                     .arg(name, name == QLatin1String("expect-dock-area") ? QStringLiteral("|floating") : QString()));
+      return true;
+    }
+    const QPointer<QMainWindow> main = window;
+    if (name == QLatin1String("dock-area")) {
+      queue([this, dock, main, dockName, area, line] {
+        if (dock.isNull() || main.isNull()) {
+          fail(line, QStringLiteral("the dock '%1' or its window is gone").arg(dockName));
+          return;
+        }
+        if (dock->isFloating()) {
+          dock->setFloating(false);
+        }
+        main->removeDockWidget(dock.data());
+        main->addDockWidget(area, dock.data());
+        dock->show();
+      });
+      return true;
+    }
+    whenReady(
+        [this, dock, main, areaName] {
+          if (dock.isNull() || main.isNull()) {
+            m_waitDetail = QStringLiteral("the dock or its window is gone");
+            return false;
+          }
+          const QString at = dockAreaName(*main, *dock);
+          m_waitDetail = QStringLiteral("at %1").arg(at);
+          return at == areaName;
+        },
+        6, QStringLiteral("the dock '%1' is not at %2").arg(dockName, areaName),
+        [dockName, areaName] {
+          qInfo().noquote() << QStringLiteral("TestDriver: dock %1 at %2").arg(dockName, areaName);
+        });
     return true;
   }
 

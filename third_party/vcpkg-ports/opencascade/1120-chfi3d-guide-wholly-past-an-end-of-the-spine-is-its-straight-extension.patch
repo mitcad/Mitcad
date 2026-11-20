@@ -35,6 +35,16 @@ with its edge on the earlier chamfer's face and the corner's edge there
 guide on past the vertex its corner failed. The plate's chamfer builds
 with both ends of the chain alike: valid, closed, its centre of mass on
 the plate's plane of symmetry within 1e-9 mm.
+
+Test: geometry/tests/test_chamfer_end_against_chamfer.cpp,
+test_chamfer_of_a_chain_ending_against_a_chamfer (ctest
+geometry.chamfer_end_against_chamfer): a plate's chain chamfered from one
+diagonal with OCCT alone: one contour of five edges, valid and closed,
+symmetric about the plate's plane, the volume removed pinned; it fails
+without the patch in TopoDS_Builder::Add (the port's notes). The other
+caller: test_facade_chamfers_ending_against_a_chamfer, the same through
+MitCad's chamfer and a corner of two chamfers. Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 865a08f3..6e8099da 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

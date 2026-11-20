@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's docks kept between starts (mitcad#2070, GitHub
+# mitcad/Mitcad#451), the first start with nothing kept: the window
+# 1000 x 700 at 10, 10; the Command panel's edge dragged 80 px wider; the
+# Browser docked at the right; the Timeline floated with its frame at
+# 300, 420 from the screen's available area's top left, 400 x 160; the Chat
+# panel shown. The remembered Command width (commandPanel/dockWidth, its own
+# key) is then set to 560, so that the next start shows whether it was
+# applied over the kept arrangement. MitCad keeps the docks when it ends
+# after the script ("Dock state saved: ..."). Before the moves, the Render
+# workspace opened the first time, from the workspace selector
+# (mitcad#2082): its docks take the places of the Browser, the Command
+# panel and the Timeline they hide, so that the view and the bottom bar
+# stay where they were (docs/ui-conventions.md 15 and 18, mitcad#2077), and
+# those docks come back at their sizes when the selector's Design closes
+# it.
+# Run by tools/ui-dock-state-test.sh (Linux),
+# tools/ui-windows-dock-state-test.ps1 (Windows) and
+# tools/ui-macos-dock-state-test.sh (macOS), all Docked.
+expect-ever '^Dock state: none saved, the default arrangement$' 20
+expect-ever 'View area' 30
+wait-idle
+
+# The Render workspace's docks in the hidden docks' places.
+window-resize 1400 900
+sleep 300
+wait-idle
+expect-ever '^Ribbon workspace at ' 10
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry RENDER at '
+key Down
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: RENDER$'
+wait-log '^Render workspace opened$' 30
+wait-log '^Render docks in the places of the docks they hide: renderLeftPanel [0-9]+ [(]browserDock [0-9]+[)], renderSettingsPanel [0-9]+ [(]commandDock [0-9]+[)], renderBarPanel [0-9]+ [(]timelineDock [0-9]+[)]$' 10
+wait-idle
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [|] Render [(]current[)] [|] Drawing$'
+wait-log '^Ribbon workspace entry DESIGN at '
+key Up
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Render workspace closed$' 30
+wait-log '^Docks given back at their sizes: browserDock [0-9]+, commandDock [0-9]+, timelineDock [0-9]+$' 10
+wait-idle
+
+window-resize 1000 700
+window-move 10 10
+sleep 300
+wait-idle
+expect-dock-area browserDock left
+expect-dock-area timelineDock bottom
+expect-dock-area commandDock right
+
+# The Command panel's edge dragged wider: remembered as before (mitcad#1825).
+expect-ever '^Command edge at ' 10
+mark
+drag-from '^Command edge at ' -80 0
+expect-log '^Command panel: dock width [0-9]+ remembered$' 10
+wait-idle
+
+# The Browser at the right, the Timeline floating, the Chat panel shown.
+dock-area browserDock right
+expect-dock-area browserDock right
+dock-float timelineDock 300 420 400 160
+expect-dock-float timelineDock 300 420 400 160
+expect-dock-area timelineDock floating
+mark
+command view.chat
+expect-log '^Chat shown$' 10
+expect-dock chatDock shown
+sleep 500
+wait-idle
+set-setting commandPanel/dockWidth 560
+expect-never 'TestDriver: FAIL'

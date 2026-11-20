@@ -9,15 +9,19 @@ expect-command-search '' '*' shortcuts
 screenshot-dialog '${MITCAD_DIALOG_SHOTS}/search-${MITCAD_TEST_COLOR_SCHEME}.png'
 
 # Exact, keyword and fuzzy matches remain navigable in their displayed order.
-# Annotations' fit keyword precedes the axis command's fuzzy name match.
+# Fit Surface's prefix precedes Annotations' keyword and the axis fuzzy match.
 type fit
 expect-command-search fit view.fit disabled
+key Down
+expect-command-search fit solid.mesh_fit_surface disabled
 key Down
 expect-command-search fit view.annotations disabled
 key Down
 expect-command-search fit construct.axis_normal_face disabled
 key Up
 expect-command-search fit view.annotations disabled
+key Up
+expect-command-search fit solid.mesh_fit_surface disabled
 key Up
 expect-command-search fit view.fit disabled
 mark

@@ -106,10 +106,14 @@ SettingsWindow::SettingsWindow(QWidget* parent, Selector selector) : QWidget(par
     layout->setContentsMargins(12, 12, 12, 12);
     auto* row = new QHBoxLayout;
     m_list = new QListWidget;
-    m_list->setObjectName(QStringLiteral("settingsPageList"));
+    m_list->setObjectName(QStringLiteral("preferencesPages"));
     m_list->setSpacing(2);
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    row->addWidget(m_list, 0, Qt::AlignTop);
+    // The list at the top of its column, under the search field (mitcad#2074).
+    m_listColumn = new QVBoxLayout;
+    m_listColumn->addWidget(m_list);
+    m_listColumn->addStretch(1);
+    row->addLayout(m_listColumn);
     row->addWidget(m_pages, 1);
     layout->addLayout(row);
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
@@ -173,9 +177,11 @@ void SettingsWindow::addPane(const QString& title, const QIcon& icon, QWidget* p
   page->setProperty("nativePaneTitle", title);
   if (m_list != nullptr) {
     m_list->addItem(title);
-    // As wide as its entries, with room for a scroll bar.
+    // As wide as its entries with a search's count ("Display (12)",
+    // mitcad#2074), with room for a scroll bar.
     ensurePolished();
-    m_list->setFixedWidth(m_list->sizeHintForColumn(0) + 2 * m_list->spacing() + 2 * m_list->frameWidth() +
+    const int count = m_list->fontMetrics().horizontalAdvance(QStringLiteral(" (99)"));
+    m_list->setFixedWidth(m_list->sizeHintForColumn(0) + count + 2 * m_list->spacing() + 2 * m_list->frameWidth() +
                           m_list->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_list) +
                           m_list->fontMetrics().averageCharWidth());
     m_list->setFixedHeight(m_list->count() * (m_list->sizeHintForRow(0) + 2 * m_list->spacing()) +
@@ -215,6 +221,14 @@ void SettingsWindow::showPane(int index) {
   m_pages->setCurrentIndex(index);
   layout()->invalidate();
   layout()->activate();
+}
+
+void SettingsWindow::setSearchField(QWidget* field) {
+  if (m_listColumn == nullptr || field == nullptr) {
+    return;
+  }
+  m_search = field;
+  m_listColumn->insertWidget(0, field);
 }
 
 int SettingsWindow::currentPane() const { return m_pages->currentIndex(); }

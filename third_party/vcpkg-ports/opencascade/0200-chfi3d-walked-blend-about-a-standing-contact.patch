@@ -31,6 +31,13 @@ The point side is then stored as 0171 stores the side of a ball turning
 about the end of an edge (ChFi3d_FilDS): a degenerated edge of the blend's
 face, no edge on the face.
 
+Test: geometry/tests/test_fillet_results.cpp (ctest
+geometry.suite.fillet_results),
+test_top_rounded_past_a_corner_of_the_balls_radius,
+test_closed_top_rounded_past_four_corners,
+test_pocket_floor_rounded_past_its_corners: Its failure without the patch
+is still to be shown in the port's before/after run (mitcad#1986).
+
 Upstream: local to the walk's transitions and StoreData's orientation; a
 moving contact is unchanged.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx

@@ -41,6 +41,16 @@ as many rectangles, 287 squares and 91 rectangles failed, and so did a
   10 triangles covering the points' box.
 
 Upstream: new.
+
+Test: geometry/io/tests/test_io.cpp, test_rectangular_planes (ctest
+geometry.io; and cli.perf_holes_mesh, no plane of the design redone): a 10
+mm cube, a 5 mm cube placed as the perf_holes design's notch walls and
+four rectangles of the sweep that failed, meshed by both of the view's
+Delabella tiers: every plane triangulated, its triangles covering its
+boundary, none made again. Without the patch the test fails where long
+double has 53 bits (MSVC, ARM) and passes with 64 (GCC and Clang on
+x86-64), so its before/after run needs such a platform or a build whose
+long double has 53 bits (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
 --- a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
 +++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp

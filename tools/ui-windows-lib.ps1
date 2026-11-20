@@ -446,8 +446,8 @@ function Ui-IconsOnly {
 # recovery of autosaved work at start-up (--no-recovery: a test that killed it and starts it
 # again would get the question) unless -Recovery is given, and checks for
 # no updates unless -Updates is given (a test with a server of its own:
-# MITCAD_UPDATE_URL). The window is Docked (--chrome=docked), which the
-# tests were written for, unless the arguments choose a layout (--chrome)
+# MITCAD_UPDATE_URL). The window is Docked (--chrome=docked) with the
+# toolbar's icons only (Ui-IconsOnly), which the tests were written for, unless the arguments choose a layout (--chrome)
 # or -DefaultChrome leaves it to the preference and the default (Floating
 # since mitcad#429).
 function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recovery, [switch]$Updates,
@@ -510,7 +510,12 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   # so the helpers read it meanwhile.
   $options = @('--no-native-dialogs')
   if (-not $Recovery) { $options += '--no-recovery' }
-  if (-not $DefaultChrome -and -not ($Arguments | Where-Object { $_ -like '--chrome*' })) { $options += '--chrome=docked' }
+  if (-not $DefaultChrome -and -not ($Arguments | Where-Object { $_ -like '--chrome*' })) {
+    $options += '--chrome=docked'
+    # Laid out as the tests were written: the Docked toolbar has the
+    # toolbar panel's labels by default since mitcad#2082 (Ui-IconsOnly).
+    Ui-IconsOnly
+  }
   $arguments = ($options + $Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
   $script:UiProcess = Start-Process -FilePath $script:UiApp -ArgumentList $arguments -PassThru `
     -RedirectStandardError $script:UiLog -RedirectStandardOutput (Join-Path $script:UiOut "$Name.out")
@@ -1064,17 +1069,12 @@ function Ui-LogCount([string]$Text) {
   return @(Ui-LogLines | Where-Object { $_.Contains($Text) }).Count
 }
 
-# Ui-Workspace DESIGN|MAKE|RENDER|DRAWING: the toolbar panel's workspace
-# (mitcad#1990) chosen through its selector, as ui_workspace on Linux: a
-# click on the selector ("Ribbon workspace at"), then on the workspace's
-# entry in its list ("Ribbon workspace entry RENDER at"); waited for until
-# it is chosen. The Docked layout ("Chrome: docked" in the log) has no
-# selector and shows every workspace's tabs at once: nothing to choose.
+# Ui-Workspace DESIGN|MAKE|RENDER|DRAWING: the workspace (mitcad#1990)
+# chosen through its selector, the toolbar panel's or the Docked tab row's
+# (mitcad#2082), as ui_workspace on Linux: a click on the selector
+# ("Ribbon workspace at"), then on the workspace's entry in its list
+# ("Ribbon workspace entry RENDER at"); waited for until it is chosen.
 function Ui-Workspace([string]$Name) {
-  if ((Ui-LogCount 'Chrome: docked') -gt 0) {
-    Write-Host "     the Docked layout shows every workspace's tabs: $Name needs no choosing"
-    return
-  }
   $menus = Ui-LogCount 'Ribbon workspace menu: '
   $chosen = Ui-LogCount "Ribbon workspace chosen: $Name"
   Ui-ClickLogged 'Ribbon workspace'
@@ -1248,6 +1248,27 @@ function Ui-PickOriginRow([string]$Name) {
     $script:UiMark = $mark
   }
   Ui-Step "pick $Name in the browser"        { Ui-ClickLogged $row }
+}
+
+# Ui-StepsPannedBefore script line...: the shared steps of a test driver
+# script (tools/ui-scripts/<script>) in a file of the test's own, with the
+# view panned left and down before the first line that equals each given
+# line; its path, for MITCAD_TEST_INPUT. In session 0's 1024x768 desktop
+# the Docked top bar (mitcad#2082) leaves the view low, and a sketch's
+# points in the upper right of a fitted sketch lie under the orientation
+# cube, where a click turns the view instead (the middle drag pans with
+# the middle-pan navigation; Linux and macOS have the room).
+function Ui-StepsPannedBefore([string]$Script, [string[]]$Lines) {
+  $steps = (Get-Content -Raw (Join-Path $PSScriptRoot "ui-scripts/$Script")) -replace "`r`n", "`n"
+  $pan = "view-navigation middle-pan`ndrag 55 45 45 53 middle`nwait-idle`n"
+  foreach ($line in $Lines) {
+    $at = $steps.IndexOf("`n$line`n")
+    if ($at -lt 0) { Ui-Fail "the steps of $Script have no line '$line'" }
+    $steps = $steps.Substring(0, $at + 1) + $pan + $steps.Substring($at + 1)
+  }
+  $file = Join-Path $script:UiOut ($Script -replace '\.mitcad-ui$', '-panned.mitcad-ui')
+  Set-Content -Encoding ascii $file $steps
+  return $file
 }
 
 # Ui-SketchAt x y: the window point of a sketch point (mm), from the logged

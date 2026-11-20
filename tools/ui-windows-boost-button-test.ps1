@@ -49,17 +49,16 @@ foreach ($layout in @('floating', 'docked')) {
   Ui-ExpectLog 'Boost button hidden' "${layout}: the x hides it"
   Ui-ExpectLog 'Preferences: Boost development button shown' "${layout}: Preferences shows it again"
   Ui-ExpectLog 'TestDriver: done' "${layout}: the Boost development button"
-  if ($layout -eq 'floating') {
-    # In the top bar, left of the project indicator.
-    $cards = Ui-LastMatch '^(Floating cards: .*)$'
-    $boost = @(($cards -split '; ') | Where-Object { $_ -match '^titleBoost ' })
-    $indicator = @(($cards -split '; ') | Where-Object { $_ -match '^titleIndicator ' })
-    if ($boost.Count -eq 0 -or $indicator.Count -eq 0) { Ui-Fail "no titleBoost or titleIndicator in the top bar: '$cards'" }
-    $boostX = [int]((($boost[0] -split ' ')[1] -split ',')[0])
-    $indicatorX = [int]((($indicator[0] -split ' ')[1] -split ',')[0])
-    if ($boostX -ge $indicatorX) { Ui-Fail "the Boost button is not left of the project indicator: '$cards'" }
-    Write-Host 'ok   floating: the Boost button in the top bar, left of the project indicator'
-  }
+  # In the top bar, left of the project indicator, in both layouts
+  # (mitcad#2082).
+  $cards = Ui-LastMatch '^((Floating cards|Docked top bar): .*)$'
+  $boost = @(($cards -split '; ') | Where-Object { $_ -match '^titleBoost ' })
+  $indicator = @(($cards -split '; ') | Where-Object { $_ -match '^titleIndicator ' })
+  if ($boost.Count -eq 0 -or $indicator.Count -eq 0) { Ui-Fail "no titleBoost or titleIndicator in the top bar: '$cards'" }
+  $boostX = [int]((($boost[0] -split ' ')[1] -split ',')[0])
+  $indicatorX = [int]((($indicator[0] -split ' ')[1] -split ',')[0])
+  if ($boostX -ge $indicatorX) { Ui-Fail "the Boost button is not left of the project indicator: '$cards'" }
+  Write-Host "ok   ${layout}: the Boost button in the top bar, left of the project indicator"
   $picture = Join-Path $env:MITCAD_TEST_WORK 'boost-button.png'
   if (-not (Test-Path $picture) -or (Get-Item $picture).Length -eq 0) { Ui-Fail "no picture boost-button.png ($layout)" }
   Copy-Item $picture (Join-Path $pictures "boost-button-$layout.png")

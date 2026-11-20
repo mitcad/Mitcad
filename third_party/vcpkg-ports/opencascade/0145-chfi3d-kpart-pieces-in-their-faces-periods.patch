@@ -17,6 +17,11 @@ face's period where it lies wholly outside it (ChFi3d_PCurveInFacePeriod,
 
 Before, the chamfer of the case gave an unorientable face.
 
+Test: geometry/tests/test_chamfer_overflow.cpp (ctest
+geometry.suite.chamfer_overflow),
+test_chamfer_of_a_boss_beyond_a_plate_corner: Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index bf713193..610133a8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

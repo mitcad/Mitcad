@@ -29,7 +29,26 @@ body: valid, the file's change of volume within 1.4e-7 of the stored
 state's (it failed in both orders of the two rims); on the stored body,
 whose circles turn the same way, unchanged.
 
+The condition (mitcad#1986) is geometric, not the case's: any rider of
+0016 whose own line on the support runs against the line it rides (its
+tangents at 30 and 70 % of it, at their projections on that line, both
+pointing against it, the mean cosine below -0.5); the spines' ways come
+from the edges' curves of any body, not only a ring's circles. Both
+samples must agree, so a rider whose way changes along the line is left
+as before. Only the sizes come from the case: the two sample fractions
+and the ends matched within 10 times the approximation tolerance.
+
 Upstream: new.
+
+Test: geometry/tests/test_fillet_ride_against.cpp,
+test_rims_turning_opposite_ways_lower_first and
+test_rims_turning_opposite_ways_upper_first (ctest
+geometry.fillet_ride_against): a disc 2.5 thick whose rims' circles turn
+opposite ways, rounded with 1.5 on both rims in either order: valid, the
+volume the section's revolution has within 1e-6 (invalid without the patch
+by its documentation). Its failure without the patch is still to be shown in
+the port's before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index f517a95c..2104b967 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

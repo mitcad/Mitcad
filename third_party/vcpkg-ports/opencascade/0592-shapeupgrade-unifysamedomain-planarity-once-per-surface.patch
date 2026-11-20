@@ -17,6 +17,14 @@ IntUnifyFaces now keeps the result for each surface it tested (a face
 without a location; a located surface is tested as before), so a surface
 is sampled once. The results are those of the test itself.
 
+Test: none, because the patch's only effect is speed: the face merge tests
+each surface for planarity once instead of once per neighbouring face, with
+the test's own results, and no count of that work is observable from outside
+the merge. geometry/tests/test_multi_turn_faces.cpp,
+test_merge_after_a_cut_across_a_multi_turn_thread (ctest
+geometry.multi_turn_faces) checks that the merge after a box cut across a
+32-turn thread keeps the cut's result: valid, the same volume and faces.
+
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -1584,11 +1584,62 @@

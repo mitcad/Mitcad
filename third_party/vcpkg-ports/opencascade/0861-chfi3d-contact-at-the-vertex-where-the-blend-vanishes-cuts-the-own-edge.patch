@@ -23,25 +23,36 @@ Fo, on an edge of F across which a face Fn goes on tangentially from F, Fn
 meeting Fo along an edge from V) a vertex interference on E at V, with the
 contact's transition carried over to E as E lies in F.
 
+Test: geometry/tests/test_fillet_near_tangent_contour.cpp,
+test_blend_thinner_than_the_vertex_tolerance (ctest
+geometry.fillet_near_tangent_contour): the same block with the vertex
+between the first two edges at a tolerance of 0.02, above the blend's half
+width there: valid, no part of the second edge left. Its failure without the
+patch, stated in its documentation, is still to be shown in the port's
+before/after run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 8d2944b..120fcb6 100644
+index cb905b3e..11ed2ab9 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2642,6 +2642,9 @@ void ChFi3d_Builder::Compute()
+@@ -2686,8 +2686,10 @@ void ChFi3d_Builder::Compute()
        // Contacts along whole edges of their faces, once the corners are done.
        ChFi3d_ContactsAlongFaceEdges(DStr, st, myEFMap, tolapp3d);
        ChFi3d_FilDS(solidindex, st, DStr, myRegul, tolapp3d, tol2d);
+-      // Blends a face of the solid pokes through (each hole made, or not,
+-      // on its own: mitcad#1986).
 +      // Contacts ending at a vertex of the spine where the blend comes to
 +      // nothing: on the spine's own edge there as well.
 +      ChFi3d_OwnEdgesAtVertices(st, DStr, myVEMap, myEFMap);
-       // Blends a face of the solid pokes through.
-       try
-       {
++      // Blends a face of the solid pokes through.
+       PierceBlends(st);
+       // Narrow faces consumed by blends on their edges (edge overflow).
+       ChFi3d_CutConsumedFaces(DStr, st, myEFMap);
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 1641937..71c2231 100644
+index 71fefc0d..260c4ad0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -8576,3 +8576,146 @@ void ChFi3d_LoadScrewContinued(BRepAdaptor_Surface& HS, const double Tol)
+@@ -8602,3 +8602,146 @@ void ChFi3d_LoadScrewContinued(BRepAdaptor_Surface& HS, const double Tol)
    }
    HS.Load(aExt, u0, u1, v0, v1, HS.Trsf());
  }
@@ -189,13 +200,13 @@ index 1641937..71c2231 100644
 +  }
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index d914501..34cd509 100644
+index 7231eeff..e83d3556 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -633,4 +633,16 @@ TopoDS_Face ChFi3d_WidenedFace(const TopoDS_Face& F, const double R);
+@@ -748,4 +748,16 @@ bool ChFi3d_CutBetween(const occ::handle<Geom_Surface>& S,
  //! the surface's bounds or F's bounds widened by F's size and ten radii.
  TopoDS_Face ChFi3d_WidenedFace(const TopoDS_Face& F, const double R);
-
+ 
 +//! A contact of the stripe's blend on face F that ends at a vertex V of the
 +//! edge E between F and the blend's other face Fo (the blend thinner there
 +//! than V's tolerance: it comes to nothing at V), on another edge of F

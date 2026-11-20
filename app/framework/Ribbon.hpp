@@ -99,7 +99,7 @@ public:
   // DRAWING)", "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD,
   // MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)".
   void setDrawingMode(bool open, bool cutSheet = false);
-  // The Render workspace (setPanel only, mitcad#1990): its RENDER tab alone
+  // The Render workspace (the selector's, mitcad#1990, mitcad#2082): its RENDER tab alone
   // in the bar while on, as a drawing's is; off, Design's tabs come back
   // with the one shown before. Logged as "Ribbon tabs: RENDER (shown
   // RENDER)". Nothing while a drawing's tab is there.
@@ -170,13 +170,13 @@ public:
   // The workspace tabs. In the Mac presentation the bar is not part of the
   // ribbon's layout: whoever hosts it (the title bar) places it.
   QTabBar* tabBar() const { return m_tabs; }
-  // The Classic presentation (Docked): a widget in the tabs' row, right after
-  // the tabs (the quick-access group, mitcad#1090), so that the groups below
-  // keep the toolbar's width. Not for the Mac presentation.
-  void addTabRowWidget(QWidget* widget);
-  // The Classic presentation: a widget at the right end of the tabs' row
-  // (the Boost development button, mitcad#1990), after its free stretch.
-  void addTabRowEndWidget(QWidget* widget);
+  // The Classic presentation (Docked): a widget at the right end of the
+  // tabs' row, after its free stretch, so that the groups below keep the
+  // toolbar's width (mitcad#1090): the quick-access group and the command
+  // search field (mitcad#2082), the Chat button; `first` puts it right
+  // after the stretch, before those added already. Not for the Mac
+  // presentation.
+  void addTabRowEndWidget(QWidget* widget, bool first = false);
 
   // The Floating layout's group cards (mitcad#425, floatingTopCards(): Windows
   // and Linux): the ribbon floats over the 3D view, each group a card of its
@@ -203,6 +203,27 @@ public:
   // build().
   void setPanel(QWidget* search);
   bool isPanel() const { return m_panel; }
+  // The macOS Docked layout's workspace selector (the Classic
+  // presentation, mitcad#2082; Windows and Linux have the toolbar panel,
+  // setPanel, in both layouts): the toolbar panel's block (card material, the
+  // workspace's icon, its name and "Workspace ˅" under it) at the
+  // toolbar's left, as high as the tab row and the groups' row together,
+  // 8 px to them, with the same list and choices as the toolbar panel's
+  // (setWorkspace, workspaceRequested); the tab row then shows the
+  // workspace's tabs, and the Start tab stays first in it (there is no
+  // Home button). Logs "Ribbon workspace block: left of the card (...),
+  // as high as both rows: yes (...)" and the toolbar's fonts ("Ribbon
+  // fonts: ..."). Call it after build().
+  void setWorkspaceSelector();
+  // Whether the toolbar has the workspace selector (setPanel or
+  // setWorkspaceSelector).
+  bool hasWorkspaceSelector() const { return m_workspaces; }
+  // The macOS Docked toolbar over the Start page (setWorkspaceSelector,
+  // mitcad#2082): `on`, the workspace block and the groups' row hidden and
+  // the tab row alone the way back (the window has no designs' tabs then);
+  // off, both back as they were. The window logs it.
+  void setTabRowOnly(bool on);
+  bool tabRowOnly() const { return m_tabRowOnly; }
   // setPanel: the panel's parts for the Floating layout (its log, the
   // view's free area), in the ribbon's coordinates: "ribbonWorkspace" (the
   // selector), "ribbonTabs" (the tabs and their +), "ribbonSearch", then
@@ -222,9 +243,11 @@ public:
   // RENDER tab, while the workspace is chosen: setRenderMode) and DRAWING
   // (a drawing's or a cut sheet's tab, while one is open). The tab row
   // shows the tabs of the workspace shown; Start is no workspace's (the
-  // title row's Home shows it, the panel hidden over it) and SKETCH comes
-  // into any while sketching.
-  // Without the panel (Docked, macOS) every tab shows, as before.
+  // title row's Home shows it, the panel hidden over it; first in the
+  // Docked tab row, setWorkspaceSelector) and SKETCH comes into any while
+  // sketching.
+  // Without a selector (the macOS Floating title bar) every tab shows, as
+  // before.
   static QStringList workspaces();
   // The workspace of a tab ("SOLID": DESIGN); empty for START and SKETCH.
   static QString workspaceOfTab(const QString& tab);
@@ -233,7 +256,7 @@ public:
   // The workspace shown: DRAWING while a drawing's tab is there, else the
   // model's (DESIGN at first).
   QString workspace() const;
-  // The selector's choice (setPanel only): DESIGN or MAKE shows that
+  // The selector's choice (setPanel or setWorkspaceSelector): DESIGN or MAKE shows that
   // workspace's tabs and the one of them shown last (its first at first),
   // logged as "Ribbon workspace: MAKE (tabs MAKE)"; while a drawing is open
   // or Render is shown it asks the window to close the drawing or end the
@@ -302,10 +325,11 @@ public:
   // kept when the pages are made again; their places take the mouse as a
   // group does (groupCards: "ribbonContent_<object name>").
   void setTabContent(const QString& tab, QWidget* leading, QWidget* trailing = nullptr);
-  // A tab whose tab row is the window's own (setPanel only; mitcad#2013:
-  // the Render workspace's stages): while it is shown, `tabs` stands in the
+  // A tab whose tab row is the window's own (mitcad#2013: the Render
+  // workspace's stages; the toolbar panel's row, or the Docked tab row with
+  // its selector, mitcad#2082): while it is shown, `tabs` stands in the
   // row in place of the workspace's tabs and their +, and `trailing` at the
-  // row's right before the search field (Render and Cancel). Its page holds
+  // row's right (before the panel's search field; Render and Cancel). Its page holds
   // only its content (setTabContent: a slim row of the stage's actions), not
   // the tab's groups of the layout. Logged as "Ribbon tab RENDER: its own
   // row" in place of the tab's place; the panel's parts name `tabs`
@@ -493,6 +517,15 @@ private:
   // The tab to show when the one wanted is not there: SOLID, else the first
   // tab (START, which is never hidden).
   int fallbackTab() const;
+  // The tab at `index` shown: its page, the workspace it is in, and
+  // tabChanged (the tab bar's currentChanged).
+  void followTabAt(int index);
+  // The tab at `index` taken out and the tab of `page` (or the fallback)
+  // shown, as one change: the neighbour Qt picks while the tab goes is
+  // never shown, since showing a tab can do much (the Start tab covers the
+  // view with the Start page, a tab's page rearranges the docks,
+  // mitcad#2077).
+  void removeTabShowing(int index, int page);
   // Customize Toolbar… and Reset Toolbar of `tab` in a menu (the tabs' menu,
   // a command row's menu).
   void addToolbarEntries(QMenu* menu, const QString& tab);
@@ -506,6 +539,14 @@ private:
   // either. Logged when a group's folded pins change: "Ribbon pinned
   // folded SOLID/CREATE: solid.sweep" ("... folded SOLID/CREATE: none").
   void fitGroups();
+  // The Classic tabs' row (the macOS Docked toolbar, mitcad#2079,
+  // docs/ui-conventions.md 13): the room left for the tabs after the
+  // workspace block and the row's other widgets, Boost
+  // development compact first when the tabs would not all fit, then the
+  // tabs folding into their » (PillTabBar::setRoom). scheduleFitTabRow:
+  // once, a moment later, when a widget of the row changed.
+  void fitTabRow();
+  void scheduleFitTabRow();
   // fitGroups for one page's groups: `fixed` is the width of what is not
   // a collapsible group, `available` the room. Returns the width the
   // groups take as they fit; `widths` gets each group's.
@@ -528,9 +569,10 @@ private:
   // Every group's row at buttonRowHeight and its widths measured again, the
   // groups fitted and the places logged (setButtonLabels).
   void layoutButtonRows();
-  // setPanel (mitcad#1990): the tabs of the workspace shown in sight, the
-  // others (and START) out of it; the selector shows the workspace, enabled
-  // but while sketching; "Ribbon workspace: ..." logged when it changed.
+  // setPanel (mitcad#1990) or setWorkspaceSelector (mitcad#2082): the tabs
+  // of the workspace shown in sight, the others (and, in the panel, START)
+  // out of it; the selector shows the workspace, enabled but while
+  // sketching; "Ribbon workspace: ..." logged when it changed.
   void applyWorkspaceTabs();
   // setPanel: the model tab shown belongs to another workspace (shown by
   // the code, a hidden tab's fallback): that workspace is shown.
@@ -556,16 +598,22 @@ private:
   bool drawingTabShown() const;
   // A workspace's tabs in the bar, in order (DRAWING: the drawing's tab).
   QStringList tabsOfWorkspace(const QString& workspace) const;
-  // setPanel: the tab rows of the window's own (setTabRow) put into the
-  // panel's tab row, hidden; and shown in place of the tabs and their +
-  // while their tab is the one shown.
+  // setPanel or setWorkspaceSelector: the tab rows of the window's own
+  // (setTabRow) put into the panel's tab row (the Classic tab row after the
+  // tabs' +, their trailing part after its free stretch), hidden; and shown
+  // in place of the tabs and their + while their tab is the one shown.
   void placeTabRows();
   void updateTabRow();
+  // Whether a widget of setTabRow is in the tab row already.
+  bool tabRowHolds(QWidget* widget) const;
+  // The model's workspace of the tab shown, at the selector's start.
+  void initWorkspace();
 
   CommandRegistry& m_registry;
   Presentation m_presentation;
   QTabBar* m_tabs = nullptr;
-  QHBoxLayout* m_tabRow = nullptr; // Classic: the tabs and addTabRowWidget's
+  bool m_fitTabRowPending = false;
+  QHBoxLayout* m_tabRow = nullptr; // Classic: the tabs and addTabRowEndWidget's
   QStackedWidget* m_pages = nullptr;
   QWidget* m_sketchPage = nullptr;
   int m_pageBeforeSketch = 0; // the page Finish Sketch goes back to
@@ -580,6 +628,8 @@ private:
   QHash<QWidget*, QWidget*> m_classicPages;
   bool m_groupCards = false; // setGroupCards
   bool m_panel = false;      // setPanel (mitcad#1990)
+  bool m_workspaces = false; // a workspace selector (setPanel, setWorkspaceSelector)
+  bool m_tabRowOnly = false; // setTabRowOnly: the Docked tab row alone (Start)
   QWidget* m_panelTabRow = nullptr;          // the tabs, their + and the search field
   QWidget* m_panelBody = nullptr;            // the card: the tab row and the groups
   QToolButton* m_workspaceButton = nullptr;  // the selector (mitcad#1990)
@@ -658,8 +708,10 @@ public:
   // (Ribbon::setGroupCards, mitcad#425).
   void setCardMaterial(bool card);
   // Nothing painted: a group of the toolbar panel, which is the card
-  // (Ribbon::setPanel, mitcad#1990).
+  // (Ribbon::setPanel, mitcad#1990), or the quick-access group on the Docked
+  // tab row (mitcad#2082).
   void setFlat(bool flat);
+  bool isFlat() const { return m_flat; }
 
 protected:
   void paintEvent(QPaintEvent* event) override;

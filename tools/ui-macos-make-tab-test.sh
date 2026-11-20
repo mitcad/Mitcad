@@ -6,8 +6,8 @@
 # Build and Make; the moved commands started from it (Qt: the Make tab's
 # buttons; AppKit: the native actions of its toolbar) and cancelled: Print
 # Analysis, Send to Slicer (once 3D Print) and the Annotate group's
-# Dimension; Edit Materials…, Printers… and Processes… open their
-# windows. Qt: Body2 selected on the Make tab shows its card with Walls 5
+# Dimension; Edit Materials… opens from Manage, Printers… and Processes…
+# from 3D Print. Qt: Body2 selected on the Make tab shows its card with Walls 5
 # set on the body, and the Browser marks Body2. AppKit: the outline's row
 # of Body2 has the Make marker after its name, with its tooltip, Body1's
 # none, and back on Solid Body2's goes (mitcad#1352).
@@ -83,7 +83,7 @@ for frontend in $frontends; do
     else
       echo 'window-resize 1280 820'
     fi
-    echo "expect-ribbon-labels Start Solid Build '3D Print' Laser CNC"
+    echo "expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage"
     if [ "$frontend" = qt ]; then
       echo 'mark'
       # Make's workspace first where the toolbar panel has the selector
@@ -101,9 +101,25 @@ for frontend in $frontends; do
       cancel
       echo "expect-log 'Command ${command#*:} cancelled'"
     done
+    if [ "$frontend" = qt ]; then
+      echo 'mark'
+      echo 'workspace DESIGN'
+      echo "click-logged '^Ribbon tab MANAGE at '"
+      echo "expect-log '^Ribbon tab shown: MANAGE$'"
+    fi
     echo 'mark'
     make_command solid.materials
     echo "expect-log 'Materials opened'"
+    if [ "$frontend" = qt ]; then
+      echo "focus-dialog '^Materials$'"
+      echo 'key Escape'
+      echo "expect-dialog-gone '^Materials$'"
+      echo 'focus-main'
+      echo 'mark'
+      echo 'workspace MAKE'
+      echo "click-logged '^Ribbon tab MAKE_PRINT at '"
+      echo "expect-log '^Ribbon tab shown: MAKE_PRINT$'"
+    fi
     echo 'mark'
     make_command make.printers
     echo "expect-log 'Printers opened'"

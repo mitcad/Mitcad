@@ -15,6 +15,17 @@ deque of their own allocations, read by index in constant time; each
 point keeps its address while others are added or removed, as a
 sequence's node did, and the line's order, contents and range checks are
 those of the sequence, so every algorithm reads the same points.
+
+Test: geometry/tests/test_kernel_repeated_work.cpp,
+test_blend_line_keeps_order_and_addresses (ctest
+geometry.kernel_repeated_work): the line's points in order and at their
+addresses through appends, prepends, inserts and removals. The speed
+itself: none, because the patch changes no result
+(geometry.fillet_consumed_strip and
+geometry.offset_loft_circle_seam_lean_in give stock OCCT's results), and
+its gain is below what a bound in a test of seconds can tell on a loaded
+machine.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.cxx
 index 8fb698e5e..64af698df 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.cxx

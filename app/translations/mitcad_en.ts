@@ -513,6 +513,16 @@
     </message>
 </context>
 <context>
+    <name>mitcad::CommandPanel</name>
+    <message numerus="yes">
+        <source>and %n more</source>
+        <translation>
+            <numerusform>and %n more</numerusform>
+            <numerusform>and %n more</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
     <name>mitcad::CommandSession</name>
     <message numerus="yes">
         <source>%n profile(s) deleted from %1: select a new one.</source>

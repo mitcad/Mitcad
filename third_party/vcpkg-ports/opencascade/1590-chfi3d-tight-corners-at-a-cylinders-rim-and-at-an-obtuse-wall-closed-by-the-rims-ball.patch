@@ -59,25 +59,36 @@ rim's ball within 5e-4 mm; a block's bottom outline past vertical corners
 rounded with 0.3, its front wall leaning 15 and 30 degrees away from the
 bottom, rounded with 0.5: valid (before, invalid at 15 and failed at 30).
 
+Test: geometry/tests/test_fillet_tight_rim_corner.cpp (ctest
+geometry.fillet_tight_rim_corner):
+test_tube_cut_face_rounded_past_its_rims (the four tori, the strips and
+triangles on the rim's ball),
+test_block_bottom_past_corners_with_an_obtuse_wall (the obtuse wall at 15
+and 30 degrees, its corner faces on the corner's ball) and
+test_reported_body (the stored case `tube-rim-tight-corners`); each
+documented to fail without this patch. Its failure without the patch is
+still to be shown in the port's before/after run (mitcad#1986).
+
+Failures (mitcad#1986): the test of an arc at a contour's end as an
+obtuse tight arc (ChFi3d_TightArc) fails with OCCT's reports of a
+computation it cannot make (ChFi3d_IsComputationFailure, 0016): that end
+is not extended (0700's ChFi3d_Computed); any other failure (a broken
+invariant, a signal) is rethrown. Each end changes only once its test is
+done, so ExtendAtTightObtuseCorners has no handler of its own in Compute.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index a6317365..d88e2ccd 100644
+index a7941a96..d4457747 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3357,6 +3357,17 @@ void ChFi3d_Builder::Compute()
-   {
-     // (The ends as they are.)
-   }
+@@ -3343,8 +3343,11 @@ void ChFi3d_Builder::Compute()
+   // preanalysis to evaluate the extensions.
+   ExtentAnalyse();
+   // (The ends SplitAtTightConcaveArcs made walk on to the concave arc.)
+-  // (Each arc or end taken, or not, on its own: mitcad#1986.)
+   ExtendAtTightConcaveArcs();
 +  // (The ends SplitAtTightCorners made at an obtuse wall walk on to the
 +  // corner's own ball.)
-+  try
-+  {
-+    OCC_CATCH_SIGNALS
-+    ExtendAtTightObtuseCorners();
-+  }
-+  catch (Standard_Failure const&)
-+  {
-+    // (The ends as they are.)
-+  }
++  // (Each end taken, or not, on its own: mitcad#1986.)
++  ExtendAtTightObtuseCorners();
  
  #ifdef OCCT_DEBUG // perf
    ChFi3d_ResultChron(cl_extent, t_extent);
@@ -117,10 +128,10 @@ index 48db7a29..2e19c5b0 100644
    //! an arc between the chain's face U and a cylinder K of radius below R
    //! whose axis lies on the ball's side (a wall's concave corner tighter
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index b86ef96f..ab7e5ec3 100644
+index 6e1e7d6e..863eb2d3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -21528,6 +21528,15 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -21725,6 +21725,15 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
      // Contacts running into the face at an end of the spine before it.
      for (const bool isFirst : {true, false})
      {
@@ -137,10 +148,10 @@ index b86ef96f..ab7e5ec3 100644
        {
          // (The face at the end cuts the blend before its contact comes back
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 9f9f82dd..4e4a7a8d 100644
+index 3b04d0e4..91adb779 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -44,6 +44,8 @@
+@@ -45,6 +45,8 @@
  #include <Geom_Circle.hxx>
  #include <Geom_Ellipse.hxx>
  #include <Geom_ToroidalSurface.hxx>
@@ -149,7 +160,7 @@ index 9f9f82dd..4e4a7a8d 100644
  #include <GeomAdaptor_Curve.hxx>
  #include <IntAna_QuadQuadGeo.hxx>
  #include <BRep_Tool.hxx>
-@@ -5096,6 +5098,12 @@ namespace
+@@ -5160,6 +5162,12 @@ namespace
  //! Axis), between the chain's lines Ea and Eb, whose other faces are the
  //! planes Wa and Wb tangent to K; n, na, nb the outward normals of U, Wa
  //! and Wb. ASquare: Wa is square to Eb's line (else Wb to Ea's).
@@ -162,7 +173,7 @@ index 9f9f82dd..4e4a7a8d 100644
  struct ChFi3d_TightArcData
  {
    TopoDS_Face U, K, Wa, Wb;
-@@ -5103,6 +5111,10 @@ struct ChFi3d_TightArcData
+@@ -5167,6 +5175,10 @@ struct ChFi3d_TightArcData
    double      rk = 0.;
    gp_Ax1      Axis;
    bool        ASquare = false;
@@ -173,7 +184,7 @@ index 9f9f82dd..4e4a7a8d 100644
  };
  } // namespace
  
-@@ -5163,12 +5175,16 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+@@ -5227,12 +5239,16 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
    const TopoDS_Face F1 = TopoDS::Face(EFMap(Ek).First());
    const TopoDS_Face F2 = TopoDS::Face(EFMap(Ek).Last());
    gp_Pln            PlU;
@@ -192,7 +203,7 @@ index 9f9f82dd..4e4a7a8d 100644
    {
      D.U = F2;
      D.K = F1;
-@@ -5177,9 +5193,25 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+@@ -5241,9 +5257,25 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
    {
      return false;
    }
@@ -221,7 +232,7 @@ index 9f9f82dd..4e4a7a8d 100644
    if (!(D.rk > 10. * tol && D.rk < R - 10. * tol))
    {
      return false;
-@@ -5192,14 +5224,14 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+@@ -5256,14 +5288,14 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
    const gp_Lin La = aCa.Line(), Lb = aCb.Line();
    D.Wa            = ChFi3d_FaceBeyond(EFMap, Ea, D.U);
    D.Wb            = ChFi3d_FaceBeyond(EFMap, Eb, D.U);
@@ -241,7 +252,7 @@ index 9f9f82dd..4e4a7a8d 100644
    for (const gp_Lin* L : {&La, &Lb})
    {
      if (std::abs(L->Direction().Dot(D.n)) > angTol || PlU.Distance(L->Location()) > tol)
-@@ -5207,36 +5239,118 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+@@ -5271,36 +5303,118 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
        return false;
      }
    }
@@ -386,7 +397,7 @@ index 9f9f82dd..4e4a7a8d 100644
    bool aSeamA = false, aSeamB = false;
    for (TopExp_Explorer ex(D.K, TopAbs_EDGE); ex.More(); ex.Next())
    {
-@@ -5586,6 +5700,96 @@ void ChFi3d_Builder::SplitAtTightCorners()
+@@ -5653,6 +5767,100 @@ void ChFi3d_Builder::SplitAtTightCorners()
    }
  }
  
@@ -453,7 +464,11 @@ index 9f9f82dd..4e4a7a8d 100644
 +              continue;
 +            }
 +            ChFi3d_TightArcData D;
-+            if (ChFi3d_TightArc(E, Ex, sp2->Edges(f2 ? 1 : sp2->NbEdges()), myEFMap, R, tol, D) && D.Obtuse)
++            // (Not tight where that cannot be computed, mitcad#1986.)
++            if (ChFi3d_Computed(
++                  [&]() { return ChFi3d_TightArc(E, Ex, sp2->Edges(f2 ? 1 : sp2->NbEdges()), myEFMap, R, tol, D); },
++                  false)
++                && D.Obtuse)
 +            {
 +              aObtuse = true;
 +              break;
@@ -483,7 +498,7 @@ index 9f9f82dd..4e4a7a8d 100644
  //=======================================================================
  // function : ChFi3d_KeptSideOn
  // purpose  : The transition of a new edge C (at its parameter t, PC its
-@@ -5773,6 +5977,16 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -5840,6 +6048,16 @@ bool ChFi3d_Builder::PerformTightCorners()
        {
          return false;
        }
@@ -500,7 +515,7 @@ index 9f9f82dd..4e4a7a8d 100644
        const occ::handle<ChFiDS_SurfData>& FdP =
          fP ? SP->SetOfSurfData()->Value(1) : SP->SetOfSurfData()->Value(SP->SetOfSurfData()->Length());
        const occ::handle<ChFiDS_SurfData>& FdO =
-@@ -5794,23 +6008,61 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -5861,23 +6079,61 @@ bool ChFi3d_Builder::PerformTightCorners()
        // blends.
        gp_Pln PlU, PlP, PlO;
        gp_Dir aNU, aNP, aNO;
@@ -573,7 +588,7 @@ index 9f9f82dd..4e4a7a8d 100644
        if (d1.Magnitude() < 1.e-6 || d2.Magnitude() < 1.e-6)
        {
          return false;
-@@ -5826,7 +6078,6 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -5893,7 +6149,6 @@ bool ChFi3d_Builder::PerformTightCorners()
        {
          eo.Reverse();
        }
@@ -581,7 +596,7 @@ index 9f9f82dd..4e4a7a8d 100644
        if (eo.Dot(np) < 1. - 1.e-6 || std::abs(ep.Dot(np)) > 1.e-6 || std::abs(e0.Dot(np)) > 1.e-6
            || std::abs(ep.Dot(n)) > 1.e-6)
        {
-@@ -5839,11 +6090,22 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -5906,11 +6161,22 @@ bool ChFi3d_Builder::PerformTightCorners()
          return false;
        }
        const gp_Pnt OT(C.XYZ() + rho * np.XYZ());
@@ -606,7 +621,7 @@ index 9f9f82dd..4e4a7a8d 100644
        const gp_Pnt PD(C.XYZ() + R * n.XYZ());
        const gp_Pnt PQ(OT.XYZ() + rho * ep.XYZ() + rk * np.XYZ());
        const gp_Pnt PM(OT.XYZ() + R * ep.XYZ());
-@@ -5913,8 +6175,18 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -5980,8 +6246,18 @@ bool ChFi3d_Builder::PerformTightCorners()
        {
          return false;
        }
@@ -627,7 +642,7 @@ index 9f9f82dd..4e4a7a8d 100644
          TopoDS_Vertex v1, v2;
          TopExp::Vertices(E, v1, v2);
          gp_Pln PlU;
-@@ -5993,6 +6265,11 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -6060,6 +6336,11 @@ bool ChFi3d_Builder::PerformTightCorners()
          {
            u = ElCLib::InPeriod(u, 0.5 * (u1 + u2) - 0.5 * Sf->UPeriod(), 0.5 * (u1 + u2) + 0.5 * Sf->UPeriod());
          }
@@ -639,7 +654,7 @@ index 9f9f82dd..4e4a7a8d 100644
          return gp_Pnt2d(u, v);
        };
        if (pPe1.IsNull() || pOe3.IsNull())
-@@ -6074,16 +6351,16 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -6141,16 +6422,16 @@ bool ChFi3d_Builder::PerformTightCorners()
        cpM.SetPoint(PM);
        cpF.SetPoint(PF);
        cpK1.SetPoint(PK1);
@@ -659,7 +674,7 @@ index 9f9f82dd..4e4a7a8d 100644
          cpM = cpF;
        }
        const int iD = ChFi3d_IndexPointInDS(cpD, DStr);
-@@ -6189,7 +6466,9 @@ bool ChFi3d_Builder::PerformTightCorners()
+@@ -6256,7 +6537,9 @@ bool ChFi3d_Builder::PerformTightCorners()
        cV->SetSolidIndex(SP->SolidIndex());
        aCorners.Append(cV);
        const int IK = DStr.AddShape(D.K);
@@ -671,7 +686,7 @@ index 9f9f82dd..4e4a7a8d 100644
        {
          // (The arc is K's section: K is cut there.)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
-index 83943226..68709393 100644
+index d9fd754c..bdf60bc7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_TightConcave.cxx
 @@ -78,8 +78,10 @@
@@ -685,7 +700,7 @@ index 83943226..68709393 100644
  #include <gp_Vec.hxx>
  #include <gp_Vec2d.hxx>
  
-@@ -918,6 +920,95 @@ TopAbs_Orientation tcKeptAbove(const TopoDS_Edge& E, const gp_Dir& a)
+@@ -938,6 +940,95 @@ TopAbs_Orientation tcKeptAbove(const TopoDS_Edge& E, const gp_Dir& a)
    return gp_Vec(BRep_Tool::Pnt(v1), BRep_Tool::Pnt(v2)).Dot(gp_Vec(a)) < 0. ? TopAbs_REVERSED : TopAbs_FORWARD;
  }
  
@@ -781,7 +796,7 @@ index 83943226..68709393 100644
  //! One rounding's end at the corner: its stripe, end, last SurfData, the
  //! sides of U and of its wall W on it, the wall's edge with K (Ek), its
  //! blend's surface, where its contact on W reaches Ek (tW, PW at height hW).
-@@ -947,6 +1038,7 @@ static bool tcBuildCorner(
+@@ -967,6 +1058,7 @@ static bool tcBuildCorner(
    const bool                                                                         FirstB,
    const TopoDS_Edge&                                                                 Ek,
    const TCArc&                                                                       D,
@@ -789,7 +804,7 @@ index 83943226..68709393 100644
    NCollection_List<occ::handle<ChFiDS_Stripe>>&                                      Corners);
  
  //=======================================================================
-@@ -1271,7 +1363,7 @@ bool ChFi3d_Builder::PerformTightConcaveCorners()
+@@ -1302,7 +1394,7 @@ bool ChFi3d_Builder::PerformTightConcaveCorners()
          return false;
        }
        aDoneArcs.Add(Ek);
@@ -798,7 +813,7 @@ index 83943226..68709393 100644
        {
          return false;
        }
-@@ -1288,7 +1380,10 @@ bool ChFi3d_Builder::PerformTightConcaveCorners()
+@@ -1319,7 +1411,10 @@ bool ChFi3d_Builder::PerformTightConcaveCorners()
  // function : tcBuildCorner
  // purpose  : One corner of PerformTightConcaveCorners: stripe SA's end
  //            (FirstA) along wall D.Fa, SB's (FirstB) along D.Fb, the arc
@@ -810,7 +825,7 @@ index 83943226..68709393 100644
  //=======================================================================
  
  static bool tcBuildCorner(
-@@ -1302,6 +1397,7 @@ static bool tcBuildCorner(
+@@ -1333,6 +1428,7 @@ static bool tcBuildCorner(
    const bool                                                                         FirstB,
    const TopoDS_Edge&                                                                 Ek,
    const TCArc&                                                                       D,
@@ -818,7 +833,7 @@ index 83943226..68709393 100644
    NCollection_List<occ::handle<ChFiDS_Stripe>>&                                      Corners)
  {
    const double                       tol = std::max(10. * tolapp3d, 1.e-5);
-@@ -1346,15 +1442,13 @@ static bool tcBuildCorner(
+@@ -1377,15 +1473,13 @@ static bool tcBuildCorner(
      {
        return false;
      }
@@ -837,7 +852,7 @@ index 83943226..68709393 100644
      e.hW = gp_Vec(e.PW.XYZ()).Dot(gp_Vec(a));
    }
    // L: the end lower on its wall, H the higher; the strip lies on L's wall
-@@ -1386,7 +1480,7 @@ static bool tcBuildCorner(
+@@ -1417,7 +1511,7 @@ static bool tcBuildCorner(
        return false;
      }
      X = CLU->Value(s);
@@ -846,7 +861,7 @@ index 83943226..68709393 100644
      return true;
    };
    const auto offWall = [&](const double s, double& f) {
-@@ -1397,7 +1491,7 @@ static bool tcBuildCorner(
+@@ -1428,7 +1522,7 @@ static bool tcBuildCorner(
      {
        return false;
      }
@@ -855,7 +870,7 @@ index 83943226..68709393 100644
      return true;
    };
    double sP = 0.;
-@@ -1463,22 +1557,23 @@ static bool tcBuildCorner(
+@@ -1494,22 +1588,23 @@ static bool tcBuildCorner(
    {
      return false;
    }
@@ -884,7 +899,7 @@ index 83943226..68709393 100644
    };
    const double sgnL = blendSide(eL, FiLU, sP);
    const double sgnH = blendSide(eH, FiHU, tPH);
-@@ -1487,7 +1582,7 @@ static bool tcBuildCorner(
+@@ -1518,7 +1613,7 @@ static bool tcBuildCorner(
    {
      return false;
    }
@@ -893,7 +908,7 @@ index 83943226..68709393 100644
    const ChFiDS_FaceInterference& FiLW = eL.Fd->Interference(eL.sW);
    const ChFiDS_FaceInterference& FiHW = eH.Fd->Interference(eH.sW);
    const occ::handle<Geom_Curve>& CLW  = DStr.Curve(FiLW.LineIndex()).Curve();
-@@ -1520,11 +1615,24 @@ static bool tcBuildCorner(
+@@ -1551,11 +1646,24 @@ static bool tcBuildCorner(
      B.Sgn[1] = sgnH;
      B.r      = rk;
      B.A      = a;
@@ -922,7 +937,7 @@ index 83943226..68709393 100644
        double u = 0., v = 0., d = 0.;
        if (!tcProject(SWL, PK1, u, v, d) || d > tol)
        {
-@@ -1560,6 +1668,16 @@ static bool tcBuildCorner(
+@@ -1591,6 +1699,16 @@ static bool tcBuildCorner(
      {
        return false;
      }
@@ -939,7 +954,7 @@ index 83943226..68709393 100644
      double g0 = 0.;
      if (!side(aLast.x[0], aLast.x[1], g0) || std::abs(g0) < 1.e-12)
      {
-@@ -1849,8 +1967,8 @@ static bool tcBuildCorner(
+@@ -1880,8 +1998,8 @@ static bool tcBuildCorner(
      {
        return false;
      }
@@ -950,7 +965,7 @@ index 83943226..68709393 100644
      if (!aStrip)
      {
        cpQ = cpK1;
-@@ -1919,7 +2037,7 @@ static bool tcBuildCorner(
+@@ -1950,7 +2068,7 @@ static bool tcBuildCorner(
      gp_Pnt X;
      gp_Vec du, dv;
      eL.Sf->D1(uvPL.X(), uvPL.Y(), X, du, dv);
@@ -959,7 +974,7 @@ index 83943226..68709393 100644
    }
    const auto orientOf = [&](const occ::handle<Geom_BSplineSurface>& Sf, const TCSection& s, const double u,
                              const double v) {
-@@ -2098,3 +2216,93 @@ static bool tcBuildCorner(
+@@ -2129,3 +2247,93 @@ static bool tcBuildCorner(
    }
    return true;
  }

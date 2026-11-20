@@ -23,6 +23,11 @@ the contact's way as its vector: SearchFace and StartSol go on through the
 vertex into that face (SearchFaceOnV), and the walk goes on along the
 spine's next edge.
 
+Test: pending (mitcad#1986): no synthetic body is known that reaches its
+case; its contact meets the spine's own edge only through the stored bodies'
+micrometre deviations at the walk's steps there, verified on those bodies
+only. A regression test needs such a body first.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 index 34fb451..b8bbd25 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx

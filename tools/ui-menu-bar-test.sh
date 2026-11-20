@@ -4,30 +4,21 @@
 # check-all sources: app/framework/TitleBar.cpp app/framework/TitleBar.hpp app/MainWindow.cpp
 # check-all sources: app/DocumentFrame.cpp app/view/ViewController.cpp tools/cli
 # The hidden menu bar (mitcad#1620) through the real UI, in the Floating and
-# the Docked layout, with the quick-access group hidden too (so that the
-# menus are reachable only by the bar, the ☰ button and the keys), on a
-# saved plate that mitcad-cli makes.
-# Floating (mitcad#1990): the menu bar never shows, whatever the setting
-# (Preferences does not offer it); the ☰ is the title row's part
-# titleMenu from the start, before Undo and Redo, the view at the window's
-# top:
-#   F1. The ☰ button opens the menus: File, Edit, View, Tools, …, Help.
-#   F2. Alt alone opens the ☰ menu; Esc closes it. Alt+F (File's
-#       mnemonic) opens File from the title row's File; Alt+E (Edit's)
-#       Edit beside the ☰ menu; the bar never shows ("Menu bar shown" not
-#       logged, the view's top stays).
-# Docked:
-#   1. Preferences › Display › Show the menu bar (Alt+E) cleared, OK: saved
-#      (view/menuBar=false), the menu bar hidden at once: the 3D view moves
-#      up by the bar's height; the ☰ button shows (Floating: the title
-#      row's part titleMenu, before Undo and Redo).
-#   2. The ☰ button opens the menus: File, Edit, View, Tools, …, Help; its
-#      File opens the File menu.
-#   3. Alt pressed and released alone shows the menu bar (the view back
-#      down), and Esc hides it again; Alt+F (File's mnemonic) shows it too
-#      and opens File, and Esc (twice: the first goes back to the bar)
-#      hides it again.
-#   4. Show the menu bar checked again: the bar back, the ☰ button gone.
+# the Docked layout, both with the top bar of Windows and Linux
+# (mitcad#1990, mitcad#2082), with the quick-access group hidden too (so
+# that the menus are reachable only by the ☰ button and the keys), on a
+# saved plate that mitcad-cli makes. In either layout the menu bar never
+# shows, whatever the setting (Preferences does not offer it); the ☰ is the
+# title row's part titleMenu from the start, before Undo and Redo ("Floating
+# cards: ..." and "Docked top bar: ..." name the parts):
+#   1. The ☰ button opens the menus: File, Edit, View, Tools, …, Help.
+#   2. Alt alone opens the ☰ menu; Esc closes it. Alt+F (File's mnemonic)
+#      opens File from the title row's File; Alt+E (Edit's) Edit beside the
+#      ☰ menu; the bar never shows ("Menu bar shown" not logged, the view's
+#      top stays: at the window's top in the Floating layout, below the top
+#      bar and the toolbar panel in the Docked one).
+#   3. The old setting view/menuBar=true (the menu bar shown) changes
+#      nothing: no menu bar row in either layout.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-menu-bar-test.sh
@@ -56,154 +47,58 @@ EOF
 # view_top: the 3D view's top in the window, as logged last.
 view_top() { grep -o "^View area [0-9-]* [0-9-]*" "$UI_LOG" | tail -1 | awk '{ print $4 }'; }
 
-# expect_view_top above|at value description: waits until the view's top
-# is above (less than) the value, or at it.
-expect_view_top() {
-  local top=""
-  for _ in $(seq 1 30); do
-    ui_sync
-    top=$(view_top)
-    if [ "$1" = above ] && [ -n "$top" ] && [ "$top" -lt "$2" ]; then break; fi
-    if [ "$1" = at ] && [ "$top" = "$2" ]; then break; fi
-    sleep 0.2
-  done
-  if [ "$1" = above ]; then
-    [ -n "$top" ] && [ "$top" -lt "$2" ] || ui_fail "$3: the view's top is $top, not above $2"
-  else
-    [ "$top" = "$2" ] || ui_fail "$3: the view's top is $top, not $2"
-  fi
-  echo "ok   $3 (the view's top at $top)"
-}
+# parts_line: the top bar's parts as logged last, in either layout.
+parts_line() { grep -oE "^(Floating cards|Docked top bar): .*" "$UI_LOG" | tail -1; }
 
-# menu_bar_preference layout shown|hidden: Preferences' Display page, Show
-# the menu bar (Alt+E) toggled, OK.
-menu_bar_preference() {
-  ui_mark
-  ui_step "Preferences: Display (search)"  ui_command "Preferences: Display"
-  ui_focus_dialog '^Preferences$'
-  ui_step "Show the menu bar (Alt+E)"      ui_key alt+e
-  ui_step "OK (Enter)"                     ui_key Return
-  ui_focus_main
-  ui_expect_new "Preferences: menu bar $2" "$1: the preference saved ($2)"
-}
-
-# hide_by_esc layout description: Esc (twice where the first one only goes
-# back to the bar, as a style that goes to the menu bar on Alt does) hides
-# the shown bar again.
-hide_by_esc() {
-  ui_step "Esc"                            ui_key Escape
-  ui_sync
-  if ! tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Menu bar hidden again"; then
-    ui_step "Esc (from the bar)"           ui_key Escape
-  fi
-  ui_expect_new "Menu bar hidden again" "$1: $2"
-}
-
-# title_menu with|without: the title row's ☰ part (Floating), waited for.
+# title_menu layout: the title row's ☰ part, waited for, before Undo and
+# Redo.
 title_menu() {
-  local line=""
+  local line="" menu history
   for _ in $(seq 1 25); do
-    line=$(grep -o "^Floating cards: .*" "$UI_LOG" | tail -1)
-    if [ "$1" = with ] && grep -qF "; titleMenu " <<< "$line"; then break; fi
-    if [ "$1" = without ] && ! grep -qF "; titleMenu " <<< "$line"; then break; fi
+    line=$(parts_line)
+    grep -qF "; titleMenu " <<< "$line" && break
     sleep 0.2
   done
-  if [ "$1" = with ]; then
-    grep -qF "; titleMenu " <<< "$line" || ui_fail "the title row has no ☰ part: '$line'"
-    # Before Undo and Redo.
-    local menu history
-    menu=$(grep -o "; titleMenu [0-9-]*" <<< "$line" | awk '{ print $3 }' | cut -d, -f1)
-    history=$(grep -o "; titleHistory [0-9-]*" <<< "$line" | awk '{ print $3 }' | cut -d, -f1)
-    [ -n "$history" ] && [ "$menu" -lt "$history" ] || ui_fail "the ☰ part is not before Undo and Redo: '$line'"
-    echo "ok   the title row's ☰ part is there, before Undo and Redo"
-  else
-    grep -qF "; titleMenu " <<< "$line" && ui_fail "the title row still has its ☰ part: '$line'"
-    echo "ok   the title row's ☰ part is gone"
-  fi
+  grep -qF "; titleMenu " <<< "$line" || ui_fail "$1: the title row has no ☰ part: '$line'"
+  menu=$(grep -o "; titleMenu [0-9-]*" <<< "$line" | awk '{ print $3 }' | cut -d, -f1)
+  history=$(grep -o "; titleHistory [0-9-]*" <<< "$line" | awk '{ print $3 }' | cut -d, -f1)
+  [ -n "$history" ] && [ "$menu" -lt "$history" ] || ui_fail "$1: the ☰ part is not before Undo and Redo: '$line'"
+  echo "ok   $1: the title row's ☰ part is there, before Undo and Redo"
 }
 
-# floating_steps: the Floating steps above.
-floating_steps() {
-  local top entries
-  echo "=== floating"
+# top_bar_steps layout menu-bar-setting: the steps above in that layout,
+# with view/menuBar set as given (true: the old setting of a shown bar).
+top_bar_steps() {
+  local layout=$1 top entries label
+  label=$(tr '[:lower:]' '[:upper:]' <<< "${layout:0:1}")${layout:1}
+  echo "=== $layout (view/menuBar=$2)"
   mkdir -p "$(dirname "$CONF")"
-  printf '[quickAccess]\nvisible=false\n' > "$CONF"
-  cp "$WORK/plate.mitcad" "$WORK/floating.mitcad"
-  ui_start_app --chrome=floating --open "$WORK/floating.mitcad"
-  ui_expect_log "Opened $WORK/floating.mitcad" "floating: opened"
-  ui_expect_log "Quick access toolbar hidden" "floating: the quick-access group hidden"
-  ui_expect_log "Menu bar hidden: Floating" "floating: the window's menu bar hidden"
-  ui_sync
-  top=$(view_top)
-  [ "$top" = 0 ] || ui_fail "floating: the view's top is $top, not the window's top (a menu bar row above it?)"
-  echo "ok   floating: no menu bar, the view at the window's top"
-  ui_expect_log "Menu bar button at" "floating: the ☰ button shows"
-  title_menu with
-
-  echo "--- F1. The ☰ button opens the menus"
-  ui_mark
-  ui_step "the ☰ button"                   ui_click_logged "Menu bar button"
-  ui_expect_new "Context menu: File | Edit | View | Tools" "floating: the ☰ button's menu opened"
-  entries=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^Context menu: " | tail -1)
-  [[ $entries == *" | Help" ]] || ui_fail "floating: the ☰ menu does not end with Help: $entries"
-  echo "ok   floating: ${entries#Context menu: }"
-  ui_step "File"                           ui_menu_choose "File"
-  ui_expect_new "Context menu File: New Design" "floating: the ☰ button's File opened the File menu"
-  ui_step "close the menus (Esc Esc)"      ui_key Escape Escape
-  ui_sync
-
-  echo "--- F2. The menus' keys"
-  ui_mark
-  ui_step "Alt alone"                      ui_key alt
-  ui_expect_new "Menus by the keys (Alt): ☰" "floating: Alt opens the ☰ menu"
-  ui_expect_new "Context menu: File | Edit | View | Tools" "floating: the ☰ menu open"
-  ui_step "Esc"                            ui_key Escape
-  ui_sync
-  ui_mark
-  ui_step "Alt+F (File's mnemonic)"        ui_key alt+f
-  ui_expect_new "Menus by the keys (Alt+F): File" "floating: Alt+F opens File from the title row"
-  ui_expect_new "File menu: " "floating: the File menu open"
-  ui_step "Esc"                            ui_key Escape
-  ui_sync
-  ui_mark
-  ui_step "Alt+E (Edit's mnemonic)"        ui_key alt+e
-  ui_expect_new "Menus by the keys (Alt+E): Edit" "floating: Alt+E opens Edit beside the ☰ menu"
-  ui_expect_new "Context menu Edit: " "floating: the Edit menu open"
-  ui_step "close the menus (Esc Esc)"      ui_key Escape Escape
-  ui_sync
-  if grep -q "^Menu bar shown" "$UI_LOG"; then
-    ui_fail "floating: the menu bar was shown"
-  fi
-  [ "$(view_top)" = 0 ] || ui_fail "floating: the view's top moved to $(view_top)"
-  echo "ok   floating: the menu bar never showed"
-  ui_stop_app
-}
-
-# menu_bar_steps layout: the four steps above.
-menu_bar_steps() {
-  local layout=$1 shown hidden entries
-  echo "=== $layout"
-  mkdir -p "$(dirname "$CONF")"
-  printf '[quickAccess]\nvisible=false\n' > "$CONF"
+  printf '[quickAccess]\nvisible=false\n[view]\nmenuBar=%s\n' "$2" > "$CONF"
   cp "$WORK/plate.mitcad" "$WORK/$layout.mitcad"
   ui_start_app --chrome="$layout" --open "$WORK/$layout.mitcad"
   ui_expect_log "Opened $WORK/$layout.mitcad" "$layout: opened"
   ui_expect_log "Quick access toolbar hidden" "$layout: the quick-access group hidden"
+  ui_expect_log "Menu bar hidden: $label" "$layout: the window's menu bar hidden"
   ui_sync
-  shown=$(view_top)
-  [ -n "$shown" ] || ui_fail "$layout: no view area logged"
-
-  echo "--- 1. Show the menu bar cleared"
-  menu_bar_preference "$layout" hidden
-  grep -q "^menuBar=false" "$CONF" || ui_fail "$layout: view/menuBar is not false in the settings ($CONF)"
-  echo "ok   $layout: saved in the settings"
-  expect_view_top above "$shown" "$layout: the menu bar hidden, the view moved up"
-  hidden=$(view_top)
-  [ $((shown - hidden)) -ge 15 ] || ui_fail "$layout: the view moved by $((shown - hidden)) pixels only"
+  top=$(view_top)
+  [ -n "$top" ] || ui_fail "$layout: no view area logged"
+  if [ "$layout" = floating ]; then
+    [ "$top" = 0 ] || ui_fail "floating: the view's top is $top, not the window's top (a menu bar row above it?)"
+    echo "ok   floating: no menu bar, the view at the window's top"
+  else
+    # Below the top bar and the toolbar panel, nothing else above it.
+    local bar
+    bar=$(parts_line)
+    [[ $bar == "Docked top bar: "* ]] || ui_fail "docked: no top bar logged: '$bar'"
+    # Within the tool bar's own margin (4 px in Qt's own style on Linux), not
+    # under a menu bar row.
+    grep -qE "; titleRow [0-9]+,[0-9] " <<< "$bar" || ui_fail "docked: the title row is not at the window's top: '$bar'"
+    echo "ok   docked: no menu bar, the top bar at the window's top"
+  fi
   ui_expect_log "Menu bar button at" "$layout: the ☰ button shows"
-  [ "$layout" = floating ] && title_menu with
+  title_menu "$layout"
 
-  echo "--- 2. The ☰ button opens the menus"
+  echo "--- 1. The ☰ button opens the menus"
   ui_mark
   ui_step "the ☰ button"                   ui_click_logged "Menu bar button"
   ui_expect_new "Context menu: File | Edit | View | Tools" "$layout: the ☰ button's menu opened"
@@ -215,29 +110,36 @@ menu_bar_steps() {
   ui_step "close the menus (Esc Esc)"      ui_key Escape Escape
   ui_sync
 
-  echo "--- 3. Alt shows the menu bar until its menu closes"
+  echo "--- 2. The menus' keys"
   ui_mark
   ui_step "Alt alone"                      ui_key alt
-  ui_expect_new "Menu bar shown (Alt)" "$layout: Alt shows the menu bar"
-  expect_view_top at "$shown" "$layout: the menu bar shown, the view back down"
-  hide_by_esc "$layout" "Esc hides it again"
-  expect_view_top at "$hidden" "$layout: hidden again, the view up"
+  ui_expect_new "Menus by the keys (Alt): ☰" "$layout: Alt opens the ☰ menu"
+  ui_expect_new "Context menu: File | Edit | View | Tools" "$layout: the ☰ menu open"
+  ui_step "Esc"                            ui_key Escape
+  ui_sync
   ui_mark
   ui_step "Alt+F (File's mnemonic)"        ui_key alt+f
-  ui_expect_new "Menu bar shown (Alt+F)" "$layout: Alt+F shows the menu bar for File"
-  ui_expect_new "Menu bar File opened" "$layout: Alt+F opens File from the shown bar"
-  hide_by_esc "$layout" "Esc hides it again after File"
-  expect_view_top at "$hidden" "$layout: hidden again after File, the view up"
-
-  echo "--- 4. Show the menu bar checked again"
-  menu_bar_preference "$layout" shown
-  expect_view_top at "$shown" "$layout: the menu bar back, the view where it was"
-  grep -q "^menuBar=true" "$CONF" || ui_fail "$layout: view/menuBar is not true in the settings ($CONF)"
-  [ "$layout" = floating ] && title_menu without
+  ui_expect_new "Menus by the keys (Alt+F): File" "$layout: Alt+F opens File from the title row"
+  ui_expect_new "File menu: " "$layout: the File menu open"
+  ui_step "Esc"                            ui_key Escape
+  ui_sync
+  ui_mark
+  ui_step "Alt+E (Edit's mnemonic)"        ui_key alt+e
+  ui_expect_new "Menus by the keys (Alt+E): Edit" "$layout: Alt+E opens Edit beside the ☰ menu"
+  ui_expect_new "Context menu Edit: " "$layout: the Edit menu open"
+  ui_step "close the menus (Esc Esc)"      ui_key Escape Escape
+  ui_sync
+  if grep -q "^Menu bar shown" "$UI_LOG"; then
+    ui_fail "$layout: the menu bar was shown"
+  fi
+  [ "$(view_top)" = "$top" ] || ui_fail "$layout: the view's top moved from $top to $(view_top)"
+  echo "ok   $layout: the menu bar never showed"
   ui_stop_app
 }
 
 ui_start_display
-floating_steps
-menu_bar_steps docked
+top_bar_steps floating false
+top_bar_steps docked false
+# The old setting of a shown menu bar: no menu bar row either (mitcad#2082).
+top_bar_steps docked true
 ui_finish "the hidden menu bar"

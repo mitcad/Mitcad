@@ -40,11 +40,21 @@ them by those faces.
   surface is the same within its old bounds).
 
 Upstream: new.
+
+Test: geometry/tests/test_fillet_lens_overflow.cpp,
+test_joined_roundings_one_face_each (ctest geometry.fillet_lens_overflow):
+the housing of 0772's test, the joined blend one face per edge (the first's
+with the cut by the first side, the second's with the cuts by the corner's
+rounding and the second side, sharing an edge from the first side's
+junction), in both orders of the edges. Its failure without the patch,
+stated in its documentation, is still to be shown in the port's before/after
+run (mitcad#1986).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 6abc67a..fa8f0d1 100644
+index 56ff43fe..ee660216 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -7552,6 +7552,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -7699,6 +7699,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
              {
                Fd->ChangeSurf(
                  DStr.AddSurface(TopOpeBRepDS_Surface(S1, DStr.ChangeSurface(Isurf).Tolerance())));
@@ -63,7 +73,7 @@ index 6abc67a..fa8f0d1 100644
                if (myEVIMap.IsBound(EdgeSpine))
                {
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
-index e8a27a3..8bf2758 100644
+index 43c3ad7c..8a96156c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
 @@ -11,6 +11,7 @@
@@ -152,24 +162,22 @@ index e8a27a3..8bf2758 100644
  // Whether two faces lie on one plane, their material on the same side.
  bool samePlane(const TopoDS_Face& A, const TopoDS_Face& B)
  {
-@@ -567,7 +618,15 @@ bool ChFi3d_Builder::JoinAcrossCorners()
+@@ -573,7 +624,13 @@ bool ChFi3d_Builder::JoinAcrossCorners()
                try
                {
                  OCC_CATCH_SIGNALS
--                if (JoinAcrossCorner(SA, aFirst, iA, 3 - opp, SB, bFirst, iB, 3 - oppB, NA, NB, Fo, C))
+-                aJoin = JoinAcrossCorner(SA, aFirst, iA, 3 - opp, SB, bFirst, iB, 3 - oppB, NA, NB, Fo, C);
 +                // (The walk starts on the stripe whose edge runs out of the
 +                // corner, where one does and the other runs into it: the
 +                // stripes' faces meet at the junction its contact reaches
 +                // first, whichever order the edges were given in.)
-+                const bool aJoin =
-+                  !aFirst && bFirst
-+                    ? JoinAcrossCorner(SB, bFirst, iB, 3 - oppB, SA, aFirst, iA, 3 - opp, NB, NA, Fo, C)
-+                    : JoinAcrossCorner(SA, aFirst, iA, 3 - opp, SB, bFirst, iB, 3 - oppB, NA, NB, Fo, C);
-+                if (aJoin)
-                 {
-                   any = true;
-                   aJoined[aFirst ? 0 : 1].Append(SA);
-@@ -641,8 +700,13 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
++                aJoin = !aFirst && bFirst
++                          ? JoinAcrossCorner(SB, bFirst, iB, 3 - oppB, SA, aFirst, iA, 3 - opp, NB, NA, Fo, C)
++                          : JoinAcrossCorner(SA, aFirst, iA, 3 - opp, SB, bFirst, iB, 3 - oppB, NA, NB, Fo, C);
+               }
+               catch (Standard_Failure const& anException)
+               {
+@@ -657,8 +714,13 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
    const ChFiDS_FaceInterference& FAo = FdA->Interference(opp);
    const ChFiDS_FaceInterference& FBn = FdB->Interference(onsB);
    const ChFiDS_FaceInterference& FBo = FdB->Interference(oppB);
@@ -185,7 +193,7 @@ index e8a27a3..8bf2758 100644
    {
      NCollection_Sequence<gp_Pnt> aPA, aPB;
      const int nb = 24;
-@@ -655,7 +719,8 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -671,7 +733,8 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
        {
          aPA.Append(Pc);
        }
@@ -195,7 +203,7 @@ index e8a27a3..8bf2758 100644
        if (gapBallAt(DStr, FBn, BRep_Tool::Surface(NB), FBo, SO, R, s, Pc, Pn, Po))
        {
          aPB.Append(Pc);
-@@ -705,11 +770,47 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -721,11 +784,47 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
      HG->FirstParameter(anInterp.Curve()->FirstParameter());
      HG->LastParameter(anInterp.Curve()->LastParameter());
    }
@@ -245,7 +253,7 @@ index e8a27a3..8bf2758 100644
    occ::handle<BRepAdaptor_Surface>      HS1 = ons == 1 ? HSN : HSO;
    occ::handle<BRepAdaptor_Surface>      HS2 = ons == 1 ? HSO : HSN;
    occ::handle<BRepTopAdaptor_TopolTool> It1 = new BRepTopAdaptor_TopolTool(HS1);
-@@ -763,20 +864,27 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -784,20 +883,27 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
    const ChFiDS_FaceInterference& FiN = X->Interference(ons);
    const ChFiDS_FaceInterference& FiO = X->Interference(opp);
    const occ::handle<Geom_Curve>& CN  = DStr.Curve(FiN.LineIndex()).Curve();
@@ -277,7 +285,7 @@ index e8a27a3..8bf2758 100644
        if (!out && stateOn(NA, t) == TopAbs_OUT)
        {
          double lo = tPrev, hi = t;
-@@ -958,20 +1066,33 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -979,20 +1085,33 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
        aBreak[k + 1] = wAt(along(PsCut[k]->Value(b)));
      }
    }
@@ -323,7 +331,7 @@ index e8a27a3..8bf2758 100644
    // New vertices at the junctions' points on the blend: the growth curves of
    // the side faces' edges and the cut pieces share them.
    BRep_Builder  aBB;
-@@ -979,9 +1100,12 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -1000,9 +1119,12 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
    aBB.MakeVertex(VJ[0], PJ1, tolapp3d);
    aBB.MakeVertex(VJ[1], PJ2, tolapp3d);
  
@@ -339,7 +347,7 @@ index e8a27a3..8bf2758 100644
    const auto   piece = [&](const double w1p, const double w2p, const bool copyLines) {
      occ::handle<ChFiDS_SurfData> G = new ChFiDS_SurfData();
      G->Copy(X);
-@@ -1015,11 +1139,12 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -1036,11 +1158,12 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
    occ::handle<ChFiDS_SurfData> Q[5];
    for (int k = 0; k < 5; k++)
    {
@@ -356,7 +364,7 @@ index e8a27a3..8bf2758 100644
    // The sides on N: NA for the first, NB (its p-curve projected) for the last.
    {
      ChFiDS_FaceInterference&       GI = Q[4]->ChangeInterference(ons);
-@@ -1040,22 +1165,26 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -1061,22 +1184,26 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
        Q[4]->ChangeIndexOfS2(DStr.AddShape(NB));
      }
    }
@@ -388,7 +396,7 @@ index e8a27a3..8bf2758 100644
      GI.SetInterference(DStr.AddCurve(TopOpeBRepDS_Curve(Cc, tolCut[k])), aTraC, Pc, Ps);
      GI.SetFirstParameter(Cc->FirstParameter());
      GI.SetLastParameter(Cc->LastParameter());
-@@ -1068,6 +1197,39 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -1089,6 +1216,39 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
        Q[k + 1]->ChangeIndexOfS2(DStr.AddShape(aSide[k]));
      }
    }
@@ -428,7 +436,7 @@ index e8a27a3..8bf2758 100644
    // The points between the pieces, in the walk's order: on N's side the
    // crossings of E1 and E2 (on those arcs) and the junction vertices; on
    // Fo's side the contact's points.
-@@ -1111,138 +1273,190 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+@@ -1132,138 +1292,190 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
    {
      return false;
    }

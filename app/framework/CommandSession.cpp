@@ -31,6 +31,7 @@
 #include "Diagnostics.hpp"
 #include "DisplayMeshes.hpp"
 #include "HybridAssembly.hpp"
+#include "InputPicks.hpp"
 #include "Json.hpp"
 #include "LengthUnits.hpp"
 #include "ManipulatorOverlay.hpp"
@@ -1254,6 +1255,9 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   actions.messageHovered = [this](bool on) { hoverMessage(on); };
   // The pointer over a note row (mitcad#1643): what the row is about.
   actions.noteHovered = [this](const QString& key, bool on) { hoverNote(key, on); };
+  // The pointer over a row of an input's list of picks (mitcad#2064): that
+  // pick.
+  actions.pickHovered = [this](const QString& key, int index) { hoverPick(key, index); };
   // The pointer over a row of a choice's list (mitcad#1794): what the
   // row's option is about.
   actions.choiceHovered = [this](const QString& key, const QString& value) { hoverChoice(key, value); };
@@ -1868,11 +1872,10 @@ void CommandSession::selectionChanged(const QString& key) {
 
 void CommandSession::listItems() {
   const QVector<Slot> all = slotsOf(false);
-  // Inputs that list their picks by name, and ordered ones, whose panel
-  // lists each pick in words (mitcad#1741).
-  const auto lists = [](const Slot& slot) {
-    return slot.def->type == InputDef::Type::Selection && (static_cast<bool>(slot.def->itemsText) || slot.def->ordered);
-  };
+  // Every selection input: the panel lists each pick in words (mitcad#1741;
+  // every input since mitcad#2064, its list of picks and its chip's
+  // tooltip), and some list their picks by name (itemsText).
+  const auto lists = [](const Slot& slot) { return slot.def->type == InputDef::Type::Selection; };
   if (std::none_of(all.begin(), all.end(), lists)) {
     return;
   }
@@ -1891,11 +1894,11 @@ void CommandSession::listItems() {
     if (!lists(slot)) {
       continue;
     }
-    if (slot.def->ordered) {
-      QStringList words;
-      for (const SelectionItem& item : std::as_const(m_state).items(slot.key)) {
-        words << m_host.itemText(item);
-      }
+    // Each owner asked once: a Fillet's edges of one body, a window's
+    // faces.
+    const QStringList words = pickWords(std::as_const(m_state).items(slot.key),
+                                        [this](const SelectionItem& item) { return m_host.itemText(item); });
+    if (words != std::as_const(m_state).itemWords(slot.key)) {
       m_state.setItemWords(slot.key, words);
     }
     if (!slot.def->itemsText) {
@@ -1999,6 +2002,29 @@ void CommandSession::updateHighlights() {
       shown.body = m_host.bodyShape(item.owner);
     }
     highlights.push_back(std::move(shown));
+  }
+  // The pick of a list of picks under the pointer (mitcad#2064), over its
+  // input's colour: in the hover's look, as the press-and-hold pick list
+  // shows the row under the pointer, while it is still picked.
+  QString hoveredPick;
+  if (!m_hoveredPickKey.isEmpty() && m_state.items(m_hoveredPickKey).contains(m_hoveredPick) &&
+      onShownBody(m_hoveredPick)) {
+    HighlightDisplay shown{m_hoveredPick, m_host.itemShape(m_hoveredPick), viewColor(ColorRole::Hover, false)};
+    shown.pickable = false;
+    shown.hoverLook = m_hoveredPick.kind == SelectKind::Face || m_hoveredPick.kind == SelectKind::Body ||
+                      m_hoveredPick.kind == SelectKind::Profile;
+    if (m_hoveredPick.kind == SelectKind::Face || m_hoveredPick.kind == SelectKind::Edge) {
+      shown.body = m_host.bodyShape(m_hoveredPick.owner);
+    }
+    if (!shown.shape.IsNull()) {
+      hoveredPick = m_hoveredPick.logDescription();
+      highlights.push_back(std::move(shown));
+    }
+  }
+  if (hoveredPick != m_loggedHoveredPick) {
+    qDebug().noquote() << QStringLiteral("%1 pick highlighted: %2")
+                              .arg(m_def.name, hoveredPick.isEmpty() ? QStringLiteral("none") : hoveredPick);
+    m_loggedHoveredPick = hoveredPick;
   }
   for (const SelectionItem& item : m_previewHighlights) {
     if (item.kind == SelectKind::Component) {
@@ -3419,6 +3445,18 @@ void CommandSession::hoverNote(const QString& key, bool on) {
   m_hoveredNote = paints ? key : QString();
   m_noteHighlights = note.hover;
   m_host.hoverNoticePlaces(QStringLiteral("panel note"), note.places, std::vector<BodyDisplay>());
+  updateHighlights();
+}
+
+void CommandSession::hoverPick(const QString& key, int index) {
+  const Selection& items = m_state.items(key);
+  const bool on = !key.isEmpty() && index >= 0 && index < items.size();
+  const SelectionItem item = on ? items.at(index) : SelectionItem();
+  if ((on ? key : QString()) == m_hoveredPickKey && item == m_hoveredPick) {
+    return;
+  }
+  m_hoveredPickKey = on ? key : QString();
+  m_hoveredPick = item;
   updateHighlights();
 }
 

@@ -64,11 +64,23 @@ with another stripe) and part rides (the face between narrower along a
 part of the edges only, the contacts crossing part of the way) are not
 made so: the roundings are computed as before.
 
+Test: geometry/tests/test_fillet_tangent_ride.cpp (ctest
+geometry.fillet_tangent_ride): test_wall (2.9, 2.5 and 2.127 wide),
+test_tower_foot (2.9, 2.5 and 2.2) and test_step (1.45 and 1.3 high), each
+in both orders: valid, the volume of the section within a millionth;
+without the patch the wall's result has more material and the other two
+fail. Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
+Failures (mitcad#1986): the two stripes' computations again for the ride
+fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): the ride fails, as 0016's. Any other
+failure (a broken invariant, a signal) is rethrown.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 1221809..475287d 100644
+index 96f3aefb..8b3fcb19 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -1968,6 +1968,396 @@ bool ChFi3d_Builder::RideOnOverlap(const occ::handle<ChFiDS_Stripe>& A,
+@@ -1975,6 +1975,406 @@ bool ChFi3d_Builder::RideOnOverlap(const occ::handle<ChFiDS_Stripe>& A,
    return true;
  }
  
@@ -223,8 +235,13 @@ index 1221809..475287d 100644
 +    occ::handle<ChFiDS_Stripe> aStripe = A;
 +    PerformSetOfSurf(aStripe);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return false;
 +  }
 +  if (A->Spine()->ErrorStatus() != ChFiDS_Ok)
@@ -317,8 +334,13 @@ index 1221809..475287d 100644
 +    occ::handle<ChFiDS_Stripe> aStripe = B;
 +    PerformSetOfSurf(aStripe);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (Only OCCT's reports that this cannot be computed fail this step, mitcad#1986.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return false;
 +  }
 +  if (B->Spine()->ErrorStatus() != ChFiDS_Ok)
@@ -465,7 +487,7 @@ index 1221809..475287d 100644
  // Makes the interferences of the data structure at point theOld be at
  // point theNew instead (two corners' points that are one).
  static void redirectPoint(TopOpeBRepDS_DataStructure& DStr, const int theOld, const int theNew)
-@@ -4281,7 +4671,85 @@ void ChFi3d_Builder::Compute()
+@@ -4338,7 +4738,85 @@ void ChFi3d_Builder::Compute()
    // blend of another are dropped with their corners.
    if (done)
    {
@@ -552,7 +574,7 @@ index 1221809..475287d 100644
      // (The pairs computed again, and whether their contacts as computed on
      // the faces of their edges cross each other twice, for the check below.)
      NCollection_List<occ::handle<ChFiDS_Stripe>> anOverlapA, anOverlapB;
-@@ -4370,7 +4838,29 @@ void ChFi3d_Builder::Compute()
+@@ -4427,7 +4905,29 @@ void ChFi3d_Builder::Compute()
            itA.ChangeValue()                       = itB.Value();
            itB.ChangeValue()                       = aSwap;
          }
@@ -583,7 +605,7 @@ index 1221809..475287d 100644
          {
            removeRideOf(itB.Value(), myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
            // (A ride whose section has (nearly) no width, A's line within a
-@@ -4451,6 +4941,7 @@ void ChFi3d_Builder::Compute()
+@@ -4508,6 +5008,7 @@ void ChFi3d_Builder::Compute()
        {
          removeEntriesOf(S, myOverlapStripes, myOverlapFaces, myOverlapEdges);
          removeRideOf(S, myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
@@ -591,7 +613,7 @@ index 1221809..475287d 100644
          S->Reset();
          S->Spine()->SetErrorStatus(ChFiDS_Ok);
          try
-@@ -5170,7 +5661,26 @@ void ChFi3d_Builder::Compute()
+@@ -5247,7 +5748,26 @@ void ChFi3d_Builder::Compute()
        }
        return false;
      };
@@ -619,7 +641,7 @@ index 1221809..475287d 100644
      {
        const occ::handle<ChFiDS_Stripe>& st = itel.Value();
        if (myDroppedStripes.Contains(st))
-@@ -5181,7 +5691,7 @@ void ChFi3d_Builder::Compute()
+@@ -5258,7 +5778,7 @@ void ChFi3d_Builder::Compute()
        //                    intersections between fillets
        NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel1;
        int                                                    i2;
@@ -628,7 +650,7 @@ index 1221809..475287d 100644
        {
          if (i2 <= i1)
          {
-@@ -6551,6 +7061,7 @@ void ChFi3d_Builder::Reset()
+@@ -6637,6 +7157,7 @@ void ChFi3d_Builder::Reset()
    myRideFaces.Clear();
    myRideEdges.Clear();
    myRideSupports.Clear();
@@ -637,7 +659,7 @@ index 1221809..475287d 100644
    myRollFaces.Clear();
    myRollTangentStripes.Clear();
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index b820426..e12f856 100644
+index b8204269..e12f856b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -918,6 +918,9 @@ protected:
@@ -675,7 +697,7 @@ index b820426..e12f856 100644
    //! onto a face beyond and whose contact there lies across another
    //! stripe's contact on that face (nearer to that stripe's edge than its
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 04e6372..2c61c05 100644
+index 8ba436d8..9fa71885 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -2102,6 +2102,75 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
@@ -755,10 +777,10 @@ index 04e6372..2c61c05 100644
      {
        const int k  = f1.IsSame(rideFace) ? 0 : (f2.IsSame(rideFace) ? 1 : -1);
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index f8c127c..f5fb610 100644
+index 3d65217b..5bf490aa 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -7685,6 +7685,27 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -7715,6 +7715,27 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
      stat = spine->LastStatus();
    }
    bool        onsame = (stat == ChFiDS_OnSame);
@@ -786,7 +808,7 @@ index f8c127c..f5fb610 100644
    // (OnSame: whether the opposite face lies beyond the face of the
    // prolonged edge, away from the corner's vertex, and the face a blend
    // rolling on an obstacle edge consumes.)
-@@ -7778,7 +7799,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -7808,7 +7829,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
    TopoDS_Face   FvSliver, FsSliver;
    TopoDS_Vertex VtxProl = Vtx;
    bool          isSliverEnd = false;
@@ -795,7 +817,7 @@ index f8c127c..f5fb610 100644
    {
      const occ::handle<ChFiDS_FilSpine> aFsp = occ::down_cast<ChFiDS_FilSpine>(spine);
      isSliverEnd = !aFsp.IsNull() && aFsp->IsConstant()
-@@ -8245,6 +8266,33 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -8275,6 +8296,33 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
    {
      inters = true;
    }
@@ -829,7 +851,7 @@ index f8c127c..f5fb610 100644
    else
    {
      inters = FindFace(Vtx, CV1, CV2, Fv, Fop);
-@@ -8328,6 +8376,17 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -8358,6 +8406,17 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        // (At a vertex of the face at the end, on no arc.)
        pfac1 = BRep_Tool::Parameters(CV1.Vertex(), Fv);
      }
@@ -847,7 +869,7 @@ index f8c127c..f5fb610 100644
      else
      {
        Hc1 = BRep_Tool::CurveOnSurface(CV1.Arc(), Fv, Ubid, Ubid);
-@@ -8345,6 +8404,17 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -8375,6 +8434,17 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
      {
        pfac2 = BRep_Tool::Parameters(CV2.Vertex(), Fv);
      }

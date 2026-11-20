@@ -29,6 +29,11 @@ side's far edge.
   kept), and the first solution inside the face and on the edge, not
   leaving it, is the start. Before, the walk was not done (PerformSurf :
   Failed processing).
+
+Test: geometry/tests/test_fillet_overflow.cpp (ctest
+geometry.suite.fillet_overflow),
+test_rounding_rolls_beside_a_round_corner: Its failure without the patch
+is still to be shown in the port's before/after run (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
 index d79fc74..77fb509 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
