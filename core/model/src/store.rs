@@ -465,6 +465,9 @@ struct VariantHead {
     /// that a warm open shows them as a build does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inputs: Option<crate::features::FeatureInputs>,
+    /// The occurrences an assembly cut machined (mitcad#2131).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    machined: Vec<crate::assembly_cut::MachinedChange>,
 }
 
 /// A stored result: its head and its shapes, zlib-compressed.
@@ -969,6 +972,7 @@ impl ResultStore {
                 threaded_walls: output.threaded_walls.clone(),
                 thread_fits: output.thread_fits.clone(),
                 inputs: output.inputs.clone(),
+                machined: output.machined.clone(),
             },
             shapes,
         };
@@ -1316,6 +1320,7 @@ fn restore<K: Kernel>(
         threaded_walls: head.threaded_walls.clone(),
         thread_fits: head.thread_fits.clone(),
         inputs: head.inputs.clone(),
+        machined: head.machined.clone(),
         // Not stored: an Intersection Curve is not storable.
         curve: None,
         // Not stored: a 3D sketch is not storable (mitcad#1521).

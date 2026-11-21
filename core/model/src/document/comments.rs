@@ -30,13 +30,25 @@
 //! They change no geometry: each change is an undo step of its own that
 //! recomputes nothing, so a model change and an `address_comment` in one
 //! `model_command` array (merged into one step) undo together.
+//!
+//! A comment and each reply may carry images (mitcad#2011): a picture of
+//! the place, marked up, or of the result. Each is a PNG or JPEG file of
+//! at most [`MAX_COMMENT_IMAGE`] bytes, embedded in the design as image
+//! references' images are ([`EmbeddedImage`], checked against its fields
+//! when a design is read), with its file's name and an id `A<n>` that is
+//! never given again within the design (`next_attachment`). Files keep
+//! them apart from the comments, in the top-level `comment_attachments`
+//! (`file/v2.rs`), so that a build without them still opens the design
+//! and only says that it did not read that field.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{DocState, Document, ModelError, invalid};
+use super::{DocState, Document, EmbeddedImage, ModelError, invalid};
+use crate::appearance::ImageData;
 use crate::datum::Vec3;
 use crate::features::{OccurrencePath, is_false};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid};
+use crate::image_header;
 use crate::kernel::Kernel;
 use crate::sketch::{ConstraintUid, Ref};
 use crate::topo::{EdgeName, FaceName, VertexName};
@@ -48,6 +60,14 @@ pub const COMMENT_USER: &str = "user";
 /// Places closer than this (mm) are the same last known place: the
 /// baseline tolerance of geometric comparisons.
 const SAME_PLACE: f64 = 1e-6;
+
+/// The largest image a comment or a reply takes, 4 MB of PNG or JPEG
+/// (mitcad#2011): in base64 it still fits one MCP message (8 MiB) with room
+/// for the rest of the answer.
+pub const MAX_COMMENT_IMAGE: usize = 4 << 20;
+
+/// The longest name an attached image keeps, in characters.
+const ATTACHMENT_NAME_CHARS: usize = 120;
 
 /// Where a comment is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,6 +342,265 @@ pub struct CommentReply {
     pub text: String,
     /// RFC 3339 UTC, whole seconds.
     pub created: String,
+    /// Its images (mitcad#2011), in the order they were attached; files
+    /// keep them in `comment_attachments`.
+    #[serde(skip)]
+    pub attachments: Vec<CommentAttachment>,
+}
+
+/// An image attached to a comment or a reply (mitcad#2011).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommentAttachment {
+    /// The number of its id `A<n>`, never given again within the design.
+    pub id: u32,
+    /// The name of the file it came from, no path (`capture.png` for a
+    /// capture of the view).
+    pub name: String,
+    pub image: EmbeddedImage,
+}
+
+impl CommentAttachment {
+    /// Its id, `A3`.
+    pub fn name_id(&self) -> String {
+        format!("A{}", self.id)
+    }
+
+    /// `image/png` or `image/jpeg`.
+    pub fn media_type(&self) -> &'static str {
+        if self.image.format == "jpeg" {
+            "image/jpeg"
+        } else {
+            "image/png"
+        }
+    }
+
+    /// The size of the file in bytes, from its base64 (which designs keep
+    /// without line breaks).
+    pub fn bytes(&self) -> usize {
+        let text = self.image.data.base64().trim_end();
+        let padding = text.len() - text.trim_end_matches('=').len();
+        (text.len() / 4 * 3 + [0, 0, 1, 2][text.len() % 4]).saturating_sub(padding)
+    }
+
+    /// The SHA-256 of the file's bytes, hex.
+    pub fn sha256(&self) -> &str {
+        self.image.data.sha256()
+    }
+
+    /// Why the attachment is not one a command could have made (a file's):
+    /// a PNG or JPEG file within the limit, of the size its fields say.
+    pub fn check(&self) -> Result<(), String> {
+        if self.image.format != "png" && self.image.format != "jpeg" {
+            return Err(format!(
+                "the image is {}, not PNG or JPEG",
+                self.image.format
+            ));
+        }
+        self.image.check()?;
+        if self.bytes() > MAX_COMMENT_IMAGE {
+            return Err(too_large(self.bytes()));
+        }
+        Ok(())
+    }
+}
+
+/// An image file to attach: its bytes and its file's name (a path is cut
+/// to its last part).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttachmentSource {
+    pub bytes: Vec<u8>,
+    pub name: String,
+}
+
+impl AttachmentSource {
+    /// The attachment as the design keeps it, with the id number `id`, or
+    /// why the image cannot be attached.
+    fn attach(&self, id: u32) -> Result<CommentAttachment, String> {
+        if self.bytes.len() > MAX_COMMENT_IMAGE {
+            return Err(too_large(self.bytes.len()));
+        }
+        let header = image_header::read(&self.bytes)?;
+        if header.format != "png" && header.format != "jpeg" {
+            return Err(format!(
+                "only PNG and JPEG images can be attached, and this one is {}",
+                header.format.to_uppercase()
+            ));
+        }
+        Ok(CommentAttachment {
+            id,
+            name: attachment_name(&self.name, header.format),
+            image: EmbeddedImage {
+                format: header.format.to_owned(),
+                width: header.width,
+                height: header.height,
+                data: ImageData::from_bytes(&self.bytes),
+            },
+        })
+    }
+}
+
+/// Why an image of `bytes` is too large to attach, in words.
+fn too_large(bytes: usize) -> String {
+    format!(
+        "the image is {:.1} MB, more than the {} MB a comment's image may be",
+        bytes as f64 / f64::from(1u32 << 20),
+        MAX_COMMENT_IMAGE >> 20
+    )
+}
+
+/// The name an attached image keeps: the file's name without its folders,
+/// on one line, at most [`ATTACHMENT_NAME_CHARS`] characters; `image.png`
+/// (or `.jpg`) when none is given.
+fn attachment_name(given: &str, format: &str) -> String {
+    let last = given.rsplit(['/', '\\']).next().unwrap_or_default();
+    let name: String = last
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(ATTACHMENT_NAME_CHARS)
+        .collect();
+    if name.is_empty() {
+        format!("image.{}", if format == "jpeg" { "jpg" } else { "png" })
+    } else {
+        name
+    }
+}
+
+/// An attached image as a design file keeps it, in the top-level
+/// `comment_attachments` (mitcad#2011): the comment's id, the reply's
+/// number from 1 (left out for the comment's own image), its id, name and
+/// image.
+#[derive(Serialize)]
+pub(crate) struct AttachmentOut<'a> {
+    comment: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply: Option<usize>,
+    id: String,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    name: &'a str,
+    image: &'a EmbeddedImage,
+}
+
+/// An attached image as a design file gives it ([`AttachmentOut`]).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AttachmentIn {
+    comment: String,
+    #[serde(default)]
+    reply: Option<usize>,
+    id: String,
+    #[serde(default)]
+    name: String,
+    image: EmbeddedImage,
+}
+
+/// The images of `comments` as a design file keeps them, in the comments'
+/// order, each comment's own before its replies'.
+pub(crate) fn attachments_out(comments: &[Comment]) -> Vec<AttachmentOut<'_>> {
+    comments
+        .iter()
+        .flat_map(|comment| {
+            comment
+                .all_attachments()
+                .map(move |(reply, attachment)| AttachmentOut {
+                    comment: comment.name(),
+                    reply: reply.map(|r| r + 1),
+                    id: attachment.name_id(),
+                    name: &attachment.name,
+                    image: &attachment.image,
+                })
+        })
+        .collect()
+}
+
+/// Puts a design file's images on their comments and replies, each checked
+/// as a command would have made it and each id once; returns the largest
+/// id number (0 without images). `entries` are the file's, in its order.
+/// A refusal is what is wrong in words, as a person reads it (no ids, no
+/// fields), and with the field and the ids, for agents and the log.
+pub(crate) fn attachments_in(
+    comments: &mut [Comment],
+    entries: Vec<AttachmentIn>,
+) -> Result<u32, (String, String)> {
+    let mut largest = 0;
+    let mut seen = std::collections::BTreeSet::new();
+    for (i, entry) in entries.into_iter().enumerate() {
+        let at =
+            |words: &str, e: String| (words.to_owned(), format!("comment_attachments[{i}]: {e}"));
+        let id = attachment_number(&entry.id).ok_or_else(|| {
+            at(
+                "its number cannot be read",
+                format!("{} is no image id (A<n>)", entry.id),
+            )
+        })?;
+        if !seen.insert(id) {
+            return Err(at(
+                "two images have the same number",
+                format!("image A{id} is listed more than once"),
+            ));
+        }
+        let on_comment = |e: String| at("it is on a comment the design does not have", e);
+        let number = comment_number(&entry.comment)
+            .ok_or_else(|| on_comment(format!("{} is no comment id (C<n>)", entry.comment)))?;
+        let comment = comments
+            .iter_mut()
+            .find(|c| c.id == number)
+            .ok_or_else(|| on_comment(format!("there is no comment {}", entry.comment)))?;
+        let attachment = CommentAttachment {
+            id,
+            name: entry.name,
+            image: entry.image,
+        };
+        // The reasons of the image's check are in words already.
+        attachment.check().map_err(|e| {
+            (
+                e.clone(),
+                format!("comment_attachments[{i}]: image A{id}: {e}"),
+            )
+        })?;
+        match entry.reply {
+            None => comment.attachments.push(attachment),
+            Some(reply) => {
+                let name = comment.name();
+                comment
+                    .replies
+                    .get_mut(reply.wrapping_sub(1))
+                    .ok_or_else(|| {
+                        at(
+                            "it is on a reply the comment does not have",
+                            format!("{name} has no reply {reply}"),
+                        )
+                    })?
+                    .attachments
+                    .push(attachment);
+            }
+        }
+        largest = largest.max(id);
+    }
+    Ok(largest)
+}
+
+/// The `next_comment_attachment` a file keeps: only with comments, and only
+/// where it is not one past the largest image id listed (or 1 without
+/// images), which reading takes.
+pub(crate) fn next_attachment_out(state: &DocState) -> Option<u32> {
+    if state.comments.is_empty() {
+        return None;
+    }
+    let largest = state
+        .comments
+        .iter()
+        .flat_map(|c| c.all_attachments().map(|(_, a)| a.id))
+        .max()
+        .unwrap_or(0);
+    (state.next_attachment > largest.saturating_add(1)).then_some(state.next_attachment)
+}
+
+/// The number of an attachment id `A<n>` (`n` from 1), if the text is one.
+pub fn attachment_number(text: &str) -> Option<u32> {
+    crate::ids::parse_number::<u32>(text.trim(), "A").filter(|n| *n > 0)
 }
 
 /// A comment kept in the document.
@@ -357,6 +636,10 @@ pub struct Comment {
     /// has no place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<Vec3>,
+    /// Its images (mitcad#2011), in the order they were attached; files
+    /// keep them in `comment_attachments`.
+    #[serde(skip)]
+    pub attachments: Vec<CommentAttachment>,
 }
 
 /// A comment id as text, `C<n>`.
@@ -386,31 +669,69 @@ impl Comment {
         format!("C{}", self.id)
     }
 
-    /// Why the comment is not one a command could have made (a file's).
+    /// Why the comment is not one a command could have made (a file's),
+    /// for agents and the log: with the field it is in.
     pub fn check(&self) -> Result<(), String> {
+        self.damage().map_or(Ok(()), |(_, detail)| Err(detail))
+    }
+
+    /// Why the comment is not one a command could have made: in words, as
+    /// a person reads it (no ids, no fields; mitcad#2011), and with the
+    /// field it is in, for agents and the log.
+    pub fn damage(&self) -> Option<(&'static str, String)> {
         if self.text.trim().is_empty() {
-            return Err("the text is empty".to_owned());
+            return Some(("its text is empty", "the text is empty".to_owned()));
         }
         if self.author.trim().is_empty() {
-            return Err("the author is empty".to_owned());
+            return Some(("its author is empty", "the author is empty".to_owned()));
         }
-        self.target.kind().map_err(|e| format!("target: {e}"))?;
+        if let Err(e) = self.target.kind() {
+            return Some((
+                "what it is pinned to cannot be read",
+                format!("target: {e}"),
+            ));
+        }
         if self
             .resolution
             .as_ref()
             .is_some_and(|r| r.trim().is_empty())
         {
-            return Err("the resolution is empty".to_owned());
+            return Some((
+                "its resolution is empty",
+                "the resolution is empty".to_owned(),
+            ));
         }
         if self.place.is_some_and(|p| p.iter().any(|c| !c.is_finite())) {
-            return Err("the place is not a point".to_owned());
+            return Some((
+                "its place is not a point",
+                "the place is not a point".to_owned(),
+            ));
         }
         for (i, reply) in self.replies.iter().enumerate() {
             if reply.text.trim().is_empty() || reply.author.trim().is_empty() {
-                return Err(format!("replies[{i}]: a reply has an author and a text"));
+                return Some((
+                    "a reply of it has no author or no text",
+                    format!("replies[{i}]: a reply has an author and a text"),
+                ));
             }
         }
-        Ok(())
+        None
+    }
+
+    /// Its images and its replies', in order: each with the reply it is on
+    /// (from 0), none for the comment's own.
+    pub fn all_attachments(&self) -> impl Iterator<Item = (Option<usize>, &CommentAttachment)> {
+        self.attachments.iter().map(|a| (None, a)).chain(
+            self.replies
+                .iter()
+                .enumerate()
+                .flat_map(|(i, r)| r.attachments.iter().map(move |a| (Some(i), a))),
+        )
+    }
+
+    /// The image of this id, on the comment or one of its replies.
+    pub fn attachment(&self, id: u32) -> Option<&CommentAttachment> {
+        self.all_attachments().map(|(_, a)| a).find(|a| a.id == id)
     }
 }
 
@@ -500,17 +821,24 @@ impl<K: Kernel> Document<K> {
         format!("C{}", self.state.next_comment)
     }
 
+    /// The id the next attached image takes: one past the largest ever
+    /// used (mitcad#2011).
+    pub fn next_attachment_id(&self) -> String {
+        format!("A{}", self.state.next_attachment)
+    }
+
     /// Adds an open comment on `target` (its form checked here; the API
     /// checks first that it is in the model and finds `place`, design
-    /// coordinates), written now by `author` ([`COMMENT_USER`] when none);
-    /// an undo step `Add Comment C1` that recomputes nothing. Returns its
-    /// id.
+    /// coordinates), written now by `author` ([`COMMENT_USER`] when none),
+    /// with its images (mitcad#2011); an undo step `Add Comment C1` that
+    /// recomputes nothing. Returns its id.
     pub fn add_comment(
         &mut self,
         text: &str,
         target: CommentTarget,
         author: Option<&str>,
         place: Option<Vec3>,
+        attachments: &[AttachmentSource],
     ) -> Result<String, ModelError> {
         let text = text_of(text, "a comment")?;
         let target = target.normalized();
@@ -519,6 +847,7 @@ impl<K: Kernel> Document<K> {
         let next = id
             .checked_add(1)
             .ok_or_else(|| invalid("no comment ids are left"))?;
+        let (attachments, next_attachment) = self.attach(attachments)?;
         let comment = Comment {
             id,
             text,
@@ -531,15 +860,86 @@ impl<K: Kernel> Document<K> {
             replies: Vec::new(),
             created: now(),
             place: finite(place),
+            attachments,
         };
         let name = comment.name();
         let label = format!("Add Comment {name}");
         self.apply_with(|state| {
             state.comments.push(comment);
             state.next_comment = next;
+            state.next_attachment = next_attachment;
             Ok((label, (), false))
         })?;
         Ok(name)
+    }
+
+    /// The images to attach as the design keeps them, numbered from the
+    /// next attachment id, and the number after them; or why one cannot be
+    /// attached ("image 2: the image is 5.1 MB, …").
+    fn attach(
+        &self,
+        sources: &[AttachmentSource],
+    ) -> Result<(Vec<CommentAttachment>, u32), ModelError> {
+        let mut next = self.state.next_attachment;
+        let mut attachments = Vec::with_capacity(sources.len());
+        for (i, source) in sources.iter().enumerate() {
+            let attachment = source.attach(next).map_err(|e| {
+                invalid(if sources.len() > 1 {
+                    format!("image {}: {e}", i + 1)
+                } else {
+                    e
+                })
+            })?;
+            attachments.push(attachment);
+            next = next
+                .checked_add(1)
+                .ok_or_else(|| invalid("no image ids are left"))?;
+        }
+        Ok((attachments, next))
+    }
+
+    /// Removes an image from a comment or one of its replies (mitcad#2011);
+    /// an undo step `Remove Image`. Its id is not given again.
+    pub fn remove_comment_attachment(
+        &mut self,
+        comment: &str,
+        attachment: &str,
+    ) -> Result<(), ModelError> {
+        let i = self.comment_index(comment)?;
+        let number = attachment_number(attachment)
+            .ok_or_else(|| invalid(format!("{attachment} is no image id (A<n>)")))?;
+        let found = &self.state.comments[i];
+        let place = match found.attachments.iter().position(|a| a.id == number) {
+            Some(at) => (None, at),
+            None => found
+                .replies
+                .iter()
+                .enumerate()
+                .find_map(|(r, reply)| {
+                    reply
+                        .attachments
+                        .iter()
+                        .position(|a| a.id == number)
+                        .map(|at| (Some(r), at))
+                })
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "{} has no image {}",
+                        found.name(),
+                        attachment.trim()
+                    ))
+                })?,
+        };
+        // The action in words, as the Undo menu shows it: no ids.
+        let label = "Remove Image".to_owned();
+        self.apply_with(|state| {
+            let comment = &mut state.comments[i];
+            match place {
+                (None, at) => comment.attachments.remove(at),
+                (Some(r), at) => comment.replies[r].attachments.remove(at),
+            };
+            Ok((label, (), false))
+        })
     }
 
     /// Changes a comment's text; an undo step `Edit Comment C1`, none when
@@ -558,23 +958,28 @@ impl<K: Kernel> Document<K> {
         Ok(true)
     }
 
-    /// Adds a reply by `author` ([`COMMENT_USER`] when none); an undo step
-    /// `Reply to C1`. The status stays.
+    /// Adds a reply by `author` ([`COMMENT_USER`] when none) with its
+    /// images (mitcad#2011); an undo step `Reply to C1`. The status stays.
     pub fn reply_comment(
         &mut self,
         id: &str,
         text: &str,
         author: Option<&str>,
+        attachments: &[AttachmentSource],
     ) -> Result<(), ModelError> {
         let i = self.comment_index(id)?;
+        let text = text_of(text, "a reply")?;
+        let (attachments, next_attachment) = self.attach(attachments)?;
         let reply = CommentReply {
             author: author_of(author),
-            text: text_of(text, "a reply")?,
+            text,
             created: now(),
+            attachments,
         };
         let label = format!("Reply to {}", self.state.comments[i].name());
         self.apply_with(|state| {
             state.comments[i].replies.push(reply);
+            state.next_attachment = next_attachment;
             Ok((label, (), false))
         })
     }
@@ -680,6 +1085,7 @@ impl<K: Kernel> Document<K> {
                 author: author_of(author),
                 text: text_of(text, "a reply")?,
                 created: now(),
+                attachments: Vec::new(),
             }),
             None => None,
         };

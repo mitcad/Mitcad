@@ -1,0 +1,20 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The synthetic BUILD profile of the drag and travel UI test (mitcad#2088, tools/ui-build-drag-travel-test.sh): a square bar W wide, extruded by L from z = 0, with the end frames of a cut-to-length part and the slot frames slot_x+_1 and slot_y+_1 on its x+ and y+ sides (their z out of the side, their x along the bar)."},
+  {"cmd": "add_parameter", "name": "L", "expression": "500 mm"},
+  {"cmd": "add_parameter", "name": "W", "expression": "20 mm"},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-10, -10], "width": "W", "height": "W"},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "L"}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "mount:end_a", "def": {"type": "joint_origin", "geometry": "origin",
+    "frame_override": {"origin": [0, 0, 0], "z_axis": [0, 0, -1], "x_axis": [1, 0, 0]}}},
+  {"cmd": "add_feature", "name": "mount:end_b", "def": {"type": "joint_origin",
+    "geometry": {"body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}}},
+  {"cmd": "add_feature", "name": "mount:slot_x+_1", "def": {"type": "joint_origin",
+    "geometry": {"origin": [10, 0, 0], "normal": [1, 0, 0], "x_axis": [0, 0, 1]}}},
+  {"cmd": "add_feature", "name": "mount:slot_y+_1", "def": {"type": "joint_origin",
+    "geometry": {"origin": [0, 10, 0], "normal": [0, 1, 0], "x_axis": [0, 0, 1]}}},
+  {"expect": {"bodies": 1}}
+]

@@ -1,0 +1,223 @@
+# SPDX-License-Identifier: MIT
+# Replacing the one constraint or dimension that blocks a new one
+# (mitcad#2090, GitHub mitcad/Mitcad#475), on sketch-conflict-replace.json's
+# Sketch1: c3 and c6 Parallel (k28) and nothing else; c9 and c12 Horizontal
+# and Parallel (k29, k30, k31); c15 and c18 between fixed points; c21 and
+# c24 each 20 mm long (k32, k33).
+#   1. Perpendicular on c3 and c6 is refused for the Parallel alone: the
+#      message has Replace, the Parallel is painted. Replace: the Parallel
+#      goes and the Perpendicular holds, one undo step; one Undo brings the
+#      Parallel back.
+#   2. Shift held at the second click: replaced at once, with the notice
+#      in words; one Undo brings the Parallel back.
+#   3. Perpendicular on c9 and c12, which three items block together: no
+#      button, also with Shift held.
+#   4. Perpendicular on the two fixed lines: it can't hold with fixed
+#      geometry, no button.
+#   5. Esc takes the button away.
+#   6. A 30 mm dimension on c21, blocked by its 20 mm one: added as driven,
+#      the warning names the 20 mm distance, which is painted; Replace
+#      removes it and makes the new one driving, one undo step.
+#   7. A 25 mm dimension on c24 accepted with Shift+Enter: its 20 mm one
+#      replaced at once, with the notice in words.
+#   8. A 40 mm dimension on c21, then Undo before Replace is pressed:
+#      nothing is replaced, and the hint says the sketch changed.
+#   9. Perpendicular by its key (Shift+R) on c3 and c6 selected: refused
+#      with Replace, never replaced at once.
+# The wrapper checks the sketch snapshots taken along the way
+# (capture-sketch): k28 gone after 1's Replace and back after the Undo,
+# k32 gone after 6's Replace.
+# The clicks stay within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit also in session 0's 1024x768 window on Windows. The
+# Replace button is clicked where it is logged: the Floating band's or the
+# Docked status bar's, both logged `Message band action Replace at x,y`.
+# Run by tools/ui-sketch-conflict-test.sh (Linux),
+# tools/ui-windows-sketch-conflict-test.ps1 (Windows) and
+# tools/ui-macos-sketch-conflict-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+key F6
+wait-idle
+
+# 1. Perpendicular refused for the Parallel alone; Replace, then Undo.
+mark
+command sketch.constraint.perpendicular
+wait-log '^Sketch tool Perpendicular$' 10
+sketch-click -17 15
+sketch-click -17 5
+wait-log '^Constraint perpendicular refused: ' 20
+wait-log '^Sketch conflict replace offered: k28$' 10
+wait-log '^Status error: Perpendicular not added: ' 10
+expect-no-log '^Status error: Perpendicular not added: .*\b[kpc][0-9]'
+wait-log '^Message band action: Replace$' 10
+wait-log '^Sketch conflict painted: k28 ' 10
+wait-log '^Message band action Replace at ' 10
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-conflict-replace-offered.png'
+capture-undo-depth before
+mark
+click-logged '^Message band action Replace at '
+wait-log '^Sketch conflict replaced: k28 by k[0-9]+$' 20
+wait-idle
+expect-undo-depth ${before} 1
+capture-sketch F1 '${MITCAD_TEST_WORK}/replace-constraint.json'
+mark
+command edit.undo
+wait-log '^Undo: ' 10
+wait-idle
+expect-undo-depth ${before} 0
+capture-sketch F1 '${MITCAD_TEST_WORK}/replace-constraint-undone.json'
+
+# 2. Shift held at the second click: replaced at once; Undo.
+mark
+sketch-click -17 15
+sketch-pointer press -17 5 shift
+sketch-pointer release -17 5 shift
+wait-log '^Sketch conflict replaced \(Shift\): k28 by k[0-9]+$' 20
+wait-log '^Sketch notice: Perpendicular added; it replaced the .*\.$' 10
+expect-no-log '^Sketch conflict replace offered: '
+wait-idle
+expect-undo-depth ${before} 1
+mark
+command edit.undo
+wait-log '^Undo: ' 10
+wait-idle
+expect-undo-depth ${before} 0
+
+# 3. Three items block it together: no button, with Shift too.
+mark
+sketch-click 12 15
+sketch-click 12 5
+wait-log '^Constraint perpendicular refused: ' 20
+wait-log '^Status error: Perpendicular not added: ' 10
+expect-no-log '^Sketch conflict replace offered: '
+mark
+sketch-click 12 15
+sketch-pointer press 12 5 shift
+sketch-pointer release 12 5 shift
+wait-log '^Constraint perpendicular refused: ' 20
+wait-log '^Status error: Perpendicular not added: ' 10
+expect-no-log '^Sketch conflict replace offered: '
+expect-no-log '^Sketch conflict replaced'
+wait-idle
+expect-undo-depth ${before} 0
+
+# 4. Fixed geometry blocks it: no button.
+mark
+sketch-click -17 -5
+sketch-click -17 -15
+wait-log '^Constraint perpendicular refused: ' 20
+wait-log '^Status error: Perpendicular not added: ' 10
+expect-no-log '^Sketch conflict replace offered: '
+wait-idle
+
+# 5. Refused with Replace, then Esc: the button goes with the painting.
+mark
+sketch-click -17 15
+sketch-click -17 5
+wait-log '^Sketch conflict replace offered: k28$' 20
+wait-idle
+mark
+key Escape
+wait-log '^Sketch conflict replace withdrawn$' 10
+wait-log '^Sketch conflict painted: none$' 10
+wait-idle
+expect-undo-depth ${before} 0
+key Escape
+wait-idle
+
+# 6. A 30 mm dimension on c21: driven, the 20 mm one named and painted;
+#    Replace makes it driving in place of the 20 mm one.
+#    The value goes half way between c21 and the x axis: at session 0's
+#    5 px/mm on Windows a click 1 mm from the axis picked the axis.
+mark
+command sketch.dimension
+wait-log '^Sketch tool Sketch Dimension$' 10
+sketch-click 15 -5
+sketch-click 15 -2.5
+wait-log '^Sketch value editor at ' 10
+key ctrl+a
+type 30
+key Return
+wait-log '^Added driven dimension k[0-9]+ ' 20
+wait-log '^Sketch conflict replace offered: k32$' 10
+wait-log '^Status warning: The dimension would over-constrain the sketch: added as a driven dimension; it can.t hold with the .*\.$' 10
+expect-no-log '^Status warning: The dimension would .*\b[kpc][0-9]'
+wait-log '^Sketch conflict painted: k32 ' 10
+wait-log '^Message band action Replace at ' 10
+wait-idle
+capture-undo-depth driven
+mark
+click-logged '^Message band action Replace at '
+wait-log '^Sketch conflict replaced: k32 by k[0-9]+$' 20
+wait-log '^Added dimension k[0-9]+ .* = 30( mm)? \(driving, in place of k[0-9]+\)$' 10
+wait-idle
+expect-undo-depth ${driven} 1
+capture-sketch F1 '${MITCAD_TEST_WORK}/replace-dimension.json'
+
+# 7. Shift+Enter: the 20 mm dimension of c24 replaced at once.
+mark
+sketch-click 15 -15
+sketch-click 15 -19
+wait-log '^Sketch value editor at ' 10
+key ctrl+a
+type 25
+key shift+Return
+wait-log '^Sketch value editor accepted with Shift$' 10
+wait-log '^Sketch conflict replaced \(Shift\): k33 by k[0-9]+$' 20
+wait-log '^Sketch notice: Dimension added; it replaced the .*\.$' 10
+expect-no-log '^Added driven dimension '
+wait-idle
+expect-undo-depth ${driven} 2
+
+# 8. A 40 mm dimension on c21, Undo, then Replace: nothing replaced.
+mark
+sketch-click 15 -5
+sketch-click 15 -2.5
+wait-log '^Sketch value editor at ' 10
+key ctrl+a
+type 40
+key Return
+wait-log '^Added driven dimension k[0-9]+ ' 20
+wait-log '^Sketch conflict replace offered: k[0-9]+$' 10
+wait-log '^Message band action Replace at ' 10
+wait-idle
+mark
+command edit.undo
+wait-log '^Undo: ' 10
+wait-idle
+mark
+click-logged '^Message band action Replace at '
+wait-log '^Sketch conflict replace refused: the sketch changed since ' 10
+wait-log '^Sketch notice: Nothing replaced: the sketch changed since\.$' 10
+expect-no-log '^Sketch conflict replaced'
+wait-idle
+expect-undo-depth ${driven} 2
+key Escape
+key Escape
+wait-idle
+
+# 9. Shift+R on c3 and c6 selected: refused with Replace, not replaced.
+mark
+sketch-click -17 15
+expect-selection 1 0
+mark
+sketch-click -17 5 ctrl
+expect-selection 2 0
+mark
+key shift+r
+wait-log '^Constraint perpendicular refused: ' 20
+wait-log '^Sketch conflict replace offered: k28$' 10
+expect-no-log '^Sketch conflict replaced'
+wait-idle
+expect-undo-depth ${driven} 2
+key Escape
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

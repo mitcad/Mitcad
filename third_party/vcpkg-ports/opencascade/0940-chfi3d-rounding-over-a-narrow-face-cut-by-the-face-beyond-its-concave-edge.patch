@@ -75,7 +75,9 @@ the rounding's cylinder inside the hollow within 1e-6 mm3 (invalid without
 the patch by its documentation); test_key_rounded_over_its_side_in_a_hollow
 and test_key_rounded_over_a_lower_side are the boundary cases, which build
 without the patch as well. Its failure without the patch is still to be
-shown in the port's before/after run (mitcad#1986).
+shown: with it and the 14 later patches that change the same lines
+reverted at the port's tip, the test does not build (tried 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

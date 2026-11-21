@@ -964,10 +964,8 @@ fn set_component(state: &mut DocState, features: &[FeatureUid], component: Compo
 /// the extrusion can be made a cut again. See `CutScope::follow_move`.
 fn follow_cut_scopes(state: &mut DocState, moved: &[FeatureUid], m: &ComponentMove<'_>) {
     for entry in &mut state.features {
-        let FeatureDef::Extrude(extrude) = &entry.def else {
-            continue;
-        };
-        let Some(scope) = &extrude.cut_scope else {
+        // An Extrude's, a Revolve's or a Hole's (mitcad#2131).
+        let Some(scope) = entry.def.stored_cut_scope() else {
             continue;
         };
         let feature = if moved.contains(&entry.uid) {
@@ -979,9 +977,9 @@ fn follow_cut_scopes(state: &mut DocState, moved: &[FeatureUid], m: &ComponentMo
         };
         let mut scope = scope.clone();
         if scope.follow_move(m, feature)
-            && let FeatureDef::Extrude(extrude) = &mut Arc::make_mut(entry).def
+            && let Some(slot) = Arc::make_mut(entry).def.cut_scope_mut()
         {
-            extrude.cut_scope = Some(scope);
+            *slot = Some(scope);
         }
     }
 }

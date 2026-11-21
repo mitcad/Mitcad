@@ -92,9 +92,9 @@ geometry.offset_loft_circle_seam_lean_in): walls leaning in towards the
 circle, closed inward offsets with OCCT alone, invalid with 1130 and 1160
 alone, valid single solids of the seam-on-a-corner loft's volume with this
 patch. The vertex tolerance:
-test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side. It fails without
+the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted together
+with 1480, which changes the same lines).
 
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeLoops.cxx

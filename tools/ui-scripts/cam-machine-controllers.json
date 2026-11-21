@@ -1,0 +1,21 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The Controller list of Edit Machine (mitcad#2119): a router on grbl and a two-axis lathe on the Fanuc turning dialect, both put by model commands, without tools."},
+  {"cmd": "cam_machine_put", "machine": {
+    "id": "router",
+    "machine": {"name": "Router", "controller": "grbl",
+                "travel": {"min": [0, 0, -100], "max": [500, 500, 0]},
+                "spindle": {"min_rpm": 8000, "max_rpm": 24000, "nose_diameter": 50, "nose_length": 80},
+                "max_feed": 5000, "rapid_feed": 6000},
+    "tools": {"tools": []}
+  }},
+  {"cmd": "cam_machine_put", "machine": {
+    "id": "lathe",
+    "machine": {"name": "Lathe", "controller": "fanuc_turning",
+                "travel": {"min": [-5, 0, -300], "max": [150, 0, 200]},
+                "spindle": {"min_rpm": 50, "max_rpm": 3000, "nose_diameter": 0, "nose_length": 0},
+                "max_feed": 5000, "rapid_feed": 20000,
+                "lathe": {"turret_stations": 8, "chuck_diameter": 160, "chuck_length": 50}},
+    "tools": {"tools": []}
+  }}
+]

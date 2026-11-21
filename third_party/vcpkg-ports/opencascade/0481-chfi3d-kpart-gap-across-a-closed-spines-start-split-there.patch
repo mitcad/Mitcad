@@ -39,8 +39,9 @@ geometry.suite.chamfer_overflow): the post's foot chamfered past the plate's
 outline with the post's seam in a gap between the plate's sides (the spine's
 start there): valid, the volume of the chamfer's ring less its parts beyond
 the sides (every seam in a gap fails without this patch by the test's
-documentation). Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+documentation). It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py, reverted together with 0581, 0650, which change
+the same lines).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 8cda613..ef7b65e 100644

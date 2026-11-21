@@ -605,9 +605,16 @@ LONG WINAPI onException(EXCEPTION_POINTERS* info) {
     if (crash.thread != nullptr) {
       CloseHandle(crash.thread);
     }
+    // The report is written: end the process here, with the exit code
+    // Windows would give it. Searching on lets Windows unwind the crashed
+    // thread's whole stack, which runs the destructors of every frame below
+    // the fault (the event loop, main()'s windows, views and browser) in a
+    // process that is already broken; after a graphics driver reset that
+    // teardown never ended and the window hung until a restart (mitcad#2125).
+    TerminateProcess(GetCurrentProcess(), record != nullptr ? record->ExceptionCode : kCxxException);
   }
-  // Windows ends the process as it would have (and its error reporting
-  // sees it).
+  // Another fault while the first is reported (or the reporter's own):
+  // Windows ends the process as it would have.
   return EXCEPTION_CONTINUE_SEARCH;
 }
 

@@ -38,3 +38,11 @@ mod link_copy_tests;
 mod body_folder_tests;
 // New content under hidden parents shows them (mitcad#1995).
 mod hidden_parents_tests;
+// Folders of a component's occurrences, a Bodies folder's renamed
+// (mitcad#2103).
+mod occurrence_folder_tests;
+// The order of occurrences among their siblings (mitcad#2104).
+mod occurrence_order_tests;
+// Assembly cuts: linked and multiply placed components machined in an
+// assembly only (mitcad#2131).
+mod assembly_cut_tests;

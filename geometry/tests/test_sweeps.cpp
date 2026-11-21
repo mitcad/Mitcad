@@ -1671,6 +1671,178 @@ void test_rib_rim_cap() {
   CHECK(tops == 1);
 }
 
+// The extent across Y of a face of the shape named `name`; -1 without one.
+double y_extent(const Shape& shape, const std::string& name) {
+  const std::vector<int> faces = shape.find_faces(name);
+  if (faces.size() != 1) {
+    return -1.0;
+  }
+  const BoundingBox box = bounding_box(Shape(shape.face(faces.front())));
+  return box.max.Y() - box.min.Y();
+}
+
+// Whether the point lies inside the shape.
+bool inside(const Shape& shape, const gp_Pnt& point) {
+  BRepClass3d_SolidClassifier classifier(shape.occt(), point, 1e-7);
+  return classifier.State() == TopAbs_IN;
+}
+
+// A rib's and a web's Draft Angle (mitcad#2102): the sides lean so that the
+// wall is thicker where it meets the body, its thickness measured at the
+// curves.
+void test_rib_draft() {
+  const double two = 2.0 * kPi / 180.0;
+  // A straight rib on the plane y = 20 from (0, 30) to (40, 30), 4 thick,
+  // Symmetric, 10 deep (up, +Z): 4 thick at its curve, 4 + 20 tan 2 deg at
+  // the far end, its sides planes leaned 2 degrees off +Z; the faces keep
+  // their names.
+  RibSpec spec;
+  spec.feature = "F6";
+  spec.frame = midplane();
+  spec.chains = {{{"c1", line3(gp_Pnt(0, 20, 30), gp_Pnt(40, 20, 30))}}};
+  spec.thickness = 4;
+  spec.depth = 10.0;
+  spec.draft_angle = two;
+  const ShapePtr drafted = rib(spec);
+  CHECK(solids(*drafted).size() == 1);
+  CHECK(BRepCheck_Analyzer(drafted->occt()).IsValid());
+  CHECK_NEAR(volume(*drafted), 40.0 * 10 * (4 + 10 * std::tan(two)));
+  for (const char* name : {"F6:side(c1)", "F6:wall1", "F6:wall2", "F6:tip0", "F6:tip1", "F6:end"}) {
+    CHECK(faces_named(*drafted, name) == 1);
+  }
+  CHECK(std::abs(y_extent(*drafted, "F6:side(c1)") - 4) <= 1e-6);
+  CHECK(std::abs(y_extent(*drafted, "F6:end") - (4 + 20 * std::tan(two))) <= 1e-6);
+  CHECK(near(bounding_box(*drafted).min.Z(), 30, 1e-9) && near(bounding_box(*drafted).max.Z(), 40, 1e-9));
+  for (const char* name : {"F6:wall1", "F6:wall2"}) {
+    const std::vector<int> walls = drafted->find_faces(name);
+    if (walls.size() != 1) {
+      continue;
+    }
+    const BRepAdaptor_Surface wall(drafted->face(walls.front()));
+    CHECK(wall.GetType() == GeomAbs_Plane);
+    if (wall.GetType() == GeomAbs_Plane) {
+      CHECK(near(std::abs(wall.Plane().Axis().Direction().Z()), std::sin(two), 1e-9));
+    }
+  }
+  // Side 1 keeps its side at the curves on the sketch plane, both sides
+  // leaning out from there: from y = 20 - 4 at the curve, the same volume.
+  spec.location = ThicknessLocation::Side1;
+  const ShapePtr side1 = rib(spec);
+  CHECK_NEAR(volume(*side1), 40.0 * 10 * (4 + 10 * std::tan(two)));
+  CHECK(std::abs(y_extent(*side1, "F6:side(c1)") - 4) <= 1e-6);
+  spec.location = ThicknessLocation::Symmetric;
+  // A negative angle narrows it; one that makes the sides meet before the
+  // depth (2 / tan 15 deg = 7.5 from the curve) fails, saying so in words.
+  spec.draft_angle = -two;
+  CHECK_NEAR(volume(*rib(spec)), 40.0 * 10 * (4 - 10 * std::tan(two)));
+  spec.draft_angle = -15.0 * kPi / 180.0;
+  CHECK(throws_with([&] { rib(spec); }, "the draft angle closes the rib before its depth"));
+  spec.draft_angle = two;
+
+  // To Next onto the cylindrical walls of two bosses, with Extend Ends: the
+  // rib of test_ribs grown straight down between them, drafted 2 degrees:
+  // a valid solid that joins the bosses into one body, larger than without
+  // the draft, with no note.
+  const ShapePtr floor = extrude("F2", {rectangle(1, 0, 0, 100, 40)}, 0, 10);
+  const ShapePtr tall = extrude("F3", {circle(5, 20, 20, 10)}, 10, 60);
+  const ShapePtr low_boss = extrude("F4", {circle(6, 80, 20, 10)}, 10, 30);
+  const ShapePtr one = boolean(BooleanOp::Join, {floor.get()}, *tall).pieces.at(0).shape;
+  const ShapePtr bosses = boolean(BooleanOp::Join, {one.get()}, *low_boss).pieces.at(0).shape;
+  RibSpec down;
+  down.feature = "F9";
+  down.frame = midplane();
+  down.chains = {{{"c1", line3(gp_Pnt(30, 20, 50), gp_Pnt(70, 20, 30))}}};
+  down.thickness = 4;
+  down.bodies = {bosses};
+  down.direction = gp_Dir(0, 0, -1);
+  down.extend_ends = true;
+  const double plain = volume(*rib(down));
+  down.draft_angle = two;
+  const ShapePtr braced = rib(down);
+  CHECK(BRepCheck_Analyzer(braced->occt()).IsValid());
+  CHECK(solids(*braced).size() == 1);
+  CHECK(braced->notes().empty());
+  CHECK(volume(*braced) > plain + 1.0);
+  const BooleanResult joined = boolean(BooleanOp::Join, {bosses.get()}, *braced);
+  CHECK(joined.pieces.size() == 1);
+  // Just over the floor below the middle of the line (x = 50, 30 below
+  // it), the rib is 4 + 2 * 29.9 tan 2 deg = 6.09 thick: 1.5 off the
+  // midplane is material, 3.1 is not.
+  CHECK(inside(*braced, gp_Pnt(50, 21.5, 10.1)) && !inside(*braced, gp_Pnt(50, 23.1, 10.1)));
+  CHECK(inside(*braced, gp_Pnt(50, 18.5, 10.1)) && !inside(*braced, gp_Pnt(50, 16.9, 10.1)));
+
+  // A web grid on a 100 x 100 x 5 plate: a square of four lines meeting in
+  // mitred corners and two lines across it from side to side, 2 thick and
+  // 10 deep, drafted 1.5 degrees. Its curves lie on the plate, so it
+  // narrows as it grows: at z = 5 + h a wall is 2 - 2 h tan 1.5 deg thick,
+  // 1.476 at the top.
+  const double grid_angle = 1.5 * kPi / 180.0;
+  const ShapePtr plate = extrude("F2", {rectangle(1, 0, 0, 100, 100)}, 0, 5);
+  RibSpec grid;
+  grid.feature = "F7";
+  grid.web = true;
+  grid.frame = xy_at(5);
+  grid.thickness = 2;
+  grid.depth = 10.0;
+  grid.bodies = {plate};
+  grid.draft_angle = grid_angle;
+  grid.chains = {{{"c1", line3(gp_Pnt(10, 10, 5), gp_Pnt(90, 10, 5))}},
+                 {{"c2", line3(gp_Pnt(90, 10, 5), gp_Pnt(90, 90, 5))}},
+                 {{"c3", line3(gp_Pnt(90, 90, 5), gp_Pnt(10, 90, 5))}},
+                 {{"c4", line3(gp_Pnt(10, 90, 5), gp_Pnt(10, 10, 5))}},
+                 {{"c5", line3(gp_Pnt(50, 10, 5), gp_Pnt(50, 90, 5))}},
+                 {{"c6", line3(gp_Pnt(10, 50, 5), gp_Pnt(90, 50, 5))}}};
+  const ShapePtr webs = rib(grid);
+  CHECK(BRepCheck_Analyzer(webs->occt()).IsValid());
+  CHECK(solids(*webs).size() == 1);
+  const BooleanResult ribbed = boolean(BooleanOp::Join, {plate.get()}, *webs);
+  CHECK(ribbed.pieces.size() == 1);
+  if (ribbed.pieces.size() == 1) {
+    const Shape& body = *ribbed.pieces.at(0).shape;
+    CHECK(BRepCheck_Analyzer(body.occt()).IsValid());
+    // A wall across the plate: 0.85 off its curve is inside it at the
+    // foot, outside at the top.
+    CHECK(inside(body, gp_Pnt(50.85, 30, 5.2)) && !inside(body, gp_Pnt(50.85, 30, 14.9)));
+    CHECK(inside(body, gp_Pnt(30, 49.15, 5.2)) && !inside(body, gp_Pnt(30, 49.15, 14.9)));
+    // The mitred corner at (10, 10): its outer corner on both axes at 10
+    // less half the wall's thickness there, 9.008 at z = 5.3 and 9.257 at
+    // z = 14.8: filled at the foot, narrower at the top.
+    CHECK(inside(body, gp_Pnt(9.1, 9.1, 5.3)));
+    CHECK(!inside(body, gp_Pnt(9.1, 9.1, 14.8)) && inside(body, gp_Pnt(9.3, 9.3, 14.8)));
+    CHECK(near(bounding_box(body).max.Z(), 15, 1e-9));
+  }
+  CHECK(near(bounding_box(*webs).min.X(), 9, 1e-6) && near(bounding_box(*webs).max.X(), 91, 1e-6));
+
+  // A web drawn above a 60 x 40 x 5 plate, on z = 20, grown down (Flip) up
+  // to the plate: its curves meet no body, so it widens as it grows, 2
+  // thick at its curves and 2 + 30 tan 1.5 deg at the plate, 15 below.
+  const ShapePtr base = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, 5);
+  RibSpec hanging;
+  hanging.feature = "F8";
+  hanging.web = true;
+  hanging.frame = xy_at(20);
+  hanging.thickness = 2;
+  hanging.flip = true;
+  hanging.bodies = {base};
+  hanging.draft_angle = grid_angle;
+  hanging.chains = {{{"c1", line3(gp_Pnt(10, 20, 20), gp_Pnt(50, 20, 20))}}};
+  const ShapePtr wall = rib(hanging);
+  CHECK(BRepCheck_Analyzer(wall->occt()).IsValid());
+  CHECK_NEAR(volume(*wall), 40.0 * 15 * (2 + 15 * std::tan(grid_angle)));
+  CHECK(std::abs(y_extent(*wall, "F8:start(c1)") - 2) <= 1e-6);
+  const BoundingBox box = bounding_box(*wall);
+  CHECK(std::abs(box.max.Y() - box.min.Y() - (2 + 30 * std::tan(grid_angle))) <= 1e-6);
+  CHECK(near(box.min.Z(), 5, 1e-9) && near(box.max.Z(), 20, 1e-9));
+  // Narrowing (a negative angle) so much that its sides meet before the
+  // plate: it runs no further than where they are 0.2 apart, 6.8 below,
+  // and no face closes it off by then.
+  hanging.draft_angle = -grid_angle * 5;
+  CHECK(throws_with([&] { rib(hanging); }, "the draft angle closes the web before it reaches the faces of the bodies"));
+  // A Depth past where they meet.
+  hanging.depth = 10.0;
+  CHECK(throws_with([&] { rib(hanging); }, "the draft angle closes the web before its depth"));
+}
+
 // A B-spline as a path curve.
 ModelCurve bspline3(const occ::handle<Geom_BSplineCurve>& curve) {
   ModelCurve model;
@@ -2625,6 +2797,7 @@ void sweeps_tests_2() {
   guarded("rib outlines", test_rib_outlines);
   guarded("rib rim cap", test_rib_rim_cap);
   guarded("web corners", test_web_corners);
+  guarded("rib draft", test_rib_draft);
 }
 
 void sweeps_tests_3() {

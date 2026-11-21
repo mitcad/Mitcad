@@ -107,8 +107,10 @@ function Menu-Choose([string]$Entry) {
   $entries = Menu-Entries
   $index = [array]::IndexOf($entries, $Entry)
   if ($index -lt 0) { Ui-Fail "'$Entry' is not in the context menu: $($entries -join ' | ')" }
+  # The entries the arrow keys pass over (Ui-MenuSkipped) left out.
+  $downs = $index + 1 - (Ui-MenuSkipped $index)
   Ui-Step $Entry {
-    for ($i = 0; $i -le $index; $i++) { Ui-Key 'Down' }
+    for ($i = 0; $i -lt $downs; $i++) { Ui-Key 'Down' }
     Ui-Key 'Return'
   }
 }

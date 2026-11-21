@@ -662,3 +662,4 @@ run's patched results: we break 0, we fix 13; against stock no breaks.
 | 1691 | intcurvesurface surface polyhedra made once per face | still needed | master unchanged at the patched code |
 | 1695 | inttools wline decomposition reads no point past the line ends | still needed | master unchanged at the patched code |
 | 1701 | chfi3d contact of no length joined with none and blends in no solid no result | ours only | patches code of 0950, 1655 (0950 fixed upstream) |
+| 1820 | stepcafcontrol sub shape names skip what the reader left unresolved | still needed | master unchanged at the patched code (ExpandShell, read 18.11.2026) |

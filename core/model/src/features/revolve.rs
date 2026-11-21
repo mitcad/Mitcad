@@ -89,11 +89,25 @@ pub struct RevolveDef<P = ParamId> {
     /// sides); no `profiles`, `surface`, `curves` or `project_axis`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_face: Option<super::reference::FaceRef>,
+    /// The bodies a Cut takes across components, as an extrusion's
+    /// `cut_scope` (mitcad#2131): made in an assembly, it may machine the
+    /// occurrences of linked and multiply placed components it includes.
+    /// Kept but without effect for the other operations; None: the bodies
+    /// of its own component (`participants`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_scope: Option<super::extrude_scope::CutScope>,
 }
 
 impl<P> RevolveDef<P> {
     pub const TYPE: &'static str = "revolve";
     pub const BASE_NAME: &'static str = "Revolve";
+
+    /// Saved targets have no effect until the operation is Cut again.
+    pub(crate) fn active_cut_scope(&self) -> Option<&super::extrude_scope::CutScope> {
+        (self.operation == Operation::Cut)
+            .then_some(self.cut_scope.as_ref())
+            .flatten()
+    }
 
     // Written by hand: the extent maps by its kind (`extent.angle1`).
     pub fn map_params<Q, E>(
@@ -127,6 +141,7 @@ impl<P> RevolveDef<P> {
             surface: self.surface,
             curves: self.curves.clone(),
             profile_face: self.profile_face.clone(),
+            cut_scope: self.cut_scope.clone(),
         })
     }
 
@@ -169,6 +184,18 @@ impl FeatureInfo for RevolveDef {
         };
         if let Some(body) = self.object_links.keys().find(|b| Some(**b) != object_body) {
             return Err(format!("body {body} is linked but not an object's"));
+        }
+        // Cut targets across components (mitcad#2131), as an extrusion's.
+        if let Some(scope) = self.active_cut_scope() {
+            if !self.participants.is_empty() {
+                return Err("cut_scope requires no legacy participant list".to_owned());
+            }
+            if self.surface {
+                return Err(
+                    "a surface revolution cuts nothing, so it takes no cut_scope".to_owned(),
+                );
+            }
+            scope.check()?;
         }
         if let Some(face) = &self.profile_face {
             check_face_profile(self, ctx, face)?;
@@ -263,17 +290,27 @@ fn check_angles(extent: &RevolveExtent, value: &dyn Fn(ParamId) -> f64) -> Resul
 
 impl<K: Kernel> Evaluate<K> for RevolveDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
+        // A Cut with a scope finds its bodies across components
+        // (mitcad#2131), as an extrusion's does.
+        let scope = self.active_cut_scope();
+        let discovery = scope.map(|scope| scope.discover(ctx)).transpose()?;
         if let Some(face) = &self.profile_face {
             // A body face as the profile (mitcad#539).
-            let participants = participant_bodies(ctx, self.operation, &self.participants)?;
             let tool = self.face_tool(ctx, face)?;
+            if let (Some(scope), Some(discovery)) = (scope, discovery) {
+                return scope.apply(ctx, discovery, tool);
+            }
+            let participants = participant_bodies(ctx, self.operation, &self.participants)?;
             return apply_operation(ctx, self.operation, participants, tool, "revolution");
         }
         let (sketch, regions) = match (&self.curves, self.profiles.is_empty()) {
             (Some(curves), true) => (ctx.sketch(curves.sketch)?, Vec::new()),
             _ => profile_regions(ctx, &self.profiles)?,
         };
-        let participants = participant_bodies(ctx, self.operation, &self.participants)?;
+        let participants = match scope {
+            Some(_) => Vec::new(),
+            None => participant_bodies(ctx, self.operation, &self.participants)?,
+        };
         let line = ctx.axis(&self.axis)?;
         let mut axis = Axis {
             origin: line.origin,
@@ -347,6 +384,9 @@ impl<K: Kernel> Evaluate<K> for RevolveDef {
             target,
         };
         let tool = ctx.kernel.revolve(&spec).map_err(|e| e.to_string())?;
+        if let (Some(scope), Some(discovery)) = (scope, discovery) {
+            return scope.apply(ctx, discovery, tool);
+        }
         apply_operation(ctx, self.operation, participants, tool, "revolution")
     }
 }

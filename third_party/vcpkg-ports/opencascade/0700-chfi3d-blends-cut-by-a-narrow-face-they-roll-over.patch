@@ -81,9 +81,10 @@ test_rounding_pierced_by_a_cap (ctest geometry.suite.fillet_pierced): a
 corner rounded over a cap of a ball standing out of it, the cap notching the
 rounding (with and without the cap's edges with the wall rounded too) and
 poking through it: the volume and the cap's area left against the plain
-corner's rounding with the ball fused to it. Its failure without the patch,
-stated in its documentation, is still to be shown in the port's before/after
-run (mitcad#1986).
+corner's rounding with the ball fused to it. Its failure without the patch
+is still to be shown: the patch does not revert at the port's tip without
+the more than 40 later patches that change the same lines (tried
+2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index c71b17bd..5850ba3a 100644

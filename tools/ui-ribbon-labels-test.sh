@@ -14,7 +14,10 @@
 # icons makes the rows higher
 # and puts Sketch, Extrude, Revolve and Hole under the SOLID tab's Create
 # buttons, Create and Modify stay whole in a wide window and the groups
-# fold from the right in a narrow one; Icons only again.
+# fold from the right in a narrow one; Icons only again. The toolbar is
+# lower with Icons only than with labels, also after another tab and the
+# Render workspace (mitcad#2092, GitHub mitcad/Mitcad#478); a third run
+# starts Floating again with Icons only kept and Icon size 150 %.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-ribbon-labels-test.sh
@@ -26,14 +29,19 @@ export MITCAD_TEST_STEP_MS=100
 export MITCAD_TEST_INPUT=$here/ui-scripts/ribbon-labels.mitcad-ui
 ui_start_display
 
-# run_layout <floating|docked>: the shared script in that layout.
+# run_layout <floating|docked> [kept index]: the shared script in that
+# layout.
 run_layout() {
   # The option's index without a choice: Labels under icons in both
   # layouts (the toolbar panel's, mitcad#2082).
   export MITCAD_TEST_LABELS_DEFAULT=1
-  # Without the choice the run before saved (its last step chooses Icons
-  # only), so that the default shows.
-  [ -f "$UI_CONFIG/Mitcad/Mitcad.conf" ] && sed -i '/^ribbonLabels=/d' "$UI_CONFIG/Mitcad/Mitcad.conf"
+  if [ -n "${2:-}" ]; then
+    export MITCAD_TEST_LABELS_DEFAULT=$2
+  else
+    # Without the choice the run before saved (its last step chooses Icons
+    # only), so that the default shows.
+    [ -f "$UI_CONFIG/Mitcad/Mitcad.conf" ] && sed -i '/^ribbonLabels=/d' "$UI_CONFIG/Mitcad/Mitcad.conf"
+  fi
   ui_start_app --ui=qt --no-mcp "--chrome=$1"
   for _ in $(seq 1 600); do
     kill -0 "$UI_RUNNER" 2> /dev/null || break
@@ -48,4 +56,10 @@ run_layout() {
 
 run_layout floating
 run_layout docked
+# A restart with Icons only kept, at a larger Icon size: the toolbar laid
+# out from the start as lower than with labels (index 0, Icons only).
+CONF=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
+mkdir -p "$(dirname "$CONF")"
+printf '[appearance]\niconSize=150\nribbonLabels=icons\n' > "$CONF"
+run_layout floating 0
 ui_finish 'UI Toolbar labels'

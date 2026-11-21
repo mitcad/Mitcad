@@ -124,6 +124,12 @@ fn classify(
                 (Class::Edit, "edit", None)
             }
         }
+        // Reading the guide step only reads; showing or ending one holds
+        // back the user's input as an edit would (mitcad#2012).
+        "ui_guide" if matches!(text_field(arguments, "action"), "" | "state") => {
+            (Class::Read, "read", None)
+        }
+        "ui_guide" => (Class::Edit, "edit", None),
         "document_save" => (Class::Guarded, "document_save", path()),
         "document_open" => (Class::Guarded, "document_open", path()),
         "model_export" => (Class::Guarded, "model_export", path()),

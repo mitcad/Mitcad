@@ -34,9 +34,8 @@ first, each way round, on the box and on the box mirrored about its middle
 height so that its vertical edges run down: valid, the material taken the
 vertical edge's rounding and the mitre's corner less the ball's eighth
 within 1e-4; the port's notes record three corners of the mirrored box
-failing without the patch, the unmirrored box is the boundary case. Its
-failure without the patch is still to be shown in the port's before/after
-run (mitcad#1986).
+failing without the patch, the unmirrored box is the boundary case. It
+fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx

@@ -208,6 +208,8 @@ public:
     setMouseTracking(true);
     setFocusPolicy(Qt::ClickFocus);
     setFixedHeight(stripHeight());
+    // The icons' side, for the tests (expect-text-icon-size, mitcad#2092).
+    setProperty("iconSide", iconSide());
     m_hoverTimer.setSingleShot(true);
     m_hoverTimer.setInterval(350);
     connect(&m_hoverTimer, &QTimer::timeout, this, [this] {
@@ -659,7 +661,9 @@ protected:
         painter.drawRoundedRect(QRectF(rect.left() + 4, bandTop(), itemSide() - 8, kBand - 0.5), 1.5, 1.5);
       }
       painter.setOpacity(off ? kStateDimOpacity : 1.0);
-      QIcon icon = themeIcon(head ? QStringLiteral("folder") : featureIcon(feature.type));
+      // With the thin outline (mitcad#2092), as the toolbar's buttons.
+      QIcon icon = themeIcon(head ? QStringLiteral("folder") : featureIcon(feature.type), IconBackdrop::Palette,
+                             kThinOutlineWeight);
       // Suppressed when a condition holds (mitcad#809): an fx badge.
       if (!head && !feature.suppressedWhen.isEmpty()) {
         icon = boundIcon(icon);

@@ -20,6 +20,9 @@
 #     Geometry and Patterns: the Circles button starts Center Diameter
 #     Circle, its arrow opens the circle variants, which start from there;
 #     a plain Point button starts Point (mitcad#1545);
+#   - the hover ends with the menu (mitcad#2061): an entry of the
+#     Rectangles arrow's menu and of the MODIFY caption's chosen with the
+#     pointer leaves neither drawn hovered (their logged state);
 #   - the keyboard: the CREATE menu's Circles submenu with the arrow keys,
 #     the shortcut C and the command search;
 #   - in a narrow window the groups stay within it;
@@ -60,7 +63,8 @@ PATTERNS="Rectangular Pattern | Circular Pattern | Mirror"
 REFERENCES="Project | Intersect | Clean Up Projections | Clean Up Stale Projections | Project Again"
 CREATE="Lines > [Line | Midpoint Line] | Point | Rectangles > [$RECTANGLES] | Circles > [$CIRCLES]"
 CREATE="$CREATE | Arcs > [$ARCS] | Other Geometry > [$OTHER]"
-CREATE="$CREATE | Text > [Text | QR Code] | Patterns > [$PATTERNS] | Project / Include > [$REFERENCES] | Sketch Dimension"
+CREATE="$CREATE | Text > [Text | QR Code] | Blocks > [Insert Block | Create Block]"
+CREATE="$CREATE | Patterns > [$PATTERNS] | Project / Include > [$REFERENCES] | Sketch Dimension"
 # The SOLID CREATE menu (mitcad#579), up to the Machine Elements submenu's
 # Bearing: later machine elements may follow it in the submenu.
 SOLID_PATTERNS="Rectangular Pattern | Circular Pattern | Pattern on Path | Pattern at Points"
@@ -75,6 +79,14 @@ SOLID_CREATE="$SOLID_CREATE | - | Machine Elements > [Gear | Gear Pair | Pulley 
 # last_line "prefix": the last log line starting with the prefix, without it.
 last_line() {
   grep -F -- "$1" "$UI_LOG" | tail -1 | awk -v p="$1" '{ print substr($0, index($0, p) + length(p)) }'
+}
+
+# menu_entry_click dy: a click dy pixels (at scale 1) below the pointer,
+# on an entry of the menu that a click at the pointer just opened below
+# its button.
+menu_entry_click() {
+  ui_sync
+  xdotool mousemove_relative -- 0 $(($1 * UI_SCALE)) click 1
 }
 
 # expect_tool "name" "description": the tool started since the mark, then
@@ -162,6 +174,25 @@ check_layout() {
   ui_step "the Arcs arrow"                 ui_click_logged "Ribbon split SKETCH/CREATE/Arcs arrow"
   ui_expect_new "Ribbon menu SKETCH/CREATE/Arcs: $ARCS" "$layout: the arc variants"
   ui_step "close it (Esc)"                 ui_key Escape
+
+  echo "--- The hover ends with the menu (mitcad#2061)"
+  # An entry chosen with the pointer, below the button: the menu took the
+  # pointer without a Leave, and the button must not stay drawn hovered.
+  ui_mark
+  ui_step "the Rectangles arrow"           ui_click_logged "Ribbon split SKETCH/CREATE/Rectangles arrow"
+  ui_expect_new "Ribbon menu SKETCH/CREATE/Rectangles: $RECTANGLES" "$layout: the rectangle variants"
+  ui_step "an entry, with the pointer"     menu_entry_click 64
+  ui_expect_new "Ribbon SKETCH/CREATE/Rectangles after its menu: not hovered" \
+    "$layout: the Rectangles button not hovered after its menu"
+  ui_expect_new "Sketch tool " "$layout: a rectangle variant from the arrow's menu"
+  ui_step "end the tool (Esc)"             ui_key Escape
+  ui_mark
+  ui_step "the MODIFY caption"             ui_click_logged "Ribbon SKETCH/MODIFY"
+  ui_expect_new "Ribbon menu SKETCH/MODIFY: " "$layout: the MODIFY menu opened"
+  ui_step "an entry, with the pointer"     menu_entry_click 40
+  ui_expect_new "Ribbon SKETCH/MODIFY after its menu: not hovered" \
+    "$layout: the MODIFY caption not hovered after its menu"
+  ui_step "end the tool (Esc)"             ui_key Escape
 
   echo "--- The Point button (mitcad#1545)"
   ui_mark

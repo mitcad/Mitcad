@@ -68,10 +68,11 @@ test_rounding_rolls_on_the_far_edges_other_version (ctest
 geometry.fillet_roll_over_blend): the cases fillet-roll-over-blend and
 fillet-roll-over-blend-2, the inner rim rounded with OCCT alone: valid, of
 the expected volume and faces, within 2 um of the stored body round the
-rim; the port's notes record it failing without the patch. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986). The test reads a stored case (MITCAD_GEOMETRY_CASES), not a
-synthetic body: a synthetic test is still wanted (mitcad#1986).
+rim; the port's notes record it failing without the patch. It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted
+together with 0173, 1370, 1430, 1580, which change the same lines). The
+test reads a stored case (MITCAD_GEOMETRY_CASES), not a synthetic body: a
+synthetic test is still wanted (mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx
 index 983b131a..84674d25 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx

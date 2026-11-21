@@ -108,4 +108,8 @@ DressupFinding ring_check(const Shape& input, const Shape& result, const std::st
 // notices the model gives without the names, mitcad#1327.)
 std::string made_face(const std::string& name, const std::string& feature, const char* role, bool vertex_word);
 
+// The edge a made face is named after (<feature>:<role>(E{…}), a piece's
+// "#k" at the end left out); empty for a corner or another name.
+std::string own_edge(const std::string& name, const std::string& feature, const char* role);
+
 } // namespace mitcad::geometry::detail

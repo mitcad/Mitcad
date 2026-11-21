@@ -40,6 +40,8 @@ pub(crate) mod lineup;
 pub(crate) mod end_meets;
 // Profiles along sketch lines (mitcad#1965).
 pub(crate) mod lines;
+// A carriage's travel limits (mitcad#2088).
+pub(crate) mod travel;
 
 // What the design file keeps of BUILD: the sources, the records and the
 // libraries' `build` blocks (mitcad#777).
@@ -75,6 +77,8 @@ pub use end_meets::{EndMeet, EndMeetsBuild, NEAR, PartEnd};
 // Profiles along sketch lines (mitcad#1965).
 pub use edge::{Align, AlongLine};
 pub use lines::{AlongLines, LinesBuild};
+// A carriage's travel limits (mitcad#2088).
+pub use travel::{TravelInput, TravelNow, travel_of};
 
 // The document's BUILD methods (mitcad#777).
 pub use connect::{ConnectBuild, SetMembersBuild};

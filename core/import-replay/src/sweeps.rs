@@ -42,6 +42,16 @@ fn choices(options: &[Vec<Value>], limit: usize) -> Vec<Vec<Value>> {
     out.into_iter().map(|(_, c)| c).collect()
 }
 
+/// Adds `face` to `body`'s list in `by_body` unless it is there already
+/// ([`Importer::faces_by_body`]).
+pub(crate) fn group_face(by_body: &mut Vec<(BodyUid, Vec<String>)>, body: BodyUid, face: String) {
+    match by_body.iter_mut().find(|(b, _)| *b == body) {
+        Some((_, list)) if list.contains(&face) => {}
+        Some((_, list)) => list.push(face),
+        None => by_body.push((body, vec![face])),
+    }
+}
+
 /// The candidates with the operation's other readings ([`Importer::
 /// operation_readings`]) after them: the `k`-th reading of the `i`-th
 /// candidate by the rank `i + k`.
@@ -293,6 +303,24 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             self.hint_path(fp, *body);
         }
         found
+    }
+
+    /// The faces the fingerprints name, grouped by body in the order they
+    /// come, each face once (mitcad#2085): two faces of the file can resolve
+    /// to one face of the import (a body the file rebuilt in pieces, taken
+    /// whole from its stored bodies), and a feature's face list names each
+    /// face once. `missing` is the error when a face is not found.
+    pub(crate) fn faces_by_body<'r>(
+        &self,
+        faces: impl IntoIterator<Item = &'r Fingerprint>,
+        missing: &str,
+    ) -> Result<Vec<(BodyUid, Vec<String>)>, String> {
+        let mut by_body: Vec<(BodyUid, Vec<String>)> = Vec::new();
+        for fp in faces {
+            let (b, f) = self.face_input(fp).ok_or(missing)?;
+            group_face(&mut by_body, b, f.to_string());
+        }
+        Ok(by_body)
     }
 
     /// Traces how far the faces of the bodies `keep` keeps are from a face

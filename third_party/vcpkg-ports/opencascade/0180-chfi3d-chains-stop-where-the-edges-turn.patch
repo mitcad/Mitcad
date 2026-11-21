@@ -57,7 +57,9 @@ geometry/tests/test_fillet_chain_loops.cpp (ctest
 geometry.fillet_chain_loops),
 test_contour_round_a_closed_chain_stops_where_it_turns. They use the
 option the patch adds and do not build without it. Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+patch is still to be shown: the patch does not revert at the port's tip
+without the more than 40 later patches that change the same lines (tried
+2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
 index f192eb5f..b1af6fe6 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx

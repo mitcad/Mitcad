@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "SketchItemList.hpp"
 
+#include <QAction>
 #include <QApplication>
+#include <QContextMenuEvent>
 #include <QDebug>
 #include <QEvent>
 #include <QFont>
@@ -10,6 +12,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidgetItem>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
@@ -54,6 +57,10 @@ constexpr int kItemsRole = Qt::UserRole + 1;
 // A cell whose icon is drawn in its disabled colours (a step of inactive
 // items, mitcad#1763).
 constexpr int kDimmedRole = Qt::UserRole + 2;
+// The step's kind (`rectangular_pattern`, ...; empty for an item alone),
+// which tells a pattern's step (mitcad#2089) and an Equal Spacing step
+// (mitcad#2099).
+constexpr int kKindRole = Qt::UserRole + 3;
 // The hover list's rows: no more in sight at once, the rest scroll.
 constexpr int kMostRows = 12;
 // How long the hover list waits for the pointer to come over it after
@@ -559,6 +566,8 @@ void SketchItemList::describeStep(const QString& kind, Cell& cell) const {
       {"chamfer", "sketch-chamfer", tr("Sketch Chamfer")},
       {"trim", "trim", tr("Trim")},
       {"extend", "extend", tr("Extend")},
+      {"break", "sketch-break", tr("Break")},
+      {"split", "sketch-split", tr("Split at Point")},
       {"offset", "offset", tr("Offset")},
       {"edit_offset", "offset", tr("Offset")},
       {"mirror", "mirror", tr("Mirror")},
@@ -576,9 +585,15 @@ void SketchItemList::describeStep(const QString& kind, Cell& cell) const {
       {"import_svg", "import", tr("Insert SVG")},
       {"import_dxf", "insert-dxf", tr("Insert DXF")},
       {"move", "move", tr("Move/Copy")},
-      {"scale", "scale", tr("Scale")},
+      {"scale", "sketch-scale", tr("Sketch Scale")},
       {"axis", "line", tr("Sketch Axis")},
       {"insert_spline_point", "spline-fit", tr("Spline Point")},
+      {"blend_curve", "blend-curve", tr("Blend Curve")},
+      // Sketch blocks (mitcad#2110).
+      {"create_block", "create-block", tr("Create Block")},
+      {"insert_block", "insert-block", tr("Insert Block")},
+      {"explode_block", "explode-block", tr("Explode Block")},
+      {"edit_block", "edit-block", tr("Edit Block")},
   };
   cell.name = tr("Sketch Step");
   cell.icon = QStringLiteral("sketch");
@@ -730,6 +745,7 @@ void SketchItemList::rebuild() {
         new QListWidgetItem(badgedIcon(cell.icon, cell.level, made, iconSize(), cell.dimmed), QString(), this);
     entry->setData(kKeyRole, cell.key);
     entry->setData(kDimmedRole, cell.dimmed);
+    entry->setData(kKindRole, cell.kind);
     QStringList ids;
     for (const ItemRow& row : cell.items) {
       ids << row.id;
@@ -1181,21 +1197,87 @@ void SketchItemList::mouseMoveEvent(QMouseEvent* event) {
 
 void SketchItemList::mouseDoubleClickEvent(QMouseEvent* event) {
   QListWidgetItem* cell = itemAt(event->position().toPoint());
-  if (event->button() != Qt::LeftButton || cell == nullptr) {
-    event->accept();
+  event->accept();
+  if (event->button() != Qt::LeftButton || cell == nullptr || m_c.tool() != nullptr) {
     return;
   }
-  if (m_c.tool() == nullptr) {
-    // A dimension's step: its value editor where the view shows its value.
-    for (const QString& id : cell->data(kItemsRole).toStringList()) {
-      if (m_c.model().dimension(id) != nullptr) {
-        hideHoverList();
-        m_c.editDimension(id);
-        break;
-      }
+  const QString key = cell->data(kKeyRole).toString();
+  const QString kind = cell->data(kKindRole).toString();
+  const QStringList items = cell->data(kItemsRole).toStringList();
+  // An Equal Spacing step: its Edit Equal Spacing, as a double-click on
+  // its glyph in the view opens it (mitcad#2099); before the dimension's
+  // value editor, also when the step holds its Common Spacing Dimension.
+  if (!m_c.spacingOfStep(kind, items).isEmpty()) {
+    hideHoverList();
+    qDebug().noquote() << QStringLiteral("Sketch step %1 double-clicked: equal spacing").arg(key);
+    m_c.editStepSpacing(kind, items);
+    return;
+  }
+  // A pattern's step: its Edit Pattern, as a double-click on one of its
+  // curves in the view opens it (mitcad#2089).
+  if (m_c.patternOfStep(kind, items) != nullptr) {
+    hideHoverList();
+    qDebug().noquote() << QStringLiteral("Sketch step %1 double-clicked: pattern").arg(key);
+    m_c.editStepPattern(kind, items);
+    return;
+  }
+  // A dimension's step: its value editor where the view shows its value.
+  for (const QString& id : items) {
+    if (m_c.model().dimension(id) != nullptr) {
+      hideHoverList();
+      qDebug().noquote() << QStringLiteral("Sketch step %1 double-clicked: dimension").arg(key);
+      m_c.editDimension(id);
+      return;
     }
   }
+  qDebug().noquote() << QStringLiteral("Sketch step %1 double-clicked: nothing").arg(key);
+}
+
+void SketchItemList::contextMenuEvent(QContextMenuEvent* event) {
+  QListWidgetItem* cell = itemAt(event->pos());
   event->accept();
+  if (cell == nullptr) {
+    return;
+  }
+  const QString key = cell->data(kKeyRole).toString();
+  const QString kind = cell->data(kKindRole).toString();
+  const QStringList items = cell->data(kItemsRole).toStringList();
+  // An Equal Spacing step (mitcad#2099): its glyph selected alone, and the
+  // view's menu entry for that glyph.
+  if (m_c.tool() == nullptr && m_c.selectStepSpacing(kind, items)) {
+    QAction* edit = m_c.commandAction(QStringLiteral("sketch.edit_equal_spacing"));
+    if (edit == nullptr) {
+      qDebug().noquote() << QStringLiteral("Sketch step %1 menu: none").arg(key);
+      return;
+    }
+    hideHoverList();
+    QMenu menu(this);
+    menu.addAction(edit);
+    qDebug().noquote() << QStringLiteral("Sketch step %1 menu: %2").arg(key, edit->text().remove(QLatin1Char('&')));
+    menu.exec(event->globalPos());
+    return;
+  }
+  // A pattern's step only (mitcad#2089): its copy selected as the view's
+  // click on one of its curves selects it, and the entries of the view's
+  // menu for that curve, in its order.
+  const PatternData* pattern = m_c.tool() == nullptr ? m_c.patternOfStep(kind, items) : nullptr;
+  if (pattern == nullptr || !m_c.selectStepPattern(kind, items)) {
+    qDebug().noquote() << QStringLiteral("Sketch step %1 menu: none").arg(key);
+    return;
+  }
+  hideHoverList();
+  QMenu menu(this);
+  QStringList entries;
+  if (QAction* edit = m_c.commandAction(QStringLiteral("sketch.edit_pattern")); edit != nullptr) {
+    menu.addAction(edit);
+    entries << edit->text().remove(QLatin1Char('&'));
+  }
+  // Its originals and copies as plain sketch geometry (mitcad#2007).
+  QAction* free = menu.addAction(themeIcon(QStringLiteral("circular-pattern")), tr("Free Pattern"));
+  connect(free, &QAction::triggered, &menu, [this, patternId = pattern->id] { m_c.freePattern(patternId); });
+  entries << free->text();
+  qDebug().noquote() << QStringLiteral("Sketch step %1 menu: %2").arg(key, entries.join(QStringLiteral(" | ")));
+  menu.exec(event->globalPos());
 }
 
 void SketchItemList::keyPressEvent(QKeyEvent* event) {

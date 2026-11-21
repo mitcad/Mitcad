@@ -35,6 +35,7 @@
 #include "view/CameraHeight.hpp"
 #include "view/CameraTurn.hpp"
 #include "view/DefaultView.hpp"
+#include "view/PickFacing.hpp"
 #include "view/ViewCube.hpp"
 #include "view/ViewEdges.hpp"
 #include "view/ViewTessellation.hpp"
@@ -46,6 +47,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -63,6 +65,7 @@
 #include <QGuiApplication>
 #include <QHelpEvent>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QOpenGLContext>
@@ -139,6 +142,7 @@
 #include <StdSelect_BRepSelectionTool.hxx>
 #include <StdSelect_ViewerSelector3d.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_NullObject.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -268,10 +272,9 @@ constexpr double kOcclusionTolerance = 0.01;
 // Points along an edge that a window classifies, its ends left out.
 constexpr int kSightSamples = 32;
 // The orientation cube's corner of the view and its centre's distance from the
-// corner are OcctViewer::kCubeArea and kCubeOffset (widget pixels; the cube
-// itself is drawn in device pixels and scaled by the device pixel ratio, see
-// applyDevicePixelRatio).
-constexpr int kCubeOffset = OcctViewer::kCubeOffset;
+// corner are OcctViewer::cubeAreaSize and cubeOffset (widget pixels at the
+// cube's size; the cube itself is drawn in device pixels and scaled by the
+// device pixel ratio, see applyDevicePixelRatio).
 // A press on the cube orbits the view (Aspect_VKeyFlags of its own, which
 // no key gives).
 constexpr Aspect_VKeyFlags kCubeDrag = Aspect_VKeyFlags_META;
@@ -300,13 +303,15 @@ constexpr int kRestMilliseconds = 250;
 constexpr int kReleaseFrameMilliseconds = 100;
 
 // The cube's place in the upper right corner: its centre's distance from the
-// corner in device pixels (the overlay insets move the corner). As the view
+// corner (`cubeOffset` widget pixels) in device pixels (the overlay insets
+// move the corner). As the view
 // projects it, or drawn and picked orthographic also in a perspective view
 // (mitcad#766; mitcad#774: the cube's own perspective is made on its
 // geometry, which is then drawn orthographic).
-occ::handle<Graphic3d_TransformPers> cubePersistence(qreal ratio, const QMargins& insets, bool orthographic) {
-  const NCollection_Vec2<int> offset(qRound((kCubeOffset + insets.right()) * ratio),
-                                     qRound((kCubeOffset + insets.top()) * ratio));
+occ::handle<Graphic3d_TransformPers> cubePersistence(qreal ratio, int cubeOffset, const QMargins& insets,
+                                                     bool orthographic) {
+  const NCollection_Vec2<int> offset(qRound((cubeOffset + insets.right()) * ratio),
+                                     qRound((cubeOffset + insets.top()) * ratio));
   if (orthographic) {
     return new Graphic3d_TransformPers(Graphic3d_TMF_TriedronPers | Graphic3d_TMF_OrthoPers,
                                        Aspect_TOTP_RIGHT_UPPER, offset);
@@ -1879,7 +1884,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   m_orientationCube->SetFixedAnimationLoop(false);
   m_orientationCube->SetAutoStartAnimation(true);
   // In the upper right corner, with its labels in capitals.
-  m_orientationCube->SetTransformPersistence(cubePersistence(1.0, QMargins(), false));
+  m_orientationCube->SetTransformPersistence(cubePersistence(1.0, cubeOffset(), QMargins(), false));
   m_cubeBaseSize = viewCubeSize(*m_orientationCube); // the nominal size, not the face's (mitcad#1620)
   m_cubeBaseFont = m_orientationCube->FontHeight();
   // The faces' names in the interface language (mitcad#1674), as UTF-8 (the
@@ -1932,13 +1937,10 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   m_navigationTimer->setSingleShot(true);
   connect(m_navigationTimer, &QTimer::timeout, this, &OcctViewer::updateNavigation);
   TestSync::watch(m_navigationTimer);
-  const bool glass = chromeStyle() == ChromeStyle::Floating;
   // A capsule of the cube's glass (mitcad#430).
   m_homeButton = new ViewCubeHomeButton(this);
   m_homeButton->setObjectName(QStringLiteral("viewHome"));
   m_homeButton->setIcon(overlayIcon(QStringLiteral("home"), IconBackdrop::Light));
-  m_homeButton->setIconSize(QSize(14, 14));
-  m_homeButton->setFixedSize(QSize(36, 24));
   m_homeButton->setAutoRaise(true);
   m_homeButton->setFocusPolicy(Qt::NoFocus);
   m_homeButton->setToolTip(tr("Home: the home view of the whole design"));
@@ -1961,15 +1963,14 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
     const QString name = QString::fromLatin1(id);
     arrow->setObjectName(QStringLiteral("orientationCube_") + name);
     arrow->setIcon(overlayIcon(name, IconBackdrop::Light));
-    arrow->setIconSize(glass ? QSize(12, 12) : QSize(16, 16));
     arrow->setToolTip(tr(tip));
-    arrow->setFixedSize(glass ? QSize(26, 26) : QSize(22, 22));
     arrow->setAutoRaise(true);
     arrow->setFocusPolicy(Qt::NoFocus);
     arrow->hide();
     connect(arrow, &QToolButton::clicked, this, [this, name] { pressCubeArrow(name); });
     m_cubeArrows.emplace_back(name, arrow);
   }
+  sizeCubeButtons(); // at the cube's size (mitcad#2071)
   applyDevicePixelRatio(); // the ratio of the screen the view starts on
 
   m_view = m_viewer->CreateView();
@@ -3243,7 +3244,7 @@ void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const S
     setPointImage(object, sketchMarkerImage(key, image));
     return;
   }
-  setEdgeStyle(object, sketchCurveColor(object, look), kSketchLineWidth,
+  setEdgeStyle(object, sketchCurveColor(object, look), kSketchLineWidth * lineRatio(),
                sketchLineType(look.construction, look.centerline));
 }
 
@@ -3267,7 +3268,7 @@ void OcctViewer::styleSketchThrough(const occ::handle<AIS_Shape>& through, const
   // The curve's colour, dashed (a centre line keeps its
   // dash-dot), faint (kSketchThroughOpacity), blended in place.
   const Aspect_TypeOfLine own = sketchLineType(look.construction, look.centerline);
-  setEdgeStyle(through, sketchCurveColor(object, look), kSketchThroughWidth,
+  setEdgeStyle(through, sketchCurveColor(object, look), kSketchThroughWidth * lineRatio(),
                own == Aspect_TOL_SOLID ? Aspect_TOL_DASH : own);
   setLineOpacity(through, kSketchThroughOpacity);
 }
@@ -3542,7 +3543,7 @@ void OcctViewer::updateSketchHalo(const occ::handle<AIS_Shape>& object, const Sk
 
 void OcctViewer::styleSketchHalo(const occ::handle<AIS_Shape>& halo, const SketchEntityLook& look) const {
   // The line's own pattern, so that a centre line's gaps stay gaps.
-  setEdgeStyle(halo, m_backgroundDark ? kSketchHaloDark : kSketchHaloLight, kSketchHaloWidth,
+  setEdgeStyle(halo, m_backgroundDark ? kSketchHaloDark : kSketchHaloLight, kSketchHaloWidth * lineRatio(),
                look.centerline ? Aspect_TOL_DOTDASH : Aspect_TOL_SOLID);
 }
 
@@ -3662,6 +3663,26 @@ void OcctViewer::setSketchPointsHidden(bool hidden) {
   }
   logSketchThrough();
   logSketchPointMarkers();
+  if (restyled) {
+    sceneChanged();
+  }
+}
+
+void OcctViewer::restyleSketchLines() {
+  // The curves, their halos and their copies through the bodies at the
+  // device pixel ratio of the screen the view is now on (mitcad#2063).
+  bool restyled = false;
+  for (const occ::handle<AIS_Shape>& object : m_sketchEntities) {
+    const auto look = m_sketchEntityLooks.find(object.get());
+    if (look == m_sketchEntityLooks.end() || look->second.point) {
+      continue;
+    }
+    styleSketchEntity(object, look->second);
+    m_context->Redisplay(object, false);
+    updateSketchThrough(object, look->second);
+    updateSketchHalo(object, look->second);
+    restyled = true;
+  }
   if (restyled) {
     sceneChanged();
   }
@@ -4428,8 +4449,8 @@ bool OcctViewer::drawHighlightShadows(const HighlightDisplay& highlight) {
   // The line aspects setHighlightStyle widens are its own (drawBrowserHover).
   look->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
   look->SetOwnLineAspects();
-  setHighlightStyle(look, occtColor(highlight.color), kWholeTransparency, highlightEdgeWidth(),
-                    highlightBoundaryWidth());
+  setHighlightStyle(look, occtColor(highlight.color), highlight.faintWhole ? kLightTransparency : kWholeTransparency,
+                    highlightEdgeWidth(), highlightBoundaryWidth());
   // Just in front of the faces it covers, as the faces of a highlight are.
   look->BasicFillAreaAspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f, -4.0f);
   const occ::handle<Graphic3d_StructureManager> manager = m_viewer->StructureManager();
@@ -4499,7 +4520,7 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
     occ::handle<AIS_Shape> hidden = fineShape(highlight.shape, copies);
     drawWithoutMeshing(hidden);
     if (highlight.inputLines) {
-      setEdgeStyle(hidden, color, kInputLineHiddenWidth, Aspect_TOL_DASH);
+      setEdgeStyle(hidden, color, kInputLineHiddenWidth * lineRatio(), Aspect_TOL_DASH);
     } else {
       setEdgeStyle(hidden, occtColor(highlight.color.darker(135)), 1.5, Aspect_TOL_DASH);
     }
@@ -4567,7 +4588,7 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
         highlight.item.kind == SelectKind::Body || highlight.item.kind == SelectKind::Component;
     object->SetTransparency(whole && highlight.opaqueWholeBody ? 0.0f
                             : highlight.hoverLook ? kHoverTransparency
-                            : highlight.light ? kLightTransparency
+                            : highlight.light || (whole && highlight.faintWhole) ? kLightTransparency
                             : whole         ? kWholeTransparency
                             : highlight.item.kind == SelectKind::Plane ? kPickedPlaneTransparency
                                                                        : kSelectedTransparency);
@@ -4596,7 +4617,7 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
     if (highlight.inputLines) {
       // Lighter on a dark background, where the plain selection blue
       // has little contrast (mitcad#957).
-      setEdgeStyle(object, m_backgroundDark ? occtColor(kInputLineColorDark) : color, kInputLineWidth);
+      setEdgeStyle(object, m_backgroundDark ? occtColor(kInputLineColorDark) : color, kInputLineWidth * lineRatio());
     } else {
       // Wider than a plain edge, by the Selected line width and the
       // device pixel ratio (mitcad#1803). A sketch curve's in its own line
@@ -4614,7 +4635,7 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
     // from the amber faces of their feature.
     occ::handle<AIS_Shape> halo = fineShape(highlight.shape, lines);
     drawWithoutMeshing(halo);
-    setEdgeStyle(halo, kSketchHaloDark, kInputLineHaloWidth);
+    setEdgeStyle(halo, kSketchHaloDark, kInputLineHaloWidth * lineRatio());
     PickInfo haloInfo;
     haloInfo.item = highlight.item;
     haloInfo.highlight = true;
@@ -4677,11 +4698,12 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
 }
 
 bool OcctViewer::wantsSelectionThrough(const HighlightDisplay& highlight) const {
-  // A light tint, a feature's input lines, a hover look and an item
-  // inspected through what hides it have their own look through the
-  // bodies, or none on purpose.
-  if (!m_selectionThroughBodies || highlight.shape.IsNull() || highlight.light || highlight.inputLines ||
-      highlight.hoverLook || highlight.throughSolid) {
+  // A light tint, a command's faint whole body (mitcad#2069: its copy lay
+  // over the command's preview), a feature's input lines, a hover look and
+  // an item inspected through what hides it have their own look through
+  // the bodies, or none on purpose.
+  if (!m_selectionThroughBodies || highlight.shape.IsNull() || highlight.light || highlight.faintWhole ||
+      highlight.inputLines || highlight.hoverLook || highlight.throughSolid) {
     return false;
   }
   switch (highlight.item.kind) {
@@ -4748,7 +4770,7 @@ void OcctViewer::drawSelectionThrough(const HighlightDisplay& highlight, const V
     // selection's colour, faint, blended in place; no lines across the
     // faces (drawHidden).
     const Quantity_Color color = occtColor(highlight.color);
-    setEdgeStyle(through, color, kSelectionThroughWidth, Aspect_TOL_DASH);
+    setEdgeStyle(through, color, kSelectionThroughWidth * lineRatio(), Aspect_TOL_DASH);
     setLineOpacity(through, kSelectionThroughOpacity);
     const occ::handle<Prs3d_Drawer>& drawer = through->Attributes();
     drawer->SetUIsoAspect(new Prs3d_IsoAspect(color, Aspect_TOL_DASH, 1.0, 0));
@@ -5316,6 +5338,22 @@ OcctViewer::pickedPoint(const occ::handle<SelectMgr_EntityOwner>& owner) const {
   return std::nullopt;
 }
 
+occ::handle<SelectMgr_EntityOwner> OcctViewer::detectQuietly(const NCollection_Vec2<int>& pixel) {
+  const occ::handle<StdSelect_ViewerSelector3d>& selector = m_context->MainSelector();
+  selector->Pick(pixel.x(), pixel.y(), m_view);
+  const occ::handle<SelectMgr_AndOrFilter>& filters = m_context->GlobalFilter();
+  for (int rank = 1; rank <= selector->NbPicked(); ++rank) {
+    const occ::handle<SelectMgr_EntityOwner>& owner = selector->Picked(rank);
+    if (!owner.IsNull() && (filters.IsNull() || filters->IsOk(owner))) {
+      return owner;
+    }
+    if (m_context->PickingStrategy() == SelectMgr_PickingStrategy_OnlyTopmost) {
+      break;
+    }
+  }
+  return occ::handle<SelectMgr_EntityOwner>();
+}
+
 bool OcctViewer::pickPointsReady() const {
   return !m_pointerInputPending && !isNavigating() && PressedMouseButtons() == Aspect_VKeyMouse_NONE;
 }
@@ -5385,8 +5423,9 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
     }
     return middle.Transformed(location.Transformation());
   };
-  // The middles of `count` triangles spread over a face's triangulation.
-  const auto middlesOf = [](const TopoDS_Face& face, int count) {
+  // The middles of `count` triangles spread over a face's triangulation,
+  // leaving out those `front` says turn away from the eye (mitcad#2062).
+  const auto middlesOf = [](const TopoDS_Face& face, int count, const std::vector<bool>* front) {
     std::vector<gp_Pnt> middles;
     TopLoc_Location location;
     const occ::handle<Poly_Triangulation> mesh = BRep_Tool::Triangulation(face, location);
@@ -5396,6 +5435,10 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
     const int triangles = mesh->NbTriangles();
     for (int k = 0; k < std::min(count, triangles); ++k) {
       const int t = 1 + static_cast<int>(static_cast<long long>(k) * triangles / std::min(count, triangles));
+      if (front != nullptr && static_cast<std::size_t>(t - 1) < front->size() &&
+          !(*front)[static_cast<std::size_t>(t - 1)]) {
+        continue;
+      }
       int a = 0;
       int b = 0;
       int c = 0;
@@ -5433,11 +5476,10 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
         if (!inside.contains(at.toPoint()) || isCovered(at)) {
           return std::nullopt;
         }
-        const NCollection_Vec2<int> pixel = toDevicePixels(at);
-        m_context->MoveTo(pixel.x(), pixel.y(), m_view, false);
-        auto item = itemFor(m_context->DetectedOwner());
+        const occ::handle<SelectMgr_EntityOwner> owner = detectQuietly(toDevicePixels(at));
+        auto item = itemFor(owner);
         if (item && item->kind == SelectKind::Profile && item->owner.toStdString() == named.first &&
-            item->name.toStdString() == named.second && accepts(m_context->DetectedOwner())) {
+            item->name.toStdString() == named.second && accepts(owner)) {
           return item;
         }
         return std::nullopt;
@@ -5458,7 +5500,7 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
       // Its middle under a handle, which keeps a click there (mitcad#1105):
       // another place of it, whose neighbours pick it too.
       for (TopExp_Explorer faces(profile->Shape(), TopAbs_FACE); faces.More() && !placed; faces.Next()) {
-        for (const gp_Pnt& point : middlesOf(TopoDS::Face(faces.Current()), 24)) {
+        for (const gp_Pnt& point : middlesOf(TopoDS::Face(faces.Current()), 24, nullptr)) {
           const QPointF at = QPointF(toWidgetF(point).toPoint());
           const auto item = picksProfile(at);
           if (item && picksProfile(at + QPointF(2, 0)) && picksProfile(at + QPointF(-2, 0)) &&
@@ -5475,6 +5517,7 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
     std::shared_ptr<geometry::Shape> shape;
     gp_Trsf placement;
     std::optional<SelectionItem> body; // its owner and occurrence, as a pick names them
+    bool shown = false;                // the body as the view shows it, not a selection's overlay
   };
   const auto bodyItem = [this](const AIS_InteractiveObject* object) -> std::optional<SelectionItem> {
     const auto info = m_pickInfo.find(object);
@@ -5484,7 +5527,7 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
   for (const auto& [key, entry] : m_bodies) {
     (void)key;
     if (entry.style == BodyDisplay::Style::Normal && entry.shape) {
-      sources.push_back({entry.shape, entry.placement.Transformation(), bodyItem(entry.object.get())});
+      sources.push_back({entry.shape, entry.placement.Transformation(), bodyItem(entry.object.get()), true});
     }
   }
   // Also log points on selected source topology after a preview replaced
@@ -5496,7 +5539,7 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
     if (std::none_of(sources.begin(), sources.end(), [&](const PickBody& source) {
           return source.shape == info->second.body && sameTransformation(source.placement, placement);
         })) {
-      sources.push_back({info->second.body, placement, info->second.item});
+      sources.push_back({info->second.body, placement, info->second.item, false});
     }
   }
   // Whether the filter and the input's test take an item at all, wherever
@@ -5528,6 +5571,14 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
   // edges and vertices, each face tried at up to 26 points) fall on the
   // same pixels again and again, and each try is a pick in the view.
   std::map<std::pair<int, int>, std::optional<SelectionItem>> picked;
+  // The pixels are tried without MoveTo's highlight (detectQuietly()):
+  // each new face MoveTo detected built and drew its highlight, most of a
+  // list's 30-70 s on a large design (mitcad#2062); with that and the
+  // faces turned away left out, a list takes a small fraction of that.
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  const PickEye eye{camera->Eye(), camera->Direction(), !camera->IsOrthographic()};
+  const bool culling =
+      m_sectionClip.IsNull() && (m_view->ClipPlanes().IsNull() || m_view->ClipPlanes()->IsEmpty());
   for (const PickBody& source : sources) {
     const geometry::Shape& body = *source.shape;
     const gp_Trsf& placement = source.placement;
@@ -5541,10 +5592,9 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
       }
       auto there = picked.find({at.x(), at.y()});
       if (there == picked.end()) {
-        const NCollection_Vec2<int> pixel = toDevicePixels(at);
-        m_context->MoveTo(pixel.x(), pixel.y(), m_view, false);
-        std::optional<SelectionItem> item = itemFor(m_context->DetectedOwner());
-        if (item && !accepts(m_context->DetectedOwner())) {
+        const occ::handle<SelectMgr_EntityOwner> owner = detectQuietly(toDevicePixels(at));
+        std::optional<SelectionItem> item = itemFor(owner);
+        if (item && !accepts(owner)) {
           item.reset();
         }
         there = picked.emplace(std::make_pair(at.x(), at.y()), std::move(item)).first;
@@ -5568,10 +5618,24 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
       return mayTake(item);
     };
     if (kinds.testFlag(SelectKind::Face)) {
+      // Which of the shown body's triangles turn away from the eye on a
+      // closed shell (view/PickFacing.hpp): a click there picks the
+      // shell's near side, so they are not tried, nor a face that has no
+      // other. About half a solid's faces and fallback points (mitcad#2062).
+      // Not where a section shows the insides, nor on a selection's
+      // overlay, which a preview may have bared.
+      PickFacing facing;
+      if (source.shown && culling) {
+        facing = pickFacing(body.occt(), placement, eye);
+      }
       for (int i = 0; i < body.face_count(); ++i) {
         if (body.face_names(i).empty() ||
             !takes(SelectKind::Face, body.face_names(i).front(), surfaceType(body.face(i)))) {
           continue;
+        }
+        const std::vector<bool>* front = facing.Seek(body.face(i));
+        if (front != nullptr && std::none_of(front->begin(), front->end(), [](bool towards) { return towards; })) {
+          continue; // wholly on the far side of its solid
         }
         // The middle of the face's parameters first: across a narrow face
         // (a fillet's strip) the middle, where neither edge beside it is
@@ -5588,7 +5652,7 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
         // Where those are hidden or covered (a curved face's far side, a
         // preview in front of it, mitcad#656): the middles of its next
         // largest triangles.
-        for (const gp_Pnt& middle : middlesOf(face, 24)) {
+        for (const gp_Pnt& middle : middlesOf(face, 24, front)) {
           if (probe(middle, SelectKind::Face, body.face_names(i).front())) {
             break;
           }
@@ -6968,7 +7032,108 @@ void OcctViewer::runViewOperation(const QString& operation, const std::function<
 // The orientation cube and the camera's log
 
 QRectF OcctViewer::cubeArea() const {
-  return QRectF(width() - m_overlayInsets.right() - kCubeArea, m_overlayInsets.top(), kCubeArea, kCubeArea);
+  const int area = cubeAreaSize();
+  return QRectF(width() - m_overlayInsets.right() - area, m_overlayInsets.top(), area, area);
+}
+
+bool OcctViewer::isCubeScale(int percent) {
+  return percent == 75 || percent == 100 || percent == 125 || percent == 150;
+}
+
+int OcctViewer::cubeScaled(int length) const {
+  // Half away from zero, the same on every compiler and Qt version.
+  const int product = length * m_cubeScale;
+  return (product + (product >= 0 ? 50 : -50)) / 100;
+}
+
+int OcctViewer::cubeScaledSize(int length) const { return length * m_cubeScale / 100; }
+
+void OcctViewer::setCubeScale(int percent) {
+  if (!isCubeScale(percent)) {
+    percent = 100;
+  }
+  if (percent == m_cubeScale) {
+    return;
+  }
+  m_cubeScale = percent;
+  qDebug().noquote() << QStringLiteral("Orientation cube size %1 %").arg(percent);
+  applyCubePlacement();
+  sizeCubeButtons();
+  placeHomeButton();
+  placeCubeArrows();
+  m_loggedCamera.clear(); // the cube's places moved
+  m_restTimer->start();
+  emit cubeAreaChanged();
+  emit overlayInsetsChanged(); // the watermark and the sketch overlay follow
+}
+
+void OcctViewer::sizeCubeButtons() {
+  // At 100 %: the home button 36 x 24 with a 14 pixel icon, the arrows
+  // 26 x 26 with 12 pixel icons in the cube's glass (Floating), 22 x 22
+  // with 16 pixel icons Docked.
+  const bool glass = chromeStyle() == ChromeStyle::Floating;
+  m_homeButton->setIconSize(QSize(cubeScaledSize(14), cubeScaledSize(14)));
+  m_homeButton->setFixedSize(QSize(cubeScaledSize(36), cubeScaledSize(24)));
+  const int arrow = cubeScaledSize(glass ? 26 : 22);
+  const int icon = cubeScaledSize(glass ? 12 : 16);
+  for (const auto& [id, button] : m_cubeArrows) {
+    (void)id;
+    button->setIconSize(QSize(icon, icon));
+    button->setFixedSize(QSize(arrow, arrow));
+  }
+}
+
+void OcctViewer::logCubeCorner() {
+  // "Orientation cube corner 150 %: area 285, offset 150, cube 105.0 px,
+  // font 16.8 px; home 54x36 icon 21 at -110,-137; arrows 39x39 icon 18,
+  // up 0,-102 down 0,102 ...; closest 0 px apart" (mitcad#2071, for UI
+  // tests): the cube's size and font in widget pixels, the home button's
+  // upper left and the arrows' middles from the cube's middle, and how far
+  // apart the nearest two of the home button and the arrows are (below 0:
+  // they overlap).
+  const QPoint middle(width() - m_overlayInsets.right() - cubeOffset(), m_overlayInsets.top() + cubeOffset());
+  std::vector<QRect> buttons{m_homeButton->geometry()};
+  QStringList arrows;
+  for (const auto& [id, arrow] : m_cubeArrows) {
+    const QPoint at = arrow->pos() + QPoint(arrow->width() / 2, arrow->height() / 2) - middle; // as placed
+    arrows << QStringLiteral("%1 %2,%3").arg(id).arg(at.x()).arg(at.y());
+    buttons.push_back(arrow->geometry());
+  }
+  int closest = std::numeric_limits<int>::max();
+  for (std::size_t i = 0; i < buttons.size(); ++i) {
+    for (std::size_t j = i + 1; j < buttons.size(); ++j) {
+      const QRect& a = buttons[i];
+      const QRect& b = buttons[j];
+      const int apartX = std::max(a.left(), b.left()) - std::min(a.right(), b.right()) - 1;
+      const int apartY = std::max(a.top(), b.top()) - std::min(a.bottom(), b.bottom()) - 1;
+      closest = std::min(closest, std::max(apartX, apartY));
+    }
+  }
+  const QSize arrowSize = m_cubeArrows.empty() ? QSize() : m_cubeArrows.front().second->size();
+  const QSize arrowIcon = m_cubeArrows.empty() ? QSize() : m_cubeArrows.front().second->iconSize();
+  const QPoint home = m_homeButton->pos() - middle;
+  const QString line =
+      QStringLiteral("%1 %: area %2, offset %3, cube %4 px, font %5 px; home %6x%7 icon %8 at %9,%10; "
+                     "arrows %11x%12 icon %13, %14; closest %15 px apart")
+          .arg(m_cubeScale)
+          .arg(cubeAreaSize())
+          .arg(cubeOffset())
+          .arg(m_cubeBaseSize * m_cubeScale / 100.0, 0, 'f', 1)
+          .arg(m_cubeBaseFont * m_cubeScale / 100.0, 0, 'f', 1)
+          .arg(m_homeButton->width())
+          .arg(m_homeButton->height())
+          .arg(m_homeButton->iconSize().width())
+          .arg(home.x())
+          .arg(home.y())
+          .arg(arrowSize.width())
+          .arg(arrowSize.height())
+          .arg(arrowIcon.width())
+          .arg(arrows.join(QLatin1Char(' ')))
+          .arg(closest);
+  if (line != m_loggedCubeCorner) {
+    m_loggedCubeCorner = line;
+    qDebug().noquote() << QStringLiteral("Orientation cube corner %1").arg(line);
+  }
 }
 
 void OcctViewer::updateOverlayIcons() {
@@ -6989,10 +7154,11 @@ void OcctViewer::applyDevicePixelRatio() {
     return;
   }
   // The selection's and the hover's lines too (mitcad#1803): as wide on a
-  // 200 % display as on a 100 % one.
+  // 200 % display as on a 100 % one; and the sketches' curves (mitcad#2063).
   if (!qFuzzyCompare(ratio, m_highlightRatio)) {
     m_highlightRatio = ratio;
     restyleHighlights();
+    restyleSketchLines();
   }
   if (qFuzzyCompare(ratio, m_cubeRatio)) {
     return;
@@ -7002,12 +7168,16 @@ void OcctViewer::applyDevicePixelRatio() {
   applyCubePlacement();
 }
 
+double OcctViewer::lineRatio() const {
+  return m_highlightRatio > 0.0 ? m_highlightRatio : 1.0;
+}
+
 double OcctViewer::highlightEdgeWidth() const {
-  return selectedEdgeWidth(m_selectionLook.width) * (m_highlightRatio > 0.0 ? m_highlightRatio : 1.0);
+  return selectedEdgeWidth(m_selectionLook.width) * lineRatio();
 }
 
 double OcctViewer::highlightBoundaryWidth() const {
-  return selectedBoundaryWidth(m_selectionLook.width) * (m_highlightRatio > 0.0 ? m_highlightRatio : 1.0);
+  return selectedBoundaryWidth(m_selectionLook.width) * lineRatio();
 }
 
 void OcctViewer::setSelectionLook(const SelectionLook& look) {
@@ -7075,10 +7245,12 @@ void OcctViewer::applyCubePlacement() {
     m_context->Remove(m_orientationCube, false);
   }
   // The face and the wider bevels for the size (mitcad#1620).
-  sizeViewCube(*m_orientationCube, m_cubeBaseSize * m_cubeRatio);
-  m_orientationCube->SetFontHeight(m_cubeBaseFont * m_cubeRatio);
+  // At the cube's size (mitcad#2071) on top of the device pixel ratio.
+  const double scale = m_cubeRatio * m_cubeScale / 100.0;
+  sizeViewCube(*m_orientationCube, m_cubeBaseSize * scale);
+  m_orientationCube->SetFontHeight(m_cubeBaseFont * scale);
   m_orientationCube->SetTransformPersistence(
-      cubePersistence(m_cubeRatio, m_overlayInsets, m_cubeProjection != CubeProjection::FollowView));
+      cubePersistence(m_cubeRatio, cubeOffset(), m_overlayInsets, m_cubeProjection != CubeProjection::FollowView));
   if (displayed) {
     m_context->Display(m_orientationCube, 0, 0, false);
   }
@@ -7153,35 +7325,39 @@ void OcctViewer::placeHomeButton() {
     m_homeButton->hide();
     return;
   }
-  // At the cube's upper left.
-  m_homeButton->move(width() - m_overlayInsets.right() - kCubeOffset - 73, m_overlayInsets.top() + 9);
+  // At the cube's upper left, at the cube's size (mitcad#2071).
+  m_homeButton->move(width() - m_overlayInsets.right() - cubeOffset() - cubeScaled(73),
+                     m_overlayInsets.top() + cubeScaled(9));
   m_homeButton->raise();
   const QPoint at = mapTo(window(), m_homeButton->geometry().center());
   qDebug().noquote() << QStringLiteral("View home at %1,%2").arg(at.x()).arg(at.y());
 }
 
 void OcctViewer::placeCubeArrows() {
-  // Around the cube's middle (kCubeOffset from the corner).
-  const QPoint middle(width() - m_overlayInsets.right() - kCubeOffset, m_overlayInsets.top() + kCubeOffset);
+  // Around the cube's middle (cubeOffset from the corner), at the cube's
+  // size (mitcad#2071).
+  const QPoint middle(width() - m_overlayInsets.right() - cubeOffset(), m_overlayInsets.top() + cubeOffset());
   for (const auto& [id, arrow] : m_cubeArrows) {
-    QPoint at = middle;
+    QPoint at(0, -70); // ccw
     if (id == QStringLiteral("up")) {
-      at += QPoint(0, -68);
+      at = QPoint(0, -68);
     } else if (id == QStringLiteral("down")) {
-      at += QPoint(0, 68);
+      at = QPoint(0, 68);
     } else if (id == QStringLiteral("left")) {
-      at += QPoint(-68, 0);
+      at = QPoint(-68, 0);
     } else if (id == QStringLiteral("right")) {
-      at += QPoint(68, 0);
+      at = QPoint(68, 0);
     } else if (id == QStringLiteral("cw")) {
-      at += QPoint(58, -58);
+      at = QPoint(58, -58);
     } else {
-      at += QPoint(32, -70);
+      at.setX(32);
     }
+    at = middle + QPoint(cubeScaled(at.x()), cubeScaled(at.y()));
     arrow->move(at - QPoint(arrow->width() / 2, arrow->height() / 2));
     arrow->raise();
   }
   publishCubeArrows();
+  logCubeCorner();
 }
 
 void OcctViewer::updateCubeArrows() {
@@ -8502,21 +8678,136 @@ void OcctViewer::requestFrame() {
 // ---------------------------------------------------------------------------
 // OpenGL
 
+namespace {
+
+// MITCAD_TEST_GL_FAILURE (tests only, mitcad#2125): `init` makes a view's
+// first attach see a context whose driver answers no GL version, as after a
+// graphics driver reset; `reconnect` the attaches after it (Qt made the
+// view's surface again); `throw` makes those later attaches throw
+// Standard_NullObject where OpenGl_Context::Init threw it in the reported
+// crash. Read at every attach, so that a test can clear it while the app
+// runs (the test driver's unset-env).
+enum class GlTestFailure { None, Init, Reconnect, Throw };
+
+GlTestFailure glTestFailure() {
+  const QString value = qEnvironmentVariable("MITCAD_TEST_GL_FAILURE");
+  if (value == QLatin1String("init")) return GlTestFailure::Init;
+  if (value == QLatin1String("reconnect")) return GlTestFailure::Reconnect;
+  if (value == QLatin1String("throw")) return GlTestFailure::Throw;
+  return GlTestFailure::None;
+}
+
+QString glStringText(const char* text) {
+  return text != nullptr ? QString::fromLatin1(text) : QStringLiteral("null");
+}
+
+// Why OCCT cannot attach to Qt's context, or nothing when it can: a context
+// that is not valid or not current, or a driver that answers no GL version
+// or vendor. OCCT's Init builds its message from those strings and throws
+// on a null one (mitcad#2125).
+QString glContextProblem(QOpenGLContext* context, bool noAnswer) {
+  if (context == nullptr || !context->isValid()) {
+    return QStringLiteral("Qt's OpenGL context is not valid");
+  }
+  if (QOpenGLContext::currentContext() != context) {
+    return QStringLiteral("Qt's OpenGL context is not current");
+  }
+  QOpenGLFunctions* functions = context->functions();
+  const char* version = noAnswer ? nullptr : reinterpret_cast<const char*>(functions->glGetString(GL_VERSION));
+  const char* vendor = noAnswer ? nullptr : reinterpret_cast<const char*>(functions->glGetString(GL_VENDOR));
+  if (version != nullptr && vendor != nullptr) {
+    return QString();
+  }
+  const char* renderer = noAnswer ? nullptr : reinterpret_cast<const char*>(functions->glGetString(GL_RENDERER));
+  return QStringLiteral("the driver answers no GL version or vendor (GL_VERSION %1, GL_VENDOR %2, GL_RENDERER %3)")
+      .arg(glStringText(version), glStringText(vendor), glStringText(renderer));
+}
+
+} // namespace
+
 void OcctViewer::initializeGL() {
+  // A failure to attach never ends MitCad (mitcad#2125): the view stays
+  // empty, each frame tries again (paintGL), and the failure is told once.
+  const GlTestFailure testFailure = glTestFailure();
+  const bool reconnect = m_glAttached;
+  const bool noAnswer = testFailure == (reconnect ? GlTestFailure::Reconnect : GlTestFailure::Init);
+  QString problem = glContextProblem(context(), noAnswer);
+  if (problem.isEmpty()) {
+    // An exception that leaves a Qt event handler ends the application.
+    try {
+      if (reconnect && testFailure == GlTestFailure::Throw) {
+        throw Standard_NullObject("TCollection_ExtendedString : null parameter (MITCAD_TEST_GL_FAILURE)");
+      }
+      problem = attachGl();
+    } catch (const Standard_Failure& failure) {
+      problem = QStringLiteral("OCCT failed: %1: %2")
+                    .arg(QString::fromLatin1(failure.ExceptionType()), QString::fromUtf8(failure.what()));
+    } catch (const std::exception& failure) {
+      problem = QStringLiteral("failed: %1").arg(QString::fromUtf8(failure.what()));
+    }
+  }
+  if (!problem.isEmpty()) {
+    m_glAttachFailed = true;
+    reportGlFailure(problem);
+    return;
+  }
+  m_glAttachedTopLevel = window();
+  m_glTestScreenChanged = false;
+  watchGlTestScreen();
+  if (m_glAttachFailed) {
+    m_glAttachFailed = false;
+    qInfo().noquote() << QStringLiteral("3D view: attached to the graphics card again");
+    // The frame that attached drew nothing.
+    QTimer::singleShot(0, this, [this] { requestFrame(); });
+  }
+}
+
+void OcctViewer::watchGlTestScreen() {
+  // Only under MITCAD_TEST_GL_FAILURE (mitcad#2125): a screen change of the
+  // window the view attached in (the TestDriver's screen-change) counts as
+  // Qt making the view's surface again, as it may when the system
+  // announces its screens again after a graphics driver reset.
+  QWindow* handle = window()->windowHandle();
+  if (qEnvironmentVariableIsEmpty("MITCAD_TEST_GL_FAILURE") || handle == nullptr ||
+      handle == m_glTestScreenWindow) {
+    return;
+  }
+  if (m_glTestScreenConnection) {
+    disconnect(m_glTestScreenConnection);
+  }
+  m_glTestScreenWindow = handle;
+  m_glTestScreenConnection = connect(handle, &QWindow::screenChanged, this, [this] {
+    if (qEnvironmentVariableIsEmpty("MITCAD_TEST_GL_FAILURE")) return;
+    m_glTestScreenChanged = true;
+    requestFrame();
+  });
+}
+
+void OcctViewer::reportGlFailure(const QString& reason) {
+  // Once until a frame is drawn again: a failed attach is tried at every
+  // frame.
+  if (m_glFailureTold) return;
+  m_glFailureTold = true;
+  qWarning().noquote() << QStringLiteral("3D view: no graphics: %1").arg(reason);
+  emit glFailed(tr("The 3D view lost its connection to the graphics card. Save your work and restart MitCad."));
+}
+
+QString OcctViewer::attachGl() {
   const qreal ratio = devicePixelRatioF();
   const int viewWidth = qRound(width() * ratio);
   const int viewHeight = qRound(height() * ratio);
 
   const occ::handle<OpenGl_Context> glContext = new OpenGl_Context();
   if (!glContext->Init(context()->format().profile() == QSurfaceFormat::CoreProfile)) {
-    emit glFailed(tr("OCCT could not attach to the OpenGL context."));
-    return;
+    return QStringLiteral("OCCT could not attach to the OpenGL context");
   }
 
   occ::handle<Aspect_NeutralWindow> window =
       occ::handle<Aspect_NeutralWindow>::DownCast(m_view->Window());
-  const bool firstTime = window.IsNull();
-  if (firstTime) {
+  // The view's first attach, also when an earlier one failed half-way.
+  const bool firstTime = !m_glAttached;
+  const bool hadWindow = !window.IsNull();
+  if (!hadWindow) {
     window = new Aspect_NeutralWindow();
     window->SetVirtual(true);
   }
@@ -8531,7 +8822,7 @@ void OcctViewer::initializeGL() {
   // shares the previous wrapper's shader manager. Keep that old wrapper
   // alive until its shared manager has an explicit new owner: its destructor
   // clears the manager's context pointer while it still owns that pointer.
-  occ::handle<OpenGl_Context> previous = firstTime ? occ::handle<OpenGl_Context>() : glContextOf(m_view);
+  occ::handle<OpenGl_Context> previous = hadWindow ? glContextOf(m_view) : occ::handle<OpenGl_Context>();
   logGlBinding("before SetWindow", this, previous);
   m_view->SetWindow(window, glContext->RenderingContext());
   const occ::handle<OpenGl_Context> attached = glContextOf(m_view);
@@ -8577,6 +8868,8 @@ void OcctViewer::initializeGL() {
     }
     emit glInitialized(QString::fromLatin1(renderer != nullptr ? renderer : "unknown"));
   }
+  m_glAttached = true;
+  return QString();
 }
 
 void OcctViewer::watchHeadlessParent() {
@@ -8666,6 +8959,12 @@ Aspect_Drawable OcctViewer::occtDrawable() {
 
 void OcctViewer::paintGL() {
   if (!m_documentVisible) return;
+  if (m_glAttachFailed) {
+    // The last attach failed (mitcad#2125): nothing is drawn until one
+    // succeeds, and each frame tries again.
+    initializeGL();
+    return;
+  }
   if (m_view->Window().IsNull()) {
     return;
   }
@@ -8703,7 +9002,13 @@ void OcctViewer::paintGL() {
     }
   } firstFrame{*this};
   ScopedTiming timing("frame");
-  if (m_view->Window()->NativeHandle() != occtDrawable()) {
+  // With MITCAD_TEST_GL_FAILURE, a move to another top-level window counts
+  // as Qt making the surface again on every platform (mitcad#2125): on
+  // Linux the view's drawable is a helper window of its own that stays. So
+  // does a screen change of the window (watchGlTestScreen).
+  const bool testSurfaceRemade = (m_glAttachedTopLevel != window() || m_glTestScreenChanged) &&
+                                 !qEnvironmentVariableIsEmpty("MITCAD_TEST_GL_FAILURE");
+  if (m_view->Window()->NativeHandle() != occtDrawable() || testSurfaceRemade) {
     // Qt recreated its surface, e.g. after re-parenting: attach again.
     initializeGL();
     return;
@@ -8723,7 +9028,7 @@ void OcctViewer::paintGL() {
     glContext->SetDefaultFrameBuffer(framebuffer);
   }
   if (!framebuffer->InitWrapper(glContext)) {
-    emit glFailed(tr("OCCT could not wrap Qt's framebuffer."));
+    reportGlFailure(QStringLiteral("OCCT could not wrap Qt's framebuffer"));
     return;
   }
 
@@ -8779,6 +9084,11 @@ void OcctViewer::paintGL() {
   } catch (const std::exception& failure) {
     // A click on the cube turns the view here (mitcad#773).
     qWarning() << "OCCT view event failed:" << failure.what();
+  }
+  if (m_glFailureTold) {
+    // A graphics failure (reportGlFailure) is over; a new one is told again.
+    m_glFailureTold = false;
+    qInfo().noquote() << QStringLiteral("3D view: drawn again after a graphics failure");
   }
   if (m_context->DetectedOwner() != m_hoveredOwner) {
     m_hoveredOwner = m_context->DetectedOwner();
@@ -9038,6 +9348,16 @@ bool OcctViewer::event(QEvent* event) {
     nativeGesture(static_cast<QNativeGestureEvent*>(event));
     return true;
   }
+  if (event->type() == QEvent::ShortcutOverride && m_spaceMouseWheel.duringMotion(spaceMouseNow())) {
+    // Every key pressed in the view comes here first, a shortcut's too: a
+    // key during a 3D mouse motion may be the driver's emulated input
+    // (mitcad#1981), named in the debug log; it goes on as usual.
+    const auto* key = static_cast<QKeyEvent*>(event);
+    if (!key->isAutoRepeat()) {
+      qDebug().noquote() << QStringLiteral("3D mouse: key %1 during a motion")
+                                .arg(QKeySequence(key->keyCombination()).toString(QKeySequence::PortableText));
+    }
+  }
   if (event->type() == QEvent::DevicePixelRatioChange) {
     // Another screen or scale: the pick widths and the cursor for the new
     // ratio.
@@ -9088,6 +9408,12 @@ bool OcctViewer::event(QEvent* event) {
     applyDevicePixelRatio();
   } else if (event->type() == QEvent::ApplicationPaletteChange) {
     emit themeChanged();
+  } else if (event->type() == QEvent::Show && m_glAttached) {
+    // Shown again in a window not exposed yet (a move to a new window):
+    // where Qt never exposes it (Windows session 0) the view would draw
+    // nothing until something else asked for a frame, so the move's attach
+    // (mitcad#2125) would wait for it too.
+    requestFrame();
   }
   return handled;
 }
@@ -9493,6 +9819,24 @@ void OcctViewer::resetOrbitWrap() {
 }
 
 void OcctViewer::wheelEvent(QWheelEvent* event) {
+  // A wheel during a 3D mouse motion, or just after it, is taken for the
+  // driver's emulated input (its profile's Tilt sends wheel steps by
+  // default) and ignored: zooming about the cursor, it pulled a zoom in
+  // back smaller (mitcad#1981, SpaceMouseWheelGuard.hpp). A wheel without a
+  // recent motion zooms. The wheel's message names no device, so the
+  // driver's emulator cannot be told from a real mouse here.
+  const std::int64_t now = spaceMouseNow();
+  if (!m_spaceMouseWheel.allowWheel(now)) {
+    event->accept();
+    int skipped = 0;
+    if (m_spaceMouseWheel.logIgnored(now, skipped)) {
+      qDebug().noquote() << QStringLiteral("3D mouse: wheel ignored during a motion (delta %1, %2)%3")
+                                .arg(event->angleDelta().x())
+                                .arg(event->angleDelta().y())
+                                .arg(skipped > 0 ? QStringLiteral(", %1 more not logged").arg(skipped) : QString());
+    }
+    return;
+  }
   QOpenGLWidget::wheelEvent(event);
   closePickList(QStringLiteral("view moved")); // its items move (mitcad#1703)
   if ((m_navigation.scheme == NavigationScheme::Trackpad ||

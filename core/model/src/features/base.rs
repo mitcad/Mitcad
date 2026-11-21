@@ -359,7 +359,8 @@ const NEGLIGIBLE: f64 = 1e-6;
 /// The body changes of a join, cut or intersect of a tool with participant
 /// bodies, as an extrusion makes them: joined bodies merge into the first
 /// participant they touch (with every solid of theirs, [`join_pieces`])
-/// and tool solids that touch nothing become new bodies; a cut or
+/// and tool solids that merge with none become new bodies, with a warning
+/// ([`warn_stray`]); a cut or
 /// intersection keeps each body for its first piece, makes new bodies of
 /// the other pieces and removes a body it leaves nothing of.
 /// `what` names the tool in errors ("the base feature does not touch ...").
@@ -419,7 +420,11 @@ pub(crate) fn apply_tool<K: Kernel>(
                         changes.push(BodyChange::Set(participants[i].0, shape));
                     }
                     Joined::Merged(i) => changes.push(BodyChange::Remove(participants[i].0)),
-                    Joined::Stray(shape) | Joined::Apart(shape) => {
+                    Joined::Stray(shape) => {
+                        warn_stray(ctx, &shape);
+                        changes.push(BodyChange::Set(ctx.new_body(), shape));
+                    }
+                    Joined::Apart(shape) => {
                         changes.push(BodyChange::Set(ctx.new_body(), shape));
                     }
                 }
@@ -488,6 +493,27 @@ pub(crate) fn apply_tool<K: Kernel>(
         }
     }
     Ok(changes)
+}
+
+/// The warning of a join whose tool solid merges with no body
+/// (mitcad#2127): one that touches a body only along an edge or at a
+/// point (two solids that share no face cannot be one solid), or a
+/// profile of several that lies away from the bodies, which the join
+/// makes a body of its own.
+pub(crate) const JOINED_APART: &str = "a part of the joined shape touches the bodies at most along \
+     an edge or at a point, so it became a body of its own";
+
+/// Warns that a join made `stray`, a tool solid that merges with no body,
+/// a body of its own ([`JOINED_APART`]); its box is the warning's place.
+pub(crate) fn warn_stray<K: Kernel>(ctx: &mut EvalContext<'_, K>, stray: &K::Shape) {
+    let places = match ctx.kernel.bounding_box(stray) {
+        Ok(Some(b)) => vec![crate::notice::NoticePlace::Box {
+            min: b.min,
+            max: b.max,
+        }],
+        _ => Vec::new(),
+    };
+    ctx.warn_at(JOINED_APART, places);
 }
 
 /// What a join makes of one participant body ([`join_pieces`]).

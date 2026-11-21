@@ -6,15 +6,17 @@
 //! made of (a typed length, a bound length that follows its face, an along
 //! edge member's edge or offsets, a length formula's parameters, a row or
 //! an option), the name takes the new designation in that command's undo
-//! step. A name the user gave stays.
+//! step. A name the user gave stays. The joint BUILD placed a part with
+//! is named after the part and its target, and follows their names
+//! (mitcad#2088).
 
 use std::collections::BTreeMap;
 
 use super::part_info::{designation, part_values};
 use super::{LibrarySourceDef, SourceId};
 use crate::document::DocState;
-use crate::features::FeatureDef;
-use crate::ids::{ComponentUid, FeatureUid};
+use crate::features::{FeatureDef, JointDef, ValueInput};
+use crate::ids::{ComponentUid, FeatureUid, OccurrenceUid};
 
 /// Whether `name` is `designation`, or `designation (k)` as
 /// `DocState::free_component_name` makes a name unique.
@@ -130,6 +132,71 @@ impl DocState {
             }
             if let Some(record) = c.build.as_mut() {
                 record.named_after = Some(new);
+            }
+        }
+    }
+}
+
+/// The name BUILD gives the joint `joint` in `state` (mitcad#2088): `<a> on
+/// <b>`, after the components its sides are on (the part, and the target
+/// it is placed on; the host's own geometry is the host's).
+fn joint_name_in(state: &DocState, joint: FeatureUid) -> Option<String> {
+    let entry = state.entry(joint)?;
+    let FeatureDef::Joint(def) = &entry.def else {
+        return None;
+    };
+    let name_of = |path: &[OccurrenceUid]| -> Option<String> {
+        let component = match path.last() {
+            Some(o) => state.assembly.occurrence(*o)?.component,
+            None => entry.component,
+        };
+        Some(state.assembly.component(component)?.name.clone())
+    };
+    Some(format!(
+        "{} on {}",
+        name_of(&def.a.occurrence.0)?,
+        name_of(&def.b.occurrence.0)?
+    ))
+}
+
+/// Whether `name` is a joint's default name (`Joint7`).
+fn is_default_joint_name(name: &str) -> bool {
+    name.strip_prefix(JointDef::<ValueInput>::BASE_NAME)
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+impl DocState {
+    /// Names the joints BUILD placed its parts with after the parts they
+    /// join (mitcad#2088): `<part> on <target>`. A joint the step made with
+    /// its default name takes it; one that had it before the step follows
+    /// the two components' names, unless the step renamed it. A joint
+    /// renamed by the user keeps its name. Called by the document's `apply`
+    /// for every step, before its undo step is kept.
+    pub(crate) fn follow_build_joint_names(&mut self, before: &DocState) {
+        let joints: Vec<FeatureUid> = self
+            .assembly
+            .components
+            .iter()
+            .filter_map(|c| c.build.as_ref()?.joint)
+            .collect();
+        for joint in joints {
+            let Some(now) = self.entry(joint).map(|e| e.name.clone()) else {
+                continue;
+            };
+            let Some(wanted) = joint_name_in(self, joint) else {
+                continue;
+            };
+            if now == wanted {
+                continue;
+            }
+            let follows = match before.entry(joint) {
+                None => is_default_joint_name(&now),
+                Some(was) => {
+                    was.name == now && joint_name_in(before, joint).is_some_and(|n| n == now)
+                }
+            };
+            if follows && let Some(position) = self.position(joint) {
+                std::sync::Arc::make_mut(&mut self.features[position]).name = wanted;
             }
         }
     }

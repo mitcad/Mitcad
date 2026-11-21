@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+# Linked parts of a design (mitcad#2130, GitHub mitcad/Mitcad#479), the
+# shared input script of tools/ui-link-parts-test.sh (Linux),
+# tools/ui-windows-link-parts-test.ps1 (Windows) and
+# tools/ui-macos-link-parts-test.sh (macOS), on an empty design
+# (link-parts-holder.json) saved beside the design it links parts of
+# (link-parts-source.json: Bracket:1 and Bracket:2, one component placed
+# twice, 500 mm3 each, and Board:1, 800 mm3). The runners put the absolute
+# path of that design (forward slashes) in place of @SOURCE@ in a copy of
+# this script. ASCII only: the Windows runner writes the copy as ASCII.
+#   1. Insert Component of the design, Linked > Choose parts..., Bracket:1
+#      ticked: the link holds Bracket:1's body alone.
+#   2. Choose Linked Parts... from the linked component's browser row
+#      ticks Bracket:2 too: both bodies, one undo step; Undo takes it back.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-model-bodies 0 0
+
+# --- 1. Insert Component > Linked > Choose parts..., Bracket:1 ticked.
+mark
+command insert.component
+focus-dialog '^Insert Component$' 20
+type @SOURCE@
+key return
+wait-log '^Insert Component asked: link-parts-source[.]mitcad$' 30
+focus-dialog '^Insert Component$' 20
+button '^Choose parts$'
+button '^OK$'
+wait-log '^Insert Component: linked, chosen parts$' 20
+wait-log '^Choose Parts opened: link-parts-source[.]mitcad, 3 rows$' 60
+focus-dialog '^Choose Parts$' 20
+key space
+wait-log '^Choose Parts: ticked Bracket:1$' 20
+button '^OK$'
+wait-log '^Choose Parts: O1$' 20
+wait-log '^Linked parts of link-parts-source: Bracket:1$' 60
+wait-idle
+expect-model-bodies 1 500
+expect-ever '^Browser Root/link-parts-source:1 at ' 30
+wait-idle
+
+# --- 2. Choose Linked Parts... adds Bracket:2; Undo takes it back.
+capture-undo-depth baseline
+mark
+context-menu-logged '^Browser Root/link-parts-source:1 at ' 'Choose Linked Parts'
+wait-log '^Choose Parts opened: link-parts-source[.]mitcad, 3 rows$' 60
+focus-dialog '^Choose Linked Parts$' 20
+key down
+key space
+wait-log '^Choose Parts: ticked Bracket:2$' 20
+button '^OK$'
+wait-log '^Choose Parts: O1, O2$' 20
+wait-log '^Choose Linked Parts of C[0-9]+: Bracket:1, Bracket:2; 2 bodies$' 60
+wait-idle
+expect-model-bodies 2 1000
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-idle
+expect-model-bodies 1 500
+expect-undo-depth ${baseline} 0
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

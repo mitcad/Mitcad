@@ -57,8 +57,8 @@ use mitcad_model_drawing::internal::Shading;
 use mitcad_model_drawing::sheet::{Anchor, Item, Pen, Sheet};
 use mitcad_model_drawing::template::SheetTemplate;
 use mitcad_model_drawing::{
-    CutPlane, DrawingOptions, Orientation, P2, Projection, SheetSize, Units, ViewProjection,
-    ViewSpec, parse_scale, scale_text, today,
+    CutPlane, DrawingOptions, Orientation, P2, Projection, SheetSize, Standard, Units,
+    ViewProjection, ViewSpec, parse_scale, scale_text, today,
 };
 use mitcad_vec3::{cross, dot};
 
@@ -111,6 +111,10 @@ pub(super) struct AddDrawingCommand {
     decimals: Option<u8>,
     #[serde(default)]
     text_height: Option<f64>,
+    /// The standard its dimensions are written to (mitcad#2047): the
+    /// template's when left out, else ISO.
+    #[serde(default)]
+    standard: Option<Standard>,
 }
 
 /// `edit_drawing`: its name, and the decimals and the letters' height of
@@ -126,6 +130,9 @@ pub(super) struct EditDrawingCommand {
     decimals: Option<Option<u8>>,
     #[serde(default, deserialize_with = "present")]
     text_height: Option<Option<f64>>,
+    /// The standard its dimensions are written to (mitcad#2047).
+    #[serde(default)]
+    standard: Option<Standard>,
 }
 
 /// `add_drawing_sheet` and `edit_drawing_sheet`: a sheet's fields (`sheet`: where a new one
@@ -1139,11 +1146,16 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 if let Some(height) = c.text_height {
                     changed.defaults.text_height = height;
                 }
-                let label = if c.decimals.is_none() && c.text_height.is_none() {
-                    format!("Rename {}", old.name)
-                } else {
-                    format!("Edit {}", old.name)
-                };
+                // Its standard (mitcad#2047): every dimension follows.
+                if let Some(standard) = c.standard {
+                    changed.defaults.standard = standard;
+                }
+                let label =
+                    if c.decimals.is_none() && c.text_height.is_none() && c.standard.is_none() {
+                        format!("Rename {}", old.name)
+                    } else {
+                        format!("Edit {}", old.name)
+                    };
                 self.set_drawing(old.uid, label, changed)?;
                 Ok(json!({"drawing": old.uid}))
             }
@@ -1829,11 +1841,13 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
     ) -> Result<SheetDrawn, ApiError> {
         let mut phases = Phases::new(|| format!("draw sheet {si} of {}", drawing.name));
         let sheet = &drawing.sheets[si];
+        // In its drawing's standard (mitcad#2047).
         let units = match &sheet.units {
             Some(symbol) => Units::by_symbol(symbol)
                 .ok_or_else(|| ApiError(format!("unknown length unit “{symbol}”")))?,
             None => Units::of(self.parameters().context().default_length_unit),
-        };
+        }
+        .under(drawing.defaults.standard);
         let mut evaluated = self.evaluate_views(drawing, si);
         phases.mark("views");
         let mut warnings: Vec<String> = evaluated
@@ -2186,6 +2200,8 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             // (mitcad#729): null for the engine's decimals, 3.5 mm.
             "decimals": drawing.defaults.decimals,
             "text_height": drawing.defaults.text_height,
+            // Its dimensioning standard (mitcad#2047).
+            "standard": drawing.defaults.standard,
         });
         if missed {
             let mut answer = answer;
@@ -2331,6 +2347,16 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                 .filter(|_| c.layout.is_none())
                 .and_then(|t| t.as_ref().and_then(|t| t.projection))
         });
+        // The standard given, else the template's (mitcad#2047: ANSI's is
+        // ASME), else ISO.
+        drawing.defaults.standard = c
+            .standard
+            .or_else(|| {
+                template
+                    .as_ref()
+                    .and_then(|t| t.as_ref().and_then(|t| t.standard))
+            })
+            .unwrap_or_default();
         for sheet in &mut drawing.sheets {
             set_fields(
                 sheet,

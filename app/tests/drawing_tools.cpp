@@ -60,7 +60,7 @@ int drawingToolsTests() {
                               QStringLiteral("Baseline"), QStringLiteral("Model Items"), QStringLiteral("Center Mark"),
                               QStringLiteral("Centerline"), QStringLiteral("Line"), QStringLiteral("Arc"),
                               QStringLiteral("Center Pattern"), QStringLiteral("Edge Extension"),
-                              QStringLiteral("Text"), QStringLiteral("Note"),
+                              QStringLiteral("Text"), QStringLiteral("Note"), QStringLiteral("Hole Callout"),
                               QStringLiteral("Datum Label"), QStringLiteral("Feature Control Frame"),
                               QStringLiteral("Surface Finish"), QStringLiteral("Hole Table"),
                               QStringLiteral("Bill of Materials"), QStringLiteral("Balloon")}));
@@ -80,8 +80,8 @@ int drawingToolsTests() {
   // The bar's groups (mitcad#725): Create, Geometry, Dimensions, Text,
   // Symbols, Tables, each with its caption; Geometry with Line, Arc, Center
   // Pattern and Edge Extension (mitcad#729); Dimensions with Model Items
-  // (mitcad#1406).
-  CHECK(groups.count(0) == 5 && groups.count(1) == 6 && groups.count(2) == 4 && groups.count(3) == 2 &&
+  // (mitcad#1406); Text with Hole Callout after Note (mitcad#2054).
+  CHECK(groups.count(0) == 5 && groups.count(1) == 6 && groups.count(2) == 4 && groups.count(3) == 3 &&
         groups.count(4) == 3 && groups.count(5) == 3);
   CHECK(toolGroupName(0) == QStringLiteral("Create") && toolGroupName(1) == QStringLiteral("Geometry") &&
         toolGroupName(2) == QStringLiteral("Dimensions") && toolGroupName(3) == QStringLiteral("Text") &&
@@ -95,6 +95,7 @@ int drawingToolsTests() {
   CHECK(toolGroupId(kToolGroups).isEmpty());
   // The command search's other words (mitcad#725).
   CHECK(toolKeywords(QStringLiteral("drawing.note")).contains(QStringLiteral("leader")));
+  CHECK(toolKeywords(QStringLiteral("drawing.hole_callout")).contains(QStringLiteral("thread")));
   CHECK(toolKeywords(QStringLiteral("drawing.baseline")).contains(QStringLiteral("chain")));
   CHECK(toolKeywords(QStringLiteral("drawing.datum")).contains(QStringLiteral("datum identifier")));
   CHECK(toolKeywords(QStringLiteral("drawing.finish")).contains(QStringLiteral("surface texture")));
@@ -459,6 +460,40 @@ int drawingToolsTests() {
                           {{QStringLiteral("text"), QStringLiteral("DEBURR")}});
   CHECK(command.value(QStringLiteral("type")).toString() == QStringLiteral("note"));
   CHECK(command.value(QStringLiteral("text")).toString() == QStringLiteral("DEBURR"));
+  // A hole callout (mitcad#2054): in the Text group after Note, one pick of
+  // a circle or a round face, then where its text goes; its lines are the
+  // hole's, so it sends no text. It stays on for the next hole.
+  const DrawingToolDef* callout = drawingTool(QStringLiteral("drawing.hole_callout"));
+  CHECK(callout != nullptr);
+  if (callout != nullptr) {
+    CHECK(callout->name == QStringLiteral("Hole Callout") && toolGroup(*callout) == 3);
+    CHECK(callout->pick == SheetPick::Picks && callout->place && callout->iconOnly && callout->options.isEmpty());
+    CHECK(callout->pickCount(none) == 1 && callout->annotationType(none) == QStringLiteral("hole_callout"));
+    qsizetype noteAt = -1;
+    qsizetype calloutAt = -1;
+    for (qsizetype i = 0; i < drawingTools().size(); ++i) {
+      if (drawingTools()[i].id == QStringLiteral("drawing.note")) {
+        noteAt = i;
+      } else if (drawingTools()[i].id == QStringLiteral("drawing.hole_callout")) {
+        calloutAt = i;
+      }
+    }
+    CHECK(noteAt >= 0 && calloutAt == noteAt + 1);
+    CHECK(callout->command(QStringLiteral("D1"), 0, annotationPicks(1, {}), none).isEmpty());
+    CHECK(callout->command(QStringLiteral("D1"), 0, annotationPicks(0, {QPointF(5, 6)}), none).isEmpty());
+    command = callout->command(QStringLiteral("D1"), 0, annotationPicks(1, {QPointF(5, 6)}), none);
+    CHECK(command.value(QStringLiteral("cmd")).toString() == QStringLiteral("add_drawing_annotation"));
+    CHECK(command.value(QStringLiteral("type")).toString() == QStringLiteral("hole_callout"));
+    CHECK(command.value(QStringLiteral("view")).toInt() == 1);
+    CHECK(command.value(QStringLiteral("picks")).toArray().size() == 1);
+    CHECK(command.value(QStringLiteral("at")).toArray() == QJsonArray({5.0, 6.0}));
+    CHECK(!command.contains(QStringLiteral("text")));
+    CHECK(annotationName(QStringLiteral("hole_callout")) == QStringLiteral("Hole Callout"));
+    // Its own texts: a line break kept inside, the ends trimmed.
+    command = annotationEdit(QStringLiteral("D1"), 4, QStringLiteral("after"), QStringLiteral(" DEBURR\nBOTH SIDES "));
+    CHECK(command.value(QStringLiteral("format")).toObject().value(QStringLiteral("after")).toString() ==
+          QStringLiteral("DEBURR\nBOTH SIDES"));
+  }
   // A frame takes its tolerance from its dialog, as the model's JSON.
   CHECK(frame->command(QStringLiteral("D1"), 0, annotationPicks(1, {QPointF(5, 6)}), none).isEmpty());
   command = frame->command(QStringLiteral("D1"), 0, annotationPicks(1, {QPointF(5, 6)}),
@@ -627,6 +662,10 @@ int drawingToolsTests() {
   command = drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("text_height"), QString());
   CHECK(command.value(QStringLiteral("text_height")).isNull());
   CHECK(drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("text_height"), QStringLiteral("0")).isEmpty());
+  // The drawing's standard (mitcad#2047).
+  command = drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("standard"), QStringLiteral("asme"));
+  CHECK(command.value(QStringLiteral("standard")).toString() == QStringLiteral("asme"));
+  CHECK(drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("standard"), QStringLiteral("din")).isEmpty());
   // Width and Pattern, two choices that combine (mitcad#1447); Extra Thick
   // right after Thick (mitcad#1402).
   CHECK(widthChoices().size() == 3 && widthChoices().first().first == QStringLiteral("thin"));

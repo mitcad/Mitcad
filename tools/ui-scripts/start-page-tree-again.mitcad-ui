@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# The Start page's Tree / Cards toggle (mitcad#2093), after a restart
+# (start-page-tree.mitcad-ui chose Tree at Shop/parts/sub):
+#   1. The Start page at launch shows Shop in Tree at parts/sub.
+#   2. The keyboard: Left on parts/sub goes to parts, Left again folds it,
+#      Right unfolds it; Enter goes into parts' cards and Enter on gear's
+#      card opens it.
+# Run with MITCAD_START_PAGE=1 by tools/ui-start-page-tree-test.sh (Linux),
+# tools/ui-windows-start-page-tree-test.ps1 (Windows) and
+# tools/ui-macos-start-page-tree-test.sh (macOS).
+expect-ever '^Start page at launch: shown$' 30
+expect-ever '^Start page shown$' 30
+wait-idle
+
+# 1. The view, the project and the folder remembered.
+expect-setting start/browseView tree
+expect-ever '^Start page browse view: tree$' 30
+expect-ever '^Start page place: Shop/parts/sub/ \(0 folders, 1 designs\)$' 10
+expect-ever '^Start page tree: Shop \| Shop/parts/ \| Shop/parts/sub/ \(current Shop/parts/sub/\)$' 10
+expect-ever '^Start page tree folder Shop/parts/sub/ at ' 10
+wait-idle
+sleep 500
+
+# 2. The keyboard on the tree.
+mark
+click-logged '^Start page tree folder Shop/parts/sub/ at '
+wait-idle
+mark
+key Left
+expect-log '^Start page place: Shop/parts/ \(1 folders, 1 designs\)$'
+wait-idle
+mark
+key Left
+expect-log '^Start page tree folded: Shop/parts/$'
+wait-idle
+mark
+key Right
+expect-log '^Start page tree unfolded: Shop/parts/$'
+wait-idle
+mark
+key Return
+expect-log '^Start page keyboard: card Shop/parts/gear\.mitcad$'
+wait-idle
+mark
+key Return
+expect-log '^Start page chosen: open gear\.mitcad$'
+wait-log '^Opened .*parts/gear\.mitcad$' 60
+wait-log '^Ribbon tab shown: SOLID$' 10
+wait-idle
+expect-never 'TestDriver: FAIL'

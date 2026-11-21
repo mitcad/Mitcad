@@ -43,8 +43,9 @@ at V, past the ball that touches both (on a rib, radius 3: 2.6e-3 off).
 Test: geometry/tests/test_fillet_rolling_ball.cpp (ctest
 geometry.suite.fillet_rolling_ball),
 test_rounding_rolling_on_an_edge_into_a_concave_turn: Its failure without
-the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+the patch is still to be shown: the patch does not revert at the port's
+tip without the more than 40 later patches that change the same lines
+(tried 2026-11-20 by tools/occt-port-proof.py).
 
 Upstream: the change is local to the walk on a restriction and the
 stripe's chaining; without an edge turning towards the ball nothing

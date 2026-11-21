@@ -51,9 +51,9 @@ key on a shaft whose side is split near the key's other end, that end's
 convex arc rounded with 2, the split at two heights: valid, the contacts'
 ends within 1e-3, no face left on the lens's plane, a face past each split
 ending in a point at the lens's end, the material removed alike on both
-sides within 1e-3 mm3. Its failure without the patch, stated in its
-documentation, is still to be shown in the port's before/after run
-(mitcad#1986).
+sides within 1e-3 mm3. Its failure without the patch is still to be shown:
+the patch does not revert at the port's tip without the 47 later patches
+that change the same lines (tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 7608be10..54ea22c1 100644

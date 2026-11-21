@@ -24,14 +24,19 @@
 // ones), the Projects panel's projects with their state icons and Add
 // project (New Project), the row shown highlighted; right the recent
 // designs' cards, or a project's breadcrumb (project › folder › …, each
-// part goes there), its sub-folders as buttons and its designs as cards,
-// or the search's results with their project and folder. A card has the
+// part goes there) with the Tree / Cards toggle at its right end
+// (mitcad#2093) and, in Cards, its sub-folders as buttons and its designs
+// as cards, in Tree its folders as a tree (the folder shown unfolded and
+// selected; the arrow keys fold and unfold, Enter goes into a folder's
+// cards, where Enter opens a design) beside the folder's cards, or the
+// search's results with their project and folder. A card has the
 // preview a save writes (else the type's icon), the file's name, type,
 // folder (a project's design: its project and folders) and when it was
 // opened (changed), a star that pins it; a missing file is shown as such
 // with Remove. The projects are read on a thread of their own as Open from
 // Project reads them (readProjects, `project_tree`): no network, nothing
-// downloaded. The row and folder shown are remembered for the next start.
+// downloaded. The row, the folder shown and the view are remembered for
+// the next start.
 // Then a drop area (a CAD file dropped anywhere on the page opens or is
 // imported); Resources: Component Libraries, User Guide, Keyboard
 // Shortcuts and Connect AI Assistant, each running the command that is
@@ -43,7 +48,9 @@
 // "Start page filter Recent at x,y" (Pinned), "Start page project <name> at
 // x,y", "Start page add project at x,y", "Start page crumb <place key> at
 // x,y", "Start page folder <folder key> at x,y", "Start page search at
-// x,y", "Start page view Cards at x,y" (List), "Start page card <key> at
+// x,y", "Start page view Cards at x,y" (List), "Start page browse Tree at
+// x,y" (Cards: the project's view), "Start page tree folder <place key> at
+// x,y" (each row of the tree in sight), "Start page card <key> at
 // x,y", "Start page star <key> at x,y", "Start page remove <key> at x,y"
 // (a card's key: StartBrowser.hpp), "Start page resource User Guide at
 // x,y", "Start page link Preferences at x,y" (Report an Issue, What's
@@ -59,7 +66,11 @@
 // "Start page filter: all|pinned" (each choice logs the list again),
 // "Start page pinned: <key>", "Start page unpinned: <key>", "Start page
 // removed: <key>", "Start page view: cards|list", "Start page dropped:
-// <names>" and "Start page at launch: on|off".
+// <names>", "Start page at launch: on|off", "Start page browse view:
+// tree|cards" (a project shown, and each choice), "Start page tree: Shop |
+// Shop/parts/ | Shop/parts/sub/ (current Shop/parts/)" (start::treeLine)
+// "Start page tree folded: <place key>" (unfolded) and "Start page
+// keyboard: card <key>" (Enter on the tree).
 
 #include <functional>
 
@@ -91,6 +102,8 @@ class QMimeData;
 class QPoint;
 class QScrollArea;
 class QToolButton;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QVBoxLayout;
 
 namespace mitcad {
@@ -172,6 +185,11 @@ private:
   // next start. A row chosen ends the search.
   void selectRow(const start::Row& row);
   void setCompact(bool compact);
+  // A project's view, Tree or Cards (mitcad#2093); remembered.
+  void setView(start::View view);
+  // The tree of a project's folders (built again only when the project or
+  // its folders changed), its folder shown unfolded and selected.
+  void rebuildTree(const ProjectRow& project);
   void togglePin(const start::Card& card);
   void removeDesign(const start::Card& card);
   void showCardMenu(const start::Card& card, const QPoint& global);
@@ -216,6 +234,13 @@ private:
   QHBoxLayout* m_crumbLayout = nullptr;
   QList<QPointer<QWidget>> m_crumbWidgets;
   QList<QPair<QPointer<QAbstractButton>, QString>> m_crumbButtons; // with their place keys
+  QWidget* m_placeRow = nullptr;     // the breadcrumb and the Tree / Cards toggle
+  QToolButton* m_treeView = nullptr;
+  QToolButton* m_folderView = nullptr;
+  QTreeWidget* m_tree = nullptr;     // a project's folders in Tree
+  QWidget* m_listSide = nullptr;     // the folder buttons and the cards beside the tree
+  QString m_treeShape;               // what the tree was built of (rebuildTree)
+  bool m_treeBuilding = false;
   QWidget* m_folders = nullptr;
   QGridLayout* m_folderGrid = nullptr;
   QList<QPair<QPointer<QAbstractButton>, QString>> m_folderButtons; // with their folder keys
@@ -230,6 +255,7 @@ private:
   QList<RecentDesign> m_designs; // all, as last read
   start::Row m_row;              // the row shown
   bool m_compact = false;
+  start::View m_view = start::View::Cards;
   // The projects as last read (browsableProjects), their keys by root.
   QVector<ProjectRow> m_projects;
   QHash<QString, QString> m_keys;
@@ -241,6 +267,8 @@ private:
   QString m_loggedPlace;
   QString m_loggedSearch;
   QString m_loggedCards;
+  QString m_loggedView;
+  QString m_loggedTree;
   bool m_previewsQueued = false;
   QStringList m_loggedPlaces;
   bool m_placesQueued = false;

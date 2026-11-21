@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# The orientation cube's size (mitcad#2071, GitHub mitcad/Mitcad#447) on a
+# new design, Floating, with the cube's places logged
+# (MITCAD_LOG_ORIENTATION_CUBE=1). "Orientation cube corner <size> %: ..."
+# logs the corner's measures: its area and the cube's middle from the
+# corner, the cube's size and font, the Home button's size, icon and upper
+# left and the arrows' size, icon and middles from the cube's middle, and
+# how far apart the nearest two buttons are.
+#   1. At 100 %, the corner as before.
+#   2. 75 % from the cube's right-click menu (Cube Size): the whole corner
+#      at 75 %, no two buttons overlap (1 px apart), saved; a click on the
+#      cube's top face still turns the view to Top.
+#   3. Box's Command card on the upper right; 150 % from the cube's menu:
+#      the corner at 150 % and the card clear of the larger cube without a
+#      window resize.
+#   4. Preferences > Display, Size 75 %, OK: applied and saved; again
+#      150 %.
+# Run by tools/ui-cube-size-test.sh (Linux) and
+# tools/ui-windows-cube-size-test.ps1 (Windows).
+expect-ever 'View area' 30
+wait-idle
+
+# 1. 100 %, the default.
+expect-ever '^Orientation cube corner 100 %: area 190, offset 100, cube 70\.0 px, font 11\.2 px; home 36x24 icon 14 at -73,-91; arrows 26x26 icon 12, up 0,-68 down 0,68 left -68,0 right 68,0 cw 58,-58 ccw 32,-70; closest 0 px apart$' 30
+expect-ever '^Orientation cube front at ' 30
+
+# 2. 75 % from the cube's menu.
+mark
+pointer-logged press '^Orientation cube front at ' right
+pointer-logged release '^Orientation cube front at ' right
+wait-log '^Context menu: Home \| Camera \| Cube Size \| Set Current View as Home \| Reset Home \| Fit$'
+wait-log '^Context menu Cube Size: 75 % \| 100 % \| 125 % \| 150 %$'
+popup 'Cube Size/75 %'
+wait-log '^Orientation cube size 75 %$'
+wait-log '^Orientation cube corner 75 %: area 143, offset 75, cube 52\.5 px, font 8\.4 px; home 27x18 icon 10 at -55,-68; arrows 19x19 icon 9, up 0,-51 down 0,51 left -51,0 right 51,0 cw 44,-44 ccw 24,-53; closest 1 px apart$'
+expect-setting view/cubeSize 75
+wait-log '^Orientation cube top at ' 30
+wait-idle
+mark
+click-logged '^Orientation cube top at '
+wait-log '^Camera direction -?0 -?0 -1 up ' 30
+wait-idle
+
+# 3. The Command card on the upper right, below the cube at 150 %.
+mark
+command solid.box
+expect-log '^Command Box started$' 10
+wait-idle
+expect-clear-of-cube commandDock
+mark
+pointer-logged press '^Orientation cube top at ' right
+pointer-logged release '^Orientation cube top at ' right
+wait-log '^Context menu Cube Size: '
+popup 'Cube Size/150 %'
+wait-log '^Orientation cube size 150 %$'
+wait-log '^Orientation cube corner 150 %: area 285, offset 150, cube 105\.0 px, font 16\.8 px; home 54x36 icon 21 at -110,-136; arrows 39x39 icon 18, up 0,-102 down 0,102 left -102,0 right 102,0 cw 87,-87 ccw 48,-105; closest 0 px apart$'
+expect-setting view/cubeSize 150
+wait-idle
+expect-clear-of-cube commandDock
+focus-main
+key Escape
+wait-idle
+
+# 4. Preferences > Display: Size.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice preferencesCubeSize '75 %'
+wait-log '^Orientation cube corner 75 %: area 143, '
+key Return
+wait-log '^Preferences: orientation cube size 75 %$'
+focus-main
+wait-idle
+expect-setting view/cubeSize 75
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice preferencesCubeSize '150 %'
+wait-log '^Orientation cube corner 150 %: area 285, '
+key Return
+wait-log '^Preferences: orientation cube size 150 %$'
+focus-main
+wait-idle
+expect-setting view/cubeSize 150
+expect-never 'OCCT view event failed|TestDriver: FAIL'

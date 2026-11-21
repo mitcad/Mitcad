@@ -1457,12 +1457,16 @@ void MainWindow::insertComponent(const QString& given) {
       linked = copyIntoProject;
     }
   }
+  // Linked parts of the design only (mitcad#2130).
+  bool chooseParts = false;
   if (!linked) {
     // Not asked yet: a file in the project, or a design not saved.
-    linked = askLinked(this, path);
-    if (!linked) {
+    const std::optional<InsertLink> how = askLinked(this, path);
+    if (!how) {
       return;
     }
+    linked = *how != InsertLink::Copy;
+    chooseParts = *how == InsertLink::ChooseParts;
   }
   QJsonObject command = cmd("insert_component", {{QStringLiteral("path"), absolute}, {QStringLiteral("link"), *linked}});
   if (!base.isEmpty()) {
@@ -1471,8 +1475,34 @@ void MainWindow::insertComponent(const QString& given) {
   if (copyIntoProject) {
     command.insert(QStringLiteral("copy_into_project"), true);
   }
+  if (chooseParts) {
+    QJsonObject request{{QStringLiteral("query"), QStringLiteral("link_parts")}, {QStringLiteral("path"), absolute}};
+    if (!base.isEmpty()) {
+      request.insert(QStringLiteral("base"), base);
+    }
+    QJsonObject tree;
+    try {
+      tree = queryObject(request);
+    } catch (const std::exception& e) {
+      showError(tr("Could not read %1: %2").arg(QFileInfo(path).fileName(), errorText(e)));
+      return;
+    }
+    const std::optional<LinkPartsChoice> choice = chooseLinkParts(this, tr("Choose Parts"), tree, false);
+    if (!choice) {
+      return;
+    }
+    command.insert(QStringLiteral("parts"), choice->parts);
+  }
   QJsonObject result;
   if (runModelCommand(command, &result)) {
+    if (result.contains(QStringLiteral("parts"))) {
+      QStringList names;
+      for (const QJsonValue& value : result.value(QStringLiteral("parts")).toObject().value(QStringLiteral("names")).toArray()) {
+        names << value.toString();
+      }
+      qInfo().noquote() << QStringLiteral("Linked parts of %1: %2")
+                               .arg(result.value(QStringLiteral("name")).toString(), names.join(QStringLiteral(", ")));
+    }
     for (const QJsonValue& value : result.value(QStringLiteral("copied")).toArray()) {
       const QJsonObject copied = value.toObject();
       const QString to = copied.value(QStringLiteral("to")).toString();

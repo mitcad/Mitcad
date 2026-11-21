@@ -1,22 +1,30 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/framework/Ribbon.cpp app/MainWindow.cpp app/MainWindowDocks.cpp app/MainWindowRender.cpp
-# check-all sources: app/MainWindowStart.cpp app/drawings/MainWindowDrawings.cpp app/framework/QuickAccessGroup.cpp
-# check-all sources: app/framework/TestDriver.cpp app/framework/TestDriverDocks.cpp tools/cli
+# check-all sources: app/framework/Ribbon.cpp app/framework/Ribbon.hpp app/MainWindow.cpp app/MainWindowDocks.cpp
+# check-all sources: app/MainWindowRender.cpp app/MainWindowStart.cpp app/drawings/MainWindowDrawings.cpp
+# check-all sources: app/framework/QuickAccessGroup.cpp app/framework/TestDriver.cpp app/framework/TestDriverDocks.cpp
 # check-all sources: app/framework/TitleBar.cpp app/framework/BoostButton.cpp app/agent/MainWindowChat.cpp
-# check-all sources: tools/ui-scripts/docked-workspaces-macos.mitcad-ui tools/ui-scripts/workspaces.json
+# check-all sources: app/framework/WindowStyle.cpp app/DocumentFrame.cpp app/projects/MainWindowProjectsPanel.cpp
+# check-all sources: app/render/RenderWorkspace.cpp tools/cli
+# check-all sources: tools/ui-scripts/docked-workspaces.mitcad-ui tools/ui-scripts/workspaces.json
 # The Docked layout's workspace selector (mitcad#2082, GitHub
-# mitcad/Mitcad#476) in the Qt frontend on macOS, where the system shows
-# the menus and the Docked layout keeps its toolbar without the top bar of
-# Windows and Linux (tools/ui-docked-workspaces-test.sh): the steps
-# tools/ui-scripts/docked-workspaces-macos.mitcad-ui on a box with one drawing
-# that mitcad-cli makes (tools/ui-scripts/workspaces.json): the selector
-# first in the tab row, the quick-access group flat; Make's three tabs
-# alone; Render's tab, docks and rendered view, Design bringing the tabs,
-# the docks and the view mode back; none of Render's docks in the panels'
-# menu outside it; a drawing hiding the model's docks (the Browser stays)
-# and Close Drawing showing exactly those again, also after the Start page;
-# the selector locked while sketching.
+# mitcad/Mitcad#476) in the Qt frontend on macOS. The shared Qt UI of macOS
+# (MITCAD_MACOS_SHARED_QT_UI, docs/macos-shared-qt.md) has the Docked
+# layout of Windows and Linux: the Floating layout's top bar at the
+# window's top and the toolbar panel under it (MainWindow::createDockedTopBar,
+# floatingTopCards()), the system's menu bar holding the menus. So the
+# steps are the shared tools/ui-scripts/docked-workspaces.mitcad-ui (also
+# run by tools/ui-docked-workspaces-test.sh and
+# tools/ui-windows-docked-workspaces-test.ps1), on a box with one drawing
+# that mitcad-cli makes (tools/ui-scripts/workspaces.json): the top bar's
+# parts in the Floating order; the Projects panel hidden at the start
+# although the old Docked choice says shown; Make's three tabs alone;
+# Render's tab, docks and rendered view, Design bringing the tabs, the
+# docks and the view mode back; none of Render's docks in the panels' menu
+# outside it; a drawing hiding the model's docks (the Browser stays) and
+# Close Drawing showing exactly those again; Home showing the Start page
+# without the panel, the design's tab leading back; the selector locked
+# while sketching.
 # Usage: tools/ui-macos-docked-workspaces-test.sh <app> <mitcad-cli> <output>
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -35,21 +43,30 @@ mkdir -p "$MITCAD_TEST_WORK"
 design=$MITCAD_TEST_WORK/workspaces.mitcad
 "$cli" run "$here/ui-scripts/workspaces.json" --save "$design" > "$UI_OUT/setup.log" 2>&1 ||
   { cat "$UI_OUT/setup.log"; echo 'FAIL: mitcad-cli run workspaces.json' >&2; exit 1; }
-MITCAD_TEST_INPUT=$here/ui-scripts/docked-workspaces-macos.mitcad-ui MITCAD_TEST_STEP_MS=100 \
+# The Docked layout's old choice of the Projects panel (shown), in the
+# macOS settings file: not read by the top bar's layout (mitcad#2082).
+mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+printf '[projects]\npanel=true\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
+MITCAD_TEST_INPUT=$here/ui-scripts/docked-workspaces.mitcad-ui MITCAD_TEST_STEP_MS=100 \
   ui_run_app docked-workspaces --ui=qt --no-recovery --no-mcp --chrome=docked --open "$design"
-ui_expect_log '^Quick access group: flat [(]Docked[)]$' 'the quick-access group flat on the tab row'
-ui_expect_log '^Ribbon workspace block: left of the card .*, as high as both rows: yes ' "the workspace block at the toolbar's left"
-ui_expect_log '^Quick access leading ribbonToolbarUndo at [0-9]+,[0-9]+: inside the group, first$' 'Undo in the quick-access group'
-ui_expect_log '^Ribbon tab row end: (.*, )?quickAccess, boostButton, ribbonSearch$' "the quick-access group, Boost and the search field at the tab row's right end"
-ui_expect_log '^Boost button row: the tab row [(]Docked, the system.s menu bar[)]$' "Boost development in the tab row (the system's menu bar)"
+ui_expect_log '^Menu bar hidden: Docked$' 'no menu bar row in the window'
+ui_expect_log '^Projects panel at the start: hidden [(]no choice yet in this layout[)]$' \
+  'the Projects panel hidden at the start'
+ui_expect_log '^Docked top bar: window 1280x800' "the top bar's parts in the Floating order"
+if grep -qE '^(Quick access group: flat|Boost button row: |Ribbon tab row end: )' "$UI_LOG_FILE"; then
+  ui_fail "a stand-in of the old Docked toolbar: $(grep -E '^(Quick access group: flat|Boost button row: |Ribbon tab row end: )' "$UI_LOG_FILE" | head -1)"
+else
+  ui_pass 'no quick-access group, Boost or search field in a tab row'
+fi
 ui_expect_log '^Ribbon workspace: MAKE [(]tabs MAKE_PRINT, MAKE_LASER, MAKE_CNC[)]$' 'Make: its three tabs alone'
 ui_expect_log '^Ribbon workspace: RENDER [(]tabs RENDER[)]$' 'Render: its tab alone'
 ui_expect_log '^Workspace RENDER left: the rendered view off$' 'Design: the view mode of before'
 ui_expect_log '^Workspace DRAWING: opened D1$' "Drawing: the design's drawing opened"
 ui_expect_log '^Drawing docks hidden: commandDock, projectsDock$' "a drawing hides the model's docks shown"
 ui_expect_log '^Drawing docks shown again: commandDock, projectsDock$' 'Close Drawing shows them again'
-ui_expect_log '^Docked toolbar on the Start page: tab row only$' 'the Start page: the tab row alone'
-ui_expect_log '^Docked toolbar back: workspace block, tab row and groups$' "Solid's tab: the block and the groups back"
+ui_expect_log '^Docked toolbar panel hidden [(]Start[)]$' 'Home: the Start page without the toolbar panel'
+ui_expect_log '^Start page left by the design' "the design's tab leads back"
+ui_expect_log '^Docked toolbar panel shown$' 'the toolbar panel back'
 ui_expect_log '^TestDriver: done' 'the Docked workspaces'
 ui_expect_no_log 'TestDriver: FAIL' 'no failed driver assertion'
 [ "$UI_FAILURES" = 0 ] || exit 1

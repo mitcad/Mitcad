@@ -76,7 +76,7 @@ impl SketchEdit<'_> {
     /// where a line from the x corner and one from the y corner meet, and
     /// the lines between those corners. A frame of three points without
     /// lines is those points alone.
-    fn frame_rectangle(&self, frame: &[EntityUid]) -> Vec<Ref> {
+    pub(crate) fn frame_rectangle(&self, frame: &[EntityUid]) -> Vec<Ref> {
         let mut corners: BTreeSet<EntityUid> = frame.iter().copied().collect();
         let neighbours = |p: EntityUid| -> BTreeSet<EntityUid> {
             self.def

@@ -31,9 +31,15 @@ micrometres whose wire intersects itself).
 - ChFi3d_BSplineEndingAt: the non-periodic B-spline a curve is or trims,
   and the index of its pole at a given end.
 
-Test: pending (mitcad#2003): the port test written for this patch does not
-reach its case yet. Existing: geometry/tests/test_fillet_corners.cpp (an
-arch whose radius misses the walls by a micrometre).
+Test: geometry/tests/port/p0130-vanishing-end-tolerance.cpp (ctest
+geometry.port.0130): a block cut to a vault of radius 10 springing
+tangentially from its walls (rounded with 2 at the corners), the vault's
+end rounded with 1: the rounding vanishes at the springing, removing 4.86
+(without the patch: 5.12, the walk's end left short of the vertex); the
+vault 10.00001 and 10.0001 (0.0014 and 0.0045 rad off tangency): the same,
+within 1e-4, every tolerance within the hundredth of the radius (without
+the patch 10.0001 is invalid). The boundary: 10.001 (0.014 rad), a corner
+of its own, as before.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 91b41b19..2a17ab2c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

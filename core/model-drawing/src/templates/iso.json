@@ -4,6 +4,7 @@
   "name": "ISO",
   "size": "A3",
   "projection": "first_angle",
+  "standard": "iso",
   "margins": [20, 10, 10, 10],
   "title_block": {
     "width": 180,

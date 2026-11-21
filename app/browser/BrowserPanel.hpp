@@ -29,6 +29,11 @@ namespace mitcad {
 
 class BrowserTree;
 
+// Where rows dragged in the Browser go on a row (mitcad#2103): onto it
+// (into a folder, out of one onto its parent's row), or before or after it
+// among its siblings.
+enum class BrowserDrop { Onto, Before, After };
+
 // A row of the browser.
 struct BrowserNode {
   enum class Type {
@@ -100,6 +105,14 @@ struct BrowserNode {
     // sketch, `curve` its id, featureType its geometry (line, arc, ...);
     // `feature` as its sketch row's.
     SketchCurve,
+    // Sketch blocks (mitcad#2110): the root's Sketch Blocks folder and a
+    // row per block (uid and name its name; featureType its instance count).
+    SketchBlocks,
+    SketchBlock,
+    // A folder of a component's occurrences (mitcad#2103), listed before
+    // the occurrences in no folder: uid and name its name, `occurrence` and
+    // `component` those of the row it is under; its occurrences under it.
+    ComponentFolder,
   };
 
   Type type = Type::None;
@@ -136,6 +149,10 @@ struct BrowserNode {
   // out_of_date, not_generated, suppressed).
   QString camSetup;
   QString camState;
+  // A component's or a body's row (mitcad#2103): the folder it is listed
+  // in (of its parent's occurrences, of its component's Bodies folder);
+  // empty when in none.
+  QString folder;
 
   bool isValid() const { return type != Type::None; }
   bool isFolder() const {
@@ -143,7 +160,7 @@ struct BrowserNode {
            type == Type::Origin || type == Type::Analyses || type == Type::Joints ||
            type == Type::MotionLinks || type == Type::Measurements || type == Type::Drawings ||
            type == Type::ImageReferences || type == Type::Features || type == Type::CamFolder ||
-           type == Type::BodyFolder;
+           type == Type::BodyFolder || type == Type::SketchBlocks || type == Type::ComponentFolder;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -202,6 +219,17 @@ public:
   // AppKit outline), an invalid node when it is over none: the same
   // jointHovered and bodiesHovered as the pointer over these rows.
   void hoverNode(const mitcad::BrowserNode& node);
+
+  // Where body or component rows dragged onto `target` go (mitcad#2103):
+  // onto a folder of their parent's (a component's occurrences, a Bodies
+  // folder's) into it; onto their parent's row or their Bodies folder out of
+  // their folders. Component rows onto a sibling's row go before it, or
+  // after it with `lowerHalf` (the pointer below the row's middle), in its
+  // group (mitcad#2104). False when they cannot go there (another
+  // component's row or folder, rows of different kinds or parents, every
+  // row already there, onto one of themselves).
+  static bool dropFor(const QVector<BrowserNode>& sources, const BrowserNode& target, bool lowerHalf,
+                      BrowserDrop* place);
 
   // Rebuilds the rows, keeping what was expanded, selected and scrolled to.
   void rebuild(const DocumentSnapshot& snapshot, bool originShown);
@@ -417,6 +445,12 @@ signals:
   // changed.
   void camOperationDropped(const mitcad::BrowserNode& source, const mitcad::BrowserNode& target);
   void camOperationSelected(int operation);
+  // Body or component rows dragged and let go where they may go
+  // (mitcad#2103, dropFor): `sources` the rows dragged (the selected rows
+  // of the pressed row's kind when it is one of them, else that row), in
+  // the tree's order; `target` the row they were let go on.
+  void rowsDropped(const QVector<mitcad::BrowserNode>& sources, const mitcad::BrowserNode& target,
+                   mitcad::BrowserDrop place);
   // The rows' looks changed in place, without a rebuild (mitcad#1352): the
   // Make markers (setMakeMarkers) or an analysis row's note
   // (setAnalysisNotes). Another presentation reads presentationRows again.
@@ -533,6 +567,8 @@ private:
   QHash<QString, QString> m_loggedLevels; // the rows' levels last logged, by path (mitcad#1040)
   // The rows whose transparent eye was logged last, by path (mitcad#1093).
   QSet<QString> m_loggedTransparent;
+  // The Sketch Blocks folder's rows as last logged (mitcad#2110).
+  QString m_loggedSketchBlocks;
   // The owners' marks of setOwnerMarks (mitcad#1704) on the rows there are:
   // the row to scroll to (null: none marked).
   QTreeWidgetItem* applyOwnerMarks();

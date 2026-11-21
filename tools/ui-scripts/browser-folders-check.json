@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Saved by the UI after the folder steps (mitcad#2103): Rail:1 and Panel:1 in the root's folder Frame, Post:1 in none; the bodies Pane and Sash out of their folder again."},
+  {"expect": {"query": {"query": "components"},
+    "result": {"occurrences": [{"name": "Rail:1", "folder": "Frame"}, {"name": "Post:1"},
+                               {"name": "Panel:1", "folder": "Frame"}]}}},
+  {"expect": {"query": {"query": "bodies"}, "none": {"folder": "Glass"}}}
+]

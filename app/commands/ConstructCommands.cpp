@@ -38,6 +38,9 @@ enum class Field {
   Angle,    // an angle
   Along,    // a fraction of a path, or a length along it
   Offset,   // a length along the plane's normal, none when 0 (mitcad#1779)
+  // Optional: an axis, an edge, a plane or a face of revolution, for its
+  // direction (mitcad#2111).
+  Direction,
 };
 
 struct FieldSpec {
@@ -99,6 +102,14 @@ const std::vector<Spec>& specs() {
        {{"face", QT_TRANSLATE_NOOP("QObject", "Face"), Field::Face},
         {"point", QT_TRANSLATE_NOOP("QObject", "Point"), Field::Point},
         {"offset", QT_TRANSLATE_NOOP("QObject", "Offset"), Field::Offset}}},
+      {"construct.plane_perpendicular_point", QT_TRANSLATE_NOOP("QObject", "Plane Perpendicular to Face at Point"),
+       "plane-perpendicular",
+       QT_TRANSLATE_NOOP("QObject", "A plane square to a face where it is nearest to a point, turned about the face's normal"),
+       "construction_plane", "perpendicular_at_point",
+       {{"face", QT_TRANSLATE_NOOP("QObject", "Face"), Field::Face},
+        {"point", QT_TRANSLATE_NOOP("QObject", "Point"), Field::Point},
+        {"angle", QT_TRANSLATE_NOOP("QObject", "Angle"), Field::Angle},
+        {"reference", QT_TRANSLATE_NOOP("QObject", "Reference"), Field::Direction}}},
       {"construct.plane_along_path", QT_TRANSLATE_NOOP("QObject", "Plane Along Path"), "plane-path",
        QT_TRANSLATE_NOOP("QObject", "A plane across a path, part way along it"),
        "construction_plane", "along_path",
@@ -194,7 +205,8 @@ bool plainZero(const QString& text) {
   return text.trimmed().isEmpty() || zero.match(text).hasMatch();
 }
 
-// Where a tangent plane touches its face, and the normal there before Flip,
+// Where a tangent plane touches its face, and the normal there before
+// Reverse Normal,
 // from the shown preview (CommandDef::previewReported): the previewed plane
 // moved back by its offset, for the offset's arrow (mitcad#1779). Nothing to
 // compute again.
@@ -222,6 +234,76 @@ bool keepTouch(QJsonObject& report, CommandState& state) {
     touch.insert(QStringLiteral("normal"), along);
   }
   state.setObject(kTouch, touch);
+  return false;
+}
+
+// A construction plane's normal in its preview (mitcad#2048): a short arrow
+// along the previewed plane's normal, Reverse Normal included, towards a
+// corner of the drawn plane, clear of the Distance arrow at its middle. The
+// plane is drawn without a front or a back, so the marker is what shows
+// Reverse Normal.
+std::vector<PreviewMarker> planeNormalMarker(const QJsonObject& report) {
+  const QJsonObject datum = report.value(QStringLiteral("datum")).toObject();
+  if (datum.value(QStringLiteral("type")).toString() != QStringLiteral("plane")) {
+    return {};
+  }
+  const gp_Vec normal = vectorOf(datum.value(QStringLiteral("normal")));
+  if (normal.Magnitude() < 1e-9) {
+    return {};
+  }
+  gp_Pnt at = pointOf(datum.value(QStringLiteral("origin")));
+  const QJsonObject rect =
+      datum.value(QStringLiteral("drawn")).toObject().value(QStringLiteral("rect")).toObject();
+  if (!rect.isEmpty()) {
+    const gp_Vec x = vectorOf(rect.value(QStringLiteral("x_axis")));
+    const gp_Vec y = vectorOf(rect.value(QStringLiteral("y_axis")));
+    const double width = rect.value(QStringLiteral("width")).toDouble();
+    const double height = rect.value(QStringLiteral("height")).toDouble();
+    at = pointOf(rect.value(QStringLiteral("center")));
+    if (x.Magnitude() > 1e-9 && y.Magnitude() > 1e-9 && std::isfinite(width) && std::isfinite(height)) {
+      at.Translate(x.Normalized() * (0.35 * width) + y.Normalized() * (0.35 * height));
+    }
+  }
+  PreviewMarker marker;
+  marker.label = QStringLiteral("normal");
+  marker.point = at;
+  marker.direction = gp_Dir(normal);
+  return {marker};
+}
+
+// Plane Perpendicular to Face at Point (mitcad#2111): where the shown
+// preview stands on its face, the face's normal there (the plane's y axis
+// before Flip) and where its angle 0 points, for the Angle's ring. Nothing
+// to compute again.
+const QString kPerpendicular = QStringLiteral("perpendicular_frame");
+
+bool keepPerpendicular(QJsonObject& report, CommandState& state) {
+  QJsonObject frame;
+  const QJsonObject datum = report.value(QStringLiteral("datum")).toObject();
+  const QJsonArray origin = datum.value(QStringLiteral("origin")).toArray();
+  const gp_Vec x = vectorOf(datum.value(QStringLiteral("x_axis")));
+  gp_Vec normal = vectorOf(datum.value(QStringLiteral("y_axis")));
+  if (origin.size() == 3 && x.Magnitude() > 1e-9 && normal.Magnitude() > 1e-9) {
+    if (state.checked(QStringLiteral("flip"))) {
+      normal.Reverse();
+    }
+    double angle = state.value(QStringLiteral("angle"));
+    if (!std::isfinite(angle)) {
+      angle = 0.0;
+    }
+    // The x axis turned back about the normal by the angle.
+    const gp_Vec start = x * std::cos(angle) - normal.Normalized().Crossed(x) * std::sin(angle);
+    QJsonArray along;
+    QJsonArray zero;
+    for (int i = 1; i <= 3; ++i) {
+      along.append(normal.Coord(i));
+      zero.append(start.Coord(i));
+    }
+    frame.insert(QStringLiteral("origin"), origin);
+    frame.insert(QStringLiteral("normal"), along);
+    frame.insert(QStringLiteral("reference"), zero);
+  }
+  state.setObject(kPerpendicular, frame);
   return false;
 }
 
@@ -280,12 +362,19 @@ InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
           return spatialRouteWords(items, false, keptPathReversed(state, key), model, key);
         });
   case Field::Distance:
-    return valueInput(key, name, ValueKind::Length, QStringLiteral("10 mm"));
+    // Offset Plane's: signed, so that the plane can lie on the other side
+    // (mitcad#2048).
+    return valueInput(key, name, ValueKind::Length, QStringLiteral("10 mm"))
+        .withTooltip(QObject::tr("Along the reference's normal; negative puts the plane on the other side"));
   case Field::Angle:
     return valueInput(key, name, ValueKind::Angle, QStringLiteral("45 deg"));
   case Field::Offset:
     return valueInput(key, name, ValueKind::Length, QStringLiteral("0 mm"))
         .withTooltip(QObject::tr("Moves the plane along its normal: away from the face, or into it when negative"));
+  case Field::Direction:
+    return selectionInput(key, name, kAxisKinds | SelectKind::Plane, 0, 1)
+        .withTooltip(QObject::tr("Where the angle starts: an edge, an axis, a plane or a cylinder"))
+        .withAccepts([](const SelectionItem& item) { return isAxial(item) || isPlanar(item); });
   case Field::Along:
     break;
   }
@@ -524,8 +613,10 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
   const QString base = firstSelection(spec);
   for (const FieldSpec& field : spec.fields) {
     InputDef input = fieldInput(field, context);
-    if (field.kind == Field::Angle && type == QStringLiteral("tangent")) {
-      // At the clicked side of the face by default (mitcad#446).
+    if (field.kind == Field::Angle &&
+        (type == QStringLiteral("tangent") || type == QStringLiteral("perpendicular_at_point"))) {
+      // At the clicked side of the face by default (mitcad#446); square to
+      // the face along the reference (mitcad#2111).
       input.defaultText = QStringLiteral("0 deg");
     }
     if (field.kind == Field::Tangent) {
@@ -561,6 +652,24 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
         return arrow(pointOf(touch.value(QStringLiteral("origin"))), gp_Dir(normal));
       });
       def.previewReported = keepTouch;
+    } else if (field.kind == Field::Angle && type == QStringLiteral("perpendicular_at_point")) {
+      // A ring about the face's normal where the plane stands on the face,
+      // angle 0 along the reference (mitcad#2111).
+      input.withManipulator([](const CommandState& state, const CommandContext&) -> std::optional<Manipulator> {
+        const QJsonObject frame = state.object(kPerpendicular);
+        if (frame.isEmpty()) {
+          return std::nullopt; // no preview shown yet
+        }
+        const gp_Vec normal = vectorOf(frame.value(QStringLiteral("normal")));
+        const gp_Vec reference = vectorOf(frame.value(QStringLiteral("reference")));
+        if (normal.Magnitude() < 1e-9 || reference.Magnitude() < 1e-9) {
+          return std::nullopt;
+        }
+        Manipulator handle = ring(pointOf(frame.value(QStringLiteral("origin"))), gp_Dir(normal));
+        handle.reference = gp_Dir(reference);
+        return handle;
+      });
+      def.previewReported = keepPerpendicular;
     } else if (field.kind == Field::Angle) {
       // A ring about the line (or the face's axis).
       input.withManipulator([base](const CommandState& state,
@@ -636,10 +745,28 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
       });
     }
   }
-  if (def.featureType != QStringLiteral("construction_point")) {
+  if (plane) {
+    // A plane's `flip` turns its normal only, the plane staying where it
+    // is: Reverse Normal, not Flip, which elsewhere puts a feature on the
+    // other side (mitcad#2048). Its marker in the preview shows the normal.
+    def.inputs.append(flipInput(QStringLiteral("flip"), QObject::tr("Reverse Normal"))
+                          .withTooltip(QObject::tr("Turn the plane's normal round. The plane stays where it is.")));
+    def.previewMarkers = planeNormalMarker;
+  } else if (def.featureType != QStringLiteral("construction_point")) {
     def.inputs.append(flipInput(QStringLiteral("flip"), QObject::tr("Flip"))
-                          .withTooltip(plane ? QObject::tr("Turn the plane's normal round")
-                                             : QObject::tr("Turn the axis round")));
+                          .withTooltip(QObject::tr("Turn the axis round")));
+  }
+
+  if (type == QStringLiteral("perpendicular_at_point")) {
+    // The view's context menu offers it for a face with a point too
+    // (mitcad#2111): the face goes to Face, the point to Point.
+    const InputDef faceInput = def.inputs.at(0);
+    const InputDef pointInput = def.inputs.at(1);
+    def.takesSpread = [faceInput, pointInput](const Selection& selection) {
+      return selection.size() == 2 &&
+             ((faceInput.takes(selection.at(0)) && pointInput.takes(selection.at(1))) ||
+              (faceInput.takes(selection.at(1)) && pointInput.takes(selection.at(0))));
+    };
   }
 
   const std::vector<FieldSpec> fields = spec.fields;
@@ -693,6 +820,11 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
         definition.insert(key, path);
         break;
       }
+      case Field::Direction: // optional: none leaves it out
+        if (!state.items(key).isEmpty()) {
+          definition.insert(key, state.items(key).first().reference());
+        }
+        break;
       default:
         definition.insert(key, state.items(key).first().reference());
         break;
@@ -736,6 +868,11 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
         }
         // A 3D sketch's path keeps its direction (mitcad#1550).
         keepPathDirection(slot, state, key);
+        break;
+      case Field::Direction: // optional
+        if (slot.isObject() || slot.isString()) {
+          state.setItems(key, {itemOf(slot, context)});
+        }
         break;
       default:
         state.setItems(key, {itemOf(slot, context)});
@@ -795,6 +932,9 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
           return false; // a fixed line
         }
       } else if (isSelection(field.kind)) {
+        if (field.kind == Field::Direction && slot.isUndefined()) {
+          continue; // an optional reference left out
+        }
         const QJsonObject object = slot.toObject();
         // Fixed geometry has no item to show.
         if (object.contains(QStringLiteral("origin")) ||

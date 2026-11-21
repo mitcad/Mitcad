@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QStringList>
 #include <QWidget>
 
 #include "Selection.hpp"
@@ -50,6 +51,9 @@ public:
   explicit CutTargetsPanel(QWidget* parent = nullptr);
   void setScope(const QJsonObject& scope);
   void setPreview(const QJsonObject& report);
+  // For UI tests: "Cut target row C1@O1 at x,y" and "Cut target check C1@O1
+  // at x,y" for each row in sight, in the window's coordinates.
+  QStringList places() const;
 
 signals:
   void scopeChanged(const QJsonObject& scope);

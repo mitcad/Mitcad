@@ -36,7 +36,8 @@
 // cube of 10 at 5 the ball, the block of 20 the capsule, the cube at 4.9998
 // the exact rounded cube; the stepped block rounded so on its sides' and
 // steps' edges a bent half cylinder with quarter balls at its ends, and with
-// the step's inner edge too refused in words (GitHub #403, mitcad#1954).
+// the step's inner edge too the ball rolled between the roundings beside
+// it (GitHub #403, mitcad#1954; GitHub #375, mitcad#2068).
 
 #include <algorithm>
 #include <cmath>
@@ -54,6 +55,7 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
@@ -129,6 +131,12 @@ double narrowest_face(const Shape& shape) {
 }
 
 bool valid(const Shape& shape) { return BRepCheck_Analyzer(shape.occt()).IsValid(); }
+
+// The point lies inside the shape's solid.
+bool inside(const Shape& shape, const gp_Pnt& point) {
+  BRepClass3d_SolidClassifier classifier(shape.occt(), point, 1.0e-7);
+  return classifier.State() == TopAbs_IN;
+}
 
 // Whether every face has a name (printing those that have none).
 bool all_faces_named(const Shape& shape) {
@@ -927,10 +935,20 @@ void test_block_rounded_at_half_its_side(double radius, double height) {
 // each end, half a cylinder along each leg, their common part once,
 // 250 pi / 3 + 125 pi - 500 / 3 = (625 pi - 500) / 3. Valid, every face
 // named, no face under 0.01 mm2, no note. With the inner edge between the
-// lower top and the step's wall rounded too (the fifth design), the core's
-// corner would be a rounding of its own: refused in words, before any
-// smaller retry, the largest radius that leaves some of the edges to round
-// said; at 2.4 that design builds.
+// lower top and the step's wall rounded too (the fifth design, and GitHub
+// #375's second one, mitcad#2068), the ball rolls between the roundings of
+// the lower top and the wall: the core's inner corner is closed by a disc
+// of 2r = 10 touching the core's corners below the front's top edge
+// (y 5, z 0) and below the step's top edge (y 10, z 5), centred at
+// (7.5, 2.5) + sqrt(87.5 / 2) (-1, 1), and the rounding of the inner edge
+// is the circle of 5 about that centre in the middle (x = 5). The volume
+// grows by what the ball swept around the disc's arc adds (Steiner's
+// formula for the flat core, closed and not, both of reach 5 or more where
+// they differ): 2 r N + (L - 10) pi r^2 / 2 + (1 - pi / 4) 4 r^3 / 3, the
+// notch filled N = 12.5 - 50 (2 a - sin 2 a) and the arc L = 20 a, with
+// sin a = sqrt(2) / 4; checked by integrating the section numerically.
+// Valid, every face named, no face under 0.01 mm2, no note; at 2.4 that
+// design builds by the kernel.
 void test_stepped_block_rounded_where_corners_meet() {
   const std::vector<gp_Pnt> middles{gp_Pnt(0, 0, 2.5),  gp_Pnt(0, 2.5, 5),  gp_Pnt(0, 5, 7.5),  gp_Pnt(0, 7.5, 10),
                                     gp_Pnt(10, 0, 2.5), gp_Pnt(10, 2.5, 5), gp_Pnt(10, 5, 7.5), gp_Pnt(10, 7.5, 10),
@@ -951,14 +969,22 @@ void test_stepped_block_rounded_where_corners_meet() {
   FilletSet inner = round;
   inner.edges.push_back(edge_at(*body, gp_Pnt(5, 5, 5)));
   CHECK(!inner.edges.back().empty());
-  bool refused = false;
-  try {
-    fillet("F3", *body, {inner});
-  } catch (const std::invalid_argument& error) {
-    const std::string said = error.what();
-    refused = said.find("inner corner") != std::string::npos && said.find("4.999 mm or less") != std::string::npos;
-  }
-  CHECK(refused);
+  const ShapePtr closed = fillet("F3", *body, {inner});
+  CHECK(valid(*closed));
+  CHECK(narrowest_face(*closed) > 0.01);
+  CHECK(closed->notes().empty() && closed->infos().empty());
+  CHECK(every_face_named(*closed));
+  const double a = std::asin(std::sqrt(2.0) / 4.0);
+  const double notch = 12.5 - 50.0 * (2.0 * a - std::sin(2.0 * a));
+  const double grown = 10.0 * notch + (20.0 * a - 10.0) * kPi * 25.0 / 2.0 + (1.0 - kPi / 4.0) * 500.0 / 3.0;
+  CHECK_NEAR_TOL(volume_of(*closed), (625.0 * kPi - 500.0) / 3.0 + grown, 1e-6);
+  // Across the inner edge's rounding in the middle, 0.1 inside and outside
+  // the circle of 5 about the disc's centre.
+  const double h = std::sqrt(87.5 / 2.0);
+  const gp_Pnt centre(5.0, 7.5 - h, 2.5 + h);
+  const gp_Vec towards = gp_Vec(centre, gp_Pnt(5, 5, 5)).Normalized();
+  CHECK(inside(*closed, centre.Translated(towards * 5.1)));
+  CHECK(!inside(*closed, centre.Translated(towards * 4.9)));
   inner.radius = 2.4;
   const ShapePtr smaller = fillet("F3", *body, {inner});
   CHECK(valid(*smaller));

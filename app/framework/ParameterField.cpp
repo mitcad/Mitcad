@@ -8,7 +8,9 @@
 #include <memory>
 #include <utility>
 
+#include <QAbstractItemView>
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -36,6 +38,9 @@
 #include <QRect>
 #include <QRectF>
 #include <QRegularExpression>
+#include <QStyle>
+#include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QStringList>
 #include <QTextDocument>
 #include <QTimer>
@@ -55,6 +60,7 @@
 #include "PanelTree.hpp"
 #include "Theme.hpp"
 #include "ValueStep.hpp"
+#include "WindowStyle.hpp"
 #include "UiSizes.hpp"
 
 namespace mitcad {
@@ -296,6 +302,42 @@ private:
   QString m_existing;
   QString m_chosen;
   bool m_created = false;
+};
+
+// The suggestion list's rows (mitcad#2086, GitHub mitcad/Mitcad#485): the
+// selected row is the panel trees' accent band (paintPanelRowBand) and a
+// hovered row that is not selected HoverFill, both across the whole row, so
+// that the two differ; the style's own marks of them are left out (the
+// Windows 11 style paints both as the same faint grey). The style's own row
+// height stays: place() sizes the list from the font.
+class SuggestionRowDelegate : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+  void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+    if (index.column() == 0 && option.state.testFlag(QStyle::State_MouseOver) &&
+        !option.state.testFlag(QStyle::State_Selected)) {
+      int width = option.rect.right() + 1;
+      if (const auto* view = qobject_cast<const QAbstractItemView*>(option.widget)) {
+        width = view->viewport()->width();
+      }
+      // The band's place and shape, in the hovered row's colour.
+      const QRectF band(panel::kRowInset, option.rect.top() + 1, std::max(0, width - 2 * panel::kRowInset),
+                        option.rect.height() - 2);
+      painter->save();
+      painter->setRenderHint(QPainter::Antialiasing);
+      painter->setPen(Qt::NoPen);
+      painter->setBrush(themeColor(ColorRole::HoverFill));
+      painter->drawRoundedRect(band, panel::kRowRadius, panel::kRowRadius);
+      painter->restore();
+    }
+    paintPanelRowBand(painter, option, index);
+    QStyleOptionViewItem cell = panelRowOption(option);
+    cell.state &= ~QStyle::State_MouseOver;
+    initStyleOption(&cell, index);
+    const QStyle* style = cell.widget != nullptr ? cell.widget->style() : QApplication::style();
+    style->drawControl(QStyle::CE_ItemViewItem, &cell, painter, cell.widget);
+  }
 };
 
 } // namespace
@@ -557,6 +599,12 @@ void ParameterField::open(Mode mode) {
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_list->setFrameShape(QFrame::NoFrame);
     m_list->header()->setStretchLastSection(true);
+    // The selected row as the panels' accent band, a hovered one in
+    // HoverFill (mitcad#2086); the list's Base is transparent, so the
+    // popup's own background shows behind the rows.
+    stylePanelTree(m_list);
+    m_list->viewport()->setAttribute(Qt::WA_Hover);
+    m_list->setItemDelegate(new SuggestionRowDelegate(m_list));
     m_footer = new QLabel(popup);
     m_footer->setObjectName(QStringLiteral("parameterHint"));
     m_footer->setWordWrap(true);

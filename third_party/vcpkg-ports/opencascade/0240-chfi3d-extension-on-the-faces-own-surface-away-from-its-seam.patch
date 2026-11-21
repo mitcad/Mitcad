@@ -40,9 +40,8 @@ shape's maps, which do not hold that face (FindFromKey).
   f3d.corpus_designs.
 
 Test: geometry/tests/test_fillet_results.cpp (ctest
-geometry.suite.fillet_results), test_extension_rolling_on_past_a_seam: Its
-failure without the patch is still to be shown in the port's before/after
-run (mitcad#1986).
+geometry.suite.fillet_results), test_extension_rolling_on_past_a_seam: It
+fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

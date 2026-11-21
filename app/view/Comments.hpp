@@ -30,12 +30,25 @@ namespace mitcad {
 
 struct SelectionItem;
 
+// An image of a comment or a reply (mitcad#2011) as the `comments` query
+// lists it; its bytes come from the `comment_attachment` query.
+struct CommentImage {
+  QString id;        // A1
+  QString mediaType; // image/png or image/jpeg
+  int width = 0;     // pixels
+  int height = 0;
+  qint64 bytes = 0;  // the file's size
+  QString sha256;    // the file's SHA-256 (hex): names its bytes
+  QString name;      // the file's name, no folders
+};
+
 // One comment as the `comments` query gives it.
 struct CommentShown {
   struct Reply {
     QString author;
     QString text;
     QString created;
+    QVector<CommentImage> images; // its images (mitcad#2011)
   };
   QString id;      // C3
   int number = 0;  // 3: the pin's and the row's number
@@ -52,7 +65,16 @@ struct CommentShown {
   // Where its pin goes, in the design's coordinates (mm); none for a
   // parameter or a target without a place.
   std::optional<std::array<double, 3>> place;
+  // Its own images (mitcad#2011); its replies' are with them.
+  QVector<CommentImage> images;
 };
+
+// An image of a comment by id: the comment's own or one of its replies';
+// null when it has none of that id.
+const CommentImage* commentImageById(const CommentShown& comment, const QString& id);
+
+// "capture.png, 640 × 400": an image as the panel names it.
+QString commentImageText(const CommentImage& image);
 
 // The `comments` query's answer: the comments in the model's order and
 // the number of open ones in the document.
@@ -111,6 +133,8 @@ QString commentTimeText(const QString& created);
 struct CommentEntry {
   QString heading;
   QString text;
+  // Its images (mitcad#2011), shown as thumbnails under the text.
+  QVector<CommentImage> images;
 };
 
 // The comment itself (`reply` 0: "Comment 3 by user, <time>") or one of
@@ -139,9 +163,11 @@ QString commentTip(const CommentShown& comment);
 
 // For the UI tests, one line per comment when they change: "Comment C1:
 // open, user, Body1 › face: make this hole an M6 thread" (", orphaned"
-// after the status while its target is gone), "Comment C1 resolution:
-// <text>" when it has one, "Comment C1 reply 1: <author>: <text>" for each
-// reply, and "Comment C1 pin: open at 15, 10, 10" (the look and the place
+// after the status while its target is gone), "Comment C1 image A1:
+// capture.png, image/png, 640 x 400" for each of its images (mitcad#2011),
+// "Comment C1 resolution: <text>" when it has one, "Comment C1 reply 1:
+// <author>: <text>" for each reply with "Comment C1 reply 1 image A2: …"
+// for each of the reply's images, and "Comment C1 pin: open at 15, 10, 10" (the look and the place
 // with three decimals; "none" without a place). "Comments: none" without
 // comments; the last line "Comments open: <n>".
 QStringList commentLogLines(const CommentsShown& shown);

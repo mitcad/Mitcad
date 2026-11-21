@@ -24,8 +24,8 @@ Test: geometry/tests/test_fillet_rib_full_round.cpp (ctest
 geometry.fillet_rib_full_round): test_full_round and test_full_bevel, a
 rib 2, 1.5 and 4 wide whose four top edges are rounded (and bevelled) by
 half its width: one valid closed solid, no face left on top, the exact
-volume within 1e-6 mm3. Its failure without the patch is still to be shown
-in the port's before/after run (mitcad#1986).
+volume within 1e-6 mm3. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 7f0e6903..58f1e2b8 100644

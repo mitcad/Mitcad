@@ -141,8 +141,25 @@ struct MeshInsertChoice {
 };
 std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& file);
 
-// Insert Component: linked (true) or a copy (false).
-std::optional<bool> askLinked(QWidget* parent, const QString& file);
+// Insert Component: linked, the whole design or chosen parts of it
+// (mitcad#2130), or a copy.
+enum class InsertLink { Whole, ChooseParts, Copy };
+std::optional<InsertLink> askLinked(QWidget* parent, const QString& file);
+
+// Choose Parts… and Choose Linked Parts… (mitcad#2130): the occurrences of
+// a design and the bodies of its root, as the `link_parts` query answers
+// them (`tree`), each with a check box; an occurrence ticked ticks those in
+// it, and one unticked inside a ticked one leaves that one partly ticked
+// (it then brings only what is ticked in it). With `offerWhole`, a Whole
+// Design button links the whole design again (`whole`).
+struct LinkPartsChoice {
+  bool whole = false;
+  // `parts` of insert_component and set_link_parts: occurrence paths and
+  // root body uids.
+  QJsonObject parts;
+};
+std::optional<LinkPartsChoice> chooseLinkParts(QWidget* parent, const QString& title, const QJsonObject& tree,
+                                               bool offerWhole);
 
 // Insert Component of a file outside the design's project (mitcad#1719): a
 // link to it would not be followed when the design opens again. Copy into

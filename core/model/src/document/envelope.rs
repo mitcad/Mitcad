@@ -104,6 +104,59 @@ impl<K: Kernel> Document<K> {
         detail: Option<f64>,
     ) -> Result<(Vec<BaseBody>, Vec<SourceMount>, f64), ModelError> {
         let (bodies, mounts) = self.design_shapes(source, path)?;
+        self.envelope_of(bodies, mounts, path, detail)
+    }
+
+    /// [`Document::design_envelope`] of the chosen parts of the design
+    /// when `parts` is given (mitcad#2130): the envelope of what the link
+    /// holds.
+    pub(super) fn design_envelope_chosen(
+        &self,
+        source: &DocState,
+        path: &str,
+        detail: Option<f64>,
+        parts: Option<&[crate::assembly::LinkPart]>,
+    ) -> Result<(Vec<BaseBody>, Vec<SourceMount>, f64), ModelError> {
+        let Some(parts) = parts else {
+            return self.design_envelope(source, path, detail);
+        };
+        let shapes = self.design_shapes_chosen(source, path, None, Some(parts))?;
+        if shapes.bodies.is_empty() {
+            return Err(invalid(format!(
+                "the chosen parts of {} have no bodies to show",
+                file_label(path)
+            )));
+        }
+        self.envelope_of(shapes.bodies, shapes.mounts, path, detail)
+    }
+
+    /// The design's linked bodies again, shown in full (mitcad#1271): the
+    /// chosen parts' when the link has them (mitcad#2130).
+    fn design_full(
+        &self,
+        source: &DocState,
+        link: &ExternalLink,
+    ) -> Result<(Vec<BaseBody>, Vec<SourceMount>), ModelError> {
+        match &link.parts {
+            Some(parts) => {
+                let origin = super::copy::CopySource::Document(None);
+                let read = self.chosen_parts(source, &link.path, &origin, parts, None)?;
+                Ok((read.bodies, read.mounts))
+            }
+            None => self.design_parts(source, &link.path),
+        }
+    }
+
+    /// The envelope of a design's bodies (in its coordinates) as one
+    /// base-feature body, with the design's mount frames and the detail
+    /// size used.
+    pub(super) fn envelope_of(
+        &self,
+        bodies: Vec<ImportBody<K::Shape>>,
+        mounts: Vec<SourceMount>,
+        path: &str,
+        detail: Option<f64>,
+    ) -> Result<(Vec<BaseBody>, Vec<SourceMount>, f64), ModelError> {
         let sources: Sources<K::Shape> = bodies
             .into_iter()
             .map(|body| (body.shape, Transform::IDENTITY))
@@ -218,28 +271,41 @@ impl<K: Kernel> Document<K> {
             Plan::Switch => {
                 let (text, source) = self.read_link(&link, base)?;
                 let parts = if show {
-                    let (bodies, mounts, used) =
-                        self.design_envelope(&source, &link.path, wanted)?;
+                    let (bodies, mounts, used) = self.design_envelope_chosen(
+                        &source,
+                        &link.path,
+                        wanted,
+                        link.parts.as_deref(),
+                    )?;
                     (bodies, mounts, Some(used))
                 } else {
-                    let (bodies, mounts) = self.design_parts(&source, &link.path)?;
+                    let (bodies, mounts) = self.design_full(&source, &link)?;
                     (bodies, mounts, None)
                 };
                 (Some((parts, digest(&text))), None)
             }
             Plan::Twin => {
                 let (text, source) = self.read_link(&link, base)?;
-                let (bodies, mounts, used) = self.design_envelope(&source, &link.path, wanted)?;
+                let (bodies, mounts, used) = self.design_envelope_chosen(
+                    &source,
+                    &link.path,
+                    wanted,
+                    link.parts.as_deref(),
+                )?;
                 (None, Some(((bodies, mounts, Some(used)), digest(&text))))
             }
             Plan::Split { to } => {
                 let (text, source) = self.read_link(&link, base)?;
-                let (bodies, mounts) = self.design_parts(&source, &link.path)?;
+                let (bodies, mounts) = self.design_full(&source, &link)?;
                 let made = match to {
                     Some(_) => None,
                     None => {
-                        let (bodies, mounts, used) =
-                            self.design_envelope(&source, &link.path, link.envelope)?;
+                        let (bodies, mounts, used) = self.design_envelope_chosen(
+                            &source,
+                            &link.path,
+                            link.envelope,
+                            link.parts.as_deref(),
+                        )?;
                         Some(((bodies, mounts, Some(used)), digest(&text)))
                     }
                 };
@@ -345,7 +411,10 @@ impl<K: Kernel> Document<K> {
             .filter(|c| self.state.options_part(c.uid).is_none())
             .filter_map(|c| {
                 let other = c.link.as_ref()?;
-                (other.path == link.path).then_some((c.uid, other.envelope))
+                // The same parts of it (mitcad#2130).
+                (other.path == link.path
+                    && crate::assembly::same_parts(other.parts.as_deref(), link.parts.as_deref()))
+                .then_some((c.uid, other.envelope))
             })
             .collect()
     }
@@ -523,6 +592,9 @@ impl DocState {
             // their materials (mitcad#1923).
             looks: false,
             given: Vec::new(),
+            // The same parts of the design (mitcad#2130).
+            parts: link.parts.clone(),
+            unlinked: Vec::new(),
         });
         Ok(made)
     }

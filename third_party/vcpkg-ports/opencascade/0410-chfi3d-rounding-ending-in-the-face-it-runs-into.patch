@@ -43,9 +43,10 @@ test_rounding_ending_in_the_face_it_runs_into (ctest
 geometry.suite.fillet_corners): a vault's end rounded with the radius of the
 block's corner roundings: one contour, built, the volume removed the region
 the ball sweeps away, the corner roundings keeping their faces below the
-springing (before, the corner failed). Its failure without the patch, stated
-in its documentation, is still to be shown in the port's before/after run
-(mitcad#1986).
+springing (before, the corner failed). Its failure without the patch is
+still to be shown: the patch does not revert at the port's tip without the
+more than 40 later patches that change the same lines (tried 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

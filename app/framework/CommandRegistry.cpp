@@ -30,8 +30,15 @@ QString contextSettingsKey(const QString& id, unsigned context) {
   return group + QLatin1Char('/') + id;
 }
 
+// A key in portable text: one combination, or a sequence of up to four
+// ("E, X, C", mitcad#2095). Qt quotes a value with commas in an INI file;
+// one written there by hand without the quotes reads as a list of its
+// parts (shortcutTextFromList).
 QKeySequence storedKey(const QSettings& settings, const QString& key) {
-  return QKeySequence(settings.value(key).toString(), QKeySequence::PortableText);
+  const QVariant value = settings.value(key);
+  const QString text =
+      value.typeId() == QMetaType::QStringList ? shortcutTextFromList(value.toStringList()) : value.toString();
+  return QKeySequence(text, QKeySequence::PortableText);
 }
 
 } // namespace

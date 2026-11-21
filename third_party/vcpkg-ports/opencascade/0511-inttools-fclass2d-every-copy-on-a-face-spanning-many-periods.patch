@@ -23,13 +23,16 @@ The tried copies now start at the first one at or above the range's start
 is tried. Faces whose range spans at most one period try the same copies as
 before.
 
-Test: geometry/tests/test_multi_turn_faces.cpp,
-test_cut_across_a_thread_whose_faces_run_many_turns (ctest
-geometry.multi_turn_faces): the same box cuts across the 32-turn thread: the
-parts of the section curves inside the faces are kept (without the patch
-they were classified outside and the first cut removed nothing). Its failure
-without the patch, stated in its documentation, is still to be shown in the
-port's before/after run (mitcad#1986).
+Test: geometry/tests/test_multi_turn_faces.cpp (ctest
+geometry.multi_turn_faces),
+test_cross_hole_through_a_thread_whose_edges_run_many_turns,
+test_cut_across_a_thread_whose_major_cylinder_is_stored_as_a_cone and
+test_second_cut_across_a_thread_whose_faces_run_many_turns: cuts across
+threads whose faces and edges run many turns: the parts of the section
+curves inside the faces are kept (without the patch they were classified
+outside and the cuts removed nothing). It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py). (The box cuts across the 32-turn
+thread, named before, succeed without the patch.)
 
 --- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_FClass2d.cxx
 +++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_FClass2d.cxx

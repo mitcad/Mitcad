@@ -8,5 +8,14 @@
   {"expect":{"feature":"F3","status":"ok","bodies":1,"body":"F3.b0","volume":800}},
   {"cmd":"add_feature","def":{"type":"sheet_flange","body":"F3.b0","boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c2[c1,c3]"}},"angle":1.5707963267948966,"length":{"mode":"tangent","value":10},"position":"edge"}},
   {"expect":{"feature":"F4","status":"ok","bodies":1,"body":"F3.b0","volume":1047.1238898038469}},
-  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid","charts":[{},{},{},{}]}}}
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid","charts":[{},{},{},{}]}}},
+  {"comment":"Unfold and Flat Pattern develop the two panels together (mitcad#1942: refused as \"not connected\" before): the bend's neutral strip is 1.4 x pi/2 long, 800 + 200 + 14 pi developed. Held by the rectangle's panel or by the half disc, which reaches the bend only through the arc."},
+  {"cmd":"add_feature","def":{"type":"sheet_unfold","body":"F3.b0","stationary":{"feature":"F3","slot":0},"bends":[{"feature":"F4","slot":0}]}},
+  {"expect":{"feature":"F5","status":"ok","bodies":1,"body":"F3.b0","volume":1043.9822971502572}},
+  {"cmd":"undo"},
+  {"cmd":"add_feature","def":{"type":"sheet_unfold","body":"F3.b0","stationary":{"feature":"F3","slot":1},"bends":[{"feature":"F4","slot":0}]}},
+  {"expect":{"feature":"F5","status":"ok","bodies":1,"body":"F3.b0","volume":1043.9822971502572}},
+  {"cmd":"undo"},
+  {"cmd":"set_flat_pattern","body":"F3.b0"},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","volume":1043.9822971502572}}}
 ]

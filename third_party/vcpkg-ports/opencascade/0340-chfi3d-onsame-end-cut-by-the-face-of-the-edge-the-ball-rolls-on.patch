@@ -36,8 +36,9 @@ on an edge).
 Test: geometry/tests/test_fillet_corners.cpp (ctest
 geometry.suite.fillet_corners),
 test_rounding_cut_by_the_face_of_the_edge_it_rolls_on: Its failure without
-the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+the patch is still to be shown: the patch does not revert at the port's
+tip without the more than 40 later patches that change the same lines
+(tried 2026-11-20 by tools/occt-port-proof.py).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

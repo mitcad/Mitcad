@@ -5048,6 +5048,8 @@ impl SketchEdit<'_> {
     /// it to sketch geometry first.
     pub(crate) fn shape_editable(&self, id: EntityUid) -> Result<(), String> {
         self.editable(id)?;
+        // A block instance keeps its block's shape (mitcad#2110).
+        self.block_editable(id)?;
         let Some(e) = self.def.entity(id) else {
             return Ok(());
         };

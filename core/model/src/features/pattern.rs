@@ -72,7 +72,7 @@ use crate::kernel::{
 };
 use crate::parameters::ParamId;
 use crate::recompute::Read;
-use crate::topo::FaceName;
+use crate::topo::{EdgeName, FaceName};
 use crate::transform::{Instance, Transform};
 
 /// What a pattern or a mirror repeats (`patternEntityType` in .f3d designs).
@@ -303,7 +303,7 @@ pub struct PathPatternDef<P = ParamId> {
     pub objects: PatternObjects,
     /// A sketch line, arc or circle, lines and arcs of a sketch joined end
     /// to end, an Intersection Curve, curves of a 3D sketch (mitcad#1550),
-    /// or a fixed line (paths of edges are not supported yet).
+    /// edges of a body joined end to end (mitcad#2105), or a fixed line.
     pub path: PathRef,
     pub quantity: P,
     /// Along the path (arc length); negative goes backwards.
@@ -362,6 +362,20 @@ pub struct PathPatternDef<P = ParamId> {
     pub skipped_copies: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suppressed_elements: Vec<u32>,
+    /// A path of a body's edges (mitcad#2105) also takes the edges joined
+    /// to each listed one through smooth (tangent) joints, as a fillet's
+    /// tangent chain does: one edge of a rounded outline brings the whole
+    /// outline. On by default; other paths ignore it.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub tangent_chain: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Serde default of optional values, without the `Default` bound that
@@ -554,6 +568,7 @@ impl<P> PathPatternDef<P> {
             scale_center: clone,
             skipped_copies: clone,
             suppressed_elements: clone,
+            tangent_chain: copy,
         }
     }
 }
@@ -651,9 +666,7 @@ impl PatternObjects {
 /// Scoped cuts need document-aware target resolution, which the ordinary
 /// FeatureInfo::tool_use contract deliberately cannot provide (mitcad#569).
 fn replay_tool_definition(entry: &FeatureEntry) -> Result<Option<ToolUse>, String> {
-    if let FeatureDef::Extrude(extrude) = &entry.def
-        && let Some(scope) = extrude.active_cut_scope()
-    {
+    if let Some(scope) = entry.def.active_cut_scope() {
         scope.check_local_replay()?;
         return Ok(Some(ToolUse {
             operation: Operation::Cut,
@@ -669,7 +682,7 @@ fn replay_tool<K: Kernel>(
     set: Option<&BodySet<K::Shape>>,
 ) -> Result<Option<ToolUse>, String> {
     let entry = ctx.feature_entry(uid)?;
-    if matches!(&entry.def, FeatureDef::Extrude(extrude) if extrude.active_cut_scope().is_some()) {
+    if entry.def.active_cut_scope().is_some() {
         // Read the source before classification can fail. An edit of its
         // selection must invalidate a failed replay even when the local
         // body's geometry is unchanged by that edit.
@@ -683,8 +696,7 @@ fn replay_tool<K: Kernel>(
             .push(Read::Output(uid, output.map(|output| output.version)));
     }
     let mut tool = replay_tool_definition(&entry)?;
-    if let FeatureDef::Extrude(extrude) = &entry.def
-        && let Some(scope) = extrude.active_cut_scope()
+    if let Some(scope) = entry.def.active_cut_scope()
         && let Some(tool) = &mut tool
     {
         tool.participants = scope.local_replay_bodies(ctx)?;
@@ -1972,9 +1984,6 @@ impl PathPatternDef {
                 ctx.param_name(self.distance)
             ));
         }
-        if matches!(self.path, PathRef::Edges { .. }) {
-            return Err(format!("{UNSUPPORTED}path patterns along edges"));
-        }
         let sign = if self.flip { -1.0 } else { 1.0 };
         let step = sign * step(self.distance_type, distance, q);
         let all: Vec<Transform> = if let PathRef::SketchCurves {
@@ -1995,11 +2004,17 @@ impl PathPatternDef {
                 .map(|i| chain_transform(&chain, s0, s0 + i * step, self.along_path))
                 .collect()
         } else if let Some(curve) = match &self.path {
-            // Along an Intersection Curve (mitcad#1405) or a 3D sketch's
-            // curves (mitcad#1550): moved along it, and along the path
-            // turned as its tangent turns.
+            // Along an Intersection Curve (mitcad#1405), a 3D sketch's
+            // curves (mitcad#1550) or a body's edges (mitcad#2105): moved
+            // along it, and along the path turned as its tangent turns.
             PathRef::FeatureCurve(feature) => Some(ctx.feature_curve(*feature)?),
             PathRef::Spatial(path) => Some(std::sync::Arc::new(path.resolve(ctx)?)),
+            PathRef::Edges { body, edges } => Some(std::sync::Arc::new(edge_path(
+                ctx,
+                *body,
+                edges,
+                self.tangent_chain,
+            )?)),
             _ => None,
         } {
             let chain = super::intersection_curve::CurveChain::new(&curve)?;
@@ -2035,6 +2050,65 @@ impl PathPatternDef {
         ctx.elements.clone_from(&all);
         Ok((active(all, &self.suppressed_elements)?, scaling))
     }
+}
+
+/// The curves of a path of a body's edges in order along it (mitcad#2105):
+/// the listed edges, with `tangent_chain` also every edge joined to one of
+/// them through smooth joints ([`tangent_chained`]), joined end to end as
+/// a sweep's path of edges is.
+fn edge_path<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    body: BodyUid,
+    edges: &[EdgeName],
+    tangent_chain: bool,
+) -> Result<Vec<crate::sweeps::PathCurve>, String> {
+    let shape = ctx.body(body)?;
+    let edges = if tangent_chain {
+        tangent_chained(ctx, &shape, edges)?
+    } else {
+        edges.to_vec()
+    };
+    super::path::resolve_edges_on(ctx, body, &shape, &edges)
+}
+
+/// The listed edges and, after them, the other edges of each one's tangent
+/// chain (the edges a fillet with a tangent chain rounds together:
+/// [`Kernel::tangent_chains`]), each once. A listed edge that a change
+/// renamed is found by its new name; it stays listed by its stored name,
+/// which the path then finds again.
+fn tangent_chained<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    shape: &K::Shape,
+    edges: &[EdgeName],
+) -> Result<Vec<EdgeName>, String> {
+    let mut taken: BTreeSet<String> = BTreeSet::new();
+    let mut found = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let now = super::renamed::edge_for(ctx, shape, edge).map_err(|e| format!("path: {e}"))?;
+        taken.insert(edge.to_string());
+        taken.insert(now.to_string());
+        found.push(now.to_string());
+    }
+    let chains = ctx
+        .kernel
+        .tangent_chains(shape, false)
+        .map_err(|e| format!("path: {e}"))?;
+    let mut out = edges.to_vec();
+    for name in &found {
+        let Some(chain) = chains.iter().find(|chain| chain.contains(name)) else {
+            continue;
+        };
+        for other in chain {
+            if taken.insert(other.clone()) {
+                out.push(
+                    other
+                        .parse::<EdgeName>()
+                        .map_err(|e| format!("path: {other}: {e}"))?,
+                );
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// How a pattern's or mirror's copies of bodies join bodies (`combine`,
@@ -2751,7 +2825,7 @@ impl Copying<'_> {
         if changes_sheet(&entry.def) {
             return Err("a sheet feature".to_owned());
         }
-        if matches!(&entry.def, FeatureDef::Extrude(e) if e.active_cut_scope().is_some()) {
+        if entry.def.active_cut_scope().is_some() {
             return Err("a scoped cut".to_owned());
         }
         let Some(tool_use) = replay_tool(ctx, uid, Some(set))? else {
@@ -4005,7 +4079,7 @@ fn without_coincident<K: Kernel>(
         if is_dressup(&entry.def)
             || changes_sheet(&entry.def)
             || makes_sheets(&entry.def)
-            || matches!(&entry.def, FeatureDef::Extrude(e) if e.active_cut_scope().is_some())
+            || entry.def.active_cut_scope().is_some()
             || !matches!(replay_tool_definition(&entry), Ok(Some(_)))
         {
             continue;

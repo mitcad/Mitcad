@@ -291,6 +291,14 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_print_bed_face", Model),
     // Paste of copied sketch geometry (mitcad#788).
     ("sketch.paste", Model),
+    // Sketch blocks (mitcad#2110).
+    ("sketch.insert_block", Model),
+    ("sketch.explode_block", Model),
+    ("add_sketch_block", Model),
+    ("rename_sketch_block", Model),
+    ("remove_sketch_block", Model),
+    ("edit_sketch_block", Model),
+    ("finish_sketch_block", Model),
     // Redefine Sketch Plane (mitcad#787).
     ("sketch.redefine_plane", Model),
     // Image references (mitcad#782): an image read from a `path` is a file's,
@@ -354,6 +362,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("resolve_comment", Model),
     ("reopen_comment", Model),
     ("delete_comment", Model),
+    // An image of a comment or a reply (mitcad#2011).
+    ("remove_comment_attachment", Model),
     // Print plates (mitcad#1050).
     ("add_print_plate", Model),
     ("edit_print_plate", Model),
@@ -509,8 +519,21 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("add_glue_flap", Model),
     // Auto Constrain of a sketch (mitcad#2019).
     ("sketch.auto_constrain", Model),
+    // Break and Split at Point of a sketch curve (mitcad#2108).
+    ("sketch.break", Model),
     // Mesh sections into sketches (mitcad#1871).
     ("mesh_section", Model),
+    // Blend Curve in a sketch (mitcad#2107).
+    ("sketch.blend_curve", Model),
+    // Folders of a component's occurrences and bodies in the browser
+    // (mitcad#2103).
+    ("set_occurrence_folder", Model),
+    ("rename_occurrence_folder", Model),
+    ("rename_body_folder", Model),
+    // An occurrence's place among its siblings (mitcad#2104).
+    ("reorder_occurrence", Model),
+    // Linked parts of a design (mitcad#2130): reads the linked file.
+    ("set_link_parts", FileIo),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -664,6 +687,7 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("drawing_templates", FileIo),
     // Copy of sketch geometry for a paste (mitcad#788).
     ("sketch_fragment", Model),
+    ("sketch_blocks", Model),
     // Image references (mitcad#782); `image_info` reads a file by its path.
     ("image_references", Model),
     ("image_reference_image", Model),
@@ -700,6 +724,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("design_properties", Model),
     // Comments pinned to the model for an AI agent (mitcad#1119).
     ("comments", Model),
+    // An image of a comment or a reply with its bytes (mitcad#2011).
+    ("comment_attachment", Model),
     // The top-level fields of the design file a newer MitCad wrote, and
     // whether saving to a path drops them (mitcad#1132): about the saved
     // file.
@@ -795,6 +821,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("mesh_stats", Model),
     // What a print job sends to a slicer (mitcad#2008).
     ("print_job", Model),
+    // A design's parts to link (mitcad#2130): reads the design file.
+    ("link_parts", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

@@ -831,6 +831,8 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
             "mobile": unit.mobile,
             "motions": motions,
             "joints": joints,
+            // A part BUILD placed does not drag (mitcad#2088).
+            "held": self.build_drag_refusal(uid),
         }))
     }
 
@@ -1420,6 +1422,15 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             "mobile": unit.mobile,
             "joints": unit.joints,
         });
+        // A part BUILD placed does not drag (mitcad#2088): why, in words.
+        if unit.under.is_empty()
+            && let Some(why) = unit
+                .occurrences
+                .iter()
+                .find_map(|o| self.build_drag_refusal(*o))
+        {
+            value["held"] = json!(why);
+        }
         // Inside a flexible occurrence (mitcad#1793); nested in others, the
         // whole chain, outermost first (mitcad#1805).
         if let Some(under) = unit.under.last() {

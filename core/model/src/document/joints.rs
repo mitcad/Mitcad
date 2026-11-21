@@ -208,7 +208,11 @@ impl<K: Kernel> Document<K> {
     /// component: `grab` (in the parent's coordinates, the occurrence's
     /// origin when None) pulled toward `target` while the joints in effect
     /// at the marker hold, the other occurrences moving as little as
-    /// possible. Driven motions follow like free ones. Changes nothing.
+    /// possible. Driven motions follow like free ones, but those of the
+    /// joints BUILD placed its parts with (mitcad#2088): a part BUILD placed
+    /// does not drag, and its joint keeps its Offset while another part
+    /// drags (a carriage's slide is the exception, within its limits).
+    /// Changes nothing.
     pub fn joint_drag(
         &self,
         occurrence: OccurrenceUid,
@@ -233,6 +237,11 @@ impl<K: Kernel> Document<K> {
             .last()
             .ok_or_else(|| invalid("no occurrence to drag"))?;
         self.state.require_occurrence(occurrence)?;
+        // A part BUILD placed moves with Placement (mitcad#2088).
+        if let Some(message) = self.build_drag_refusal(occurrence) {
+            return Err(invalid(message));
+        }
+        let held = self.build_held_joints();
         let prefix = &path[..path.len() - 1];
         let grab = grab.unwrap_or_else(|| {
             self.placement_after(prefix, occurrence)
@@ -250,6 +259,7 @@ impl<K: Kernel> Document<K> {
                 path,
                 grab,
                 at,
+                &held,
             )
             .map_err(invalid)
         };
@@ -472,7 +482,12 @@ impl<K: Kernel> Document<K> {
                 .iter()
                 .filter_map(|spec| {
                     let target = spec.target?;
-                    let v = *values.get(&spec.motion)?;
+                    // Within its limits, also by a rounding past one where
+                    // the drag stopped at it (mitcad#2088).
+                    let v = values
+                        .get(&spec.motion)?
+                        .max(spec.min.unwrap_or(f64::NEG_INFINITY))
+                        .min(spec.max.unwrap_or(f64::INFINITY));
                     changed(v, target).then_some((spec.motion, Some(ValueInput::Number(v))))
                 })
                 .collect();

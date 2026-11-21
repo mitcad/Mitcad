@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Plane Perpendicular to Face at Point (mitcad#2111), tools/ui-scripts/construct-perpendicular-plane.mitcad-ui: a cylinder of diameter 20 and height 30 on XY about the origin (F1, its side F1:side0) and Sketch1 (F2) on XZ with one point at (20, 0, 10) beside the cylinder."},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0], "diameter": 20,
+    "height": 30, "operation": "new_body"}},
+  {"cmd": "sketch.create", "plane": "xz"},
+  {"cmd": "sketch.add_point", "sketch": "F2", "at": [20, -10]},
+  {"expect": {"bodies": 1}}
+]

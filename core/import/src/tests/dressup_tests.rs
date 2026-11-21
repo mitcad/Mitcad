@@ -900,19 +900,22 @@ fn moved_faces_come_in_as_a_move_face() {
         .expect("a top face");
     let point = face_point(&top).map(|x| x / 10.0);
     // The top moved up 0.5 cm, as the decoder gives it (the matrix in cm).
-    let moved = |transform: Value| {
-        let mut detail = json!({"faces": [{"kind": "face", "objectType": "BRepFace",
+    // `copies` references of the top face: two of the file's faces can
+    // resolve to one face of the import (mitcad#2085).
+    let moved = |transform: Value, copies: usize| {
+        let face = json!({"kind": "face", "objectType": "BRepFace",
             "geometry": {"type": "Plane"}, "point_on_face": point,
-            "_f3d": {"recipe": "bounded_face"}}]});
+            "_f3d": {"recipe": "bounded_face"}});
+        let mut detail = json!({"faces": vec![face; copies]});
         if !transform.is_null() {
             detail["transform"] = transform;
         }
         json!({"index": 2, "name": "MoveFace1", "objectType": "MoveFaceFeature",
                "detail": detail})
     };
-    let run = |transform: Value| {
+    let run = |transform: Value, copies: usize| {
         let mut items = base.clone();
-        items.push(moved(transform));
+        items.push(moved(transform, copies));
         let mut doc = Document::new(kernel());
         let report = import_design(
             &mut doc,
@@ -929,23 +932,28 @@ fn moved_faces_come_in_as_a_move_face() {
             .filter(|d| d["type"] == "move_face");
         (report, def)
     };
-    let (report, def) = run(json!([
+    let up = json!([
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.5],
         [0.0, 0.0, 0.0, 1.0]
-    ]));
-    let item = report.items.iter().find(|i| i.name == "MoveFace1").unwrap();
-    assert_eq!(item.outcome, Outcome::Parametric, "{}", report.text());
-    assert_eq!(item.input_provenance, Some(InputProvenance::Read));
-    let def = def.expect("a move face");
-    assert_eq!(def["body"], "F2.b0", "{def}");
-    assert_eq!(def["faces"], json!([top.to_string()]));
-    assert_eq!(def["transform"]["type"], "free");
-    assert_eq!(def["transform"]["matrix"][2][3], json!(5.0));
+    ]);
+    // Named once or twice, the face is listed once (mitcad#2085: twice
+    // was refused as "a face is listed more than once").
+    for copies in [1, 2] {
+        let (report, def) = run(up.clone(), copies);
+        let item = report.items.iter().find(|i| i.name == "MoveFace1").unwrap();
+        assert_eq!(item.outcome, Outcome::Parametric, "{}", report.text());
+        assert_eq!(item.input_provenance, Some(InputProvenance::Read));
+        let def = def.expect("a move face");
+        assert_eq!(def["body"], "F2.b0", "{def}");
+        assert_eq!(def["faces"], json!([top.to_string()]));
+        assert_eq!(def["transform"]["type"], "free");
+        assert_eq!(def["transform"]["matrix"][2][3], json!(5.0));
+    }
 
     // Its motion not decoded: not translated.
-    let (report, def) = run(Value::Null);
+    let (report, def) = run(Value::Null, 1);
     let item = report.items.iter().find(|i| i.name == "MoveFace1").unwrap();
     assert_ne!(item.outcome, Outcome::Parametric, "{}", report.text());
     assert!(

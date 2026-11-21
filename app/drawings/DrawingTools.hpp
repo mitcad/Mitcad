@@ -111,9 +111,8 @@ struct DrawingToolDef {
 // (mitcad#1406: no picks; the sketch dimensions and the model's
 // annotations switched on for the selected views, or all the sheet's, by
 // its panel's Apply), Center Mark, Centerline, Line, Arc, Center Pattern,
-// Edge Extension
-// (mitcad#729), Text, Note, Datum Label, Feature Control Frame, Surface
-// Finish; then the tables' (mitcad#707 phase 3): Hole Table, Parts List,
+// Edge Extension (mitcad#729), Text, Note, Hole Callout (mitcad#2054),
+// Datum Label, Feature Control Frame, Surface Finish; then the tables' (mitcad#707 phase 3): Hole Table, Parts List,
 // Balloon. The bar shows them by their groups (`toolGroup`).
 //
 // Line and Arc (mitcad#729) draw outside the model, on the sheet or in the
@@ -246,10 +245,11 @@ QJsonObject viewEdit(const QString& drawing, int view, const QString& field, con
 QJsonObject annotationEdit(const QString& drawing, int annotation, const QString& field, const QString& value,
                            const QJsonObject& finish = QJsonObject());
 
-// The drawing's own decimals and letters' height (mitcad#729) as the
-// sheet's panel edits them: the edit_drawing command for "decimals"
-// ("auto": none, else 0 to 6) or "text_height" (mm; empty: none); empty
-// for a value the field cannot take.
+// The drawing's own decimals and letters' height (mitcad#729) and its
+// dimensioning standard (mitcad#2047) as the sheet's panel edits them: the
+// edit_drawing command for "decimals" ("auto": none, else 0 to 6),
+// "text_height" (mm; empty: none) or "standard" ("iso", "asme"); empty for
+// a value the field cannot take.
 QJsonObject drawingDefaultsEdit(const QString& drawing, const QString& field, const QString& value);
 
 // The widths and the patterns a line or an arc drawn outside the model

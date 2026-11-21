@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 35];
+    fn command_families() -> [CommandFamily<K>; 36];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 35] {
+    fn command_families() -> [CommandFamily<K>; 36] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -413,6 +413,17 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 prefix: None,
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
                     doc.run_mesh_command(parse(value, "command")?)
+                },
+            },
+            // Sketch blocks of the design (mitcad#2110, `sketch_blocks.rs`);
+            // `sketch.insert_block` and `sketch.explode_block` are the
+            // sketch's.
+            CommandFamily {
+                names: super::sketch_blocks::BlockCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::sketch_blocks::run(doc, parse(value, "command")?)
+                        .map(super::sketch::with_shown_texts)
                 },
             },
         ]

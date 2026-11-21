@@ -889,6 +889,19 @@ pub(crate) fn planar_binding(ids: &dyn PlanarIds, kind: &BindingKind) -> Result<
         },
         BindingKind::Midpoint { point, curve } => S::Midpoint(p(point)?, c(curve)?),
         BindingKind::HorizontalPoints { a, b } => S::HorizontalPoints(p(a)?, p(b)?),
+        BindingKind::Distance { a, b, value } => S::Distance {
+            a: p(a)?,
+            b: p(b)?,
+            value,
+        },
+        BindingKind::Radius { curve, value } => S::Radius {
+            entity: c(curve)?,
+            value,
+        },
+        BindingKind::MinorRadius { curve, value } => S::MinorRadius {
+            ellipse: c(curve)?,
+            value,
+        },
     })
 }
 
@@ -909,6 +922,10 @@ pub(crate) fn binding_refs(kind: &BindingKind) -> Vec<Ref> {
         BindingKind::TangentAt { a, b, at } => vec![Curve(a), Curve(b), Point(at)],
         BindingKind::Midpoint { point, curve } => vec![Point(point), Curve(curve)],
         BindingKind::HorizontalPoints { a, b } => vec![Point(a), Point(b)],
+        BindingKind::Distance { a, b, .. } => vec![Point(a), Point(b)],
+        BindingKind::Radius { curve, .. } | BindingKind::MinorRadius { curve, .. } => {
+            vec![Curve(curve)]
+        }
     }
 }
 

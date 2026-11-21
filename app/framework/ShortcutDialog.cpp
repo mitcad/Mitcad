@@ -20,6 +20,7 @@
 #include <QPushButton>
 #include <QStyle>
 #include <QStyledItemDelegate>
+#include <QTimer>
 #include <QToolTip>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -143,19 +144,14 @@ ShortcutDialog::ShortcutDialog(CommandRegistry& registry, QWidget* parent)
   m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_tree->setItemDelegateForColumn(kCommandColumn, new ShortcutIconDelegate(m_tree));
   m_tree->setProperty(NativeSelectedIconTintProperty, QVariantList{kCommandColumn}); // its native cells (mitcad#1080)
-  // The Context column as wide as the longest text it can show.
+  // Command takes the room left; Context is fitted to its rows (fitColumns).
   const QFontMetrics metrics(m_tree->font());
-  int contextWidth = metrics.horizontalAdvance(tr("Context"));
-  for (unsigned contexts = 1; contexts <= EveryShortcutContext; ++contexts) {
-    contextWidth = std::max(contextWidth, metrics.horizontalAdvance(contextText(contexts)));
-  }
   const int padding = 4 * metrics.averageCharWidth();
   QHeaderView* header = m_tree->header();
   header->setStretchLastSection(false);
   header->setSectionResizeMode(kCommandColumn, QHeaderView::Stretch);
   header->setSectionResizeMode(kContextColumn, QHeaderView::Fixed);
   header->setSectionResizeMode(kShortcutColumn, QHeaderView::Fixed);
-  header->resizeSection(kContextColumn, contextWidth + padding);
   header->resizeSection(kShortcutColumn,
                         metrics.horizontalAdvance(QKeySequence(Qt::CTRL | Qt::ALT | Qt::SHIFT | Qt::Key_F12)
                                                       .toString(QKeySequence::NativeText)) +
@@ -176,6 +172,10 @@ ShortcutDialog::ShortcutDialog(CommandRegistry& registry, QWidget* parent)
   });
   m_tree->addAction(defaultKey);
   layout->addWidget(m_tree);
+  m_columnsLog = new QTimer(this);
+  m_columnsLog->setSingleShot(true);
+  m_columnsLog->setInterval(150);
+  connect(m_columnsLog, &QTimer::timeout, this, &ShortcutDialog::logColumns);
   fill(false);
 
   connect(m_search, &QLineEdit::textChanged, this, &ShortcutDialog::filter);
@@ -290,8 +290,49 @@ void ShortcutDialog::build() {
     showKeys(def->id);
   }
   addReservedRows(wanted);
+  if (!single) fitColumns();
   filter();
   restoreSelection();
+}
+
+void ShortcutDialog::fitColumns() {
+  // Every context a row shows ("3D View, Sketch"), not every combination
+  // there could be: the four names joined took the Command column's room
+  // (mitcad#2096). The Command column needs its longest name beside the
+  // icon and the fold mark; the list is never narrower than that.
+  const QFontMetrics metrics(m_tree->font());
+  const int padding = 4 * metrics.averageCharWidth();
+  QHeaderView* header = m_tree->header();
+  int contextWidth = header->fontMetrics().horizontalAdvance(m_tree->headerItem()->text(kContextColumn));
+  int nameWidth = header->fontMetrics().horizontalAdvance(m_tree->headerItem()->text(kCommandColumn));
+  for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+    contextWidth = std::max(contextWidth, metrics.horizontalAdvance((*it)->text(kContextColumn)));
+    nameWidth = std::max(nameWidth, metrics.horizontalAdvance((*it)->text(kCommandColumn)));
+  }
+  header->resizeSection(kContextColumn, contextWidth + padding);
+  const int icon = m_tree->style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, m_tree);
+  m_commandNeeds = m_tree->indentation() + icon + nameWidth + padding;
+  const int frame = 2 * m_tree->frameWidth();
+  const int scrollBar = m_tree->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_tree);
+  m_tree->setMinimumWidth(m_commandNeeds + header->sectionSize(kContextColumn) +
+                          header->sectionSize(kShortcutColumn) + frame + scrollBar);
+}
+
+void ShortcutDialog::resizeEvent(QResizeEvent* event) {
+  QDialog::resizeEvent(event);
+  if (m_columnsLog != nullptr) m_columnsLog->start();
+}
+
+void ShortcutDialog::logColumns() const {
+  const QHeaderView* header = m_tree->header();
+  qDebug().noquote() << QStringLiteral("Keyboard Shortcuts columns: Command %1 (needs %2), Context %3, Shortcut %4, "
+                                       "dialog %5 x %6")
+                            .arg(header->sectionSize(kCommandColumn))
+                            .arg(m_commandNeeds)
+                            .arg(m_tree->isColumnHidden(kContextColumn) ? 0 : header->sectionSize(kContextColumn))
+                            .arg(header->sectionSize(kShortcutColumn))
+                            .arg(width())
+                            .arg(height());
 }
 
 void ShortcutDialog::addReservedRows(unsigned wanted) {
@@ -488,10 +529,14 @@ void ShortcutDialog::record(QTreeWidgetItem* item) {
   m_recording = item;
   auto* recorder = new QKeySequenceEdit;
   recorder->setObjectName(QStringLiteral("shortcutRecorder"));
-  recorder->setMaximumSequenceLength(1);
+  // Up to three key combinations (mitcad#2095: G, L): the recording ends at
+  // the third, or at Qt's pause after the last one.
+  recorder->setMaximumSequenceLength(3);
   m_recorder = recorder;
   m_tree->setItemWidget(item, kShortcutColumn, recorder);
-  // Esc and Return end the recording without a key: they are the window's.
+  // Esc and Return are the window's, never a key of a command: Return ends
+  // the recording keeping what was recorded (G, L then Return gives G, L),
+  // Esc cancels it and keeps the key the row had.
   recorder->installEventFilter(this);
   for (QWidget* child : recorder->findChildren<QWidget*>()) child->installEventFilter(this);
   connect(recorder, &QKeySequenceEdit::editingFinished, this, [this] {
@@ -547,7 +592,12 @@ bool ShortcutDialog::eventFilter(QObject* watched, QEvent* event) {
       record(m_tree->currentItem());
       return true;
     } else if (inRecorder(watched) && (enter || key->key() == Qt::Key_Escape)) {
-      finishRecording(QKeySequence(), false, true);
+      if (enter && !m_recorder.isNull() && !m_recorder->keySequence().isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Keyboard Shortcuts recording ended by Enter");
+        finishRecording(m_recorder->keySequence(), true, true);
+      } else {
+        finishRecording(QKeySequence(), false, true);
+      }
       return true;
     }
   }

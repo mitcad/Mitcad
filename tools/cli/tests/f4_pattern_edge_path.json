@@ -1,0 +1,77 @@
+[
+  {"comment": "Pattern on Path along a body's edges (mitcad#2105). A 60 x 40 x 20 block (Sketch1 F1: d1 = 60 along x, d2 = 40; Extrude1 F2) with its bottom edges E{F2:side(cN)|F2:start(r)} (c1 along y = 0, c2 at x = 60, c3 at y = 40, c4 at x = 0), and a 4 mm cube about the origin (Sketch2 F3, Extrude2 F4) as the patterned body."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [-2, -2], "width": 4, "height": 4},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 4}, "operation": "new_body"}},
+
+  {"comment": "An open path of two bottom edges with a sharp corner, listed one by one (PathPattern1 F5): from the free end of the first, (0, 0), 50 and 100 mm along it: (50, 0) and, past the corner, (60, 40)."},
+  {"cmd": "add_feature", "def": {"type": "path_pattern",
+    "objects": {"type": "bodies", "bodies": ["F4.b0"]},
+    "path": {"body": "F2.b0", "edges": [
+      "E{F2:side(c1[c4,c2])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}",
+      "E{F2:side(c2[c1,c3])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}"]},
+    "quantity": 3, "distance": 50, "distance_type": "spacing"}},
+  {"expect": {"feature": "PathPattern1", "status": "ok"}},
+  {"expect": {"body": "F5.b0", "volume": 64, "bbox": {"min": [48, -2, 0], "max": [52, 2, 4]}}},
+  {"expect": {"body": "F5.b1", "volume": 64, "bbox": {"min": [58, 38, 0], "max": [62, 42, 4]}}},
+
+  {"comment": "A closed path of all four bottom edges, in any order: 200 mm round. From the corner (0, 0), 300 mm goes round once and on to the opposite corner (60, 40) whichever way the loop runs."},
+  {"cmd": "edit_feature", "uid": "F5", "def": {"type": "path_pattern",
+    "objects": {"type": "bodies", "bodies": ["F4.b0"]},
+    "path": {"body": "F2.b0", "edges": [
+      "E{F2:side(c3[c2,c4])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}",
+      "E{F2:side(c1[c4,c2])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}",
+      "E{F2:side(c4[c3,c1])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}",
+      "E{F2:side(c2[c1,c3])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}"]},
+    "quantity": 2, "distance": 300, "distance_type": "spacing", "start_point": [0, 0, 0]}},
+  {"expect": {"feature": "PathPattern1", "status": "ok"}},
+  {"expect": {"body": "F5.b0", "volume": 64, "bbox": {"min": [58, 38, 0], "max": [62, 42, 4]}}},
+
+  {"comment": "The block's vertical edges rounded 5 mm (Fillet1 F6): its bottom outline is one tangent chain of four lines and four arcs, 2 (50 + 30) + 10 pi mm round."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "edges": [
+    "E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}", "E{F2:side(c2[c1,c3])|F2:side(c3[c2,c4])}",
+    "E{F2:side(c3[c2,c4])|F2:side(c4[c3,c1])}", "E{F2:side(c1[c4,c2])|F2:side(c4[c3,c1])}"], "radius": 5}},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "tangent_chains", "body": "F2.b0",
+    "edge": "E{F2:side(c1[c4,c2])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}"}, "result": {"count": 8}}},
+
+  {"comment": "One bottom edge with Tangent Chain (the default; PathPattern2 F7) takes the whole outline. From the middle of the front edge, (30, 0), half the outline, d1 + d2 - 20 + 5 pi mm, reaches the middle of the back edge, (30, 40), whichever way the loop runs."},
+  {"cmd": "add_feature", "def": {"type": "path_pattern",
+    "objects": {"type": "bodies", "bodies": ["F4.b0"]},
+    "path": {"body": "F2.b0", "edges": [
+      "E{F2:side(c1[c4,c2])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}"]},
+    "quantity": 2, "distance": "d1 + d2 - 4.292036732051034", "distance_type": "spacing",
+    "start_point": [30, 0, 0]}},
+  {"expect": {"feature": "PathPattern2", "status": "ok"}},
+  {"expect": {"body": "F7.b0", "volume": 64, "bbox": {"min": [-2, 38, 0], "max": [2, 42, 4]}, "tolerance": 1e-6}},
+
+  {"comment": "Without Tangent Chain the path is the listed edges only: the front edge and the corner's arc after it, open, from the free end of the front edge, (5, 0); 10 mm before the start goes on straight back to (-5, 0)."},
+  {"cmd": "edit_feature", "uid": "F7", "def": {"type": "path_pattern",
+    "objects": {"type": "bodies", "bodies": ["F4.b0"]},
+    "path": {"body": "F2.b0", "edges": [
+      "E{F2:side(c1[c4,c2])|F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}",
+      "E{F2:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F6:fillet(E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])})}"]},
+    "quantity": 2, "distance": -10, "distance_type": "spacing", "tangent_chain": false}},
+  {"expect": {"feature": "PathPattern2", "status": "ok"}},
+  {"expect": {"body": "F7.b0", "volume": 64, "bbox": {"min": [-12, -2, 0], "max": [-8, 2, 4]}, "tolerance": 1e-6}},
+
+  {"comment": "With the fillet suppressed the corner's arc is gone: the pattern fails, naming the edge to agents and placing it."},
+  {"cmd": "suppress_feature", "uid": "F6"},
+  {"expect": {"feature": "PathPattern2", "status": "error", "error_contains": "edge"}},
+  {"cmd": "undo"},
+  {"cmd": "undo"},
+  {"expect": {"feature": "PathPattern2", "status": "ok"}},
+  {"expect": {"body": "F7.b0", "bbox": {"min": [-2, 38, 0], "max": [2, 42, 4]}, "tolerance": 1e-6}},
+
+  {"comment": "The block deeper (d2 = 60): the edges keep their names, the chain is longer and the copy follows the back edge to (30, 60)."},
+  {"cmd": "set_parameter", "name": "d2", "value": 60},
+  {"expect": {"feature": "PathPattern2", "status": "ok"}},
+  {"expect": {"body": "F7.b0", "volume": 64, "bbox": {"min": [-2, 58, 0], "max": [2, 62, 4]}, "tolerance": 1e-6}}
+]

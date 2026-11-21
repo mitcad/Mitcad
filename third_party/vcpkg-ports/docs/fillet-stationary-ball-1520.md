@@ -162,7 +162,8 @@ walk's tolerance (1e-4) refused.
   lie apart by 3.2e-3, at most R / 200: the stored rounding is a tube
   within 1.6e-3 of its axis, so the centres seen from two such tubes lie
   within twice that (mitcad#1986; it was 5e-3, half the hundredth of a
-  millimetre a stored body is taken within). Test: pending (mitcad#2003).
+  millimetre a stored body is taken within). Test:
+  geometry/tests/port/p1523-still-ball-tolerance.cpp (a rippled B-spline tube).
 - `StillDirection`: past 1520's test, where the centre moves at less than
   a tenth of the contact's speed along one parameter (and at more than 0.3
   along the other), the support is a tube of the ball's radius if the

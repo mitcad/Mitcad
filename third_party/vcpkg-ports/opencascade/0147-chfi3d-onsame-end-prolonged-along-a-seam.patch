@@ -24,8 +24,9 @@ Before, the blend of the case gave a self-intersecting wire.
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
 geometry.suite.chamfer_overflow), test_chamfer_as_wide_as_a_lug_in_a_bore:
-Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+Its failure without the patch is still to be shown: the patch does not
+revert at the port's tip without the more than 40 later patches that
+change the same lines (tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index b253ca49..b6526905 100644

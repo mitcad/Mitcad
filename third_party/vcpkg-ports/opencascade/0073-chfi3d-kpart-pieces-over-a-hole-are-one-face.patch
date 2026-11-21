@@ -23,7 +23,9 @@ geometry.suite.fillet_overflow), test_rounding_over_a_hole_is_cut_by_it,
 test_rim_rounding_past_a_side_is_cut_by_it,
 test_rounding_over_a_slot_is_cut_by_its_faces: the blend's pieces over the
 cut one face (the count of faces). Its failure without the patch is still
-to be shown in the port's before/after run (mitcad#1986).
+to be shown: with it and the 36 later patches that change the same lines
+reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 11ba5b6..20cfc4f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

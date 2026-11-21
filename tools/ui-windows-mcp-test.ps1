@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/MainWindowMcp.cpp app/MainWindowMcpUi.cpp app/mcp core/mcp core/ffi/src/mcp.rs tools/cli
+# check-all sources: app/MainWindowMcp.cpp app/MainWindowMcpUi.cpp app/mcp app/tutorials core/mcp core/ffi/src/mcp.rs tools/cli
 # Live MCP for debugging (mitcad#265) in the build VM (session 0, Mesa;
 # tools/ui-windows-lib.ps1): the actual application and the actual bridge,
 # mitcad-cli.exe mcp --connect, over JSON-RPC on its stdin and stdout.
@@ -87,6 +87,7 @@ function Mcp-Send($Message) {
 # notifications (a method, no id) are skipped and shown; anything else
 # without that id (an error without an id, another id, a line that is not a
 # JSON-RPC message) fails with the whole line.
+$script:Notifications = New-Object System.Collections.ArrayList
 function Mcp-Receive([int]$Id) {
   for ($i = 0; $i -lt 1000; $i++) {
     $read = $script:Bridge.StandardOutput.ReadLineAsync()
@@ -100,6 +101,8 @@ function Mcp-Receive([int]$Id) {
     $hasId = $null -ne $message.PSObject.Properties['id']
     if (-not $hasId -and $null -ne $message.PSObject.Properties['method']) {
       Write-Host "note: a notification from the bridge: $line"
+      # Kept for the checks of a resource's updates (mitcad#2012).
+      [void]$script:Notifications.Add($message)
       continue
     }
     if (-not $hasId -or $message.id -ne $Id) { Mcp-Fail "the answer to request $Id is another message: $line" }
@@ -238,7 +241,7 @@ Mcp-Check ($init.result.protocolVersion -eq '2025-11-25') 'initialized' ($init |
 Mcp-Send @{ jsonrpc = '2.0'; method = 'notifications/initialized' }
 $tools = @((Mcp-Request 'tools/list').result.tools | ForEach-Object { $_.name }) | Sort-Object
 $expected = @('document_list', 'document_new', 'document_open', 'document_save', 'model_command', 'model_export', 'model_query', 'model_reference', 'model_render', 'ui_camera',
-  'ui_command', 'ui_log', 'ui_screenshot', 'ui_select', 'ui_state') | Sort-Object
+  'ui_command', 'ui_guide', 'ui_log', 'ui_screenshot', 'ui_select', 'ui_state') | Sort-Object
 Mcp-Check (($tools -join ',') -eq ($expected -join ',')) 'the live catalog has the debugging tools' ($tools -join ',')
 $document = @((Mcp-Tool 'document_list' @{}).documents)[0].document
 Ui-ExpectNew 'Agent connected' 'the window says an agent is connected'
@@ -338,6 +341,66 @@ foreach ($line in @('MCP: an agent ran sketch.add_line in sketch F4', 'Cleaned u
 $last = @($log.lines)[-1].seq
 $later = Mcp-Tool 'ui_log' @{ since = $last }
 Mcp-Check (@($later.lines | Where-Object { $_.seq -le $last }).Count -eq 0) "ui_log's since leaves out the older lines"
+
+Write-Host '--- ui_guide (mitcad#2012): guide steps, a command held back, the resource mitcad://ui-guide'
+$guideUri = 'mitcad://ui-guide'
+# Guide-State predicate what: the guide's resource once the predicate holds
+# of it, after its notifications/resources/updated.
+function Guide-State([scriptblock]$Predicate, [string]$What) {
+  $deadline = (Get-Date).AddSeconds(20)
+  while ($true) {
+    $notified = @($script:Notifications | Where-Object {
+        $_.method -eq 'notifications/resources/updated' -and $_.params.uri -eq $guideUri }).Count -gt 0
+    if ($notified) {
+      $text = (Mcp-Request 'resources/read' @{ uri = $guideUri }).result.contents[0].text
+      $state = $text | ConvertFrom-Json
+      if (& $Predicate $state) {
+        $script:Notifications.Clear()
+        return $state
+      }
+    }
+    if ((Get-Date) -gt $deadline) { Mcp-Fail "ui_guide: no notification of $What" }
+    Start-Sleep -Milliseconds 100
+    $null = Mcp-Request 'ping'
+  }
+}
+$resources = @((Mcp-Request 'resources/list').result.resources | ForEach-Object { $_.uri })
+Mcp-Check ($resources -contains $guideUri) 'resources/list has the guide step' ($resources -join ', ')
+$subscribed = Mcp-Request 'resources/subscribe' @{ uri = $guideUri }
+Mcp-Check ($null -eq $subscribed.error) 'subscribed to the guide step' ($subscribed | ConvertTo-Json -Compress -Depth 5)
+$script:Notifications.Clear()
+$refused = Mcp-Tool 'ui_guide' @{ document = $document; action = 'start'; step = @{
+    text = 'Nothing'; target = @{ command = 'no.such' }; done = @{ command = 'no.such' } } } -IsError
+Mcp-Check ($refused.error -like '*no.such*') 'a step of no command is refused' $refused.error
+$state = Mcp-Tool 'ui_guide' @{ document = $document; action = 'start'; step = @{
+    id = 'extrude'; text = 'Open Extrude.'; target = @{ command = 'solid.extrude' }; done = @{ started = 'solid.extrude' } } }
+Mcp-Check ($state.active -eq $true -and $state.step.id -eq 'extrude') 'ui_guide started the first step' ($state | ConvertTo-Json -Compress -Depth 10)
+$first = [int]$state.sequence
+$held = Mcp-Tool 'ui_command' @{ document = $document; id = 'sketch.create' } -IsError
+Mcp-Check ($held.error -like '*holds back*') 'another command is held back' $held.error
+$null = Guide-State { param($s) $s.last_event.event -eq 'refused' -and $s.last_event.command -eq 'sketch.create' } 'the refused command'
+Mcp-Check $true 'the resource said the command was refused'
+$null = Mcp-Tool 'ui_command' @{ document = $document; id = 'solid.extrude'; finish = 'keep_open' }
+$done = Guide-State { param($s) $s.last_event.event -eq 'step_done' -and [int]$s.last_event.sequence -eq $first } 'the first step done'
+Mcp-Check ($done.active -eq $false -and $done.last_event.done.started -eq 'solid.extrude') 'Extrude opened completes the first step' ($done | ConvertTo-Json -Compress -Depth 10)
+$null = Mcp-Tool 'ui_guide' @{ document = $document; action = 'start'; step = @{
+    id = 'distance'; text = 'Type 20 mm.'; target = @{ input = 'distance' }; done = @{ input = 'distance'; value = '20 mm' } } }
+$null = Mcp-Tool 'ui_command' @{ document = $document; inputs = @{ distance = '20 mm' }; finish = 'keep_open' }
+$done = Guide-State { param($s) $s.last_event.event -eq 'step_done' -and [int]$s.last_event.sequence -eq ($first + 1) } 'the second step done'
+Mcp-Check ($done.last_event.done.input -eq 'distance' -and $done.last_event.done.value -eq '20 mm') 'the distance typed completes the second step' ($done | ConvertTo-Json -Compress -Depth 10)
+$null = Mcp-Tool 'ui_guide' @{ document = $document; action = 'start'; step = @{
+    id = 'finish'; text = 'Click OK.'; target = @{ command = 'solid.extrude' }; done = @{ command = 'solid.extrude' } } }
+$ended = Mcp-Tool 'ui_guide' @{ document = $document; action = 'end' }
+Mcp-Check ($ended.active -eq $false -and $ended.last_event.event -eq 'step_left' -and $ended.last_event.reason -eq 'ended') 'ui_guide ended the third step' ($ended | ConvertTo-Json -Compress -Depth 10)
+$null = Mcp-Tool 'ui_command' @{ document = $document; finish = 'cancel' }
+Mcp-Check ((Mcp-Tool 'ui_guide' @{ document = $document }).active -eq $false) 'no step is shown after the end'
+$texts = @((Mcp-Tool 'ui_log' @{ limit = 2000 }).lines | ForEach-Object { $_.text })
+foreach ($line in @('Guide: step extrude started: target command solid.extrude', 'Guide: command sketch.create refused during step extrude',
+                    'Guide: step extrude done: the panel of solid.extrude opened', 'Guide: step distance done: 20 mm typed into distance',
+                    'Guide: step finish left (ended)')) {
+  Mcp-Check (@($texts | Where-Object { $_.Contains($line) }).Count -ge 1) "ui_log shows '$line'"
+}
+$null = Mcp-Request 'resources/unsubscribe' @{ uri = $guideUri }
 
 Write-Host '--- The bridge ends'
 Ui-Mark

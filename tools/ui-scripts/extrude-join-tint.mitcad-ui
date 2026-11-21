@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# An Extrude Join's target body in the command's look (mitcad#2069, GitHub
+# mitcad/Mitcad#474) on extrude-join-tint.json: a block (F1.b0) under the
+# XY plane and Sketch1 (F2), a square on its top face. Selection Through
+# Bodies is on (the default). Seen from the isometric corner (+x, -y, +z):
+#   1. The block's own color in the middle of its front face (y = -20).
+#   2. Extrude takes the square and joins it to the block, which Local
+#      bodies holds: the block is tinted faintly, nearer its own color
+#      there than the cut's red (PreviewRemove), and gets no copy through
+#      the bodies; the added material's front face (y = -10), over the
+#      block's top face, reads blue (its blue channel above its red).
+#   3. Cancelled.
+# Run by tools/ui-extrude-join-tint-test.sh (Linux),
+# tools/ui-windows-extrude-join-tint-test.ps1 (Windows) and
+# tools/ui-macos-extrude-join-tint-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.iso
+wait-idle
+command view.fit
+expect-model-bodies 1 32000
+wait-idle
+
+# 1. The block as it is drawn.
+capture-view-point-pixel body 0,-20,-10
+
+# 2. The Join, its target filled automatically.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile \[profile r\{.*\} of F2\]' 30
+wait-log '^Extrude: automatic Operation = Join' 30
+wait-log '^Extrude Local bodies: 1 body \[body F1\.b0\]' 30
+wait-log '^Preview Extrude: ok' 30
+wait-idle
+expect-never 'Preview Extrude: failed'
+expect-no-log '^Selection through the bodies: .*body F1\.b0'
+expect-view-point-pixel 0,-20,-10 nearer '${body}' PreviewRemove
+expect-view-point-pixel 0,-10,5 blue-over-red
+screenshot '${MITCAD_TEST_WORK}/extrude-join-tint.png'
+
+# 3. Cancelled.
+mark
+focus-main
+key Escape
+wait-log '^Command Extrude cancelled'
+wait-idle
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

@@ -60,8 +60,8 @@ polynomial within 0.01 mm, the volume a little under the run-on over the
 flat stretch's plane (by at most a twentieth of the material added);
 documented to fail without this patch.
 No synthetic body: a U of cubic B-spline sides went another way at its
-ends (invalid with and without the patch). Its failure without the patch
-is still to be shown in the port's before/after run (mitcad#1986).
+ends (invalid with and without the patch). It fails without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py).
 
 Failures (mitcad#1986): the longer B-spline curve's construction fails
 with OCCT's reports of a computation it cannot make

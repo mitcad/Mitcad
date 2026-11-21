@@ -60,6 +60,8 @@ void groupTests() {
   CHECK(settingsGroupOf(text("navigationBarPins")) == text("pins"));
   CHECK(settingsGroupOf(text("toolbarPins/SOLID")) == text("pins"));
   CHECK(settingsGroupOf(text("quickAccess/commands")) == text("pins"));
+  CHECK(settingsGroupOf(text("quickAccess/items")) == text("pins"));
+  CHECK(settingsGroupOf(text("quickAccess/itemsMigrated")) == text("pins"));
   CHECK(settingsGroupOf(text("quickAccess/visible")) == text("preferences"));
   CHECK(settingsGroupOf(text("floating/leftSplit")) == text("layout"));
   CHECK(settingsGroupOf(text("libraries/sources")) == text("libraries"));

@@ -51,8 +51,8 @@ a block below the cut face, its rims rounded with 1.5: valid, the horn
 tori of area R^2 (pi / 2 - psi) (pi / 2 - 1) (invalid without the patch);
 the boundary test_cut_cylinder_rims_without_the_block, the tori cut by the
 cut face as before; and test_reported_body on the stored case
-`tube-end-crease-corners`. Its failure without the patch is still to be
-shown in the port's before/after run (mitcad#1986).
+`tube-end-crease-corners`. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 Failures (mitcad#1986): the section of the turned ball's patch by the
 solid (BRepAlgoAPI_Section) fails with OCCT's reports of a computation it

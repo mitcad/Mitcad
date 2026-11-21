@@ -122,6 +122,7 @@
             "construct.plane_two_edges",
             "construct.plane_three_points",
             "construct.plane_tangent_point",
+            "construct.plane_perpendicular_point",
             "construct.plane_along_path",
             "construct.plane_edge_point",
             "construct.plane_normal_point",
@@ -228,6 +229,7 @@
             "construct.plane_two_edges",
             "construct.plane_three_points",
             "construct.plane_tangent_point",
+            "construct.plane_perpendicular_point",
             "construct.plane_along_path",
             "construct.plane_edge_point",
             "construct.plane_normal_point",
@@ -268,6 +270,7 @@
             "-",
             {"command": "sheet.face", "button": true},
             {"command": "sheet.flange", "button": true},
+            "sheet.hem",
             "sheet.convert",
             "-",
             {"command": "sheet.bend", "button": true},
@@ -321,6 +324,7 @@
             "construct.plane_two_edges",
             "construct.plane_three_points",
             "construct.plane_tangent_point",
+            "construct.plane_perpendicular_point",
             "construct.plane_along_path",
             "construct.plane_edge_point",
             "construct.plane_normal_point",
@@ -680,6 +684,7 @@
               ]
             },
             {"submenu": "Text", "entries": ["sketch.text", "sketch.add_code"]},
+            {"submenu": "Blocks", "entries": ["sketch.insert_block", "sketch.create_block"]},
             {
               "submenu": "Patterns",
               "entries": ["sketch.rectangular_pattern", "sketch.circular_pattern", "sketch.mirror"]
@@ -701,14 +706,23 @@
           "group": "MODIFY",
           "entries": [
             {"command": "sketch.fillet", "button": true},
+            "sketch.blend_curve",
             "sketch.chamfer",
             {"command": "sketch.trim", "button": true},
             "sketch.extend",
+            "sketch.break",
+            "sketch.split",
             {"command": "sketch.offset", "button": true},
             "sketch.move",
+            "sketch.scale",
             "sketch.construction",
             "sketch.centerline",
             "sketch.convert_projected",
+            "sketch.create_block",
+            "sketch.edit_block",
+            "sketch.explode_block",
+            "sketch.finish_block",
+            "sketch.cancel_block",
             "sketch.parameters"
           ]
         },
@@ -728,7 +742,8 @@
             "sketch.constraint.symmetric",
             "sketch.constraint.smooth",
             "sketch.equal_spacing",
-            {"command": "sketch.auto_constrain", "button": true}
+            {"command": "sketch.auto_constrain", "button": true},
+            "sketch.show_unconstrained"
           ]
         },
         {
@@ -808,7 +823,8 @@
           "group": "TEXT",
           "entries": [
             {"command": "drawing.text", "button": true},
-            {"command": "drawing.note", "button": true}
+            {"command": "drawing.note", "button": true},
+            {"command": "drawing.hole_callout", "button": true}
           ]
         },
         {
@@ -1061,12 +1077,15 @@
       "menu": "HELP",
       "entries": [
         "help.user_guide",
+        "help.tutorials",
+        "help.leave_tutorial",
         "help.shortcuts",
         "help.connect_assistant",
         "help.diagnostics",
         "help.open_log_folder",
         "help.check_updates",
         "help.send_feedback",
+        "help.discord",
         "-",
         {"extra": "about"},
         {"extra": "about_qt"}

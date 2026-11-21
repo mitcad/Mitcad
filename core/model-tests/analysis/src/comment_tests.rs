@@ -8,7 +8,9 @@
 //! parameter following its renames (mitcad#1305); comments on a
 //! deleted last feature staying orphaned after a reload (mitcad#1320); and
 //! a comment on the whole design, in an empty design and through model
-//! changes (mitcad#2010).
+//! changes (mitcad#2010); images on comments and replies, removed, undone,
+//! saved and read back, and refused over the limit or when their bytes do
+//! not match (mitcad#2011).
 
 use serde_json::{Value, json};
 
@@ -58,6 +60,22 @@ fn ids(answer: &Value) -> Vec<String> {
         .iter()
         .map(|c| c["id"].as_str().unwrap().to_owned())
         .collect()
+}
+
+/// What the application shows of a design file's refusal: the text before
+/// its detail (mitcad#2011), which carries the fields and the ids.
+fn shown(error: &str) -> String {
+    mitcad_model::notice::FeatureError::from_text(error).message
+}
+
+/// The shown text says nothing of fields, comment ids or image ids.
+fn in_words(text: &str) -> bool {
+    !text.contains('[')
+        && !text.split(|c: char| !c.is_alphanumeric()).any(|word| {
+            word.len() > 1
+                && (word.starts_with('C') || word.starts_with('A'))
+                && word[1..].chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 fn document(doc: &Document<MockKernel>) -> Value {
@@ -514,10 +532,18 @@ fn comments_are_saved_and_read_back() {
         .err()
         .unwrap()
         .to_string();
+    // The detail names the field and the comment; the text shown says it
+    // in words (mitcad#2011).
     assert!(
         error.contains("comments[1] (C2): the text is empty"),
         "{error}"
     );
+    let words = shown(&error);
+    assert!(
+        words.contains("a comment is damaged: its text is empty"),
+        "{words}"
+    );
+    assert!(in_words(&words), "{words}");
 }
 
 /// Done when: a feature that removes the face makes the comment orphaned at
@@ -922,4 +948,463 @@ fn a_comment_on_the_whole_design_works_in_an_empty_design() {
     command(&mut loaded, json!({"cmd": "delete_comment", "id": "C1"}));
     assert_eq!(undo_label(&loaded), "Delete Comment C1");
     assert_eq!(ids(&comments(&loaded)), [on_sketch.as_str()]);
+}
+
+// Images on comments and replies (mitcad#2011, GitHub mitcad/Mitcad#402).
+
+/// The start of a PNG file of `width` × `height` pixels as its header says
+/// (the signature, IHDR, IEND), with `tag` after it so that two of the same
+/// size differ: what the model reads of an image.
+fn png(width: u32, height: u32, tag: u8) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend(13u32.to_be_bytes());
+    bytes.extend(b"IHDR");
+    bytes.extend(width.to_be_bytes());
+    bytes.extend(height.to_be_bytes());
+    bytes.extend([8, 6, 0, 0, 0]);
+    bytes.extend([0, 0, 0, 0]);
+    bytes.extend(0u32.to_be_bytes());
+    bytes.extend(b"IEND");
+    bytes.extend([0xae, 0x42, 0x60, 0x82, tag]);
+    bytes
+}
+
+/// The start of a JPEG file of `width` × `height` pixels: its start of
+/// frame.
+fn jpeg(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = vec![0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08];
+    bytes.extend(height.to_be_bytes());
+    bytes.extend(width.to_be_bytes());
+    bytes.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    bytes.extend([0xff, 0xd9]);
+    bytes
+}
+
+/// A BMP file's header of 2 × 2 pixels.
+fn bmp() -> Vec<u8> {
+    let mut bytes = b"BM".to_vec();
+    bytes.resize(14, 0);
+    bytes.extend(40u32.to_le_bytes());
+    bytes.extend(2i32.to_le_bytes());
+    bytes.extend(2i32.to_le_bytes());
+    bytes.resize(54, 0);
+    bytes
+}
+
+fn base64(bytes: &[u8]) -> String {
+    mitcad_model::internal::base64::encode(bytes)
+}
+
+fn attachment(bytes: &[u8], name: &str) -> Value {
+    json!({"data": base64(bytes), "name": name})
+}
+
+fn attachment_ids(listed: &Value) -> Vec<String> {
+    listed
+        .as_array()
+        .map(|images| {
+            images
+                .iter()
+                .map(|image| image["id"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The bytes the `comment_attachment` query gives, decoded.
+fn attachment_bytes(doc: &Document<MockKernel>, comment: &str, id: &str) -> Vec<u8> {
+    let answer = query(
+        doc,
+        json!({"query": "comment_attachment", "comment": comment, "id": id}),
+    );
+    mitcad_model::internal::base64::decode(answer["data"].as_str().unwrap()).unwrap()
+}
+
+/// Done when: images attached to a comment and to a reply, listed with
+/// their fields; removed, undone and redone, each change one undo step;
+/// the query's bytes equal to the stored ones; ids never given again; a
+/// comment on the whole design takes them too.
+#[test]
+fn images_on_a_comment_and_a_reply_are_listed_removed_undone_and_redone() {
+    let mut doc = block();
+    let revision = |doc: &Document<MockKernel>| comments(doc)["revision"].as_u64().unwrap();
+    let capture = png(3, 2, 1);
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_comment", "text": "make this face flat", "target": top(),
+               "attachments": [attachment(&capture, "C:\\shots\\capture.png")]}),
+    );
+    assert_eq!(
+        (&added["id"], &added["attachments"]),
+        (&json!("C1"), &json!(["A1"]))
+    );
+    assert_eq!(undo_label(&doc), "Add Comment C1");
+    let c1 = comment(&doc, "C1");
+    assert_eq!(
+        c1["attachments"],
+        json!([{
+            "id": "A1",
+            "media_type": "image/png",
+            "width": 3,
+            "height": 2,
+            "bytes": capture.len(),
+            "sha256": mitcad_model::internal::sha256::Sha256::of(&capture).to_string(),
+            "name": "capture.png",
+        }]),
+        "{c1}"
+    );
+    assert_eq!(attachment_bytes(&doc, "C1", "A1"), capture);
+    let answer = query(
+        &doc,
+        json!({"query": "comment_attachment", "comment": "C1", "id": "A1"}),
+    );
+    assert_eq!(answer["comment"], "C1");
+    assert_eq!(answer["media_type"], "image/png");
+    assert_eq!(answer["name"], "capture.png");
+
+    // A reply with two images: a PNG and a JPEG, one undo step.
+    let r1 = revision(&doc);
+    let photo = jpeg(640, 480);
+    let replied = command(
+        &mut doc,
+        json!({"cmd": "reply_comment", "id": "C1", "text": "Done, see the result",
+               "author": "claude-code",
+               "attachments": [attachment(&png(5, 5, 2), "result.png"), attachment(&photo, "")]}),
+    );
+    assert_eq!(
+        (&replied["reply"], &replied["attachments"]),
+        (&json!(1), &json!(["A2", "A3"]))
+    );
+    assert_eq!(undo_label(&doc), "Reply to C1");
+    assert!(revision(&doc) > r1, "a new image grows the revision");
+    let c1 = comment(&doc, "C1");
+    assert_eq!(attachment_ids(&c1["attachments"]), ["A1"]);
+    let images = &c1["replies"][0]["attachments"];
+    assert_eq!(attachment_ids(images), ["A2", "A3"]);
+    assert_eq!(images[1]["media_type"], "image/jpeg");
+    assert_eq!(images[1]["width"], 640);
+    assert_eq!(images[1]["height"], 480);
+    // A JPEG without a name is named for its format.
+    assert_eq!(images[1]["name"], "image.jpg");
+    assert_eq!(attachment_bytes(&doc, "C1", "A3"), photo);
+    // A reply without images lists none.
+    command(
+        &mut doc,
+        json!({"cmd": "reply_comment", "id": "C1", "text": "Thanks"}),
+    );
+    assert!(
+        comment(&doc, "C1")["replies"][1]
+            .get("attachments")
+            .is_none()
+    );
+
+    // Removed: its own undo step, undone and redone; the others stay.
+    let r2 = revision(&doc);
+    command(
+        &mut doc,
+        json!({"cmd": "remove_comment_attachment", "comment": "C1", "id": "A2"}),
+    );
+    assert_eq!(undo_label(&doc), "Remove Image");
+    assert!(revision(&doc) > r2);
+    let images = |doc: &Document<MockKernel>| {
+        let c1 = comment(doc, "C1");
+        (
+            attachment_ids(&c1["attachments"]),
+            attachment_ids(&c1["replies"][0]["attachments"]),
+        )
+    };
+    assert_eq!(images(&doc), (vec!["A1".to_owned()], vec!["A3".to_owned()]));
+    let gone = doc
+        .query(&json!({"query": "comment_attachment", "comment": "C1", "id": "A2"}).to_string())
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(gone.contains("C1 has no image A2"), "{gone}");
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(
+        images(&doc),
+        (
+            vec!["A1".to_owned()],
+            vec!["A2".to_owned(), "A3".to_owned()]
+        )
+    );
+    command(&mut doc, json!({"cmd": "redo"}));
+    assert_eq!(images(&doc), (vec!["A1".to_owned()], vec!["A3".to_owned()]));
+    command(
+        &mut doc,
+        json!({"cmd": "remove_comment_attachment", "comment": "C1", "id": "A1"}),
+    );
+    assert_eq!(undo_label(&doc), "Remove Image");
+    assert!(comment(&doc, "C1").get("attachments").is_none());
+
+    // Refused: an image the comment does not have, no image id, no comment.
+    for (fields, expected) in [
+        (json!({"comment": "C1", "id": "A9"}), "C1 has no image A9"),
+        (json!({"comment": "C1", "id": "F2"}), "F2 is no image id"),
+        (
+            json!({"comment": "C7", "id": "A3"}),
+            "there is no comment C7",
+        ),
+    ] {
+        let mut remove = fields.clone();
+        remove["cmd"] = json!("remove_comment_attachment");
+        let error = refused(&mut doc, remove);
+        assert!(error.contains(expected), "{fields}: {error}");
+    }
+
+    // The next image takes a new id, never one removed.
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_comment", "text": "the whole design", "target": {"design": true},
+               "attachments": [attachment(&png(8, 8, 3), "overview.png")]}),
+    );
+    assert_eq!(
+        (&added["id"], &added["attachments"]),
+        (&json!("C2"), &json!(["A4"]))
+    );
+    assert_eq!(attachment_ids(&comment(&doc, "C2")["attachments"]), ["A4"]);
+    // Undoing the comment takes its image with it, redo brings both back.
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(ids(&comments(&doc)), ["C1"]);
+    command(&mut doc, json!({"cmd": "redo"}));
+    assert_eq!(attachment_bytes(&doc, "C2", "A4"), png(8, 8, 3));
+    // A change of images recomputes nothing.
+    let before = doc.recompute_count();
+    command(
+        &mut doc,
+        json!({"cmd": "remove_comment_attachment", "comment": "C2", "id": "A4"}),
+    );
+    assert_eq!(doc.recompute_count(), before);
+}
+
+/// Done when: an image over the limit, one that is no PNG or JPEG and data
+/// that is no base64 are refused with the reason in words, and nothing of
+/// the comment or the reply is added.
+#[test]
+fn an_image_over_the_limit_or_of_another_kind_is_refused() {
+    let mut doc = block();
+    add(&mut doc, "first", top());
+    let label = undo_label(&doc);
+    let mut large = png(4000, 3000, 0);
+    large.resize(mitcad_model::MAX_COMMENT_IMAGE + 1, 0);
+    let cases = [
+        (
+            vec![attachment(&large, "large.png")],
+            "the image is 4.0 MB, more than the 4 MB a comment's image may be",
+        ),
+        (
+            vec![attachment(&bmp(), "plan.bmp")],
+            "only PNG and JPEG images can be attached, and this one is BMP",
+        ),
+        (
+            vec![attachment(b"hello", "notes.txt")],
+            "the file is no PNG, JPEG, BMP, WebP or HEIF image",
+        ),
+        (
+            vec![json!({"data": "@@not base64@@"})],
+            "the image's data is no base64",
+        ),
+        (
+            vec![
+                attachment(&png(2, 2, 0), "a.png"),
+                attachment(&large, "b.png"),
+            ],
+            "image 2: the image is 4.0 MB, more than the 4 MB",
+        ),
+    ];
+    for (attachments, expected) in cases {
+        let error = refused(
+            &mut doc,
+            json!({"cmd": "add_comment", "text": "with an image", "target": top(),
+                   "attachments": attachments}),
+        );
+        assert!(error.contains(expected), "{expected}: {error}");
+        let error = refused(
+            &mut doc,
+            json!({"cmd": "reply_comment", "id": "C1", "text": "with an image",
+                   "attachments": attachments}),
+        );
+        assert!(error.contains(expected), "{expected}: {error}");
+    }
+    // Nothing added: no comment, no reply, no undo step, no id used.
+    assert_eq!(ids(&comments(&doc)), ["C1"]);
+    assert!(
+        comment(&doc, "C1")["replies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(undo_label(&doc), label);
+    let added = command(
+        &mut doc,
+        json!({"cmd": "reply_comment", "id": "C1", "text": "now one that fits",
+               "attachments": [attachment(&png(2, 2, 0), "a.png")]}),
+    );
+    assert_eq!(added["attachments"], json!(["A1"]));
+    // Exactly the limit is taken.
+    let mut limit = png(10, 10, 0);
+    limit.resize(mitcad_model::MAX_COMMENT_IMAGE, 0);
+    let added = command(
+        &mut doc,
+        json!({"cmd": "reply_comment", "id": "C1", "text": "the largest",
+               "attachments": [attachment(&limit, "limit.png")]}),
+    );
+    assert_eq!(added["attachments"], json!(["A2"]));
+    assert_eq!(
+        comment(&doc, "C1")["replies"][1]["attachments"][0]["bytes"],
+        mitcad_model::MAX_COMMENT_IMAGE
+    );
+}
+
+/// A change made to a saved design's JSON before it is read again.
+type Change = dyn Fn(&mut Value);
+
+/// Done when: the images saved apart from the comments and read back the
+/// same, the query's bytes equal to the stored ones; ids go on after the
+/// largest ever used; bytes that do not match their fields, an image on a
+/// reply or a comment the file does not have, an id twice and an image
+/// over the limit are refused on load; a design without images keeps no
+/// field of them, and the comments themselves keep none, so that a build
+/// without images reads them.
+#[test]
+fn images_are_saved_and_read_back_and_bytes_that_do_not_match_are_refused() {
+    let mut doc = block();
+    add(&mut doc, "no image", top());
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert!(file.get("comment_attachments").is_none());
+    assert!(file.get("next_comment_attachment").is_none());
+
+    let capture = png(3, 2, 1);
+    let photo = jpeg(64, 48);
+    command(
+        &mut doc,
+        json!({"cmd": "add_comment", "text": "flat", "target": top(),
+               "attachments": [attachment(&capture, "capture.png")]}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "reply_comment", "id": "C2", "text": "done", "author": "claude-code",
+               "attachments": [attachment(&photo, "result.jpg"), attachment(&png(4, 4, 9), "last.png")]}),
+    );
+    // The largest removed: the next id is kept in the file.
+    command(
+        &mut doc,
+        json!({"cmd": "remove_comment_attachment", "comment": "C2", "id": "A3"}),
+    );
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    for c in file["comments"].as_array().unwrap() {
+        assert!(c.get("attachments").is_none(), "{c}");
+        for reply in c["replies"].as_array().into_iter().flatten() {
+            assert!(reply.get("attachments").is_none(), "{reply}");
+        }
+    }
+    let images = file["comment_attachments"].as_array().unwrap();
+    assert_eq!(images.len(), 2, "{saved}");
+    assert_eq!(images[0]["comment"], "C2");
+    assert!(images[0].get("reply").is_none());
+    assert_eq!(images[0]["id"], "A1");
+    assert_eq!(images[0]["name"], "capture.png");
+    assert_eq!(
+        images[0]["image"],
+        json!({"format": "png", "width": 3, "height": 2, "data": base64(&capture)})
+    );
+    assert_eq!(images[1]["comment"], "C2");
+    assert_eq!(images[1]["reply"], 1);
+    assert_eq!(images[1]["id"], "A2");
+    assert_eq!(images[1]["image"]["format"], "jpeg");
+    assert_eq!(file["next_comment_attachment"], 4);
+
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    loaded.kernel().measures_selections.set(true);
+    loaded.recompute();
+    assert_eq!(loaded.to_json(), saved);
+    let listed = |doc: &Document<MockKernel>| comments(doc)["comments"].clone();
+    assert_eq!(listed(&loaded), listed(&doc));
+    assert_eq!(attachment_bytes(&loaded, "C2", "A1"), capture);
+    assert_eq!(attachment_bytes(&loaded, "C2", "A2"), photo);
+    let added = command(
+        &mut loaded,
+        json!({"cmd": "reply_comment", "id": "C1", "text": "next",
+               "attachments": [attachment(&png(1, 1, 0), "one.png")]}),
+    );
+    assert_eq!(added["attachments"], json!(["A4"]));
+
+    // Refused on load, each with the reason.
+    let broken = |change: &dyn Fn(&mut Value)| {
+        let mut file: Value = serde_json::from_str(&saved).unwrap();
+        change(&mut file);
+        Document::from_json(&file.to_string(), MockKernel::default())
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "accepted".to_owned())
+    };
+    let cases: [(&Change, &str); 7] = [
+        (
+            &|f| f["comment_attachments"][0]["image"]["width"] = json!(4),
+            "comment_attachments[0]: image A1: the image is a 3 × 2 png file, not the 4 × 2 png it says",
+        ),
+        (
+            &|f| f["comment_attachments"][0]["image"]["data"] = json!(base64(&png(3, 3, 1))),
+            "comment_attachments[0]: image A1: the image is a 3 × 3 png file, not the 3 × 2 png it says",
+        ),
+        (
+            &|f| f["comment_attachments"][0]["image"]["format"] = json!("bmp"),
+            "comment_attachments[0]: image A1: the image is bmp, not PNG or JPEG",
+        ),
+        (
+            &|f| f["comment_attachments"][1]["reply"] = json!(3),
+            "comment_attachments[1]: C2 has no reply 3",
+        ),
+        (
+            &|f| f["comment_attachments"][1]["comment"] = json!("C9"),
+            "comment_attachments[1]: there is no comment C9",
+        ),
+        (
+            &|f| f["comment_attachments"][1]["id"] = json!("A1"),
+            "comment_attachments[1]: image A1 is listed more than once",
+        ),
+        (
+            &|f| {
+                let mut large = png(3, 2, 1);
+                large.resize(mitcad_model::MAX_COMMENT_IMAGE + 1, 0);
+                f["comment_attachments"][0]["image"]["data"] = json!(base64(&large));
+            },
+            "comment_attachments[0]: image A1: the image is 4.0 MB, more than the 4 MB",
+        ),
+    ];
+    for (change, expected) in cases {
+        let error = broken(change);
+        // The detail with the field and the ids, for agents and the log;
+        // the text shown in words (mitcad#2011).
+        assert!(error.contains(expected), "{expected}: {error}");
+        let words = shown(&error);
+        assert!(
+            words.contains("an image of a comment is damaged: "),
+            "{words}"
+        );
+        assert!(in_words(&words), "{words}");
+    }
+    let words = shown(&broken(&|f| {
+        f["comment_attachments"][0]["image"]["width"] = json!(4)
+    }));
+    assert!(
+        words.contains(
+            "an image of a comment is damaged: the image is a 3 × 2 png file, not the 4 × 2 png it says"
+        ),
+        "{words}"
+    );
+    let words = shown(&broken(&|f| {
+        f["comment_attachments"][1]["reply"] = json!(3)
+    }));
+    assert!(
+        words.contains(
+            "an image of a comment is damaged: it is on a reply the comment does not have"
+        ),
+        "{words}"
+    );
+    // A field it does not know is refused, as inside the comments.
+    let error = broken(&|f| f["comment_attachments"][0]["pin"] = json!(1));
+    assert!(error.contains("unknown field `pin`"), "{error}");
+    assert!(in_words(&shown(&error)), "{error}");
 }

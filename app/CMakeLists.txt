@@ -201,6 +201,8 @@ qt_add_executable(mitcad
   # The View menu, display settings and dialogs (U5).
   view/ViewController.cpp
   view/ViewController.hpp
+  view/ShortcutOverview.cpp
+  view/ShortcutOverview.hpp
   # Preferences › Restore Defaults (mitcad#1887).
   view/PreferencesRestore.cpp
   view/ViewNavigation.hpp
@@ -211,6 +213,8 @@ qt_add_executable(mitcad
   files/FileFormats.hpp
   files/F3dImport.cpp
   files/F3dImport.hpp
+  files/ImportWorkerFailure.cpp
+  files/ImportWorkerFailure.hpp
   # An .iam assembly's parts with their design history (mitcad#507).
   files/IamImport.cpp
   files/IamImport.hpp
@@ -1322,6 +1326,20 @@ if(BUILD_TESTING AND TARGET mitcad-release)
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 add_subdirectory(webbrowser)
+# In-app tutorials (mitcad#2012, docs/tutorials.md): the guide step shown in
+# a design window (one engine for a tutorial page's bridge and live MCP's
+# ui_guide) and the tutorial pane on the web browser component's module.
+target_sources(mitcad PRIVATE
+  tutorials/GuideStep.cpp
+  tutorials/GuideStep.hpp
+  tutorials/MainWindowGuide.cpp
+  tutorials/MainWindowTutorials.cpp
+  tutorials/TutorialGuide.cpp
+  tutorials/TutorialGuide.hpp
+  tutorials/TutorialSources.cpp
+  tutorials/TutorialSources.hpp
+  tutorials/TutorialsDialog.cpp
+  tutorials/TutorialsDialog.hpp)
 # Windows Explorer's thumbnails of designs (mitcad#1695): the thumbnail
 # handler mitcad-thumbnails.dll; Windows only.
 if(WIN32)
@@ -1855,6 +1873,9 @@ target_sources(mitcad PRIVATE sketch/SketchClipboard.cpp sketch/SketchClipboard.
 # Copy, Cut and Paste in a 3D sketch, and a 2D sketch's copy pasted into
 # one (mitcad#1661).
 target_sources(mitcad PRIVATE sketch/Sketch3dClipboard.cpp)
+# Sketch blocks (mitcad#2110): Create, Insert, Explode and Edit Block, and
+# an instance picked as one.
+target_sources(mitcad PRIVATE sketch/SketchBlocks.cpp MainWindowSketchBlocks.cpp)
 
 # Redefine Sketch Plane (mitcad#787): a sketch moved to another plane or
 # face and placed there by an offset, a move, a rotation and a flip.
@@ -1989,7 +2010,8 @@ target_sources(mitcad PRIVATE
   view/SpaceMouseController.hpp
   view/SpaceMouseNavigation.hpp
   view/SpaceMouseTiming.hpp
-  view/SpaceMouseView.cpp)
+  view/SpaceMouseView.cpp
+  view/SpaceMouseWheelGuard.hpp)
 if(WIN32)
   target_sources(mitcad PRIVATE
     platform/windows/SpaceMouseWindows.cpp
@@ -2240,6 +2262,12 @@ target_sources(mitcad PRIVATE MainWindowComments.cpp view/Comments.cpp view/Comm
                view/CommentPinOverlay.cpp view/CommentPinOverlay.hpp view/CommentsWindow.cpp
                view/CommentsWindow.hpp)
 
+# Images on comments and replies (mitcad#2011, app/COMMANDS.md "Comments"):
+# Attach Image…, Capture and Annotate's markup editor over the view, the
+# thumbnails' viewer.
+target_sources(mitcad PRIVATE view/CommentImages.cpp view/CommentImages.hpp view/CommentMarkup.cpp
+               view/CommentMarkup.hpp)
+
 # Send to Slicer's material rows (mitcad#1141, app/COMMANDS.md "Send to
 # Slicer"): a row per filament, each a searchable material picker with the
 # FDM plastics first, grouped by where the materials live.
@@ -2481,6 +2509,9 @@ target_sources(mitcad PRIVATE framework/MenuBarReveal.cpp framework/MenuBarRevea
 # CRLF line ends (mitcad#1641, app/COMMANDS.md "BUILD"): Copy as Text and
 # Save as Text… beside the CSV and PDF buttons.
 target_sources(mitcad PRIVATE build/ListTables.cpp build/ListTables.hpp)
+# Lists as pages (mitcad#1089, mitcad#2095): the BUILD lists and the
+# Keyboard and Mouse Overview's cheat sheet as PDF and print.
+target_sources(mitcad PRIVATE build/ListPages.cpp build/ListPages.hpp)
 
 # The project picker's New Folder (mitcad#1649, app/COMMANDS.md "Project
 # picker"): a folder made in the chosen project, named in place.
@@ -2743,3 +2774,29 @@ target_sources(mitcad PRIVATE MainWindowDocks.cpp framework/DockState.cpp framew
 # above the page list, the index made from the pages' widgets, the counts
 # and the matches painted.
 target_sources(mitcad PRIVATE framework/PreferencesSearch.cpp framework/PreferencesSearch.hpp)
+
+# The sketch's value fields over the view (mitcad#2086, GitHub
+# mitcad/Mitcad#485): their style sheet, selected text in the accent with
+# AccentText, read by the unit test sketch_field_style.
+target_sources(mitcad PRIVATE sketch/SketchFieldStyle.cpp sketch/SketchFieldStyle.hpp)
+
+# A sketch constraint or dimension refused for a conflict with one blocking
+# item (mitcad#2090, GitHub mitcad/Mitcad#475, app/COMMANDS.md "Conflicting
+# constraints"): the message's Replace button, which swaps that item out in
+# one undo step while the sketch is as it was refused.
+target_sources(mitcad PRIVATE sketch/SketchReplace.cpp)
+
+# The Rib's and Web's Draft Angle (mitcad#2102, GitHub mitcad/Mitcad#488):
+# its input right after Thickness and `draft_angle` written only when not 0.
+target_sources(mitcad PRIVATE commands/RibDraft.cpp commands/RibDraft.hpp)
+
+# Folders of the Browser's component and body rows (mitcad#2103, GitHub
+# mitcad/Mitcad#491, app/COMMANDS.md "Folders in the Browser"): the
+# occurrences of a component by folder, New Folder's name and the folder
+# commands the row menus and drops run.
+target_sources(mitcad PRIVATE browser/BrowserOrder.cpp browser/BrowserOrder.hpp)
+
+# The Discord button (mitcad#2123, app/COMMANDS.md "Discord"): an icon
+# button right of the Boost development button that opens MitCad's Discord
+# server, the action help.discord (Help › MitCad on Discord).
+target_sources(mitcad PRIVATE framework/DiscordButton.cpp framework/DiscordButton.hpp)

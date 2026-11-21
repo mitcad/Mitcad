@@ -333,6 +333,7 @@ mod tests {
             map,
             view_box,
             text: 3.5,
+            standard: crate::Standard::Iso,
         }
     }
 

@@ -747,9 +747,13 @@ public:
   }
 
   bool focusFirstValue() override {
-    for (const Row& row : m_rows) {
-      if (row.input->type == InputDef::Type::Value && shown(row)) {
-        return focusValue(row.key);
+    // A value marked to take the keyboard first (mitcad#2098), else the
+    // first shown one.
+    for (const bool marked : {true, false}) {
+      for (const Row& row : m_rows) {
+        if (row.input->type == InputDef::Type::Value && (!marked || row.input->keyboardFirst) && shown(row)) {
+          return focusValue(row.key);
+        }
       }
     }
     return false;

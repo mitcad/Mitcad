@@ -44,7 +44,7 @@ QStringList ids(const QStringList& names) {
 // The Sketch tab's Create and Modify tools in the ribbon's order (Create:
 // the Lines submenu, Point (mitcad#1545), the Rectangles, Circles, Arcs,
 // Other Geometry, Text, Patterns and References submenus, then Dimension;
-// Modify: Fillet, Chamfer, Trim, ...).
+// Modify: Fillet, Blend Curve, Chamfer, Trim, ...).
 const QStringList& ribbon() {
   static const QStringList order = ids(
       {QStringLiteral("line"), QStringLiteral("point"), QStringLiteral("rectangle"),
@@ -55,8 +55,8 @@ const QStringList& ribbon() {
        QStringLiteral("slot_overall"), QStringLiteral("spline"), QStringLiteral("spline_control"),
        QStringLiteral("text"), QStringLiteral("rectangular_pattern"), QStringLiteral("circular_pattern"),
        QStringLiteral("mirror"), QStringLiteral("project"), QStringLiteral("intersect"),
-       QStringLiteral("dimension"), QStringLiteral("fillet"), QStringLiteral("chamfer"),
-       QStringLiteral("trim"), QStringLiteral("extend"), QStringLiteral("offset"), QStringLiteral("move")});
+       QStringLiteral("dimension"), QStringLiteral("fillet"), QStringLiteral("blend_curve"),
+       QStringLiteral("chamfer"), QStringLiteral("trim"), QStringLiteral("extend"), QStringLiteral("offset"), QStringLiteral("move")});
   return order;
 }
 
@@ -112,15 +112,19 @@ void countsTests() {
     counts.insert(ribbon()[i], 100 + static_cast<int>(i)); // later ones more
   }
   counts.insert(QStringLiteral("sketch.line"), 1000);   // the most
-  counts.insert(QStringLiteral("sketch.ellipse"), 118); // ties with Text (100 + 18) for the last place
+  // The tool just before the twelve last of the ribbon (Text before more
+  // tools came after it) ties with Ellipse for the last place.
+  const qsizetype tiedAt = ribbon().size() - 13;
+  const QString tied = ribbon()[tiedAt];
+  counts.insert(QStringLiteral("sketch.ellipse"), 100 + static_cast<int>(tiedAt));
   const PaletteCreateChoice choice = choosePaletteCreateTools(ribbon(), {}, counts);
   CHECK(choice.fromCounts);
   CHECK(choice.ids.size() == kPaletteCreateCount);
   CHECK(inRibbonOrder(choice.ids));
   CHECK(choice.ids.first() == QStringLiteral("sketch.line"));
   CHECK(choice.ids.contains(QStringLiteral("sketch.move")));       // 130
-  CHECK(choice.ids.contains(QStringLiteral("sketch.ellipse")));    // 118, before Text in the ribbon
-  CHECK(!choice.ids.contains(QStringLiteral("sketch.text")));      // 118
+  CHECK(choice.ids.contains(QStringLiteral("sketch.ellipse")));    // the tie, earlier in the ribbon
+  CHECK(!choice.ids.contains(tied));                                // the tie, later
   CHECK(!choice.ids.contains(QStringLiteral("sketch.rectangle"))); // 102
   // The 14: Line, Ellipse and the twelve last of the ribbon.
   CHECK(choice.ids.mid(2) == ribbon().mid(ribbon().size() - 12));

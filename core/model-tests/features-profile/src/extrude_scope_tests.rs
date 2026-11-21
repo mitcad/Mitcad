@@ -213,13 +213,30 @@ fn cut_scope_hidden_second_occurrence_invalidates_cache_and_disables_shared_defi
         a.reason
             .as_deref()
             .unwrap()
-            .contains("multiple occurrences")
+            .contains("Placed more than once")
     );
+    assert!(a.assembly_cut);
+    // Included by name, the occurrence is machined there only (mitcad#2131):
+    // the shared definition stays as it is.
     f.cut["cut_scope"]["targets"] =
         json!({"type":"explicit","included":[{"component":"C1","occurrence":"O1"}]});
     let report = f.doc.preview_edit(uid, &cut_definition(&f.cut)).unwrap();
-    assert!(matches!(report.status, FeatureStatus::Failed(_)));
-    assert!(!report.cut_targets.unwrap().can_commit);
+    assert_eq!(report.status, FeatureStatus::Ok);
+    let targets = report.cut_targets.unwrap();
+    assert!(targets.can_commit);
+    let a = targets
+        .rows
+        .iter()
+        .find(|r| r.component == ComponentUid(1))
+        .unwrap();
+    assert!(a.eligible && a.checked && !a.assembly_cut);
+    assert!(
+        a.note
+            .as_deref()
+            .unwrap()
+            .contains("Machined in this assembly")
+    );
+    assert!(!is_cut(&f.doc, f.bodies[0]), "preview cannot mutate bodies");
     f.doc.undo(); // visibility
     f.doc.undo(); // second occurrence
     assert!(is_cut(&f.doc, f.bodies[0]));
@@ -533,6 +550,8 @@ fn cut_scope_linked_target_is_disabled_and_never_modified() {
             frames: Vec::new(),
             looks: false,
             given: Vec::new(),
+            parts: None,
+            unlinked: Vec::new(),
         });
     let mut doc = Document::from_state(MockKernel::default(), state);
     doc.recompute();
@@ -545,7 +564,11 @@ fn cut_scope_linked_target_is_disabled_and_never_modified() {
         .find(|r| r.component == ComponentUid(1))
         .unwrap();
     assert!(!a.eligible && !a.checked);
-    assert!(a.reason.as_deref().unwrap().contains("read-only"));
+    assert!(a.reason.as_deref().unwrap().contains("Linked component"));
+    assert!(
+        a.assembly_cut,
+        "checking it machines this occurrence (mitcad#2131)"
+    );
     doc.add_feature(&cut_definition(&f.cut), None).unwrap();
     assert!(!is_cut(&doc, f.bodies[0]));
     assert!(is_cut(&doc, f.bodies[2]));
@@ -991,7 +1014,9 @@ fn cut_inside_a_component_with_several_occurrences_cuts_its_own_definition() {
             .count(),
         1
     );
-    // Other's shared definition, reached from outside it, stays refused.
+    // Other's shared definition, reached from outside it, is left out of
+    // the automatic scope; checked, it would be machined there only
+    // (mitcad#2131).
     let other = targets
         .rows
         .iter()
@@ -1004,7 +1029,7 @@ fn cut_inside_a_component_with_several_occurrences_cuts_its_own_definition() {
             .reason
             .as_deref()
             .unwrap()
-            .contains("multiple occurrences")
+            .contains("Placed more than once")
     );
     assert!(!is_cut(&f.doc, f.ring), "preview cannot mutate bodies");
 
@@ -1120,7 +1145,7 @@ fn cut_from_outside_still_refuses_one_occurrence_of_a_shared_component() {
             row.reason
                 .as_deref()
                 .unwrap()
-                .contains("multiple occurrences")
+                .contains("Placed more than once")
         );
     }
     f.doc.add_feature(&cut_definition(&cut), None).unwrap();

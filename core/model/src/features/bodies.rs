@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use super::base::{Joined, body_lumps, join_pieces};
+use super::base::{Joined, body_lumps, join_pieces, warn_stray};
 use super::{BodyChange, EvalContext, FeatureEntry, Operation};
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::{BooleanOp, Kernel};
@@ -135,7 +135,8 @@ pub(crate) fn verb(op: BooleanOp) -> &'static str {
 /// Combines a tool with bodies as an extrude does: New Body makes a body
 /// of each solid; Join fuses the tool with every participant it touches
 /// (merged bodies go into the first, a body of several solids keeps those
-/// the tool does not reach, a tool solid touching nothing becomes a body);
+/// the tool does not reach, a tool solid merging with none becomes a body,
+/// with a warning);
 /// Cut and Intersect work on each participant they reach (a body
 /// cut away is removed, pieces after the first become bodies). Empty
 /// `participants` means all bodies. Returns false when a Join, Cut or
@@ -208,7 +209,13 @@ pub(crate) fn apply_tool_strays<K: Kernel>(
                 Joined::Body(i, shape) => bodies.set(uids[i], shape),
                 Joined::Merged(i) => bodies.remove(uids[i]),
                 Joined::Stray(_) if !strays => {}
-                Joined::Stray(shape) | Joined::Apart(shape) => {
+                Joined::Stray(shape) => {
+                    // Said, as an extrusion's (mitcad#2127).
+                    warn_stray(ctx, &shape);
+                    let uid = ctx.new_body();
+                    bodies.set(uid, shape);
+                }
+                Joined::Apart(shape) => {
                     let uid = ctx.new_body();
                     bodies.set(uid, shape);
                 }

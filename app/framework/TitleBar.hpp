@@ -35,11 +35,10 @@ class Ribbon;
 // extends under the native title bar (MainWindow sets the flag), so the
 // empty parts of this row move the window. The Floating row of Windows and
 // Linux (setFloatingRow, mitcad#1990) is the window's one top row instead,
-// one flat bar: Home, File and Save, Undo and Redo, the document tabs (a +
-// for a new design only with RowControls::newDesign), the quick-access
-// group's other commands at the free
-// stretch's right end, the Boost development button, the indicators,
-// Preferences and Help, the version;
+// one flat bar: the one left group (☰, Home, File, New Design, Open, Save,
+// Design Properties, Print, Undo, Redo and the commands the user added,
+// mitcad#2129), the document tabs, the Boost development button, the
+// Discord button, the indicators, Preferences and Help, the version;
 // the workspace tabs and the search field are the toolbar panel's
 // (Ribbon::setPanel).
 class TitleBar : public QWidget {
@@ -64,15 +63,21 @@ public:
   // row's right part, left of the indicators (or Preferences and Help);
   // the part "titleBoost" while it shows.
   void setBoostButton(QWidget* button);
-  // The quick-access group (mitcad#1090). In the Floating row it sits at the
-  // right end of the free part between the document tabs and the
-  // indicators (or Preferences and Help), and folds into its menu when its
-  // buttons do not fit there (mitcad#1989, mitcad#1990). In the macOS toolbar row it follows the tabs and folds
-  // when the row is too narrow for it and the whole document name.
+  // The Discord button (mitcad#2123, DiscordButton): right of the Boost
+  // development button, left of the indicators (or Preferences and Help);
+  // the part "titleDiscord". It stays when Boost development is hidden.
+  void setDiscordButton(QWidget* button);
+  // The quick-access group (mitcad#1090). In the Floating row it is the one
+  // left group, first in the row, the document tabs after it
+  // (setRowControls, mitcad#2129); it folds its items from the end into its
+  // menu where the row has no room for them (QuickAccessGroup::fitWidth).
+  // In the macOS toolbar row it follows the tabs and folds when the row is
+  // too narrow for it and the whole document name.
   void setQuickAccess(QuickAccessGroup* group);
   // The ☰ button of the hidden menu bar (mitcad#1620, MenuBarButton): at the
   // left of the row, before Undo and Redo, in a capsule of its own (the row
-  // part "titleMenu"); shown only while setMenuButtonVisible says so.
+  // part "titleMenu"); shown only while setMenuButtonVisible says so. The
+  // Floating row's setRowControls moves it into the left group, first.
   void setMenuButton(QWidget* button);
   void setMenuButtonVisible(bool visible);
   // The Floating row (mitcad#1990), where the window's menu bar never shows:
@@ -103,19 +108,18 @@ public:
   // row is shown.
   void setFloatingRow(bool floating);
   bool isFloatingRow() const { return m_floatingRow; }
-  // The Floating row's own controls (mitcad#1990; after setFloatingRow):
-  // Home (the Start tab), File (the menu bar's File menu) and Save in a
-  // capsule ("titleFile") before Undo and Redo; after them the document
-  // tabs (hostDocumentTabs) and, with `newDesign`, a + that runs it, in a
-  // capsule ("titleTabs"; the window passes none: New Design is in File,
-  // Ctrl+N and the Start page); at the right end Preferences and Help (the menu bar's
-  // Help menu) in a capsule ("titleSettings") and the version
-  // ("titleVersion").
+  // The Floating row's own controls (mitcad#1990; after setFloatingRow and
+  // setQuickAccess): the one left group (mitcad#2129), the quick-access
+  // group as QuickAccessGroup::setTopBar makes it, with the ☰
+  // (setMenuButton) and Home (the Start tab) fixed first in it and File
+  // (the menu bar's File menu) as its File ˅ item; it replaces the ☰'s
+  // capsule and the Undo and Redo pill. After it the document tabs
+  // (hostDocumentTabs) in a capsule ("titleTabs"); at the right end
+  // Preferences and Help (the menu bar's Help menu) in a capsule
+  // ("titleSettings") and the version ("titleVersion").
   struct RowControls {
     QAction* home = nullptr;
     QMenu* file = nullptr;
-    QAction* save = nullptr;
-    QAction* newDesign = nullptr;
     QAction* preferences = nullptr;
     QMenu* help = nullptr;
   };
@@ -136,10 +140,10 @@ public:
   // §10). As wide as the title row's, narrower down to 140 px where the
   // row has no room.
   static QWidget* createSearchField(QAction* search, int height, QWidget* parent = nullptr);
-  // setFloatingRow: the controls shown, named ("titleMenu", "titleFile",
-  // "titleHistory", "titleTabs", "titleQuickAccess", "titleBoost",
-  // "titleIndicator", "titleAgent", "titleChat", "titleSettings",
-  // "titleVersion"), in the
+  // setFloatingRow: the controls shown, named ("titleQuickAccess", the
+  // left group, and "titleMenu", its ☰ inside it (mitcad#2129);
+  // "titleTabs", "titleBoost", "titleDiscord", "titleIndicator",
+  // "titleAgent", "titleChat", "titleSettings", "titleVersion"), in the
   // row's coordinates, left to right.
   std::vector<std::pair<QString, QRect>> rowParts() const;
 
@@ -202,8 +206,8 @@ private:
   QWidget* m_inset = nullptr;
   CapsuleFrame* m_menu = nullptr; // the ☰ button's capsule (setMenuButton)
   QPointer<QWidget> m_menuButton;  // the ☰ button itself
-  QPointer<QToolButton> m_fileButton; // setRowControls' File and ?
-  QPointer<QToolButton> m_helpButton;
+  bool m_menuInGroup = false;      // the ☰ in the left group (setRowControls)
+  QPointer<QToolButton> m_helpButton; // setRowControls' ?
   CapsuleFrame* m_history = nullptr;
   QWidget* m_tabs = nullptr;
   QWidget* m_tabsButton = nullptr; // the + of the tabs' menu (mitcad#1975)
@@ -212,17 +216,17 @@ private:
   QPointer<QWidget> m_agentIndicator;
   QPointer<QWidget> m_chatButton;
   QPointer<QWidget> m_boost; // setBoostButton
+  QPointer<QWidget> m_discord; // setDiscordButton
   QPointer<QuickAccessGroup> m_quickAccess;
   // The Floating row's own controls (setRowControls, mitcad#1990).
-  CapsuleFrame* m_file = nullptr;      // Home, File, Save
-  QWidget* m_home = nullptr;
+  QWidget* m_home = nullptr;           // in the left group (mitcad#2129)
   CapsuleFrame* m_documents = nullptr; // the document tabs and +
   QHBoxLayout* m_documentsRow = nullptr;
   QPointer<QTabBar> m_documentTabs;    // hostDocumentTabs
   CapsuleFrame* m_settings = nullptr;  // Preferences, Help
   QLabel* m_version = nullptr;
   // The bar's own buttons of commands the quick-access group may hold
-  // (file.save, file.new_design, tools.preferences): not shown twice.
+  // (tools.preferences): not shown twice.
   QHash<QString, QWidget*> m_rowCommands;
   std::vector<std::pair<QString, QRect>> m_toldParts; // rowParts as told
   QTimer* m_foldTimer = nullptr;

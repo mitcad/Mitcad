@@ -378,7 +378,9 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Corner: right, on top"), QT_TRANSLATE_NOOP("Choice", "Corner: left, under"),
     QT_TRANSLATE_NOOP("Choice", "Corner: right, under"),
     // commands/SheetCommands.cpp: Convert to Sheet Metal's Miter (mitcad#1949).
-    QT_TRANSLATE_NOOP("Choice", "Earlier Face Runs Past"), QT_TRANSLATE_NOOP("Choice", "Later Face Runs Past")};
+    QT_TRANSLATE_NOOP("Choice", "Earlier Face Runs Past"), QT_TRANSLATE_NOOP("Choice", "Later Face Runs Past"),
+    // drawings/: a drawing's dimensioning Standard (mitcad#2047).
+    QT_TRANSLATE_NOOP("Choice", "ISO"), QT_TRANSLATE_NOOP("Choice", "ASME")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -2655,11 +2657,16 @@ std::vector<const CommandPanel::Row*> CommandPanel::orderedRows() const {
 }
 
 bool CommandPanel::focusFirstValue() {
-  for (const Row* row : orderedRows()) {
-    if (row->edit != nullptr && row->input->type == InputDef::Type::Value &&
-        row->field->isVisibleTo(this)) {
-      focusField(row->edit);
-      return true;
+  const std::vector<const Row*> rows = orderedRows();
+  // A value marked to take the keyboard first (mitcad#2098), else the
+  // first visible one.
+  for (const bool marked : {true, false}) {
+    for (const Row* row : rows) {
+      if (row->edit != nullptr && row->input->type == InputDef::Type::Value &&
+          (!marked || row->input->keyboardFirst) && row->field->isVisibleTo(this)) {
+        focusField(row->edit);
+        return true;
+      }
     }
   }
   return false;
@@ -2823,6 +2830,11 @@ QStringList CommandPanel::layoutLines() const {
                        .arg(center.x())
                        .arg(center.y());
         }
+      }
+      if (row->targets != nullptr) {
+        // Affected components' rows and check boxes, where they are now
+        // (the page scrolls to a message after the list logged them).
+        lines << row->targets->places();
       }
       if (row->mark != nullptr && row->mark->isVisible()) {
         // A value field's mark (InputDef::markFor, mitcad#980): its button

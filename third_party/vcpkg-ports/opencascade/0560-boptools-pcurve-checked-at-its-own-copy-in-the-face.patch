@@ -34,8 +34,7 @@ the threaded hole, whose pieces of the thread's cylinders end well short of
 their surfaces' first period: the section curves are put into the piece's
 range and the cuts remove the boxes' material (before, the copy was checked
 at twice the shift, the box cut removed nothing and its result was invalid).
-Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 --- a/src/ModelingAlgorithms/TKBO/BOPTools/BOPTools_AlgoTools2D.cxx
 +++ b/src/ModelingAlgorithms/TKBO/BOPTools/BOPTools_AlgoTools2D.cxx

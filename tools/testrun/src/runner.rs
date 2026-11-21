@@ -360,10 +360,12 @@ pub struct Runner<'o> {
     limits: Limits,
     jobs: usize,
     /// The bound of the UI entries at once (`concurrency::bound`); None:
-    /// the scheduler holds UI entries to no cap or room and reruns none.
+    /// the scheduler holds UI entries to no room and reruns none (the cap
+    /// is then `concurrency::DEFAULT_BOUND`).
     ui_bound: Option<usize>,
-    /// The machine's learnt cap (within the learning bound), for the report.
-    ui_learnt: usize,
+    /// The machine's cap (`concurrency::machine_cap`): the scheduler's
+    /// `Limits::ui_max` and the report's.
+    ui_cap: usize,
     ceiling: u64,
     /// The budget's basis came from MITCAD_TEST_MEMORY (not re-read).
     fixed_basis: bool,
@@ -509,8 +511,8 @@ impl<'o> Runner<'o> {
             margin: o.margin,
         };
         let scheduling = o.mode == Mode::Schedule;
-        // The bound of the UI entries at once; without one no cap or room
-        // is applied (a machine opts in, `concurrency`).
+        // The bound of the UI entries at once; without one the default cap
+        // applies, but no room (a machine opts in, `concurrency`).
         let ui_jobs = std::env::var("MITCAD_UI_JOBS").ok();
         let ui_bound = concurrency::bound(o.ui_max, ui_jobs.as_deref());
         let (before, setups) = link(&selected);
@@ -638,15 +640,14 @@ impl<'o> Runner<'o> {
         for (t, rank) in tests.iter_mut().zip(schedule::ranks(&walls, &successors)) {
             t.rank = rank;
         }
-        let ui_cap = profiles.ui_caps.get(concurrency::PLATFORM);
-        let ui_learnt = concurrency::effective_cap(ui_cap, concurrency::learning_bound(ui_bound));
+        let ui_cap = concurrency::machine_cap(ui_bound);
         let limits = Limits {
             budget,
             cores: cores as f64,
             cpu_gate: o.cpu_gate,
             sensitive_load: o.sensitive_load,
             sensitive_max: o.sensitive_max,
-            ui_max: concurrency::scheduled_cap(ui_cap, ui_bound),
+            ui_max: ui_cap,
             lane_share: o.lane_share,
             max_parallel: o
                 .jobs
@@ -666,7 +667,7 @@ impl<'o> Runner<'o> {
                 .jobs
                 .unwrap_or(options::default_jobs(cores, false, known, total)),
             ui_bound,
-            ui_learnt,
+            ui_cap,
             ceiling,
             fixed_basis,
             free,
@@ -880,7 +881,7 @@ impl<'o> Runner<'o> {
         }
         self.save();
         self.record_release();
-        let ui = self.learn_ui_cap();
+        let ui = self.ui_run_line();
         self.finish_report(ui.as_deref())
     }
 
@@ -1417,12 +1418,11 @@ impl<'o> Runner<'o> {
     fn ui_line(&self) -> String {
         match self.ui_bound {
             Some(bound) => format!(
-                "UI entries at most {} at once (learnt; bound {bound})",
-                self.limits.ui_max
+                "UI entries at most {bound} at once (the bound; each within its room and the memory budget)"
             ),
             None => format!(
-                "UI entries not capped (no --ui-max or MITCAD_UI_JOBS; learnt cap {})",
-                self.ui_learnt
+                "UI entries at most {} at once (the default, no --ui-max or MITCAD_UI_JOBS; no rooms, no rerun alone)",
+                self.ui_cap
             ),
         }
     }
@@ -1438,30 +1438,13 @@ impl<'o> Runner<'o> {
         }
     }
 
-    /// Learns the machine's UI entries at once from this run's records
-    /// (`concurrency::learn`) into the profile file; the report's line.
-    fn learn_ui_cap(&self) -> Option<String> {
+    /// What this run's records tell of its UI entries
+    /// (`concurrency::run_facts`), the report's line; the rooms were
+    /// learnt with each test's runs (`profile::record`), and the machine's
+    /// cap does not change with them (mitcad#2124).
+    fn ui_run_line(&self) -> Option<String> {
         let facts = concurrency::run_facts(&self.records);
-        if facts.at_once == 0 {
-            return None;
-        }
-        let cap = self.ui_learnt;
-        let unchanged = concurrency::summary(&facts, cap, cap);
-        let Some(path) = self.profiles.as_ref().filter(|_| self.o.record) else {
-            return Some(unchanged);
-        };
-        let platform = concurrency::PLATFORM;
-        let bound = concurrency::learning_bound(self.ui_bound);
-        let learnt = profile::update(path, |profiles| {
-            concurrency::learn_into(&mut profiles.ui_caps, platform, &facts, bound)
-        });
-        match learnt {
-            Ok((before, after)) => Some(concurrency::summary(&facts, before, after)),
-            Err(e) => {
-                eprintln!("testrun: {e}");
-                Some(unchanged)
-            }
-        }
+        (facts.at_once > 0).then(|| concurrency::summary(&facts, self.ui_cap))
     }
 
     /// One line per finished test; failures also to the status file.

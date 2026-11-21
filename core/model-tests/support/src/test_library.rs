@@ -905,6 +905,31 @@ impl TestLibrary {
                 designation: String::new(),
             },
         );
+        // A carriage of the guide rail (mitcad#2088): a block 40 long along
+        // its frame `rail`'s x axis, the frame on its underside.
+        add(
+            "carriage15",
+            V1,
+            Part {
+                text: block_design(
+                    [40.0, 30.0, 20.0],
+                    [-20.0, -15.0],
+                    &[
+                        ("rail", [0.0; 3], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]),
+                        ("top", [0.0, 0.0, 20.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+                    ],
+                ),
+                build: Some(json!({
+                    "role": "linear",
+                    "frames": [{"name": "rail", "kind": "rail"}, {"name": "top", "kind": "face"}],
+                    "linear": {"kind": "carriage",
+                               "mate": {"frame": "rail", "on": "rail", "joint": "slider", "axis": "x"}}
+                })),
+                part_number: "C15".to_owned(),
+                name: "Carriage 15".to_owned(),
+                designation: String::new(),
+            },
+        );
         Arc::new(library)
     }
 }

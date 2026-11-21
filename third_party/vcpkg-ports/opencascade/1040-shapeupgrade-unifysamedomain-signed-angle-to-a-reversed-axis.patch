@@ -46,8 +46,8 @@ kept. Without the patch the two faces stay apart wherever the other face's
 X direction lies behind the reference face's (the sector behind with the
 quarter first, the sector ahead with the sector first); the other two
 orders, whose angle lies between 0 and pi, are the boundary cases the
-patch leaves as they were. Its failure without the patch is still to be shown in
-the port's before/after run (mitcad#1986).
+patch leaves as they were. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -1445,19 +1445,12 @@

@@ -196,6 +196,19 @@ impl LiveMcpSession {
             .unwrap_or_default())
     }
 
+    /// The guide step's state (mitcad#2012): the `mitcad://ui-guide`
+    /// resource. The notification to send the client when it subscribed and
+    /// the state changed; empty otherwise.
+    pub fn set_mcp_guide(&mut self, state: &str) -> Result<String, crate::ApiError> {
+        let state = serde_json::from_str(state)
+            .map_err(|error| crate::ApiError(format!("invalid guide step JSON: {error}")))?;
+        Ok(self
+            .0
+            .set_guide_step(state)
+            .map(|notification| notification.to_string())
+            .unwrap_or_default())
+    }
+
     /// Preferences › AI Assistants › Agents may resolve comments (mitcad#1119).
     pub fn set_mcp_comment_policy(&mut self, may_resolve: bool) {
         self.0.set_may_resolve_comments(may_resolve);

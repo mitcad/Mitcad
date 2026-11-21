@@ -37,6 +37,13 @@ pub(super) const COMMANDS: &[&str] = &[
     "reorient_design",
     "convert_derived_part",
     "mesh_section",
+    // Folders of a component's occurrences and bodies in the browser
+    // (mitcad#2103).
+    "set_occurrence_folder",
+    "rename_occurrence_folder",
+    "rename_body_folder",
+    // An occurrence's place among its siblings (mitcad#2104).
+    "reorder_occurrence",
 ];
 
 /// The design policy's settings (`Setting::key`).
@@ -256,6 +263,50 @@ fn components(name: &str) -> Option<Value> {
             },
             "required": ["occurrence"],
             "examples": [{"cmd": "set_occurrence_flexible", "occurrence": "Hinge:1"}]
+        }),
+        // Folders in the browser (mitcad#2103): organization only, nothing
+        // recomputed.
+        "set_occurrence_folder" => json!({
+            "description": "Lists an occurrence in a folder of its parent component's occurrences in the browser (organization only; a folder is a name the occurrences in it share, gone when none has it), or in no folder. Refused inside a linked component. Result: folder.",
+            "properties": {
+                "occurrence": occurrence(),
+                "folder": {"type": ["string", "null"], "description": "The folder's name; null or left out: in no folder"}
+            },
+            "required": ["occurrence"],
+            "examples": [{"cmd": "set_occurrence_folder", "occurrence": "Rail:1", "folder": "Frame"},
+                         {"cmd": "set_occurrence_folder", "occurrence": "Rail:1"}]
+        }),
+        "rename_occurrence_folder" => json!({
+            "description": "Renames a folder of a component's occurrences in the browser: every occurrence in it takes the new name. Refused when another of the component's folders has the name. Result: folder.",
+            "properties": {
+                "component": component(),
+                "folder": text("The folder's name"),
+                "name": text("Its new name")
+            },
+            "required": ["component", "folder", "name"],
+            "examples": [{"cmd": "rename_occurrence_folder", "component": "C0", "folder": "Frame", "name": "Profiles"}]
+        }),
+        "rename_body_folder" => json!({
+            "description": "Renames a folder of a component's Bodies folder in the browser: every body of the component in it takes the new name. Refused when another of its folders has the name. Result: folder.",
+            "properties": {
+                "component": component(),
+                "folder": text("The folder's name"),
+                "name": text("Its new name")
+            },
+            "required": ["component", "folder", "name"],
+            "examples": [{"cmd": "rename_body_folder", "component": "C0", "folder": "Glass", "name": "Panes"}]
+        }),
+        // An occurrence's place among its siblings (mitcad#2104).
+        "reorder_occurrence" => json!({
+            "description": "Moves an occurrence (with `with`, several of the same parent, in that order) to a place among the occurrences of its parent: the order the browser and the queries list them in, kept in the design. Nothing is recomputed; placements, joints and the timeline stay. Refused: an index past the end, a parent linked from another file. Result: index.",
+            "properties": {
+                "occurrence": occurrence(),
+                "index": {"type": "integer", "minimum": 0, "description": "Its new place among its parent's occurrences, counted without those moved (0: first)"},
+                "with": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Other occurrences of the same parent that go after it, in this order"}
+            },
+            "required": ["occurrence", "index"],
+            "examples": [{"cmd": "reorder_occurrence", "occurrence": "Arm:2", "index": 0},
+                         {"cmd": "reorder_occurrence", "occurrence": "O3", "with": ["O4"], "index": 1}]
         }),
         _ => return None,
     };

@@ -62,9 +62,10 @@ edge or two, the torus one face, against the post rounded without flats and
 the flats cut after; another caller: geometry/tests/test_fillet_cutouts.cpp,
 test_rounding_over_flats_is_the_poles_with_the_flats_cut_again (ctest
 geometry.suite.fillet_cutouts), MitCad's fillet of the pole with flats built
-by the kernel itself, with no note. Its failure without the patch, stated in
-its documentation, is still to be shown in the port's before/after run
-(mitcad#1986).
+by the kernel itself, with no note. Its failure without the patch is still
+to be shown: with it and the 55 later patches that change the same lines
+reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index fb0285a0..b5500224 100644

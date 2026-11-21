@@ -974,24 +974,294 @@ std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& fi
   return choice;
 }
 
-std::optional<bool> askLinked(QWidget* parent, const QString& file) {
-  QMessageBox box(QMessageBox::Question, QObject::tr("Insert Component"),
-                  QObject::tr("Insert %1 linked, so that it follows the file, or as a copy that can be edited "
-                              "here?")
-                      .arg(QFileInfo(file).fileName()),
-                  QMessageBox::Cancel, parent);
-  QPushButton* link = box.addButton(QObject::tr("&Linked"), QMessageBox::AcceptRole);
-  QPushButton* copy = box.addButton(QObject::tr("&Copy"), QMessageBox::AcceptRole);
-  box.setDefaultButton(link);
-  prepareModal(&box);
-  execDialog(&box);
-  if (box.clickedButton() == link) {
-    return true;
+std::optional<InsertLink> askLinked(QWidget* parent, const QString& file) {
+  // Linked (the whole design, as before, or chosen parts of it,
+  // mitcad#2130) or a copy; Enter takes the whole design linked.
+  QDialog dialog(parent);
+  dialog.setObjectName(QStringLiteral("insertLinkDialog"));
+  dialog.setWindowTitle(QObject::tr("Insert Component"));
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* text = new QLabel(QObject::tr("Insert %1 linked, so that it follows the file, or as a copy that can be "
+                                      "edited here?")
+                              .arg(QFileInfo(file).fileName()),
+                          &dialog);
+  text->setWordWrap(true);
+  layout->addWidget(text);
+  auto* linked = new QRadioButton(QObject::tr("&Linked"), &dialog);
+  auto* whole = new QRadioButton(QObject::tr("&Whole design"), &dialog);
+  auto* parts = new QRadioButton(QObject::tr("Choose &parts…"), &dialog);
+  auto* copy = new QRadioButton(QObject::tr("&Copy"), &dialog);
+  whole->setToolTip(QObject::tr("Every visible body of the design, as it places them"));
+  parts->setToolTip(QObject::tr("Only the occurrences and bodies you tick"));
+  copy->setToolTip(QObject::tr("The design and its history become a component of this design"));
+  auto* how = new QButtonGroup(&dialog);
+  how->addButton(linked);
+  how->addButton(copy);
+  auto* which = new QButtonGroup(&dialog);
+  which->addButton(whole);
+  which->addButton(parts);
+  linked->setChecked(true);
+  whole->setChecked(true);
+  layout->addWidget(linked);
+  auto* choices = new QVBoxLayout;
+  choices->setContentsMargins(panel::kTreeIndentation + 8, 0, 0, 0);
+  choices->addWidget(whole);
+  choices->addWidget(parts);
+  layout->addLayout(choices);
+  layout->addWidget(copy);
+  QObject::connect(linked, &QRadioButton::toggled, &dialog, [whole, parts](bool on) {
+    whole->setEnabled(on);
+    parts->setEnabled(on);
+  });
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+  if (QPushButton* ok = buttons->button(QDialogButtonBox::Ok)) {
+    ok->setDefault(true);
   }
-  if (box.clickedButton() == copy) {
-    return false;
+  qDebug().noquote() << QStringLiteral("Insert Component asked: %1").arg(QFileInfo(file).fileName());
+  prepareModal(&dialog);
+  if (execDialog(&dialog) != QDialog::Accepted) {
+    qDebug().noquote() << QStringLiteral("Insert Component: canceled");
+    return std::nullopt;
   }
-  return std::nullopt;
+  const InsertLink chosen = copy->isChecked()    ? InsertLink::Copy
+                            : parts->isChecked() ? InsertLink::ChooseParts
+                                                 : InsertLink::Whole;
+  qDebug().noquote() << QStringLiteral("Insert Component: %1")
+                            .arg(chosen == InsertLink::Copy          ? QStringLiteral("copy")
+                                 : chosen == InsertLink::ChooseParts ? QStringLiteral("linked, chosen parts")
+                                                                     : QStringLiteral("linked, whole design"));
+  return chosen;
+}
+
+namespace {
+
+// The rows of Choose Parts… (mitcad#2130): an occurrence's path or a
+// body's uid, and which it is.
+constexpr int kPartRole = Qt::UserRole;
+constexpr int kPartKindRole = Qt::UserRole + 1;
+constexpr int kOccurrencePart = 1;
+constexpr int kBodyPart = 2;
+
+void addOccurrenceRows(QTreeWidgetItem* parent, QTreeWidget* view, const QJsonArray& occurrences) {
+  for (const QJsonValue& value : occurrences) {
+    const QJsonObject occurrence = value.toObject();
+    auto* item = parent != nullptr ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(view);
+    item->setText(0, occurrence.value(QStringLiteral("name")).toString());
+    item->setData(0, kPartRole, occurrence.value(QStringLiteral("path")).toString());
+    item->setData(0, kPartKindRole, kOccurrencePart);
+    item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+    item->setCheckState(0, Qt::Unchecked);
+    if (!occurrence.value(QStringLiteral("visible")).toBool(true)) {
+      item->setToolTip(0, QObject::tr("Hidden in the design: it brings no bodies while it is hidden"));
+    }
+    addOccurrenceRows(item, view, occurrence.value(QStringLiteral("children")).toArray());
+  }
+}
+
+// Every row under `item` takes its state.
+void setSubtree(QTreeWidgetItem* item, Qt::CheckState state) {
+  for (int i = 0; i < item->childCount(); ++i) {
+    item->child(i)->setCheckState(0, state);
+    setSubtree(item->child(i), state);
+  }
+}
+
+bool anyTicked(const QTreeWidgetItem* item) {
+  for (int i = 0; i < item->childCount(); ++i) {
+    if (item->child(i)->checkState(0) != Qt::Unchecked || anyTicked(item->child(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The rows above `item`: one ticked whole while something in it is not
+// is partly ticked, and one with something ticked in it at least partly.
+void settleAbove(QTreeWidgetItem* item) {
+  for (QTreeWidgetItem* above = item->parent(); above != nullptr; above = above->parent()) {
+    bool all = true;
+    for (int i = 0; i < above->childCount(); ++i) {
+      all = all && above->child(i)->checkState(0) == Qt::Checked;
+    }
+    const Qt::CheckState now = above->checkState(0);
+    if (now == Qt::Checked && !all) {
+      above->setCheckState(0, Qt::PartiallyChecked);
+    } else if (now != Qt::Checked) {
+      above->setCheckState(0, anyTicked(above) ? Qt::PartiallyChecked : Qt::Unchecked);
+    }
+  }
+}
+
+// What is ticked: an occurrence ticked whole with what is in it, else the
+// ones ticked in it; a ticked body of the root.
+void collectParts(const QTreeWidgetItem* item, QJsonArray& occurrences, QJsonArray& bodies) {
+  const int kind = item->data(0, kPartKindRole).toInt();
+  if (item->checkState(0) == Qt::Checked && kind == kOccurrencePart) {
+    occurrences.append(item->data(0, kPartRole).toString());
+    return;
+  }
+  if (item->checkState(0) == Qt::Checked && kind == kBodyPart) {
+    bodies.append(item->data(0, kPartRole).toString());
+    return;
+  }
+  for (int i = 0; i < item->childCount(); ++i) {
+    collectParts(item->child(i), occurrences, bodies);
+  }
+}
+
+} // namespace
+
+std::optional<LinkPartsChoice> chooseLinkParts(QWidget* parent, const QString& title, const QJsonObject& tree,
+                                               bool offerWhole) {
+  QDialog dialog(parent);
+  dialog.setObjectName(QStringLiteral("linkPartsDialog"));
+  dialog.setWindowTitle(title);
+  auto* layout = new QVBoxLayout(&dialog);
+  const QString file = tree.value(QStringLiteral("file")).toString();
+  auto* text = new QLabel(QObject::tr("The occurrences and bodies of %1 to link. An occurrence brings the components "
+                                      "in it; changes to them come in with Update Link.")
+                              .arg(file),
+                          &dialog);
+  text->setWordWrap(true);
+  layout->addWidget(text);
+  auto* view = new QTreeWidget(&dialog);
+  view->setObjectName(QStringLiteral("linkPartsTree"));
+  view->setHeaderHidden(true);
+  view->setColumnCount(1);
+  panel::setCompactIndentation(view, panel::Indent::Tree);
+  addOccurrenceRows(nullptr, view, tree.value(QStringLiteral("occurrences")).toArray());
+  const QJsonArray bodies = tree.value(QStringLiteral("bodies")).toArray();
+  if (!bodies.isEmpty()) {
+    // The root's bodies in their folder, as the browser lists them.
+    auto* folder = new QTreeWidgetItem(view);
+    folder->setText(0, QObject::tr("Bodies"));
+    folder->setFlags(folder->flags() | Qt::ItemIsUserCheckable);
+    folder->setCheckState(0, Qt::Unchecked);
+    for (const QJsonValue& value : bodies) {
+      const QJsonObject body = value.toObject();
+      auto* item = new QTreeWidgetItem(folder);
+      item->setText(0, body.value(QStringLiteral("name")).toString());
+      item->setData(0, kPartRole, body.value(QStringLiteral("uid")).toString());
+      item->setData(0, kPartKindRole, kBodyPart);
+      item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+      item->setCheckState(0, Qt::Unchecked);
+      if (!body.value(QStringLiteral("visible")).toBool(true)) {
+        item->setToolTip(0, QObject::tr("Hidden in the design: it brings nothing while it is hidden"));
+      }
+    }
+  }
+  view->expandAll();
+  // What the component links now.
+  bool settling = true;
+  const QJsonObject chosen = tree.value(QStringLiteral("chosen")).toObject();
+  const QJsonArray chosenOccurrences = chosen.value(QStringLiteral("occurrences")).toArray();
+  const QJsonArray chosenBodies = chosen.value(QStringLiteral("bodies")).toArray();
+  for (QTreeWidgetItemIterator it(view); *it != nullptr; ++it) {
+    QTreeWidgetItem* item = *it;
+    const QString part = item->data(0, kPartRole).toString();
+    const int kind = item->data(0, kPartKindRole).toInt();
+    if ((kind == kOccurrencePart && chosenOccurrences.contains(QJsonValue(part))) ||
+        (kind == kBodyPart && chosenBodies.contains(QJsonValue(part)))) {
+      item->setCheckState(0, Qt::Checked);
+      setSubtree(item, Qt::Checked);
+    }
+  }
+  for (QTreeWidgetItemIterator it(view); *it != nullptr; ++it) {
+    if ((*it)->checkState(0) != Qt::Unchecked) {
+      settleAbove(*it);
+    }
+  }
+  settling = false;
+  layout->addWidget(view, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  QPushButton* whole = nullptr;
+  if (offerWhole) {
+    whole = buttons->addButton(QObject::tr("Whole Design"), QDialogButtonBox::ResetRole);
+    whole->setToolTip(QObject::tr("Links every visible body of the design again"));
+  }
+  bool wholeChosen = false;
+  QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  if (whole != nullptr) {
+    QObject::connect(whole, &QPushButton::clicked, &dialog, [&dialog, &wholeChosen] {
+      wholeChosen = true;
+      dialog.accept();
+    });
+  }
+  layout->addWidget(buttons);
+  QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+  const auto anything = [view] {
+    QJsonArray occurrences;
+    QJsonArray ticked;
+    for (int i = 0; i < view->topLevelItemCount(); ++i) {
+      collectParts(view->topLevelItem(i), occurrences, ticked);
+    }
+    return !occurrences.isEmpty() || !ticked.isEmpty();
+  };
+  if (ok != nullptr) {
+    ok->setEnabled(anything());
+  }
+  QObject::connect(view, &QTreeWidget::itemChanged, &dialog, [&settling, view, ok, anything](QTreeWidgetItem* item) {
+    if (settling) {
+      return;
+    }
+    settling = true;
+    const Qt::CheckState state = item->checkState(0);
+    // A partly ticked row clicked is ticked whole.
+    const Qt::CheckState whole = state == Qt::Unchecked ? Qt::Unchecked : Qt::Checked;
+    item->setCheckState(0, whole);
+    setSubtree(item, whole);
+    settleAbove(item);
+    settling = false;
+    qDebug().noquote() << QStringLiteral("Choose Parts: %1 %2")
+                              .arg(whole == Qt::Checked ? QStringLiteral("ticked") : QStringLiteral("unticked"),
+                                   item->text(0));
+    if (ok != nullptr) {
+      ok->setEnabled(anything());
+    }
+    view->viewport()->update();
+  });
+  if (view->topLevelItemCount() > 0) {
+    view->setCurrentItem(view->topLevelItem(0));
+  }
+  view->setFocus();
+  dialog.resize(dialog.sizeHint().expandedTo(QSize(360, 320)));
+  qDebug().noquote() << QStringLiteral("Choose Parts opened: %1, %2 rows").arg(file).arg([view] {
+    int rows = 0;
+    for (QTreeWidgetItemIterator it(view); *it != nullptr; ++it) {
+      ++rows;
+    }
+    return rows;
+  }());
+  prepareModal(&dialog);
+  if (execDialog(&dialog) != QDialog::Accepted) {
+    qDebug().noquote() << QStringLiteral("Choose Parts: canceled");
+    return std::nullopt;
+  }
+  LinkPartsChoice choice;
+  if (wholeChosen) {
+    choice.whole = true;
+    qDebug().noquote() << QStringLiteral("Choose Parts: the whole design");
+    return choice;
+  }
+  QJsonArray occurrences;
+  QJsonArray ticked;
+  for (int i = 0; i < view->topLevelItemCount(); ++i) {
+    collectParts(view->topLevelItem(i), occurrences, ticked);
+  }
+  choice.parts = QJsonObject{{QStringLiteral("occurrences"), occurrences}, {QStringLiteral("bodies"), ticked}};
+  QStringList listed;
+  for (const QJsonValue& value : occurrences) {
+    listed << value.toString();
+  }
+  for (const QJsonValue& value : ticked) {
+    listed << value.toString();
+  }
+  qDebug().noquote() << QStringLiteral("Choose Parts: %1").arg(listed.join(QStringLiteral(", ")));
+  return choice;
 }
 
 std::optional<OutsideLinkChoice> askOutsideLink(QWidget* parent, const QString& file, bool inProject) {

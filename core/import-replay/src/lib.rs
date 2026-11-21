@@ -819,7 +819,16 @@ pub fn replay_design<K: ImportKernel>(
     // A design modelled with Y up turned to stand on Z up, in the import's
     // undo step (mitcad#1937).
     if options.upright && report.stopped.is_none() {
-        upright::stand_upright(doc, dump, &mut report);
+        // (It recomputes every feature: under the watchdog's eye, each
+        // feature a step, and cancelled when the try is given up,
+        // mitcad#2085.)
+        let monitor = options
+            .progress
+            .as_ref()
+            .map(|p| p.recompute_monitor(doc.monitor().cloned()));
+        interruptible(doc, monitor.as_ref(), |doc| {
+            upright::stand_upright(doc, dump, &mut report);
+        });
     }
     if let Some(label) = &options.undo_label {
         doc.merge_undo(depth, label);
@@ -5805,6 +5814,9 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             }
         }
         self.compare_final();
+        if self.abandoned() {
+            return;
+        }
         // The mesh bodies no item brought in (mitcad#1366): no comparison
         // takes a mesh.
         self.remaining_meshes();
@@ -5935,6 +5947,12 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
                     .warnings
                     .push(format!("the replay differs from the stored design: {e}")),
             }
+        }
+        // Given up by the watchdog while the stored bodies came in: what
+        // it made is dropped, its memory freed before the next try starts
+        // (mitcad#2085).
+        if self.abandoned() {
+            return;
         }
         // Over the time limit, stopped or low on memory: volumes only.
         let compare = self.options.compare

@@ -1,0 +1,74 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A sketch and an extrude</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 12px; }
+  li.now { font-weight: bold; }
+  li.done { color: #777; text-decoration: line-through; }
+</style>
+</head>
+<body>
+<h1>Your first part</h1>
+<p>A rectangle on the XY plane, extruded 20 mm into a block. MitCad points
+at what to use next; Escape or Leave Tutorial stops at any time.</p>
+<ol id="steps"></ol>
+<p id="end" hidden>Done: your first part. Leave Tutorial closes this pane.</p>
+<script>
+// The steps name commands and inputs as MitCad names them, never places on
+// the screen (docs/tutorials.md, "Guide steps").
+const steps = [
+  {id: "sketch", text: "Click Create Sketch, then the XY plane.",
+   target: {command: "sketch.create"}, done: {mode: "sketch"}},
+  {id: "rectangle", text: "Draw a rectangle: 2-Point Rectangle (R), then two corners. Then Finish Sketch.",
+   target: {command: "sketch.finish"}, allow: ["sketch.rectangle"], done: {mode: "idle"}},
+  {id: "extrude", text: "Click Extrude.",
+   target: {command: "solid.extrude"}, done: {started: "solid.extrude"}},
+  {id: "distance", text: "Type 20 mm as the distance.",
+   target: {input: "distance"}, done: {input: "distance", value: "20 mm"}},
+  {id: "ok", text: "Click OK.",
+   target: {command: "solid.extrude"}, done: {command: "solid.extrude"}}
+];
+const list = document.getElementById("steps");
+for (const step of steps) {
+  const item = document.createElement("li");
+  item.id = "step-" + step.id;
+  item.textContent = step.text;
+  list.appendChild(item);
+}
+let next = 0;
+function show(index) {
+  document.querySelectorAll("li").forEach(li => li.classList.remove("now"));
+  document.getElementById("step-" + steps[index].id).classList.add("now");
+  mitcad.startStep(steps[index]).catch(error => console.log("mitcad:tutorial:step refused: " + error.message));
+}
+if (window.mitcad) {
+  // What the page logs as "mitcad:tutorial:..." is in MitCad's log, for
+  // the tests that take this tutorial to its end.
+  mitcad.on("step_done", event => {
+    document.getElementById("step-" + event.step).classList.add("done");
+    console.log("mitcad:tutorial:done " + event.step);
+    next += 1;
+    if (next < steps.length) {
+      show(next);
+    } else {
+      document.getElementById("end").hidden = false;
+      console.log("mitcad:tutorial:finished");
+    }
+  });
+  mitcad.on("step_left", event => {
+    if (event.reason === "escape") {
+      // Escape stops the step shown; the page offers it again.
+      const again = document.createElement("button");
+      again.textContent = "Show this step again";
+      again.onclick = () => { again.remove(); show(next); };
+      list.after(again);
+    }
+  });
+  show(0);
+}
+</script>
+</body>
+</html>

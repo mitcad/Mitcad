@@ -208,7 +208,12 @@ MainWindow::DragAnswer MainWindow::dragAnswer(const SelectionItem& item) const {
       continue;
     }
     QString why;
-    if (grounded) {
+    // A part BUILD placed (mitcad#2088): Placement moves it, not a drag;
+    // the model says so in words.
+    const QString held = unit.value(QStringLiteral("held")).toString();
+    if (!held.isEmpty()) {
+      why = held;
+    } else if (grounded) {
       // Grounded itself, or in a rigid group with a grounded occurrence.
       QStringList members;
       for (const QJsonValue& member : unit.value(QStringLiteral("occurrences")).toArray()) {

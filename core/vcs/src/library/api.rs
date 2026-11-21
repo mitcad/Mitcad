@@ -82,6 +82,10 @@ pub fn command(
         "library_configure" => configure(cache, &command)?,
         // Library Sources' Remove and Add (mitcad#1436).
         "library_remove" => remove(cache, &command)?,
+        // In-app tutorials (mitcad#2012): those of the fetched tutorials
+        // repositories, and one installed into the user's data folder.
+        "tutorial_list" => super::tutorials::list(cache, &command),
+        "tutorial_install" => super::tutorials::install(cache, &command)?,
         // The suppliers' shops by region and the product links of
         // articles (mitcad#950, `mitcad_model::supplier_shops`).
         "supplier_shops" => supplier_shops(&command),
@@ -233,6 +237,15 @@ fn list(cache: &LibraryCache) -> Value {
                     value["name"] = json!(index.name);
                     value["description"] = json!(index.description);
                     value["entries"] = json!(entries.len());
+                    value["problems"] = json!({"errors": [], "warnings": problems});
+                }
+            }
+            // Tutorials (mitcad#2012): listed apart by tutorial_list.
+            RepoKind::Tutorials => {
+                if let Ok((tutorials, entries, problems)) = repo.tutorials(head) {
+                    value["name"] = json!(tutorials.name);
+                    value["description"] = json!(tutorials.description);
+                    value["tutorials"] = json!(entries.len());
                     value["problems"] = json!({"errors": [], "warnings": problems});
                 }
             }
@@ -547,6 +560,14 @@ fn show(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
             value["entries"] = json!(entries);
             value["problems"] = json!({"errors": [], "warnings": problems});
         }
+        RepoKind::Tutorials => {
+            let (tutorials, entries, problems) = repo.tutorials(commit)?;
+            value["kind"] = json!("tutorials");
+            value["name"] = json!(tutorials.name);
+            value["description"] = json!(tutorials.description);
+            value["tutorials"] = json!(entries);
+            value["problems"] = json!({"errors": [], "warnings": problems});
+        }
         RepoKind::Unknown => {
             return Err(VcsError::File(
                 "the repository is neither a library nor an index at that version".to_owned(),
@@ -847,7 +868,7 @@ fn search(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
                 });
             }
             RepoKind::Index => indexes.push((repo, head, url)),
-            RepoKind::Unknown => {}
+            RepoKind::Tutorials | RepoKind::Unknown => {}
         }
     }
     let mut components = Vec::new();
@@ -1215,6 +1236,8 @@ pub fn describe(command: &str, answer: &str) -> Result<String, VcsError> {
             }
             let what = if answer["kind"] == "index" {
                 "index"
+            } else if answer["kind"] == "tutorials" {
+                "tutorials"
             } else {
                 "library"
             };

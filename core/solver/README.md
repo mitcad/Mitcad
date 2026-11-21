@@ -77,7 +77,7 @@ on the curve would slide along it (mitcad#396).
 | `Coincident(p, q)` | `p - q` (2) |
 | `PointOnCurve(p, e)` | line: signed distance; circle/arc: `|p-c| - r`; ellipse, elliptical arc, spline: `p - C(t)` with internal `t` (2) |
 | `Horizontal(l)`, `Vertical(l)`, `HorizontalPoints`, `VerticalPoints` | `dy`, `dx` |
-| `Parallel(a, b)`, `Perpendicular(a, b)` | `unit(a) x b`, `unit(a) . b` |
+| `Parallel(a, b)`, `Perpendicular(a, b)` | `unit(a) x b`, `unit(a) . b`; `Perpendicular` of a line and a circle/arc (mitcad#2114): the center's signed distance from the line `= 0`; of two circles/arcs: `|c1-c2| - sqrt(r1^2 + r2^2)` (they cross at right angles) |
 | `Tangent(a, b)` | line-circle/arc: signed centre distance `= side * r`; circle/arc-circle/arc: `|c1-c2| = r1 + r2` or `side (r1 - r2)`; at a shared/coincident/point-on-curve/midpoint/collinear-end contact point (mitcad#2006): line perpendicular to the radius, or centres collinear with the point (G1 join); line, arc or spline at a spline end: end leg parallel/perpendicular; line or circle/arc inside a spline: contact point `C(t)` on the curve and `C'(t)` tangent (2, internal `t`) |
 | `Smooth(a, b)` (G2) | spline end joined to a line, arc or spline: G1 plus equal signed curvature |
 | `TangentAt { a, b, at }`, `SmoothAt { a, b, at }` (mitcad#783) | as `Tangent` and `Smooth`, at the end of each curve at the point `at` (joined to it, else the nearer end): a curve can be tangent at both ends; `a == b`: an open spline whose ends meet at `at`, its two end legs joined (G1, G2) |
@@ -209,7 +209,10 @@ to all equations.
   whose polynomial equations still have a degenerate solution (a line that is
   both horizontal and vertical collapses to a point). Two points both
   horizontal and vertical to each other only coincide: their pair gives no
-  direction (mitcad#235).
+  direction (mitcad#235). Perpendicular circles or arcs whose centers
+  coincide (one point class, or joined by concentric constraints) are a
+  conflict found there too: only zero radii would satisfy them
+  (mitcad#2114).
 - **Fully constrained.** An unknown is determined when its unit vector lies in
   the row space of `J`: the Schur complement `1 - b^T G^-1 b` of its column
   is zero (below `1e-8`). A point is fully constrained when both coordinates

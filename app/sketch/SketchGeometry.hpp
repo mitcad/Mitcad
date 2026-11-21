@@ -95,6 +95,19 @@ struct Curve2 {
 // Where two curves cross (or touch), within the curves' extents.
 std::vector<V2> intersections(const Curve2& a, const Curve2& b);
 
+// --- A line's extension (mitcad#2035): the endless line through a line
+// curve's ends.
+
+// The foot of `p` on the endless line through `line`'s ends, with its
+// parameter in `t`: 0 at the start, 1 at the end, outside 0..1 beyond them.
+V2 lineFoot(const Curve2& line, const V2& p, double* t = nullptr);
+// Where the endless lines through two line curves meet; none when they are
+// parallel (or a line has no length).
+std::optional<V2> lineMeet(const Curve2& a, const Curve2& b);
+// Where the endless line through `line`'s ends crosses (or touches)
+// `curve`, within `curve`'s extent.
+std::vector<V2> lineCrossings(const Curve2& line, const Curve2& curve);
+
 // The centre of the circle through three points; none when they are on a
 // line.
 std::optional<V2> circumcenter(const V2& a, const V2& b, const V2& c);

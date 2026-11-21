@@ -1,0 +1,286 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: the end of a blend at a vertex where more than three
+edges meet (PerformIntersectionAtEnd), past a face that lies between two
+faces each tangent to it at the vertex, is cut on those two faces, which
+meet along the intersection of their surfaces from the vertex (mitcad#2039,
+GitHub mitcad/Mitcad#449).
+
+The case: a low block whose plan is a half disc stands against a wall whose
+top is a half cylinder; the wall's flat sides run on tangentially into the
+block's curved side and into the wall's curved top. The concave edge where
+the block's top meets the wall's front is rounded or chamfered. At each end
+of the edge five faces meet: the block's top (F1), the wall's front (F2),
+and round the vertex the block's curved side (Face[0]), the wall's flat
+side (Face[1]) and the wall's curved top (Face[2]), Edge[1] and Edge[2]
+tangent (G1, not G2, so counted as sharp edges). Expected: one valid solid,
+the blend's end cut by the block's side and the wall's top, both continued
+past the vertex. Observed: an invalid shape 142 mm3 smaller than the body
+(a rounding of 1 on a body of 642 mm3), an edge 11 mm in tolerance and the
+wall's top without its curves; the chamfer likewise.
+
+The origin: for five edges with Edge[1] tangent and Edge[0] or Edge[2]
+tangent ("pro15368"), the end is cut on Face[2]'s surface alone, and
+Edge[0] (the edge of F1 and Face[0]), prolonged to CV1, bounds the cut
+part of Face[2] up to the vertex. That holds only where Edge[0] lies on
+Face[2]'s surface (Face[0] and Face[2] on one surface, split at Face[1]).
+Here CV1 lies 0.1 mm off the wall's top: the cut on the wall's top ran from
+a point that is not on the block's top, and the faces' new edges joined
+points of different surfaces. Without the shortcut, the general walk cut
+the end on all three faces, the tangent edges prolonged along their own
+curves past the vertex: a tangent edge is a line of contact of two
+surfaces that do not cross there, the prolonged flat side ran outside both
+curved faces, and the three cuts crossed each other.
+
+- The shortcut is taken only where CV1 lies on Face[2]'s surface, within
+  CV1's tolerance and Edge[0]'s (the tolerances the point and the edge
+  already have; no new limit).
+- After the faces round the vertex are found: a face Face[k] whose edges at
+  the vertex, Edge[k] and Edge[k + 1], are both tangent to the faces beside
+  it (ChFi3d::IsTangentFaces, G1) and neither crossed by the blend's
+  surface within its range is not cut; Face[k - 1] and Face[k + 1] are
+  taken as neighbours whose common boundary is the intersection of their
+  surfaces (GeomInt_IntSS, as for a B-spline edge the blend does not cross),
+  the line through the vertex that crosses the blend. Its parameter at the
+  vertex is the nearest extremum (an ellipse of two cylinders also passes
+  the other end's vertex, the farthest point), its curves on the faces are
+  put into the faces' periods at the vertex, and they are not shifted by a
+  projection of the vertex onto them (the 3D curve and its curves on the
+  faces share its parameters). The middle face is left as it is.
+- Elsewhere nothing changes. No catch is added.
+
+Upstream: changes the ends of blends at vertices of more than three edges
+where the pro15368 shortcut was taken with CV1 off Face[2]'s surface (an
+invalid shape before), and where a face lies between two faces tangent to
+it, neither of its edges crossed (the general walk gave crossing cuts).
+
+Test: geometry.port.1830 (geometry/tests/port/p1830-end-cut-across-a-tangent-face.cpp),
+the half-disc block against the half-cylinder wall rounded and chamfered
+with 0.5, 1 and 3: one valid solid each, the added volume that of the
+section cut by both cylinders continued within 1e-5; the wall's top rounded
+with 3 only at its edges, the side plane crossed: as before.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 64ca556..46fc601 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -48,6 +48,8 @@
+ #include <gp_Cylinder.hxx>
+ #include <gp_Torus.hxx>
+ #include <GeomAdaptor_Curve.hxx>
++#include <GeomAPI_ProjectPointOnCurve.hxx>
++#include <GeomAPI_ProjectPointOnSurf.hxx>
+ #include <IntAna_QuadQuadGeo.hxx>
+ #include <BRep_Tool.hxx>
+ #include <ElCLib.hxx>
+@@ -10993,6 +10995,37 @@ bool ChFi3d_Builder::PerformMitredEnd(const int Index)
+ 
+ //=================================================================================================
+ 
++// A curve on the surface of face F, put into the surface's period where it
++// passes through vertex V at parameter W: the curves of an intersection of
++// two faces' surfaces (GeomInt_IntSS) lie in the periods the intersection
++// chose, which need not be the face's.
++static void ChFi3d_PCurveIntoVertexPeriod(occ::handle<Geom2d_Curve>& C,
++                                          const double              W,
++                                          const TopoDS_Face&        F,
++                                          const TopoDS_Vertex&      V)
++{
++  if (C.IsNull())
++  {
++    return;
++  }
++  const occ::handle<Geom_Surface> S    = BRep_Tool::Surface(F);
++  const gp_Pnt2d                  aOn  = C->Value(W);
++  const gp_Pnt2d                  aAtV = BRep_Tool::Parameters(V, F);
++  double                          aDU = 0., aDV = 0.;
++  if (S->IsUPeriodic())
++  {
++    aDU = S->UPeriod() * std::round((aAtV.X() - aOn.X()) / S->UPeriod());
++  }
++  if (S->IsVPeriodic())
++  {
++    aDV = S->VPeriod() * std::round((aAtV.Y() - aOn.Y()) / S->VPeriod());
++  }
++  if (aDU != 0. || aDV != 0.)
++  {
++    C = occ::down_cast<Geom2d_Curve>(C->Translated(gp_Vec2d(aDU, aDV)));
++  }
++}
++
+ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+ {
+ 
+@@ -11941,7 +11974,22 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         bool isTangent0 = ChFi3d::IsTangentFaces(Edge[0], F1, Face[0]);
+         bool isTangent1 = ChFi3d::IsTangentFaces(Edge[1], Face[0], Face[1]);
+         bool isTangent2 = ChFi3d::IsTangentFaces(Edge[2], Face[1], Face[2]);
+-        if ((isTangent0 || isTangent2) && isTangent1)
++        // (The end is then cut on Face[2]'s surface alone, from CV1 on
++        // Edge[0], the edge of F1 and Face[0], which bounds the cut part of
++        // Face[2] up to the vertex: only where Edge[0] lies on that surface,
++        // CV1 within its own and the edge's tolerances of it. Face[0] and
++        // Face[2] on one surface, a face split at Face[1]. A face Face[0]
++        // that curves away from Face[2] leaves it at the vertex: the cut
++        // crosses both, below.)
++        bool isOnFace2 = false;
++        if (isTangent1 && (isTangent0 || isTangent2))
++        {
++          GeomAPI_ProjectPointOnSurf aProj(CV1.Point(), BRep_Tool::Surface(Face[2]));
++          isOnFace2 = aProj.NbPoints() > 0
++                      && aProj.LowerDistance()
++                           <= CV1.Tolerance() + BRep_Tool::Tolerance(TopoDS::Edge(Edge[0]));
++        }
++        if (isOnFace2)
+         {
+           //         GeomAbs_Shape cont0,cont1,cont2;
+           //         cont0=BRep_Tool::Continuity(Edge[0],F1,Face[0]);
+@@ -12064,6 +12112,73 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+     }
+     k--;
+   }
++  // A face at the vertex between two faces each tangent to it along its
++  // edge there (Edge[k] and Edge[k + 1], G1), neither edge crossed by the
++  // fillet within its range: the cut round the vertex does not lie on it,
++  // it passes the vertex on the far side, from Face[k - 1] straight onto
++  // Face[k + 1]. Their common boundary there is the intersection of their
++  // surfaces from the vertex, not the edges prolonged along their curves:
++  // each edge is a line of contact of two tangent surfaces, which no
++  // crossing prolongs (prolonged, the middle face's surface ran outside
++  // both and the cuts on the three faces crossed each other). The middle
++  // face is left as it is; Face[k - 1] and Face[k + 1] meet along the
++  // intersection, isJoinedAcross[k].
++  bool isJoinedAcross[nn];
++  for (int k = 0; k < nn; k++)
++  {
++    isJoinedAcross[k] = false;
++  }
++  for (int k = 1; k + 1 < nbface; k++)
++  {
++    if (Face[k].IsSame(Face[k - 1]) || Face[k].IsSame(Face[k + 1]) || Face[k - 1].IsSame(Face[k + 1])
++        || Edge[k].IsNull() || Edge[k + 1].IsNull() || BRep_Tool::Degenerated(Edge[k])
++        || BRep_Tool::Degenerated(Edge[k + 1]))
++    {
++      continue;
++    }
++    bool isAtVtx = true;
++    for (int j = k; j <= k + 1 && isAtVtx; j++)
++    {
++      TopoDS_Vertex aV1, aV2;
++      TopExp::Vertices(Edge[j], aV1, aV2);
++      isAtVtx = aV1.IsSame(Vtx) || aV2.IsSame(Vtx);
++    }
++    if (!isAtVtx || !ChFi3d::IsTangentFaces(Edge[k], Face[k - 1], Face[k])
++        || !ChFi3d::IsTangentFaces(Edge[k + 1], Face[k], Face[k + 1]))
++    {
++      continue;
++    }
++    bool isCrossed = false;
++    for (int j = k; j <= k + 1 && !isCrossed; j++)
++    {
++      double                        aF = 0., aL = 0.;
++      const occ::handle<Geom_Curve> aC = BRep_Tool::Curve(Edge[j], aF, aL);
++      if (aC.IsNull())
++      {
++        isCrossed = true;
++        continue;
++      }
++      occ::handle<GeomAdaptor_Curve> aHC = new GeomAdaptor_Curve(aC, aF, aL);
++      IntCurveSurface_HInter         anInter;
++      anInter.Perform(aHC, HGs);
++      isCrossed = !anInter.IsDone() || anInter.NbPoints() > 0 || anInter.NbSegments() > 0;
++    }
++    if (isCrossed)
++    {
++      continue;
++    }
++    for (int j = k; j + 1 < nbface; j++)
++    {
++      Face[j] = Face[j + 1];
++    }
++    for (int j = k + 1; j < nbface; j++)
++    {
++      Edge[j]  = Edge[j + 1];
++      Vedge[j] = Vedge[j + 1];
++    }
++    isJoinedAcross[k] = true;
++    nbface--;
++  }
+   NCollection_Array1<double> Pardeb(1, 4), Parfin(1, 4);
+   gp_Pnt2d                   pfil1, pfac1, pfil2, pfac2, pint, pfildeb;
+   occ::handle<Geom2d_Curve>  Hc1, Hc2;
+@@ -12415,11 +12530,11 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           }
+         }
+       }
+-      if (!inters.IsDone() || (inters.NbPoints() == 0))
++      if (isJoinedAcross[nb] || !inters.IsDone() || (inters.NbPoints() == 0))
+       {
+         occ::handle<Geom_BSplineCurve> cd  = occ::down_cast<Geom_BSplineCurve>(C);
+         occ::handle<Geom_BezierCurve>  cd1 = occ::down_cast<Geom_BezierCurve>(C);
+-        if (!cd.IsNull() || !cd1.IsNull())
++        if (isJoinedAcross[nb] || !cd.IsNull() || !cd1.IsNull())
+         {
+           BRep_Builder BRE;
+           Sface = BRep_Tool::Surface(Face[nb]);
+@@ -12453,6 +12568,16 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+               Cad.Load(cint);
+               inters.Perform(HC, HGs);
+               trouve = inters.IsDone() && inters.NbPoints() != 0;
++              if (trouve && isJoinedAcross[nb])
++              {
++                // (The line of the two faces' boundary runs from the
++                // vertex: of two ellipses of two cylinders, the one through
++                // it.)
++                GeomAPI_ProjectPointOnCurve aProjV(BRep_Tool::Pnt(Vtx), cint);
++                trouve = aProjV.NbPoints() > 0
++                         && aProjV.LowerDistance()
++                              <= std::max(InterSS.TolReached3d(), BRep_Tool::Tolerance(Vtx));
++              }
+               // eap occ293, eval tolex on finally trimmed curves
+               //               occ::handle<GeomAdaptor_Surface> H1=new
+               //               GeomAdaptor_Surface(Sfacemoins1); occ::handle<GeomAdaptor_Surface>
+@@ -12465,7 +12590,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+             // vertex: their common boundary is prolonged from that vertex,
+             // through which the intersection of their surfaces runs, and the
+             // short edge lies in the removed corner.
+-            if (trouve && !Vedge[nb].IsNull() && !Vedge[nb].IsSame(Vtx))
++            if (trouve && !isJoinedAcross[nb] && !Vedge[nb].IsNull() && !Vedge[nb].IsSame(Vtx))
+             {
+               Vprol = Vedge[nb];
+             }
+@@ -13367,7 +13492,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         bool          vtx1 = false;
+         bool          vtx2 = false;
+         par1               = ext.Point(1).Parameter();
+-        if (isPointOnFace)
++        if (isPointOnFace || isJoinedAcross[nb])
+         {
+           // The parameter of the vertex the boundary is prolonged from: the
+           // nearest of the extrema (on a conic the others are the farthest
+@@ -13495,7 +13620,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           }
+         }
+         //// for periodic 3d curves ////
+-        if (cad.IsPeriodic() && !C2dint1.IsNull())
++        // (Not on the intersection of two faces' surfaces from the vertex:
++        // its curves on the faces share its parameters, they are put into
++        // the faces' periods below.)
++        if (cad.IsPeriodic() && !C2dint1.IsNull() && !isJoinedAcross[nb])
+         {
+           gp_Pnt2d                      P2d = Vprol.IsSame(Vtx)
+                                                 ? BRep_Tool::Parameters(Vtx, Face[0])
+@@ -13530,6 +13658,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+             tolex = std::max(tolex, ChFi3d_EvalTolReached(H1, C2dint1, H2, C2dint2, Ct));
+           }
+         }
++        if (isJoinedAcross[nb] && extend && Vprol.IsSame(Vtx))
++        {
++          const double aWVtx = vtx1 ? par1 : par2;
++          ChFi3d_PCurveIntoVertexPeriod(C2dint1, aWVtx, Face[nb - 1], Vtx);
++          ChFi3d_PCurveIntoVertexPeriod(C2dint2, aWVtx, Face[nb], Vtx);
++        }
+         TopOpeBRepDS_Curve tcurv(Ct, tolex);
+         int                indcurv;
+         indcurv  = DStr.AddCurve(tcurv);

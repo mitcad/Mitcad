@@ -151,7 +151,7 @@ cards_below_bar() {
   [ -z "${CARDS[titleCard]:-}" ] || ui_fail "$1: a title card in '$line'"
   [ -z "${CARDS[titleFinishSketch]:-}" ] || ui_fail "$1: duplicate Finish Sketch in the title row: '$line'"
   [ -z "${CARDS[titleSearch]:-}" ] || ui_fail "$1: the search field in the title row, not the panel: '$line'"
-  for part in titleFile titleHistory titleTabs titleSettings ribbon ribbonWorkspace ribbonTabs ribbonSearch; do
+  for part in titleQuickAccess titleMenu titleTabs titleSettings ribbon ribbonWorkspace ribbonTabs ribbonSearch; do
     [ -n "${CARDS[$part]:-}" ] || ui_fail "$1: no $part in '$line'"
   done
   # The title row is a bar across the view at the window's top.
@@ -192,7 +192,7 @@ cards_below_bar() {
     esac
   done
   [ "$groups" -ge 2 ] || ui_fail "$1: $groups groups in the toolbar panel in '$line'"
-  ui_quick_access_place "$1" "$line" none
+  ui_quick_access_place "$1" "$line"
   case $rest in
     *browserDock*) ;;
     *) ui_fail "$1: no Browser card in '$line'" ;;

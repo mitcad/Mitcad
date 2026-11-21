@@ -91,18 +91,26 @@ impl<S: Clone> ContactPairs<S> {
                 .unwrap_or(Transform::IDENTITY)
         };
         let owners = &result.owners;
-        let bodies = |c: ComponentUid| -> Vec<BodyUid> {
-            owners
-                .iter()
-                .filter(|(_, owner)| **owner == c)
-                .map(|(b, _)| *b)
-                .collect()
+        // A machined occurrence touches with its pieces (mitcad#2131).
+        let machined = &result.machined;
+        let bodies = |path: &[OccurrenceUid], c: ComponentUid| -> Vec<BodyUid> {
+            machined.shown(
+                path,
+                owners
+                    .iter()
+                    .filter(|(_, owner)| **owner == c)
+                    .map(|(b, _)| *b)
+                    .collect(),
+            )
         };
         // Inside flexible occurrences where they are for them (mitcad#1793).
         let instances: Vec<_> = assembly
-            .instances_flexed(&placement, &result.joints.flexed, &bodies)
+            .instances_at(&placement, &result.joints.flexed, &bodies)
             .into_iter()
-            .filter(|i| i.visible && state.body_attributes.get(&i.body).is_none_or(|a| a.visible))
+            .filter(|i| {
+                let source = machined.replaced_by(i.body).unwrap_or(i.body);
+                i.visible && state.body_attributes.get(&source).is_none_or(|a| a.visible)
+            })
             .collect();
         let mut index: BTreeMap<(Vec<OccurrenceUid>, BodyUid), usize> = BTreeMap::new();
         let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();

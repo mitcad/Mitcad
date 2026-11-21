@@ -31,8 +31,10 @@ geometry.fillet_top_chains): on the stored case `fillet-wall-run-on` of
 MITCAD_GEOMETRY_CASES, the fin top's outer and inner chains rounded with
 0.5 by OCCT's fillet alone: valid, taking what the two chains take alone
 within a thousandth; documented to fail without the patch
-(Failure_Overlap). Its failure without the patch is still to be shown in
-the port's before/after run (mitcad#1986).
+(Failure_Overlap). It fails with this patch and 12 later patches that
+change the same lines reverted together, so the test does not single this
+patch out (shown 2026-11-20 by tools/occt-port-proof.py; the patches are
+listed in third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 506e40f4..09f39919 100644

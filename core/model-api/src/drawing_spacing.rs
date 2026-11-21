@@ -53,11 +53,15 @@ fn spaced(kind: AnnotationType) -> bool {
 }
 
 /// The kinds of annotation whose drag snaps their leader to multiples of
-/// 45 degrees (mitcad#1294): a note's text, a datum's square, a frame.
+/// 45 degrees (mitcad#1294): a note's text, a datum's square, a frame, a
+/// hole callout's text (mitcad#2054).
 fn led(kind: AnnotationType) -> bool {
     matches!(
         kind,
-        AnnotationType::Note | AnnotationType::Datum | AnnotationType::Frame
+        AnnotationType::Note
+            | AnnotationType::Datum
+            | AnnotationType::Frame
+            | AnnotationType::HoleCallout
     )
 }
 
@@ -80,10 +84,11 @@ fn frame_cells<K: Kernel>(
         .units
         .as_deref()
         .and_then(Units::by_symbol)
-        .unwrap_or_else(|| Units::of(doc.parameters().context().default_length_unit));
+        .unwrap_or_else(|| Units::of(doc.parameters().context().default_length_unit))
+        .under(drawing.defaults.standard);
     let letters = doc.all_datum_letters();
     let datums: Vec<&str> = letters.iter().map(String::as_str).collect();
-    frame_words(tolerance, WordUnits::new(units.symbol, units.mm), &datums).0
+    frame_words(tolerance, WordUnits::of_sheet(units), &datums).0
 }
 
 /// Whether a dimension's place was given (clicked, dragged or set): a

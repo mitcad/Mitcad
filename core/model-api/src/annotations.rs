@@ -495,6 +495,10 @@ struct Laid {
 pub(super) struct Units {
     symbol: &'static str,
     millimetres: f64,
+    /// A drawing's standard (mitcad#2047): ASME writes inch values without
+    /// the unit after them and without a leading zero. The model's own
+    /// annotations keep ISO 129-1.
+    standard: mitcad_model_drawing::Standard,
 }
 
 impl Units {
@@ -502,6 +506,7 @@ impl Units {
     pub(super) const MM: Self = Self {
         symbol: "mm",
         millimetres: 1.0,
+        standard: mitcad_model_drawing::Standard::Iso,
     };
 
     /// A unit by its symbol and its millimetres (a drawing sheet's).
@@ -509,7 +514,23 @@ impl Units {
         Self {
             symbol,
             millimetres,
+            standard: mitcad_model_drawing::Standard::Iso,
         }
+    }
+
+    /// A drawing sheet's unit with its drawing's standard (mitcad#2047).
+    pub(super) fn of_sheet(units: mitcad_model_drawing::Units) -> Self {
+        Self {
+            symbol: units.symbol,
+            millimetres: units.mm,
+            standard: units.standard,
+        }
+    }
+
+    /// Whether lengths are written ASME's inch way: no unit after the
+    /// value and no leading zero (`.44`).
+    fn asme_inches(self) -> bool {
+        self.drawing().no_leading_zero()
     }
 
     /// The same unit as the drawings write lengths in (a hole callout's,
@@ -522,6 +543,7 @@ impl Units {
             } else {
                 1.0
             },
+            standard: self.standard,
         }
     }
 }
@@ -980,6 +1002,7 @@ impl<K: Kernel> AnnotationsOps<K> for Document<K> {
         let units = Units {
             symbol: unit.symbol(),
             millimetres: unit.millimetres(),
+            standard: mitcad_model_drawing::Standard::Iso,
         };
         // Each uses at most two keys, its picks' and its plane's pick's
         // (mitcad#758); all of them stay measured.
@@ -1268,6 +1291,7 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
         let units = Units {
             symbol: unit_of.symbol(),
             millimetres: unit_of.millimetres(),
+            standard: mitcad_model_drawing::Standard::Iso,
         };
         let taken = match shape {
             Shape::Ends(_) => self.laid_out(units, false, None).1,
@@ -2940,23 +2964,33 @@ fn dimension_label(annotation: &Annotation, value: f64, units: Units) -> Label {
         value / millimetres
     };
     let tolerance_scale = if angle { 1.0 } else { 1.0 / millimetres };
+    // A drawing to ASME in inches (mitcad#2047): no unit after the values
+    // (the title block names it) and no zero before their decimal point.
+    let asme = !angle && units.asme_inches();
+    let lead = |text: String| {
+        if asme {
+            mitcad_model_drawing::without_leading_zero(&text)
+        } else {
+            text
+        }
+    };
     let unit_text = if angle {
         "°".to_owned()
-    } else if units.symbol == "mm" {
+    } else if units.symbol == "mm" || asme {
         String::new()
     } else {
         format!(" {}", units.symbol)
     };
     let deviation_unit = if angle { "°" } else { "" };
-    let number = |v: f64| fixed(v, format.decimals, 3);
+    let number = |v: f64| lead(fixed(v, format.decimals, 3));
     // Two deviations with the decimals they need, the same for both (ISO
     // 129), not the value's.
     let pair = |upper: f64, lower: f64, most: usize| {
         let (upper, lower) = (upper * tolerance_scale, lower * tolerance_scale);
         let decimals = needed(upper, most).max(needed(lower, most));
         (
-            format!("{}{deviation_unit}", signed(upper, Some(decimals))),
-            format!("{}{deviation_unit}", signed(lower, Some(decimals))),
+            format!("{}{deviation_unit}", lead(signed(upper, Some(decimals)))),
+            format!("{}{deviation_unit}", lead(signed(lower, Some(decimals)))),
         )
     };
     let prefix = format
@@ -2971,7 +3005,7 @@ fn dimension_label(annotation: &Annotation, value: f64, units: Units) -> Label {
         (None, Some(Tolerance::Symmetric { value })) => {
             let plus_minus = format!(
                 "±{}{deviation_unit}",
-                fixed(value * tolerance_scale, None, DEVIATION_DECIMALS)
+                lead(fixed(value * tolerance_scale, None, DEVIATION_DECIMALS))
             );
             label.main = format!("{nominal} {plus_minus}");
             label.tolerance = plus_minus;
@@ -2999,11 +3033,11 @@ fn dimension_label(annotation: &Annotation, value: f64, units: Units) -> Label {
             label.main = prefix;
             label.upper = Some(format!(
                 "{}{unit_text}",
-                fixed(largest, Some(decimals), DEVIATION_DECIMALS)
+                lead(fixed(largest, Some(decimals), DEVIATION_DECIMALS))
             ));
             label.lower = Some(format!(
                 "{}{unit_text}",
-                fixed(smallest, Some(decimals), DEVIATION_DECIMALS)
+                lead(fixed(smallest, Some(decimals), DEVIATION_DECIMALS))
             ));
             label.deviations = Some((*upper, *lower));
         }
@@ -3226,6 +3260,7 @@ mod tests {
         let cm = Units {
             symbol: "cm",
             millimetres: 10.0,
+            standard: mitcad_model_drawing::Standard::Iso,
         };
         assert_eq!(dimension_label(&r, 25.0, cm).text, "R2.5 cm");
         // Angles in degrees.
@@ -3316,6 +3351,7 @@ mod tests {
         let inches = Units {
             symbol: "in",
             millimetres: 25.4,
+            standard: mitcad_model_drawing::Standard::Iso,
         };
         let label = dimension_label(&inch_hole, 10.0, inches);
         assert_eq!(label.text, "Ø0.394 in H7");
@@ -3361,6 +3397,7 @@ mod tests {
         let inches = Units {
             symbol: "in",
             millimetres: 25.4,
+            standard: mitcad_model_drawing::Standard::Iso,
         };
         let label = frame_label(&frame, inches, &["A"]);
         assert_eq!(label.text, "⌖ | Ø0.01 Ⓜ | A | C");
@@ -3369,6 +3406,7 @@ mod tests {
         let millimetres = Units {
             symbol: "mm",
             millimetres: 1.0,
+            standard: mitcad_model_drawing::Standard::Iso,
         };
         assert_eq!(
             frame_label(&frame, millimetres, &["A", "C"]).tolerance,
@@ -3856,5 +3894,44 @@ mod tests {
         let above = layout(&note, &shape, Some(Z), Some(X), &Around::bare(5.0));
         assert_eq!(above.dimension_lines.len(), 1, "{above:?}");
         near_point(above.dimension_lines[0][0], [0.0, 20.0, 0.0]);
+    }
+
+    /// A drawing to ASME in inches writes its values without the unit and
+    /// without a leading zero (mitcad#2047); ISO and millimetres as before.
+    #[test]
+    fn asme_inch_values_drop_the_unit_and_the_leading_zero() {
+        use mitcad_model_drawing::{Standard, Units as Sheet};
+        let inches = Sheet::by_symbol("in").unwrap();
+        let asme = Units::of_sheet(inches.under(Standard::Asme));
+        let iso = Units::of_sheet(inches);
+        let mm = Units::of_sheet(Sheet::MM.under(Standard::Asme));
+        let words = |units: Units, value: f64, tolerance: Option<Tolerance>| {
+            value_text(
+                MeasureKind::Distance,
+                &AnnotationFormat::default(),
+                tolerance.as_ref(),
+                value,
+                units,
+            )
+            .0
+        };
+        assert_eq!(words(asme, 0.44 * 25.4, None).text, ".44");
+        assert_eq!(words(iso, 0.44 * 25.4, None).text, "0.44 in");
+        assert_eq!(words(mm, 0.44, None).text, "0.44");
+        assert_eq!(words(Units::of_sheet(Sheet::MM), 0.44, None).text, "0.44");
+        assert_eq!(words(asme, 2.375 * 25.4, None).text, "2.375");
+        // Deviations without their leading zeros too.
+        let deviations = Tolerance::Deviations {
+            upper: 0.005 * 25.4,
+            lower: -0.005 * 25.4,
+        };
+        let value = words(asme, 0.44 * 25.4, Some(deviations));
+        assert_eq!(value.main, ".44");
+        assert_eq!(value.upper.as_deref(), Some("+.005"));
+        assert_eq!(value.lower.as_deref(), Some("-.005"));
+        let symmetric = Tolerance::Symmetric {
+            value: 0.002 * 25.4,
+        };
+        assert_eq!(words(asme, 1.5 * 25.4, Some(symmetric)).text, "1.5 ±.002");
     }
 }

@@ -5,10 +5,17 @@
 # <px> px (<logical> x ratio <r>), color <#rrggbb>; plain edges <px> px"
 # (OcctViewer::setSelectionLook, from the line aspect OCCT draws the
 # highlight with). The test checks the numbers: the width is the logical
-# width times the device pixel ratio, wider than a plain edge.
+# width times the device pixel ratio, wider than a plain edge. The lines
+# the view draws are measured too, in its own frame (view-line-width,
+# mitcad#2063: in macOS's core profile OCCT drew every line 1 device pixel
+# wide whatever its width): the selected edge at least 3 logical pixels at
+# Normal and wider at Thick, the sketch's plain line at least 1.75 (2
+# logical pixels: a line of 1 device pixel fails at every ratio, one of 2
+# device pixels at ratio 2).
 #   1. A fresh profile: Selection color the selection blue, Selected line
-#      width Normal; a top edge of the block selected: its highlight 4
-#      logical pixels wide in the blue.
+#      width Normal; the block's top edge at x = 60 (side1, in front of
+#      the top face from the home view, so no face hides half of a wide
+#      line) selected: its highlight 4 logical pixels wide in the blue.
 #   2. Preferences › Display: Selection color #d02090 (the color dialog's
 #      HTML field): the selected edge drawn anew in it.
 #   3. Preferences › Display: Selected line width Thick: the edge's
@@ -27,10 +34,11 @@ wait-idle
 
 # 1. A top edge selected, Normal, the selection blue.
 mark
-click-pick-offset 'edge F1[.]b0/E[{][^}]*F1:top[^}]*[}]' 0 0 '^edge E[{][^}]*F1:top[^}]*[}] of F1[.]b0$'
+click-pick-offset 'edge F1[.]b0/E[{]F1:side1[|]F1:top[}]' 0 0 '^edge E[{]F1:side1[|]F1:top[}] of F1[.]b0$'
 wait-log '^Selected: 1 edge' 30
 wait-log '^View highlight line: edge [0-9.]+ px \(4 x ratio [0-9.]+\), color #1f7aff; plain edges 1 px$'
 wait-idle
+view-line-width normal 3 'edge F1[.]b0/E[{]F1:side1[|]F1:top[}]'
 
 # 2. Selection color: the color dialog's HTML field, OK in both.
 mark
@@ -67,6 +75,7 @@ expect-setting view/selectedLineWidth thick
 wait-log '^View selection look: color #d02090, line width thick; edges [0-9.]+ px \(6 x ratio [0-9.]+\)'
 wait-log '^View highlight line: edge [0-9.]+ px \(6 x ratio [0-9.]+\), color #d02090; plain edges 1 px$'
 wait-idle
+view-line-width thick 5 'edge F1[.]b0/E[{]F1:side1[|]F1:top[}]' normal
 key Escape
 wait-log '^Selected: nothing'
 wait-idle
@@ -88,4 +97,8 @@ expect-ever '^Sketch overlay highlight look: 6 px, selection color #d02090$'
 wait-idle
 key Escape
 wait-idle
+# The plain line, the pointer away from it (no hover).
+sketch-move 30 30
+wait-idle
+view-line-width sketch 1.75 sketch:30,10
 expect-never 'TestDriver: FAIL'

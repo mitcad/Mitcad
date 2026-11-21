@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! How many UI entries run at once without disturbing each other
-//! (mitcad#790 roadmap step 5), learnt from the ordinary runs, never from a
-//! measuring run of its own.
+//! (mitcad#790 roadmap step 5, mitcad#872, mitcad#2124), learnt from the
+//! ordinary runs, never from a measuring run of its own.
 //!
 //! A UI entry is a test of the UI kind (`profile::Kind::Ui`: `app.ui-*`,
 //! labelled `ui`), or a UI test that `tools/check-all.sh` runs itself and
@@ -9,101 +9,74 @@
 //! entries ran beside it at most (`Run::beside`). A UI entry that failed
 //! (or timed out) with others beside it and then passed with fewer beside
 //! it (the runner reruns it alone) failed for the company, not for the
-//! code: a **contention failure**. From those:
+//! code: a **contention failure**.
 //!
-//! - **the machine's cap** (per platform, in the profile file): UI entries
-//!   at once. It starts at the bound (`--ui-max`, else
-//!   `MITCAD_UI_JOBS`; 4 for learning without either), drops by one after
-//!   a run with contention failures of `CAP_DROP_TESTS` (2) or more UI
-//!   entries (one test's lowers only its room), and grows by one after
-//!   `GROW_RUNS` clean runs that reached it, never above the bound;
-//! - **a test's room** (in its profile): the other UI entries it may have
+//! - **The machine's cap**: UI entries at once. It is the bound
+//!   (`--ui-max`, else `MITCAD_UI_JOBS`; `DEFAULT_BOUND` without either),
+//!   one number for the scheduler, `--ui-cap` and the run's report
+//!   (`machine_cap`), and exists for the memory budget only: the scheduler
+//!   admits a UI entry, as any test, only while its predicted memory fits
+//!   the budget beside the tests running (`schedule::admit`). Contention
+//!   failures never lower it (mitcad#2124: a 12-core 30 GB VM with
+//!   `MITCAD_UI_JOBS=6` fell to 2 by a few load-sensitive tests and never
+//!   grew back). A cap that an older runner learnt lower into the profile
+//!   file (`ui_caps`) is not read: the file's next save drops it.
+//! - **A test's room** (in its profile): the other UI entries it may have
 //!   beside it. A contention failure beside `b` others halves it to `b / 2`;
-//!   `ROOM_GROW_PASSES` passes with a full room beside it grow it by one.
+//!   `ROOM_GROW_PASSES` passes with a full room beside it grow it by one. So
+//!   a test sensitive to load waits until few enough run, while the others
+//!   go on at the cap.
 //!
 //! The scheduler (`schedule::admit`) starts a UI entry only while the UI
 //! entries running are fewer than the cap and neither it nor any running UI
-//! entry would have more beside it than its room (`admits`). A machine opts
-//! in by giving the bound: without `--ui-max` and `MITCAD_UI_JOBS` the runs
-//! record and learn, but the scheduler holds UI entries to neither the cap
-//! nor the rooms and reruns none alone (`scheduled_cap`, `scheduled_room`).
+//! entry would have more beside it than its room (`admits`). The cap holds
+//! on every machine, `DEFAULT_BOUND` without a bound (a follow-up of
+//! mitcad#2124: the Windows VM, with neither `--ui-max` nor
+//! `MITCAD_UI_JOBS`, ran 15 at once while its report named the cap 4). The
+//! rooms and the rerun alone are what a machine opts in to by giving the
+//! bound: without `--ui-max` and `MITCAD_UI_JOBS` the runs record and learn
+//! the rooms, but the scheduler holds UI entries to no room and reruns none
+//! alone (`scheduled_room`).
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
-
 use crate::options::Options;
 use crate::profile::{self, ResultKind, Run};
 
-/// Clean runs at the cap after which the cap grows by one.
-pub const GROW_RUNS: u32 = 2;
-/// The UI entries that must fail for the company in one run for the cap
-/// to drop (mitcad#872): one such test lowers only its own room, which
-/// the scheduler and tools/check-all.sh keep, so that one test sensitive
-/// to load does not hold every UI entry of the machine down (two tests,
-/// ui-pick and ui-sweep, held Linux's 196 at 7 or 8 at once of the bound
-/// 12).
-pub const CAP_DROP_TESTS: usize = 2;
 /// Passes with its room full after which a test's room grows by one.
 pub const ROOM_GROW_PASSES: u32 = 3;
-/// The bound the cap is learnt within when neither `--ui-max` nor
-/// `MITCAD_UI_JOBS` gives one (check-all's default); it is not applied.
+/// The machine's cap when neither `--ui-max` nor `MITCAD_UI_JOBS` gives a
+/// bound (check-all's default): the scheduler holds UI entries to it, and
+/// `--ui-cap` and the run's report name it.
 pub const DEFAULT_BOUND: usize = 4;
 /// What a contention failure takes back of the failure's +10: it counts
 /// +2, as the other failures of the environment.
 pub const CONTENTION_REFUND: f64 = 8.0;
-/// The platform the cap is kept under in the profile file.
+/// The platform (`std::env::consts::OS`), for the release fingerprints.
 pub const PLATFORM: &str = std::env::consts::OS;
 
-/// What a machine has learnt of its UI entries at once, one per platform.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UiCap {
-    /// UI entries at once.
-    pub cap: usize,
-    /// Clean runs that reached the cap since it last changed.
-    #[serde(default)]
-    pub clean_runs: u32,
-}
-
 /// The bound of the cap: `--ui-max`, else `MITCAD_UI_JOBS` (a number of at
-/// least 1); None without either, and then the scheduler applies no cap.
+/// least 1); None without either, and then the cap is `DEFAULT_BOUND`.
 pub fn bound(given: Option<usize>, variable: Option<&str>) -> Option<usize> {
     let from_variable = variable.and_then(|v| v.trim().parse::<usize>().ok());
     given.or(from_variable).filter(|&n| n > 0)
 }
 
-/// The bound the cap is learnt within: the given one, else
-/// `DEFAULT_BOUND`.
-pub fn learning_bound(bound: Option<usize>) -> usize {
-    bound.unwrap_or(DEFAULT_BOUND)
-}
-
-/// The UI entries at once the scheduler holds to: the learnt cap within
-/// the bound, or no limit (`usize::MAX`) without a bound.
-pub fn scheduled_cap(learnt: Option<&UiCap>, bound: Option<usize>) -> usize {
-    bound.map_or(usize::MAX, |b| effective_cap(learnt, b))
+/// The machine's cap: the bound, else `DEFAULT_BOUND`, at least 1. The
+/// one number the scheduler holds UI entries to and `--ui-cap` and the
+/// run's report name. It follows the bound only (the memory budget holds
+/// UI entries further, as every test); contention failures lower the
+/// tests' rooms, never the cap (mitcad#2124).
+pub fn machine_cap(bound: Option<usize>) -> usize {
+    bound.unwrap_or(DEFAULT_BOUND).max(1)
 }
 
 /// The room the scheduler holds a test to: its learnt room, or none
 /// without a bound.
 pub fn scheduled_room(room: Option<u32>, bound: Option<usize>) -> Option<usize> {
     bound.and(room).map(|r| r as usize)
-}
-
-/// The cap a machine starts with: the bound itself, at least 1, so that
-/// taking the cap into use does not slow a machine down; it drops after a
-/// run with a failure that was only contention.
-pub fn start_cap(bound: usize) -> usize {
-    bound.max(1)
-}
-
-/// The cap a run goes by: the learnt one (the start without one), within
-/// the bound.
-pub fn effective_cap(learnt: Option<&UiCap>, bound: usize) -> usize {
-    let bound = bound.max(1);
-    learnt.map_or(start_cap(bound), |l| l.cap).clamp(1, bound)
 }
 
 /// Whether a UI entry may start: the UI entries running (`running`) are
@@ -202,68 +175,11 @@ pub fn run_facts(records: &[(String, Run)]) -> RunFacts {
     facts
 }
 
-/// The machine's cap after a run: one less (at least 1) after contention
-/// failures of `CAP_DROP_TESTS` or more UI entries; one more after
-/// `GROW_RUNS` clean runs (no UI entry failed beside others) that reached
-/// the cap, up to the bound; otherwise as it was (one test's contention
-/// failure lowers its room, not the cap). A run without UI entries leaves
-/// it.
-pub fn learn(learnt: Option<&UiCap>, facts: &RunFacts, bound: usize) -> Option<UiCap> {
-    if facts.at_once == 0 {
-        return learnt.cloned();
-    }
-    let bound = bound.max(1);
-    let cap = effective_cap(learnt, bound);
-    let clean = learnt.map_or(0, |l| l.clean_runs);
-    if facts.contended >= CAP_DROP_TESTS {
-        let cap = cap.saturating_sub(1).max(1);
-        return Some(UiCap { cap, clean_runs: 0 });
-    }
-    // One test's contention failure lowers that test's room, which both
-    // schedulers keep (mitcad#872): the cap holds, and the run is not clean.
-    if facts.contended > 0 || facts.unresolved > 0 || facts.at_once < cap {
-        return Some(UiCap {
-            cap,
-            clean_runs: clean,
-        });
-    }
-    let clean_runs = clean + 1;
-    if clean_runs >= GROW_RUNS && cap < bound {
-        return Some(UiCap {
-            cap: cap + 1,
-            clean_runs: 0,
-        });
-    }
-    Some(UiCap {
-        cap,
-        clean_runs: clean_runs.min(GROW_RUNS),
-    })
-}
-
-/// Learns from a run into the profile file's caps; the cap before and
-/// after.
-pub fn learn_into(
-    caps: &mut BTreeMap<String, UiCap>,
-    platform: &str,
-    facts: &RunFacts,
-    bound: usize,
-) -> (usize, usize) {
-    let before = effective_cap(caps.get(platform), bound);
-    if let Some(next) = learn(caps.get(platform), facts, bound) {
-        caps.insert(platform.to_owned(), next);
-    }
-    (before, effective_cap(caps.get(platform), bound))
-}
-
-/// One line on what a run taught.
-pub fn summary(facts: &RunFacts, before: usize, after: usize) -> String {
-    let change = if after == before {
-        format!("cap {after}")
-    } else {
-        format!("cap {before} -> {after}")
-    };
+/// One line on what a run taught: the cap it ran at, the most UI entries
+/// at once, and the contention failures (whose rooms were lowered).
+pub fn summary(facts: &RunFacts, cap: usize) -> String {
     format!(
-        "UI entries at once: {change}; this run at most {}, {} failed beside others and passed alone, {} failed beside others",
+        "UI entries at once: cap {cap}; this run at most {}, {} failed beside others and passed alone (their rooms lowered), {} failed beside others",
         facts.at_once, facts.contended, facts.unresolved
     )
 }
@@ -324,42 +240,39 @@ pub fn rooms_table(profiles: &profile::Profiles) -> String {
         .join("\n")
 }
 
-/// `--ui-cap` (prints the machine's cap within the bound), `--ui-rooms`
-/// (`rooms_table`) and
-/// `--record-ui FILE` (adds check-all's UI runs to the profiles, learns
-/// from them, prints what it learnt): the output.
+/// `--ui-cap` (prints the machine's cap, `machine_cap`), `--ui-rooms`
+/// (`rooms_table`) and `--record-ui FILE` (adds check-all's UI runs to the
+/// profiles, which lowers or grows their rooms, and prints what the run
+/// taught): the output.
 pub fn command(o: &Options) -> Result<String, String> {
     let variable = std::env::var("MITCAD_UI_JOBS").ok();
-    let bound = learning_bound(bound(o.ui_max, variable.as_deref()));
+    let cap = machine_cap(bound(o.ui_max, variable.as_deref()));
     let path = o.profiles.clone().or_else(profile::default_path);
     let Some(file) = &o.record_ui else {
+        if !o.ui_rooms {
+            return Ok(cap.to_string());
+        }
         let profiles = match &path {
             Some(path) => profile::load(path)?,
             None => profile::Profiles::default(),
         };
-        if o.ui_rooms {
-            return Ok(rooms_table(&profiles));
-        }
-        return Ok(effective_cap(profiles.ui_caps.get(PLATFORM), bound).to_string());
+        return Ok(rooms_table(&profiles));
     };
     let text =
         fs::read_to_string(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
     let since = SystemTime::now().duration_since(UNIX_EPOCH);
     let runs = parse_ui_runs(&text, since.map_or(0, |d| d.as_secs()))?;
     let facts = run_facts(&runs);
-    let Some(path) = path.filter(|_| o.record) else {
-        let cap = effective_cap(None, bound);
-        return Ok(summary(&facts, cap, cap));
-    };
-    let load = o.sensitive_load;
-    let (before, after) = profile::update(&path, |profiles| {
-        for (name, run) in &runs {
-            let test = profiles.tests.entry(name.clone()).or_default();
-            profile::record(test, run.clone(), load);
-        }
-        learn_into(&mut profiles.ui_caps, PLATFORM, &facts, bound)
-    })?;
-    Ok(summary(&facts, before, after))
+    if let Some(path) = path.filter(|_| o.record) {
+        let load = o.sensitive_load;
+        profile::update(&path, |profiles| {
+            for (name, run) in &runs {
+                let test = profiles.tests.entry(name.clone()).or_default();
+                profile::record(test, run.clone(), load);
+            }
+        })?;
+    }
+    Ok(summary(&facts, cap))
 }
 
 #[cfg(test)]
@@ -396,44 +309,26 @@ mod tests {
         assert_eq!(bound(None, Some("many")), None);
         assert_eq!(bound(None, Some("0")), None);
         assert_eq!(bound(None, None), None);
-        // Learning goes on without one, within the default.
-        assert_eq!(learning_bound(None), DEFAULT_BOUND);
-        assert_eq!(learning_bound(Some(12)), 12);
+        // The machine's cap is the bound; without one, the default.
+        assert_eq!(machine_cap(None), DEFAULT_BOUND);
+        assert_eq!(machine_cap(Some(12)), 12);
+        assert_eq!(machine_cap(Some(1)), 1);
+        assert_eq!(machine_cap(Some(0)), 1);
     }
 
     #[test]
-    fn without_a_bound_the_scheduler_holds_ui_entries_to_nothing() {
-        let learnt = UiCap {
-            cap: 2,
-            clean_runs: 0,
-        };
-        // No --ui-max, no MITCAD_UI_JOBS: no cap and no rooms, as before.
-        assert_eq!(scheduled_cap(Some(&learnt), None), usize::MAX);
-        assert_eq!(scheduled_cap(None, None), usize::MAX);
+    fn without_a_bound_the_cap_is_the_default_and_no_room_applies() {
+        // No --ui-max, no MITCAD_UI_JOBS: the default cap, no rooms.
+        assert_eq!(machine_cap(None), DEFAULT_BOUND);
         assert_eq!(scheduled_room(Some(1), None), None);
-        assert!(admits(40, None, scheduled_room(Some(0), None), usize::MAX));
-        // With a bound: the learnt cap within it, the rooms as learnt.
-        assert_eq!(scheduled_cap(Some(&learnt), Some(12)), 2);
-        assert_eq!(scheduled_cap(None, Some(12)), 12);
+        let cap = machine_cap(None);
+        assert!(admits(3, None, scheduled_room(Some(0), None), cap));
+        assert!(!admits(4, None, scheduled_room(Some(0), None), cap));
+        // With a bound: the bound itself, the rooms as learnt.
+        assert_eq!(machine_cap(Some(12)), 12);
+        assert_eq!(machine_cap(Some(6)), 6);
         assert_eq!(scheduled_room(Some(1), Some(12)), Some(1));
         assert_eq!(scheduled_room(None, Some(12)), None);
-    }
-
-    #[test]
-    fn a_machine_starts_at_the_bound() {
-        assert_eq!(start_cap(12), 12);
-        assert_eq!(start_cap(4), 4);
-        assert_eq!(start_cap(3), 3);
-        assert_eq!(start_cap(1), 1);
-        assert_eq!(start_cap(0), 1);
-        assert_eq!(effective_cap(None, 12), 12);
-        // A learnt cap within the bound; a lowered bound holds it down.
-        let learnt = UiCap {
-            cap: 9,
-            clean_runs: 0,
-        };
-        assert_eq!(effective_cap(Some(&learnt), 12), 9);
-        assert_eq!(effective_cap(Some(&learnt), 4), 4);
     }
 
     #[test]
@@ -534,92 +429,6 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_drops_on_contention_and_grows_slowly_when_clean() {
-        let bound = 12;
-        let facts = |at_once, contended, unresolved| RunFacts {
-            at_once,
-            contended,
-            unresolved,
-        };
-        // A first run starts at the bound, 12: clean there, it stays.
-        let mut cap = learn(None, &facts(12, 0, 0), bound);
-        assert_eq!(
-            cap,
-            Some(UiCap {
-                cap: 12,
-                clean_runs: 1
-            })
-        );
-        // One test's contention failure lowers its room, not the cap; the
-        // run is not clean either.
-        cap = learn(cap.as_ref(), &facts(12, 1, 0), bound);
-        assert_eq!(
-            cap,
-            Some(UiCap {
-                cap: 12,
-                clean_runs: 1
-            })
-        );
-        // Two or more tests failing for the company: one less each time,
-        // the clean runs start again.
-        cap = learn(cap.as_ref(), &facts(12, 2, 0), bound);
-        assert_eq!(
-            cap,
-            Some(UiCap {
-                cap: 11,
-                clean_runs: 0
-            })
-        );
-        cap = learn(cap.as_ref(), &facts(11, 3, 0), bound);
-        assert_eq!(
-            cap,
-            Some(UiCap {
-                cap: 10,
-                clean_runs: 0
-            })
-        );
-        // Slow growth: one clean run at the cap is not enough, two are.
-        cap = learn(cap.as_ref(), &facts(10, 0, 0), bound);
-        assert_eq!(
-            cap,
-            Some(UiCap {
-                cap: 10,
-                clean_runs: 1
-            })
-        );
-        cap = learn(cap.as_ref(), &facts(10, 0, 0), bound);
-        assert_eq!(
-            cap,
-            Some(UiCap {
-                cap: 11,
-                clean_runs: 0
-            })
-        );
-        // A run below the cap or with an unresolved failure tells nothing.
-        let same = learn(cap.as_ref(), &facts(3, 0, 0), bound);
-        assert_eq!(same, cap);
-        let same = learn(cap.as_ref(), &facts(11, 0, 1), bound);
-        assert_eq!(same, cap);
-        // Never below 1.
-        let one = UiCap {
-            cap: 1,
-            clean_runs: 1,
-        };
-        let low = learn(Some(&one), &facts(1, 2, 0), bound);
-        assert_eq!(low.map(|c| c.cap), Some(1));
-        // Never above the bound.
-        let top = UiCap {
-            cap: 12,
-            clean_runs: 1,
-        };
-        let held = learn(Some(&top), &facts(12, 0, 0), bound);
-        assert_eq!(held.map(|c| c.cap), Some(12));
-        // A run without UI entries leaves it as it was (or unset).
-        assert_eq!(learn(None, &facts(0, 0, 0), bound), None);
-        assert_eq!(learn(Some(&top), &facts(0, 0, 0), bound), Some(top));
-    }
-
-    #[test]
     fn check_all_gets_the_rooms() {
         let mut profiles = profile::Profiles::default();
         assert_eq!(rooms_table(&profiles), "");
@@ -630,28 +439,99 @@ mod tests {
         assert_eq!(rooms_table(&profiles), "ui-pick\t0\nui-sweep\t4");
     }
 
+    /// A fresh folder of the test's own.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("mitcad-testrun-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The options of a command line; a path may hold spaces.
+    fn options(args: &[&str]) -> Options {
+        let args: Vec<String> = args.iter().map(|&a| a.to_owned()).collect();
+        crate::options::parse(&args).unwrap()
+    }
+
+    /// A profile file an older runner wrote: a cap learnt down to 2 by
+    /// contention failures (mitcad#2124's VM, `MITCAD_UI_JOBS=6`).
+    const OLD_PROFILES: &str = r#"{
+  "format": 1,
+  "tests": {},
+  "ui_caps": { "linux": { "cap": 2, "clean_runs": 0 }, "windows": { "cap": 3 } }
+}"#;
+
     #[test]
-    fn caps_are_kept_per_platform() {
-        let mut caps = BTreeMap::new();
-        let clean = RunFacts {
-            at_once: 2,
-            ..RunFacts::default()
-        };
-        let contended = RunFacts {
-            at_once: 4,
-            contended: 2,
-            ..RunFacts::default()
-        };
-        // Windows starts at its bound, 4, and drops after contention.
-        assert_eq!(learn_into(&mut caps, "windows", &contended, 4), (4, 3));
-        assert_eq!(caps["windows"].cap, 3);
-        assert!(!caps.contains_key("linux"));
-        // Linux keeps its own: a clean run below its start leaves it at 12,
-        // and Windows' cap stays where it was.
-        assert_eq!(learn_into(&mut caps, "linux", &clean, 12), (12, 12));
-        assert_eq!((caps["linux"].cap, caps["windows"].cap), (12, 3));
-        let line = summary(&contended, 4, 3);
-        assert!(line.contains("cap 4 -> 3"), "{line}");
+    fn an_old_learnt_cap_reads_as_the_bound() {
+        let dir = scratch("old-cap");
+        let path = dir.join("profiles.json");
+        fs::write(&path, OLD_PROFILES).unwrap();
+        // The old file still reads (its caps are left out) ...
+        assert!(profile::load(&path).unwrap().tests.is_empty());
+        // ... and --ui-cap prints the bound, not the old cap 2.
+        let p = path.to_str().unwrap();
+        let cap = command(&options(&["--ui-cap", "--ui-max", "6", "--profiles", p]));
+        assert_eq!(cap.as_deref(), Ok("6"));
+        let cap = command(&options(&["--ui-cap", "--ui-max", "12", "--profiles", p]));
+        assert_eq!(cap.as_deref(), Ok("12"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn contention_failures_lower_their_rooms_and_leave_the_cap_at_the_bound() {
+        let dir = scratch("contention");
+        let path = dir.join("profiles.json");
+        fs::write(&path, OLD_PROFILES).unwrap();
+        // Six at once; three tests failed beside others and passed alone,
+        // which the old rule took for a reason to drop the machine's cap.
+        let runs = dir.join("ui-runs.tsv");
+        let text = "ui-a\t0\t30\t5\n\
+                    ui-pick\t1\t40\t5\n\
+                    ui-render\t1\t40\t4\n\
+                    ui-sweep\t124\t300\t3\n\
+                    ui-pick\t0\t38\t0\n\
+                    ui-render\t0\t35\t0\n\
+                    ui-sweep\t0\t60\t0\n";
+        fs::write(&runs, text).unwrap();
+        let facts = run_facts(&parse_ui_runs(text, 0).unwrap());
+        assert_eq!(
+            (facts.at_once, facts.contended, facts.unresolved),
+            (6, 3, 0)
+        );
+        let (r, p) = (runs.to_str().unwrap(), path.to_str().unwrap());
+        let record = ["--record-ui", r, "--ui-max", "6", "--profiles", p];
+        let line = command(&options(&record)).unwrap();
+        assert!(line.starts_with("UI entries at once: cap 6;"), "{line}");
+        assert!(!line.contains("->"), "{line}");
+        // Each contended test's room is halved from what it had beside it;
+        // the test that passed keeps none.
+        let profiles = profile::load(&path).unwrap();
+        let room = |name: &str| profiles.tests[name].ui_room;
+        assert_eq!(room("ui-pick"), Some(2));
+        assert_eq!(room("ui-render"), Some(2));
+        assert_eq!(room("ui-sweep"), Some(1));
+        assert_eq!(room("ui-a"), None);
+        assert_eq!(
+            rooms_table(&profiles),
+            "ui-pick\t2\nui-render\t2\nui-sweep\t1"
+        );
+        // The machine's cap stays at the bound, and the old learnt cap is
+        // gone from the file after the save.
+        let cap = command(&options(&["--ui-cap", "--ui-max", "6", "--profiles", p]));
+        assert_eq!(cap.as_deref(), Ok("6"));
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("ui_caps"), "{saved}");
+        // The scheduler holds UI entries to the bound and the rooms.
+        assert_eq!(machine_cap(Some(6)), 6);
+        assert!(admits(5, None, None, machine_cap(Some(6))));
+        assert!(!admits(
+            3,
+            None,
+            scheduled_room(room("ui-pick"), Some(6)),
+            6
+        ));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

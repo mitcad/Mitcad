@@ -50,7 +50,7 @@ struct FileOut<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     components: Vec<ComponentOut<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    occurrences: Vec<OccurrenceOut>,
+    occurrences: Vec<OccurrenceOut<'a>>,
     // The number the next occurrence takes where it is not one past the
     // largest listed (the largest was deleted, mitcad#1320).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,6 +158,14 @@ struct FileOut<'a> {
     comments: &'a [Comment],
     #[serde(skip_serializing_if = "Option::is_none")]
     next_comment: Option<u32>,
+    // The images of comments and replies (mitcad#2011), when there are
+    // any, apart from the comments so that a build without them still
+    // opens the design; with the number the next one takes where it is
+    // not one past the largest listed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    comment_attachments: Vec<crate::document::AttachmentOut<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_comment_attachment: Option<u32>,
     // The print plates (mitcad#1050), when there are any.
     #[serde(skip_serializing_if = "<[crate::print_plates::PrintPlate]>::is_empty")]
     print_plates: &'a [crate::print_plates::PrintPlate],
@@ -171,6 +179,9 @@ struct FileOut<'a> {
     // (mitcad#1013), when there are any.
     #[serde(skip_serializing_if = "crate::cam::CamState::is_empty")]
     cam: &'a crate::cam::CamState,
+    // Sketch blocks (mitcad#2110), when there are any.
+    #[serde(skip_serializing_if = "<[crate::sketch::block::SketchBlock]>::is_empty")]
+    sketch_blocks: &'a [crate::sketch::block::SketchBlock],
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -239,7 +250,7 @@ struct ComponentOut<'a> {
 }
 
 #[derive(Serialize)]
-struct OccurrenceOut {
+struct OccurrenceOut<'a> {
     uid: OccurrenceUid,
     component: ComponentUid,
     parent: ComponentUid,
@@ -263,6 +274,9 @@ struct OccurrenceOut {
     // Flexible in its parent, with its own joint values (mitcad#1793).
     #[serde(skip_serializing_if = "Option::is_none")]
     flexible: Option<crate::assembly::Flex>,
+    // The folder of its parent's occurrences it is in (mitcad#2103).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder: Option<&'a str>,
 }
 
 fn is_root(component: &ComponentUid) -> bool {
@@ -458,6 +472,7 @@ pub(super) fn save_with(
                 transparent: o.transparent,
                 // Without kept placements that no longer apply (mitcad#2016).
                 flexible: assembly.saved_flex(o.uid),
+                folder: o.folder.as_deref(),
             })
             .collect(),
         next_occurrence: next_occurrence_out(assembly),
@@ -578,10 +593,13 @@ pub(super) fn save_with(
         tables: &state.tables,
         comments: &state.comments,
         next_comment: next_comment_out(state),
+        comment_attachments: crate::document::attachments_out(&state.comments),
+        next_comment_attachment: crate::document::next_attachment_out(state),
         print_plates: &state.print_plates,
         filament_changes: &state.filament_changes,
         gravity: &state.gravity,
         cam: &state.cam,
+        sketch_blocks: &state.sketch_blocks,
         statistics,
         preview,
     };
@@ -879,6 +897,9 @@ struct OccurrenceIn {
     // Flexible in its parent (mitcad#1793).
     #[serde(default)]
     flexible: Option<crate::assembly::Flex>,
+    // The folder of its parent's occurrences it is in (mitcad#2103).
+    #[serde(default)]
+    folder: Option<String>,
 }
 
 struct FeatureIn {
@@ -904,7 +925,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 46] = [
+const TOP_FIELDS: [&str; 49] = [
     "format",
     "version",
     "units",
@@ -964,6 +985,10 @@ const TOP_FIELDS: [&str; 46] = [
     // Comments and the next comment's number (mitcad#1119).
     "comments",
     "next_comment",
+    // The images of comments and replies and the next one's number
+    // (mitcad#2011).
+    "comment_attachments",
+    "next_comment_attachment",
     // The print plates (mitcad#1050).
     "print_plates",
     // The numbers the next feature and occurrence take (mitcad#1320).
@@ -975,10 +1000,24 @@ const TOP_FIELDS: [&str; 46] = [
     "gravity",
     // CAM setups, operations and machines (mitcad#1013).
     "cam",
+    // Sketch blocks (mitcad#2110).
+    "sketch_blocks",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
     FileError::Schema(message.into())
+}
+
+/// A part of a design file that cannot be read (mitcad#2011): `message`
+/// says in words what is wrong, as the application shows it (no ids, no
+/// fields); `detail`, with the field's path and the ids, goes to agents and
+/// the log, as a failure's detail does (`notice::FeatureError`'s text).
+fn damaged(message: String, detail: String) -> FileError {
+    FileError::Invalid(
+        crate::notice::FeatureError::new(message)
+            .with_detail(detail)
+            .text(),
+    )
 }
 
 fn invalid(message: impl Into<String>) -> FileError {
@@ -1187,6 +1226,7 @@ fn assembly_in(
             number: o.number,
             pattern: o.pattern,
             flexible: o.flexible,
+            folder: o.folder.filter(|f| !f.trim().is_empty()),
         });
     }
     // The number the next occurrence takes, kept where the largest was
@@ -1508,18 +1548,27 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     // Comments (mitcad#1119): each as a command could have made it, each id
     // once; the next id one past the largest ever used. Their targets are
     // found when they are asked for, so one whose target is gone loads.
+    // A refusal says in words what is wrong (mitcad#2011): the field and
+    // the ids are its detail, for agents and the log.
+    const COMMENT: &str = "a comment is damaged";
     let mut file_comments: Vec<Comment> = Vec::new();
     for (i, c) in array(&mut top, "comments", false)?.into_iter().enumerate() {
         let comment = serde_json::from_value::<Comment>(c)
-            .map_err(|e| schema(format!("comments[{i}]: {e}")))?;
-        comment
-            .check()
-            .map_err(|e| invalid(format!("comments[{i}] ({}): {e}", comment.name())))?;
+            .map_err(|e| damaged(COMMENT.to_owned(), format!("comments[{i}]: {e}")))?;
+        if let Some((words, e)) = comment.damage() {
+            return Err(damaged(
+                format!("{COMMENT}: {words}"),
+                format!("comments[{i}] ({}): {e}", comment.name()),
+            ));
+        }
         if file_comments.iter().any(|c| c.id == comment.id) {
-            return Err(invalid(format!(
-                "comments[{i}]: comment {} is listed more than once",
-                comment.name()
-            )));
+            return Err(damaged(
+                format!("{COMMENT}: two comments have the same number"),
+                format!(
+                    "comments[{i}]: comment {} is listed more than once",
+                    comment.name()
+                ),
+            ));
         }
         file_comments.push(comment);
     }
@@ -1529,12 +1578,46 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             .as_u64()
             .and_then(|n| u32::try_from(n).ok())
             .filter(|n| *n >= 1)
-            .ok_or_else(|| schema("\"next_comment\" must be a number from 1"))?,
+            .ok_or_else(|| {
+                damaged(
+                    "the numbering of the comments is damaged".to_owned(),
+                    "\"next_comment\" must be a number from 1".to_owned(),
+                )
+            })?,
     };
     let next_comment = file_comments
         .iter()
         .map(|c| c.id.saturating_add(1))
         .fold(next_comment, u32::max);
+    // Their images (mitcad#2011): each on a comment or a reply of the file,
+    // a PNG or JPEG of the size its fields say, each id once; the next id
+    // one past the largest ever used.
+    const IMAGE: &str = "an image of a comment is damaged";
+    let attachment_entries = array(&mut top, "comment_attachments", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            serde_json::from_value::<crate::document::AttachmentIn>(value)
+                .map_err(|e| damaged(IMAGE.to_owned(), format!("comment_attachments[{i}]: {e}")))
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    let largest_attachment =
+        crate::document::attachments_in(&mut file_comments, attachment_entries)
+            .map_err(|(words, detail)| damaged(format!("{IMAGE}: {words}"), detail))?;
+    let next_attachment = match top.remove("next_comment_attachment") {
+        None => 1,
+        Some(value) => value
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| {
+                damaged(
+                    "the numbering of the comments' images is damaged".to_owned(),
+                    "\"next_comment_attachment\" must be a number from 1".to_owned(),
+                )
+            })?,
+    }
+    .max(largest_attachment.saturating_add(1));
     // Purge volumes set by hand (mitcad#705): each valid, each pair once. A
     // pair of a material the design no longer has is kept as it is.
     let purge_volumes = array(&mut top, "purge_volumes", false)?
@@ -1642,6 +1725,17 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             cam
         }
     };
+    // Sketch blocks (mitcad#2110): names unique, nesting without a cycle.
+    let sketch_blocks = array(&mut top, "sketch_blocks", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            serde_json::from_value::<crate::sketch::block::SketchBlock>(value)
+                .map_err(|e| schema(format!("sketch_blocks[{i}]: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::sketch::block::check_blocks(&sketch_blocks)
+        .map_err(|e| invalid(format!("sketch_blocks: {e}")))?;
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -1851,13 +1945,10 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             .info()
             .check(&ctx)
             .and_then(|()| crate::joints::check_generated_references(&assembly, &ctx, &entry.def))
-            .and_then(|()| match &entry.def {
-                FeatureDef::Extrude(extrude) => {
-                    extrude.active_cut_scope().map_or(Ok(()), |scope| {
-                        scope.check_components(&assembly, &ctx, entry.component)
-                    })
-                }
-                _ => Ok(()),
+            .and_then(|()| {
+                entry.def.active_cut_scope().map_or(Ok(()), |scope| {
+                    scope.check_components(&assembly, &ctx, entry.component)
+                })
             })
             .and_then(|()| check_components(&assembly, &entries, &index, entry))
             .map_err(|e| invalid(format!("features[{i}] ({}): {e}", entry.name)))?;
@@ -2128,11 +2219,13 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.annotation_text_height = annotation_text_height;
     state.comments = file_comments;
     state.next_comment = next_comment;
+    state.next_attachment = next_attachment;
     state.purge_volumes = purge_volumes;
     state.print_plates = print_plates;
     state.filament_changes = filament_changes;
     state.gravity = gravity;
     state.cam = cam;
+    state.sketch_blocks = sketch_blocks;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(

@@ -172,7 +172,7 @@ function Cards-BelowBar([string]$Description, [int]$Min, [int]$Max) {
   if ($entries.ContainsKey('titleCard')) { Ui-Fail "${Description}: a title card in '$line'" }
   if ($entries.ContainsKey('titleFinishSketch')) { Ui-Fail "${Description}: duplicate Finish Sketch in the title row: '$line'" }
   if ($entries.ContainsKey('titleSearch')) { Ui-Fail "${Description}: the search field in the title row, not the panel: '$line'" }
-  foreach ($part in @('titleFile', 'titleHistory', 'titleTabs', 'titleSettings', 'ribbon', 'ribbonWorkspace', 'ribbonTabs', 'ribbonSearch')) {
+  foreach ($part in @('titleQuickAccess', 'titleMenu', 'titleTabs', 'titleSettings', 'ribbon', 'ribbonWorkspace', 'ribbonTabs', 'ribbonSearch')) {
     if (-not $entries.ContainsKey($part)) { Ui-Fail "${Description}: no $part in '$line'" }
   }
   # The title row is a bar across the view at the window's top.
@@ -206,7 +206,7 @@ function Cards-BelowBar([string]$Description, [int]$Min, [int]$Max) {
     }
   }
   if ($groups -lt 2) { Ui-Fail "${Description}: $groups groups in the toolbar panel in '$line'" }
-  Ui-QuickAccessPlace $Description $line -None
+  Ui-QuickAccessPlace $Description $line
   Write-Host "ok   ${Description}: the view below the menu bar ($bar), $count cards and parts, $groups groups in the toolbar panel, the title row's and the panel's parts within them, the others below the rows' bottom $rows (window $width wide)"
   return $entries
 }

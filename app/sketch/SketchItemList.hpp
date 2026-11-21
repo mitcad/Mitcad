@@ -103,6 +103,9 @@ protected:
   void mouseReleaseEvent(QMouseEvent* event) override;
   void mouseMoveEvent(QMouseEvent* event) override;
   void mouseDoubleClickEvent(QMouseEvent* event) override;
+  // A pattern's step: Edit Pattern and Free Pattern (mitcad#2089); an
+  // Equal Spacing step: Edit Equal Spacing (mitcad#2099).
+  void contextMenuEvent(QContextMenuEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
   void changeEvent(QEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;

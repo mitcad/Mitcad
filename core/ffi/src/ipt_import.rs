@@ -626,7 +626,7 @@ impl Document {
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         guard.check(&progress);
-                        let now = progress.step.load(Ordering::Relaxed);
+                        let now = progress.steps();
                         if now != step {
                             step = now;
                             moved = std::time::Instant::now();

@@ -174,6 +174,7 @@ pub(super) fn editable_template(sheet: &DrawingSheet) -> SheetTemplate {
             t.library = None;
             t.size = None;
             t.projection = None;
+            t.standard = None;
             t.for_sheet()
         }
     }
@@ -417,6 +418,7 @@ impl<K: Kernel> DrawingTemplatesOps<K> for Document<K> {
                 .map_or_else(|| slug(&c.name), str::to_owned);
         t.size = Some(sheet.size);
         t.projection = Some(sheet.projection);
+        t.standard = Some(drawing.defaults.standard);
         t.library = None;
         let project = c.project.as_deref().map(Path::new);
         let path = template::save(&t, c.library.trim(), project).map_err(ApiError)?;

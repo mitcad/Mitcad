@@ -43,8 +43,8 @@ test_boss_rim_rounded_across_a_stepped_seam (ctest
 geometry.suite.fillet_kernel): the end circle of a cylinder built as two
 bosses whose seams lie at an angle, merged into one face whose seam runs in
 steps: one contour, valid, the volume removed as on a reference body whose
-seam does not run in steps, within 1e-6. Its failure without the patch is
-still to be shown in the port's before/after run (mitcad#1986).
+seam does not run in steps, within 1e-6. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 index b875eb0..691d31e 100644

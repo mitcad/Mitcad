@@ -353,7 +353,20 @@ vcpkg_from_github(
         1696-chfi3d-narrow-face-try-refused-by-its-analytic-pieces-walks-no-guide-past-the-spine.patch
         1850-chfi3d-rounding-wider-than-a-walls-top-rolls-on-its-inner-edge-cut-by-the-slope-past-its-end.patch
         1860-chfi3d-torus-corner-with-unequal-sides-runs-on-to-where-the-smaller-blend-crosses-it.patch
+        1820-stepcafcontrol-sub-shape-names-skip-what-the-reader-left-unresolved.patch
+        1830-chfi3d-end-cut-across-the-faces-beside-a-tangent-face.patch
+        1840-tkopengl-lines-wider-than-a-pixel-in-a-core-profile-drawn-as-quads.patch
 )
+
+# The compiler cache (docs/development.md, "The compiler cache of the vcpkg
+# ports"): vcpkg names the extracted sources after the hash of the patch
+# set, so a changed patch would put every file under a new path and no
+# compile would hit the cache. Build from a folder of a fixed name instead;
+# the sources are extracted and patched afresh on every build all the same.
+set(MITCAD_FIXED_SOURCE_PATH "${CURRENT_BUILDTREES_DIR}/src/occt")
+file(REMOVE_RECURSE "${MITCAD_FIXED_SOURCE_PATH}")
+file(RENAME "${SOURCE_PATH}" "${MITCAD_FIXED_SOURCE_PATH}")
+set(SOURCE_PATH "${MITCAD_FIXED_SOURCE_PATH}")
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")
     set(BUILD_TYPE "Shared")

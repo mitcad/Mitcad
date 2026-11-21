@@ -130,7 +130,8 @@ g "$LIB" tag v1.0.0
 
 # The post (O1, its derived part F1) on the ground at the origin, 1200
 # long; the member (O2, F2) on the post's +X side 300 up, 600 long; its
-# joint Joint1 (F3) in the root.
+# joint (F3) in the root, named after its parts by BUILD (mitcad#2088).
+BJ="Timber 200x300 test L=600 on Timber 200x300 test L=1200"
 cat > "$WORK/timber.json" << EOF
 [
   {"cmd": "build_place", "part": {"library": "test-timber", "url": "$LIB", "rev": "HEAD", "component": "timber-200-test"},
@@ -138,7 +139,7 @@ cat > "$WORK/timber.json" << EOF
   {"cmd": "build_place", "part": {"source": "S1"},
    "at": {"occurrence": "O1", "geometry": {"mount": "F1:mount(face_xp)"}, "offset": 300}, "length": 600},
   {"expect": {"query": {"query": "joints"}, "result": {"joints": [
-    {"name": "Joint1", "a": {"on": "mount", "path": ["O2"]}, "b": {"on": "mount", "path": ["O1"]}}]}}}
+    {"name": "$BJ", "a": {"on": "mount", "path": ["O2"]}, "b": {"on": "mount", "path": ["O1"]}}]}}}
 ]
 EOF
 "$CLI" run "$WORK/timber.json" --save "$TIMBER" > "$WORK/timber.log" 2>&1 ||
@@ -222,19 +223,19 @@ ui_stop_app
 echo "--- A BUILD joint: a member on a post's side"
 ui_start_app --open "$TIMBER"
 ui_step "fit (F6)"                         ui_key F6
-ui_expect_log "Browser joints: Joint1 " "the browser has the member's joint"
+ui_expect_log "Browser joints: $BJ " "the browser has the member's joint"
 open_joints
 ui_mark
-ui_step "click the member's joint"         ui_click_logged "Browser Root/Joints/Joint1"
-expect_side b "mount frame face_xp of F1 in " " (O1), frame and part [Joint1]" \
+ui_step "click the member's joint"         ui_click_logged "Browser Root/Joints/$BJ"
+expect_side b "mount frame face_xp of F1 in " " (O1), frame and part [$BJ]" \
   "side b: the post's side frame, with the post"
-expect_side a "mount frame " " (O2), frame and part [Joint1]" "side a: the member's own frame, with the member"
+expect_side a "mount frame " " (O2), frame and part [$BJ]" "side a: the member's own frame, with the member"
 ui_expect_new "Joint highlight frame a at " "side a's frame is drawn"
 ui_expect_new "Joint highlight frame b at " "side b's frame is drawn"
 occurrences=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Joint highlight occurrences: " | tail -1)
-[[ $occurrences == *" (O2), "*" (O1) [Joint1]" ]] || ui_fail "the joined parts: $occurrences"
+[[ $occurrences == *" (O2), "*" (O1) [$BJ]" ]] || ui_fail "the joined parts: $occurrences"
 echo "ok   the two parts: $occurrences"
-ui_expect_new "Joint card: Joint1: " "the card names the BUILD joint"
+ui_expect_new "Joint card: $BJ: " "the card names the BUILD joint"
 
 ui_stop_app
 ui_finish "the joint highlight"

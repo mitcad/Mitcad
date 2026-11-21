@@ -37,6 +37,36 @@ QJsonArray pointArray(const std::array<double, 3>& at) {
 
 QString oneLine(QString text) { return text.replace(QLatin1Char('\n'), QStringLiteral(" / ")); }
 
+// The images of a comment's or a reply's `attachments` (mitcad#2011).
+QVector<CommentImage> imagesOf(const QJsonValue& attachments) {
+  QVector<CommentImage> images;
+  for (const QJsonValue& value : attachments.toArray()) {
+    const QJsonObject fields = value.toObject();
+    CommentImage image;
+    image.id = fields.value(QStringLiteral("id")).toString();
+    if (image.id.isEmpty()) {
+      continue;
+    }
+    image.mediaType = fields.value(QStringLiteral("media_type")).toString(QStringLiteral("image/png"));
+    image.width = fields.value(QStringLiteral("width")).toInt();
+    image.height = fields.value(QStringLiteral("height")).toInt();
+    image.bytes = static_cast<qint64>(fields.value(QStringLiteral("bytes")).toDouble());
+    image.sha256 = fields.value(QStringLiteral("sha256")).toString();
+    image.name = fields.value(QStringLiteral("name")).toString();
+    images.append(image);
+  }
+  return images;
+}
+
+// "Comment C1 image A1: capture.png, image/png, 640 x 400" (with "reply 1 "
+// before "image" for a reply's).
+QString imageLogLine(const QString& id, const QString& reply, const CommentImage& image) {
+  return QStringLiteral("Comment %1 %2image %3: %4, %5, %6 x %7")
+      .arg(id, reply, image.id, image.name, image.mediaType)
+      .arg(image.width)
+      .arg(image.height);
+}
+
 } // namespace
 
 CommentsShown commentsOf(const QJsonObject& answer) {
@@ -63,8 +93,10 @@ CommentsShown commentsOf(const QJsonObject& answer) {
       const QJsonObject fields = reply.toObject();
       comment.replies.append({fields.value(QStringLiteral("author")).toString(QStringLiteral("user")),
                               fields.value(QStringLiteral("text")).toString(),
-                              fields.value(QStringLiteral("created")).toString()});
+                              fields.value(QStringLiteral("created")).toString(),
+                              imagesOf(fields.value(QStringLiteral("attachments")))});
     }
+    comment.images = imagesOf(entry.value(QStringLiteral("attachments")));
     const QJsonArray place = entry.value(QStringLiteral("place")).toArray();
     if (place.size() == 3) {
       const std::array<double, 3> at{place.at(0).toDouble(), place.at(1).toDouble(), place.at(2).toDouble()};
@@ -75,6 +107,26 @@ CommentsShown commentsOf(const QJsonObject& answer) {
     shown.comments.append(comment);
   }
   return shown;
+}
+
+const CommentImage* commentImageById(const CommentShown& comment, const QString& id) {
+  for (const CommentImage& image : comment.images) {
+    if (image.id == id) {
+      return &image;
+    }
+  }
+  for (const CommentShown::Reply& reply : comment.replies) {
+    for (const CommentImage& image : reply.images) {
+      if (image.id == id) {
+        return &image;
+      }
+    }
+  }
+  return nullptr;
+}
+
+QString commentImageText(const CommentImage& image) {
+  return QObject::tr("%1, %2 × %3").arg(image.name).arg(image.width).arg(image.height);
 }
 
 int commentNumber(const QString& id) {
@@ -171,14 +223,14 @@ CommentEntry commentEntry(const CommentShown& comment, int reply) {
   if (reply <= 0) {
     return {QObject::tr("Comment %1 by %2, %3")
                 .arg(QString::number(comment.number), comment.author, commentTimeText(comment.created)),
-            comment.text};
+            comment.text, comment.images};
   }
   if (reply > comment.replies.size()) {
     return {};
   }
   const CommentShown::Reply& answer = comment.replies.at(reply - 1);
   return {QObject::tr("Reply %1 by %2, %3").arg(QString::number(reply), answer.author, commentTimeText(answer.created)),
-          answer.text};
+          answer.text, answer.images};
 }
 
 CommentDetails commentDetails(const CommentShown& comment, int reply) {
@@ -200,7 +252,7 @@ CommentDetails commentDetails(const CommentShown& comment, int reply) {
     details.entries << CommentEntry{comment.addressedBy.isEmpty()
                                         ? QObject::tr("Resolution")
                                         : QObject::tr("Resolution by %1").arg(comment.addressedBy),
-                                    comment.resolution};
+                                    comment.resolution, {}};
   }
   return details;
 }
@@ -228,6 +280,14 @@ QString commentTip(const CommentShown& comment) {
   for (const CommentShown::Reply& reply : comment.replies) {
     lines << QObject::tr("%1: %2").arg(reply.author, reply.text);
   }
+  // How many images the thread has (mitcad#2011): the panel shows them.
+  qsizetype images = comment.images.size();
+  for (const CommentShown::Reply& reply : comment.replies) {
+    images += reply.images.size();
+  }
+  if (images > 0) {
+    lines << QObject::tr("%n image(s) in the Comments panel", nullptr, static_cast<int>(images));
+  }
   return lines.join(QLatin1Char('\n'));
 }
 
@@ -241,6 +301,9 @@ QStringList commentLogLines(const CommentsShown& shown) {
                  .arg(comment.id, comment.status, comment.orphaned ? QStringLiteral(", orphaned") : QString(),
                       comment.author, comment.label.isEmpty() ? QStringLiteral("-") : comment.label,
                       oneLine(comment.text));
+    for (const CommentImage& image : comment.images) {
+      lines << imageLogLine(comment.id, QString(), image);
+    }
     if (!comment.resolution.isEmpty()) {
       lines << QStringLiteral("Comment %1 resolution: %2").arg(comment.id, oneLine(comment.resolution));
     }
@@ -248,6 +311,9 @@ QStringList commentLogLines(const CommentsShown& shown) {
       const CommentShown::Reply& reply = comment.replies.at(i);
       lines << QStringLiteral("Comment %1 reply %2: %3: %4")
                    .arg(comment.id, QString::number(i + 1), reply.author, oneLine(reply.text));
+      for (const CommentImage& image : reply.images) {
+        lines << imageLogLine(comment.id, QStringLiteral("reply %1 ").arg(i + 1), image);
+      }
     }
     const CommentPinLook look = commentPinLook(comment);
     if (comment.place) {

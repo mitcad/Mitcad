@@ -33,6 +33,28 @@ enum ShortcutContext : unsigned {
 // A command's key in each context it lives in (mitcad#720), by context.
 using ContextShortcuts = QMap<unsigned, QKeySequence>;
 
+// A key's portable text from a settings value written by hand without its
+// quotes, which an INI file reads as a list split at every comma: "G, L"
+// as G and L, and "Ctrl+," as "Ctrl+" and an empty part (mitcad#2096: it
+// came back as "Ctrl+, "). The commas are put back, and a comma right after
+// a "+" or at a combination's start is the comma key, not the sequence's
+// separator: "Ctrl+,", "Ctrl+,, G", ",".
+inline QString shortcutTextFromList(const QStringList& parts) {
+  const QString raw = parts.join(QLatin1Char(','));
+  QStringList combinations;
+  QString current;
+  for (const QChar c : raw) {
+    if (c == QLatin1Char(',') && !current.isEmpty() && !current.endsWith(QLatin1Char('+'))) {
+      combinations.append(current);
+      current.clear();
+    } else if (!c.isSpace() || !current.isEmpty()) {
+      current.append(c);
+    }
+  }
+  if (!current.isEmpty()) combinations.append(current.trimmed());
+  return combinations.join(QStringLiteral(", "));
+}
+
 // The single contexts of `contexts`, in the order the Keyboard Shortcuts
 // window lists them: Model, Sketch, Command Panel, 3D Sketch Tool.
 inline QList<unsigned> shortcutContextList(unsigned contexts) {
@@ -99,13 +121,33 @@ struct ShortcutBinding {
 struct ShortcutConflict {
   ShortcutBinding first;
   ShortcutBinding second;
-  QKeySequence keys;
-  unsigned contexts = 0; // where both are active
+  QKeySequence keys;      // first's key
+  unsigned contexts = 0;  // where both are active
+  QKeySequence otherKeys; // second's key: the same, or one that starts with
+                          // keys or that keys starts with (mitcad#2095)
+
+  // Whether one key is the start of the other (E and E, X): the shorter
+  // one runs first, and the longer one is never reached.
+  bool prefix() const { return !otherKeys.isEmpty() && otherKeys != keys; }
 
   // "S is used by both Command Search and Fit Point Spline in a sketch.
-  // Change one of them."
+  // Change one of them."; a key that starts another: "E (Extrude) is the
+  // start of E, X (Line) in the 3D view. Change one of them."
   QString description() const {
     const QString key = keys.toString(QKeySequence::NativeText);
+    if (prefix()) {
+      const bool firstShorter = keys.count() < otherKeys.count();
+      const ShortcutBinding& shorter = firstShorter ? first : second;
+      const ShortcutBinding& longer = firstShorter ? second : first;
+      const QString start = (firstShorter ? keys : otherKeys).toString(QKeySequence::NativeText);
+      const QString whole = (firstShorter ? otherKeys : keys).toString(QKeySequence::NativeText);
+      if (shorter.fixed) {
+        return QObject::tr("%1 starts with %2, which is reserved for %3. Choose another key for %4.")
+            .arg(whole, start, shorter.name, longer.name);
+      }
+      return QObject::tr("%1 (%2) is the start of %3 (%4) %5. Change one of them.")
+          .arg(start, shorter.name, whole, longer.name, shortcutContextPhrase(contexts));
+    }
     if (first.fixed || second.fixed) {
       const ShortcutBinding& reserved = first.fixed ? first : second;
       const ShortcutBinding& other = first.fixed ? second : first;
@@ -116,6 +158,9 @@ struct ShortcutConflict {
   }
 };
 
+// Two keys clash where both are active when they are the same or one is the
+// start of the other (mitcad#2095: E and E, X): Qt runs the shorter one and
+// never waits for the rest.
 inline QList<ShortcutConflict> shortcutConflicts(const QList<ShortcutBinding>& bindings) {
   QList<ShortcutConflict> conflicts;
   for (qsizetype i = 0; i < bindings.size(); ++i) {
@@ -125,9 +170,8 @@ inline QList<ShortcutConflict> shortcutConflicts(const QList<ShortcutBinding>& b
       if (first.id == second.id || !(first.contexts & second.contexts)) continue;
       for (const auto& a : first.effectiveKeys()) {
         for (const auto& b : second.effectiveKeys()) {
-          // Prefixes are ambiguous too if a legacy setting contains a chord.
           if (a.matches(b) != QKeySequence::NoMatch || b.matches(a) != QKeySequence::NoMatch) {
-            conflicts.append({first, second, a, first.contexts & second.contexts});
+            conflicts.append({first, second, a, first.contexts & second.contexts, b});
           }
         }
       }

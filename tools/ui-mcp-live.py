@@ -21,6 +21,9 @@ bridge:
     Finish Sketch;
   - document_save to the design's own path;
   - ui_log: the commands' lines, and since a sequence number;
+  - ui_guide (mitcad#2012): a tutorial's guide steps shown to the user, a
+    command held back, the steps' completion heard through the subscribed
+    resource mitcad://ui-guide;
   - model_render (mitcad#1487) on another design the window opens: the
     same picture as the headless server's, whatever the window's camera,
     also into a file.
@@ -51,7 +54,7 @@ PROTOCOL = "2025-11-25"
 TIMEOUT = 60
 FRAME_LIMIT = 8 * 1024 * 1024
 LIVE_TOOLS = {"document_list", "model_query", "model_command", "document_save", "document_open", "ui_state", "ui_log",
-              "ui_screenshot", "ui_select", "ui_command", "ui_camera", "model_export", "model_reference",
+              "ui_screenshot", "ui_select", "ui_command", "ui_camera", "ui_guide", "model_export", "model_reference",
               "document_new", "model_render",
               # The input tools of a run started with --mcp-folder, as these tests
               # start it (mitcad#1735).
@@ -171,6 +174,9 @@ class Bridge:
         self.reader = threading.Thread(target=self.read_output, daemon=True)
         self.reader.start()
         self.next_id = 0
+        # The notifications that came between the answers (mitcad#2012:
+        # resources updated).
+        self.notifications = []
 
     def read_output(self):
         while True:
@@ -230,6 +236,7 @@ class Bridge:
                 continue
             if "id" not in response and "method" in response:
                 print("note: a notification from the bridge: " + json.dumps(response), file=sys.stderr)
+                self.notifications.append(response)
                 continue
             check(response.get("id") == self.next_id, "JSON-RPC request ID was changed: " + repr(response))
             return response
@@ -662,7 +669,86 @@ def run_flow(bridge, design, say=print):
           "Opening the root evaluated the linked child's font path")
     say("ok   MCP open retains embedded linked bodies without reading a changed child's font")
 
+    check_ui_guide(bridge, say)
     check_live_render(bridge, design, say)
+
+
+GUIDE_URI = "mitcad://ui-guide"
+
+
+def guide_state(bridge, predicate, what, seconds=20):
+    """The guide step's resource once `predicate` holds of it, after its
+    notifications/resources/updated."""
+    deadline = time.monotonic() + seconds
+    while True:
+        notified = any(note.get("method") == "notifications/resources/updated"
+                       and note.get("params", {}).get("uri") == GUIDE_URI for note in bridge.notifications)
+        if notified:
+            text = bridge.request("resources/read", {"uri": GUIDE_URI})["result"]["contents"][0]["text"]
+            state = json.loads(text)
+            if predicate(state):
+                bridge.notifications.clear()
+                return state
+        check(time.monotonic() < deadline, "ui_guide: no notification of " + what)
+        time.sleep(0.1)
+        bridge.request("ping")
+
+
+def check_ui_guide(bridge, say=print):
+    """ui_guide (mitcad#2012): a tutorial's steps over live MCP, as
+    tools/ui-tutorials-test.py takes them through a page's bridge, and their
+    completion heard through the subscribed resource mitcad://ui-guide."""
+    resources = bridge.request("resources/list")["result"]["resources"]
+    check(any(resource["uri"] == GUIDE_URI for resource in resources), "resources/list lacks " + GUIDE_URI)
+    check(bridge.request("resources/subscribe", {"uri": GUIDE_URI}).get("result") == {}, "subscribe to the guide")
+    bridge.notifications.clear()
+    refused = bridge.tool("ui_guide", {"action": "start", "step": {
+        "text": "Nothing", "target": {"command": "no.such"}, "done": {"command": "no.such"}}}, error=True)
+    check("no.such" in refused["error"], "ui_guide: a step of no command: " + repr(refused))
+    state = bridge.tool("ui_guide", {"action": "start", "step": {
+        "id": "extrude", "text": "Open Extrude.", "target": {"command": "solid.extrude"},
+        "done": {"started": "solid.extrude"}}})
+    check(state["active"] is True and state["step"]["id"] == "extrude", "ui_guide start: " + repr(state))
+    first = state["sequence"]
+    # Another command: refused, said in the resource's last event.
+    held = bridge.tool("ui_command", {"id": "sketch.create"}, error=True)
+    check("holds back" in held["error"], "ui_command during a guide step: " + repr(held))
+    guide_state(bridge, lambda s: s.get("last_event", {}).get("event") == "refused"
+                and s["last_event"].get("command") == "sketch.create", "the refused command")
+    # The intended command: its panel opens, the step is done.
+    bridge.tool("ui_command", {"id": "solid.extrude", "finish": "keep_open"})
+    done = guide_state(bridge, lambda s: s.get("last_event", {}).get("event") == "step_done"
+                       and s["last_event"]["sequence"] == first, "the first step done")
+    check(done["active"] is False and done["last_event"]["done"] == {"started": "solid.extrude"},
+          "the first step's event: " + repr(done))
+    # The intended value into the open panel.
+    bridge.tool("ui_guide", {"action": "start", "step": {
+        "id": "distance", "text": "Type 20 mm.", "target": {"input": "distance"},
+        "done": {"input": "distance", "value": "20 mm"}}})
+    bridge.tool("ui_command", {"inputs": {"distance": "20 mm"}, "finish": "keep_open"})
+    done = guide_state(bridge, lambda s: s.get("last_event", {}).get("event") == "step_done"
+                       and s["last_event"]["sequence"] == first + 1, "the second step done")
+    check(done["last_event"]["done"] == {"input": "distance", "value": "20 mm"},
+          "the second step's event: " + repr(done))
+    # A third ended by the agent: left, and the input free again.
+    bridge.tool("ui_guide", {"action": "start", "step": {
+        "id": "finish", "text": "Click OK.", "target": {"command": "solid.extrude"},
+        "done": {"command": "solid.extrude"}}})
+    ended = bridge.tool("ui_guide", {"action": "end"})
+    check(ended["active"] is False and ended["last_event"]["event"] == "step_left"
+          and ended["last_event"]["reason"] == "ended", "ui_guide end: " + repr(ended))
+    bridge.tool("ui_command", {"finish": "cancel"})
+    check(bridge.tool("ui_guide", {})["active"] is False, "ui_guide state after the end")
+    texts = [line["text"] for line in bridge.tool("ui_log", {"limit": 2000})["lines"]]
+    for expected in ("Guide: step extrude started: target command solid.extrude",
+                     "Guide: command sketch.create refused during step extrude",
+                     "Guide: step extrude done: the panel of solid.extrude opened",
+                     "Guide: step distance done: 20 mm typed into distance",
+                     "Guide: step finish left (ended)"):
+        check(any(expected in text for text in texts), "ui_log lacks " + expected)
+    bridge.request("resources/unsubscribe", {"uri": GUIDE_URI})
+    say("ok   ui_guide: a step refused, another command held back, two steps done and heard through "
+        + GUIDE_URI + ", one ended")
 
 
 def main():

@@ -355,4 +355,18 @@ public:
 // This platform's backend (never null; it may find nothing).
 std::unique_ptr<SpaceMouseBackend> createSpaceMouseBackend();
 
+// The vendor's driver (mitcad#1981): its profile can send emulated wheel
+// and key input while the cap moves (its Tilt axis sends wheel steps by
+// default), which zoomed the view against the motion. Preferences' 3D
+// Mouse tab then says to turn that off in the driver's settings.
+// Whether a process of this executable name is the driver's on Windows
+// (3DxWare 10's service, the older versions' server; any case).
+inline bool isSpaceMouseDriverProcess(const QString& executable) {
+  return executable.compare(QStringLiteral("3DxService.exe"), Qt::CaseInsensitive) == 0 ||
+         executable.compare(QStringLiteral("3dxsrv.exe"), Qt::CaseInsensitive) == 0;
+}
+// Whether the vendor's driver runs now: on Windows, a process the test
+// above names; false elsewhere (no hint there).
+bool spaceMouseVendorDriverRunning();
+
 } // namespace mitcad

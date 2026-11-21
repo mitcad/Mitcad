@@ -210,7 +210,12 @@ the distance no larger than the step), not at the points nearest to them: at
 an OnDiff end where the blend touches that face, the walk passed onto the
 other branch, wandered and came back, and the cap kept the wandering part
 (the face's wire self-intersecting). The same blend walked the other way
-round was valid.
+round was valid. The line also passes an end inside a step whose points lie
+on either side of it (the end's foot between them, within the step's
+length), the nearer point ending it: where two blends tangent to the end
+face meet on it, the walk stepped past the point and back to a nearer point
+before it, and the cut kept that step (one slab of the port test on
+Windows, mitcad#2151).
 
 ### 0902-chfi3d-rounding-vanishing-where-its-contact-crosses-onto-a-tangent-face
 

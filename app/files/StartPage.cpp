@@ -21,6 +21,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -39,6 +40,9 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+#include <QTreeWidgetItemIterator>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVersionNumber>
@@ -50,6 +54,7 @@
 #include "../framework/FloatingLayout.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
@@ -83,6 +88,13 @@ constexpr int kStarSize = 18;
 constexpr int kRowsWidth = 210;
 constexpr int kCardWidth = 300;
 constexpr int kFolderWidth = 170;
+// The project's tree in Tree (mitcad#2093): its width and least height.
+constexpr int kTreeWidth = 230;
+constexpr int kTreeHeight = 220;
+// A row of the tree: its folder (relative, "" the project's top) and its
+// place key.
+constexpr int kTreeFolderRole = Qt::UserRole + 1;
+constexpr int kTreeKeyRole = Qt::UserRole + 2;
 // A dynamic property of a project's row: the project's folder.
 const char* const kRootProperty = "startPageRoot";
 
@@ -384,6 +396,15 @@ public:
 protected:
   bool event(QEvent* event) override {
     hoverRepaint(this, event);
+    // Enter is the card's (it opens the design), never a shortcut's.
+    if (event->type() == QEvent::ShortcutOverride) {
+      const auto* key = static_cast<QKeyEvent*>(event);
+      if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+          (key->modifiers() & ~Qt::KeyboardModifiers(Qt::KeypadModifier)) == Qt::KeyboardModifiers()) {
+        event->accept();
+        return true;
+      }
+    }
     return QAbstractButton::event(event);
   }
 
@@ -421,6 +442,17 @@ protected:
   void contextMenuEvent(QContextMenuEvent* event) override {
     event->accept();
     m_menu(event->globalPos());
+  }
+
+  // Enter opens the design, as a click does (Space too, as any button).
+  void keyPressEvent(QKeyEvent* event) override {
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
+        (event->modifiers() & ~Qt::KeyboardModifiers(Qt::KeypadModifier)) == Qt::KeyboardModifiers()) {
+      event->accept();
+      click();
+      return;
+    }
+    QAbstractButton::keyPressEvent(event);
   }
 
   void paintEvent(QPaintEvent*) override {
@@ -622,6 +654,47 @@ void clearLayout(QLayout* layout) {
   }
 }
 
+// The tree of a project's folders (mitcad#2093), whose Enter a function
+// may take first (it goes into the folder's cards).
+class StartTree : public QTreeWidget {
+public:
+  std::function<bool(QKeyEvent*)> keys;
+
+protected:
+  // The arrow keys and Enter are the tree's, never the window's
+  // single-key shortcuts.
+  bool event(QEvent* event) override {
+    if (event->type() == QEvent::ShortcutOverride) {
+      auto* key = static_cast<QKeyEvent*>(event);
+      if ((key->modifiers() & ~Qt::KeyboardModifiers(Qt::KeypadModifier)) == Qt::KeyboardModifiers()) {
+        switch (key->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_Home:
+        case Qt::Key_End:
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+          event->accept();
+          return true;
+        default:
+          break;
+        }
+      }
+    }
+    return QTreeWidget::event(event);
+  }
+
+  void keyPressEvent(QKeyEvent* event) override {
+    if (keys && keys(event)) {
+      event->accept();
+      return;
+    }
+    QTreeWidget::keyPressEvent(event);
+  }
+};
+
 QToolButton* iconChoice(const QString& icon, const QString& tooltip, const QString& name) {
   auto* button = new QToolButton;
   button->setObjectName(name);
@@ -650,6 +723,7 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   setAttribute(Qt::WA_OpaquePaintEvent);
   m_compact = QSettings().value(kCompactKey, false).toBool();
   m_row = start::loadRow();
+  m_view = start::loadView();
 
   m_column = new QVBoxLayout(this);
   m_column->setSpacing(12);
@@ -830,38 +904,142 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   rightColumn->setSpacing(10);
   m_title = heading(tr("Recent designs"), 1.3, QStringLiteral("startPageRecentTitle"));
   rightColumn->addWidget(m_title);
+  // A project's breadcrumb, and at its right end the Tree / Cards toggle
+  // (mitcad#2093) in its own group of exclusive buttons.
+  m_placeRow = new QWidget;
+  m_placeRow->setObjectName(QStringLiteral("startPagePlaceRow"));
+  auto* placeRow = new QHBoxLayout(m_placeRow);
+  placeRow->setContentsMargins(0, 0, 0, 0);
+  placeRow->setSpacing(6);
   m_crumbs = new QWidget;
   m_crumbs->setObjectName(QStringLiteral("startPageCrumbs"));
   m_crumbLayout = new QHBoxLayout(m_crumbs);
   m_crumbLayout->setContentsMargins(0, 0, 0, 0);
   m_crumbLayout->setSpacing(2);
-  rightColumn->addWidget(m_crumbs);
+  placeRow->addWidget(m_crumbs, 1);
+  auto* placeViews = new QWidget;
+  auto* placeViewRow = new QHBoxLayout(placeViews);
+  placeViewRow->setContentsMargins(0, 0, 0, 0);
+  placeViewRow->setSpacing(2);
+  m_treeView = iconChoice(QStringLiteral("folder-tree"), tr("Show the project's folders as a tree"),
+                          QStringLiteral("startPageTreeView"));
+  m_folderView = iconChoice(QStringLiteral("folder-cards"), tr("Show the project one folder at a time"),
+                            QStringLiteral("startPageFolderView"));
+  (m_view == start::View::Tree ? m_treeView : m_folderView)->setChecked(true);
+  connect(m_treeView, &QToolButton::clicked, this, [this] { setView(start::View::Tree); });
+  connect(m_folderView, &QToolButton::clicked, this, [this] { setView(start::View::Cards); });
+  placeViewRow->addWidget(m_treeView);
+  placeViewRow->addWidget(m_folderView);
+  placeRow->addWidget(placeViews, 0, Qt::AlignVCenter);
+  rightColumn->addWidget(m_placeRow);
+  // Below it the tree (Tree only) beside the folder buttons (Cards only)
+  // and the cards.
+  auto* placeBody = new QHBoxLayout;
+  placeBody->setContentsMargins(0, 0, 0, 0);
+  placeBody->setSpacing(14);
+  auto* tree = new StartTree;
+  m_tree = tree;
+  m_tree->setObjectName(QStringLiteral("startPageTree"));
+  panel::setCompactIndentation(m_tree, panel::Indent::Tree);
+  m_tree->setHeaderHidden(true);
+  m_tree->setColumnCount(1);
+  m_tree->setIconSize(uiIconSize(16, 16));
+  m_tree->setUniformRowHeights(true);
+  m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
+  m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  m_tree->setFocusPolicy(Qt::StrongFocus);
+  m_tree->setAccessibleName(tr("Project folders"));
+  // On the panel's surface, as the cards beside it: no frame or page of
+  // its own.
+  m_tree->setFrameShape(QFrame::NoFrame);
+  m_tree->setAutoFillBackground(false);
+  m_tree->viewport()->setAutoFillBackground(false);
+  m_tree->setFixedWidth(kTreeWidth);
+  m_tree->setMinimumHeight(kTreeHeight);
+  m_tree->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+  // Choosing a folder is walking to it with the breadcrumb.
+  connect(m_tree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
+    if (m_treeBuilding || item == nullptr || m_row.kind != start::Row::Kind::Project) {
+      return;
+    }
+    const QString folder = item->data(0, kTreeFolderRole).toString();
+    if (folder == m_row.folder) {
+      return;
+    }
+    start::Row row = m_row;
+    row.folder = folder;
+    selectRow(row);
+  });
+  // A folder folded or unfolded (a click on its arrow, Left or Right).
+  connect(m_tree, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* item) {
+    if (!m_treeBuilding) {
+      qInfo().noquote() << QStringLiteral("Start page tree unfolded: %1").arg(item->data(0, kTreeKeyRole).toString());
+    }
+    logPlaces();
+  });
+  connect(m_tree, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem* item) {
+    if (!m_treeBuilding) {
+      qInfo().noquote() << QStringLiteral("Start page tree folded: %1").arg(item->data(0, kTreeKeyRole).toString());
+    }
+    logPlaces();
+  });
+  connect(m_tree->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { logPlaces(); });
+  // Enter on a folder goes into it: unfolded, the keyboard on its first
+  // card (where Enter opens the design).
+  tree->keys = [this](QKeyEvent* event) {
+    if (event->key() != Qt::Key_Return && event->key() != Qt::Key_Enter) {
+      return false;
+    }
+    if (QTreeWidgetItem* item = m_tree->currentItem(); item != nullptr && item->childCount() > 0) {
+      item->setExpanded(true);
+    }
+    for (const QPointer<QWidget>& widget : std::as_const(m_cardWidgets)) {
+      auto* card = static_cast<RecentCard*>(widget.data());
+      if (card != nullptr && card->isVisible()) {
+        card->setFocus(Qt::TabFocusReason);
+        m_scroll->ensureWidgetVisible(card);
+        qInfo().noquote() << QStringLiteral("Start page keyboard: card %1").arg(card->design().key);
+        break;
+      }
+    }
+    return true;
+  };
+  m_tree->viewport()->installEventFilter(this); // a press gives it the keyboard (eventFilter)
+  placeBody->addWidget(m_tree, 0);
+  m_listSide = new QWidget;
+  m_listSide->setObjectName(QStringLiteral("startPageListSide"));
+  auto* listColumn = new QVBoxLayout(m_listSide);
+  listColumn->setContentsMargins(0, 0, 0, 0);
+  listColumn->setSpacing(10);
+  placeBody->addWidget(m_listSide, 1);
+  rightColumn->addLayout(placeBody, 1);
   m_folders = new QWidget;
   m_folders->setObjectName(QStringLiteral("startPageFolders"));
   m_folderGrid = new QGridLayout(m_folders);
   m_folderGrid->setContentsMargins(0, 0, 0, 0);
   m_folderGrid->setHorizontalSpacing(8);
   m_folderGrid->setVerticalSpacing(6);
-  rightColumn->addWidget(m_folders);
+  listColumn->addWidget(m_folders);
   m_cards = new QWidget;
   m_cards->setObjectName(QStringLiteral("startPageCardsArea"));
   m_cardGrid = new QGridLayout(m_cards);
   m_cardGrid->setContentsMargins(0, 0, 0, 0);
   m_cardGrid->setHorizontalSpacing(12);
   m_cardGrid->setVerticalSpacing(10);
-  rightColumn->addWidget(m_cards);
+  listColumn->addWidget(m_cards);
   m_empty = new QLabel;
   m_empty->setObjectName(QStringLiteral("startPageEmpty"));
   m_empty->setWordWrap(true);
   m_empty->setAlignment(Qt::AlignCenter);
   m_empty->setMinimumHeight(80);
   setRoleStyleSheet(m_empty, ColorRole::TextSecondary);
-  rightColumn->addWidget(m_empty);
-  rightColumn->addStretch(1);
-  m_right->installEventFilter(this); // its width sets the grids' columns
+  listColumn->addWidget(m_empty);
+  listColumn->addStretch(1);
+  m_listSide->installEventFilter(this); // its width sets the grids' columns
   browser->addWidget(m_right, 1);
   recentColumn->addLayout(browser);
-  m_crumbs->hide();
+  m_placeRow->hide();
+  m_tree->hide();
   m_folders->hide();
   m_dropArea = new StartDropArea;
   m_dropArea->setObjectName(QStringLiteral("startPageDrop"));
@@ -949,7 +1127,7 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   for (QAbstractButton* button : findChildren<QAbstractButton*>()) {
     new PlaceWatcher(button, [this] { logPlaces(); });
   }
-  for (QWidget* control : {static_cast<QWidget*>(m_search), m_dropArea}) {
+  for (QWidget* control : {static_cast<QWidget*>(m_search), m_dropArea, static_cast<QWidget*>(m_tree)}) {
     new PlaceWatcher(control, [this] { logPlaces(); });
   }
 }
@@ -967,6 +1145,8 @@ void StartPage::showPage() {
   m_loggedPlace.clear();
   m_loggedSearch.clear();
   m_loggedCards.clear();
+  m_loggedView.clear();
+  m_loggedTree.clear();
   refresh();
   place();
   show();
@@ -1113,9 +1293,21 @@ void StartPage::rebuildList() {
     m_empty->setText(tr("No designs in this folder."));
     showCards(start::placeCards(entries, pinned));
     const QString line = start::placeLine(placeKey(key, m_row.folder), entries);
+    const QString view = QStringLiteral("Start page browse view: %1").arg(start::viewWord(m_view));
+    if (view != m_loggedView) {
+      m_loggedView = view;
+      qInfo().noquote() << view;
+    }
     if (line != m_loggedPlace) {
       m_loggedPlace = line;
       qInfo().noquote() << line;
+    }
+    if (m_view == start::View::Tree) {
+      const QString tree = start::treeLine(*project, key, m_row.folder);
+      if (tree != m_loggedTree) {
+        m_loggedTree = tree;
+        qInfo().noquote() << tree;
+      }
     }
     findPreviews();
     return;
@@ -1193,10 +1385,16 @@ void StartPage::rebuildPlace(const ProjectRow* project, const QVector<BrowserEnt
     }
   }
   m_folderButtons.clear();
-  m_crumbs->setVisible(project != nullptr);
-  m_folders->setVisible(project != nullptr && !folders.isEmpty());
+  const bool tree = project != nullptr && m_view == start::View::Tree;
+  m_placeRow->setVisible(project != nullptr);
+  m_tree->setVisible(tree);
+  // In Tree the tree has the folders: no buttons of them.
+  m_folders->setVisible(project != nullptr && !tree && !folders.isEmpty());
   if (project == nullptr) {
     return;
+  }
+  if (tree) {
+    rebuildTree(*project);
   }
   const QString root = project->root;
   const QString key = m_keys.value(root);
@@ -1237,7 +1435,7 @@ void StartPage::rebuildPlace(const ProjectRow* project, const QVector<BrowserEnt
   }
   m_crumbLayout->addStretch(1);
   // The place's sub-folders: low buttons in rows.
-  for (const BrowserEntry& entry : folders) {
+  for (const BrowserEntry& entry : tree ? QVector<BrowserEntry>() : folders) {
     auto* button = new QToolButton;
     button->setObjectName(QStringLiteral("startPageFolder"));
     button->setText(entry.name);
@@ -1265,7 +1463,7 @@ void StartPage::rebuildPlace(const ProjectRow* project, const QVector<BrowserEnt
 }
 
 void StartPage::layoutGrids() {
-  const int across = m_right->width() > 0 ? m_right->width() : 2 * kCardWidth + 12;
+  const int across = m_listSide->width() > 0 ? m_listSide->width() : 2 * kCardWidth + 12;
   const int cardColumns = m_compact ? 1 : std::clamp((across + 12) / (kCardWidth + 12), 1, 3);
   if (cardColumns != m_cardColumns) {
     m_cardColumns = cardColumns;
@@ -1464,6 +1662,90 @@ void StartPage::rebuildRows() {
   logPlaces();
 }
 
+void StartPage::setView(start::View view) {
+  m_treeView->setChecked(view == start::View::Tree);
+  m_folderView->setChecked(view == start::View::Cards);
+  if (view != m_view) {
+    m_view = view;
+    start::saveView(view);
+    // Each choice logs the view and the tree again.
+    m_loggedView.clear();
+    m_loggedTree.clear();
+    m_loggedPlace.clear();
+    rebuildList();
+  }
+}
+
+void StartPage::rebuildTree(const ProjectRow& project) {
+  const QString key = m_keys.value(project.root);
+  const RowMarks marks = m_host.projectMarks ? m_host.projectMarks(project) : RowMarks();
+  const bool cloud = project.kind == ProjectRow::Kind::Cloud;
+  // The project's row as the left column has it: its state icon, its
+  // words in the tooltip.
+  const QString icon = !marks.icon.isEmpty() ? marks.icon
+                       : cloud               ? QStringLiteral("remote-open")
+                                             : QStringLiteral("folder");
+  QStringList tip{project.name, cloud ? tr("Cloud project") : tr("Local project")};
+  if (!marks.full.isEmpty()) {
+    tip << marks.full;
+  }
+  tip << QDir::toNativeSeparators(project.root);
+  const QStringList folders = allFolders(project);
+  const QString shape = QStringList{project.root, key, project.name, icon, tip.join(QLatin1Char('\n')),
+                                    folders.join(QLatin1Char('\n'))}
+                            .join(QChar(0x1f));
+  m_treeBuilding = true;
+  if (shape != m_treeShape) {
+    // As Open from Project's folders (ProjectBrowser.cpp): the project's
+    // row on top, its folders under it.
+    m_treeShape = shape;
+    m_tree->clear();
+    auto* top = new QTreeWidgetItem(m_tree);
+    top->setText(0, project.name);
+    top->setIcon(0, themeIcon(icon));
+    top->setToolTip(0, tip.join(QLatin1Char('\n')));
+    top->setData(0, kTreeFolderRole, QString());
+    top->setData(0, kTreeKeyRole, placeKey(key, QString()));
+    QHash<QString, QTreeWidgetItem*> items;
+    items.insert(QString(), top);
+    // allFolders is sorted, so a folder's parent comes before it.
+    for (const QString& path : folders) {
+      const qsizetype slash = path.lastIndexOf(QLatin1Char('/'));
+      QTreeWidgetItem* parent = items.value(slash < 0 ? QString() : path.left(slash), top);
+      auto* item = new QTreeWidgetItem(parent);
+      item->setText(0, path.mid(slash + 1));
+      item->setIcon(0, themeIcon(QStringLiteral("folder")));
+      item->setToolTip(0, QDir::toNativeSeparators(QDir(project.root).filePath(path)));
+      item->setData(0, kTreeFolderRole, path);
+      item->setData(0, kTreeKeyRole, placeKey(key, path));
+      items.insert(path, item);
+    }
+  }
+  // The folder shown unfolded and selected, with every folder above it.
+  QHash<QString, QTreeWidgetItem*> items;
+  for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+    items.insert((*it)->data(0, kTreeFolderRole).toString(), *it);
+  }
+  if (QTreeWidgetItem* top = items.value(QString())) {
+    top->setExpanded(true);
+  }
+  // Only a folder with folders under it: an unfolded leaf would make Left
+  // fold it instead of going to its parent.
+  for (const QString& folder : start::openFolders(m_row.folder)) {
+    if (QTreeWidgetItem* item = items.value(folder); item != nullptr && item->childCount() > 0) {
+      item->setExpanded(true);
+    }
+  }
+  if (QTreeWidgetItem* current = items.value(m_row.folder, items.value(QString()))) {
+    if (m_tree->currentItem() != current) {
+      m_tree->setCurrentItem(current);
+    }
+    m_tree->scrollToItem(current);
+  }
+  m_treeBuilding = false;
+  logPlaces();
+}
+
 void StartPage::setCompact(bool compact) {
   m_cardsView->setChecked(!compact);
   m_listView->setChecked(compact);
@@ -1569,6 +1851,25 @@ void StartPage::logPlaces() {
     }
     add(QStringLiteral("view Cards"), m_cardsView);
     add(QStringLiteral("view List"), m_listView);
+    add(QStringLiteral("browse Tree"), m_treeView);
+    add(QStringLiteral("browse Cards"), m_folderView);
+    // The tree's rows in sight.
+    if (m_tree->isVisible()) {
+      const QRect sight = m_tree->viewport()->rect();
+      for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+        const QRect rect = m_tree->visualItemRect(*it);
+        if (rect.isValid() && sight.contains(rect.center()) &&
+            !m_tree->viewport()->visibleRegion().intersected(rect).isEmpty()) {
+          // The name's middle, left in the row: a click there hits the name.
+          const QPoint point(std::min(rect.left() + 30, rect.center().x()), rect.center().y());
+          const QPoint at = m_tree->viewport()->mapTo(m_tree->window(), point);
+          lines << QStringLiteral("Start page tree folder %1 at %2,%3")
+                       .arg((*it)->data(0, kTreeKeyRole).toString())
+                       .arg(at.x())
+                       .arg(at.y());
+        }
+      }
+    }
     for (const QPointer<QWidget>& widget : std::as_const(m_cardWidgets)) {
       const auto* card = static_cast<const RecentCard*>(widget.data());
       if (card == nullptr) {
@@ -1608,8 +1909,14 @@ bool StartPage::eventFilter(QObject* watched, QEvent* event) {
   if (watched == m_search && event->type() == QEvent::MouseButtonPress && !m_search->hasFocus()) {
     m_search->setFocus(Qt::MouseFocusReason);
   }
+  // The same for the tree: a press on a row gives it the arrow keys. The
+  // search field's filter is installed before the tree is made, and its
+  // events (its parent set by the layouts) come here already then.
+  if (m_tree != nullptr && watched == m_tree->viewport() && event->type() == QEvent::MouseButtonPress && !m_tree->hasFocus()) {
+    m_tree->setFocus(Qt::MouseFocusReason);
+  }
   // The right side's width sets its grids' columns.
-  if (watched == m_right && event->type() == QEvent::Resize) {
+  if (watched == m_listSide && event->type() == QEvent::Resize) {
     layoutGrids();
   }
   if (!isHidden() && watched->isWidgetType() && m_bars.contains(static_cast<QWidget*>(watched))) {

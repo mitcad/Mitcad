@@ -1,0 +1,6 @@
+{
+  "format": "mitcad-tutorials",
+  "version": 1,
+  "name": "Example tutorials",
+  "description": "The layout of a tutorials repository: one tutorial, a sketch and an extrude."
+}

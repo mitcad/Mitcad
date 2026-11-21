@@ -31,8 +31,11 @@ test_rounding_cut_by_a_cylinder_whose_seam_starts_at_the_vertex (ctest
 geometry.suite.fillet_corners): a gable's ridge rounded where it ends on a
 cylinder whose seam starts at the corner's vertex: the volume removed that
 of the same body with the seam a quarter turn away, within 1e-6 (before, an
-invalid body without its floor). Its failure without the patch is still to
-be shown in the port's before/after run (mitcad#1986).
+invalid body without its floor). It fails with this patch and 20 later
+patches that change the same lines reverted together, so the test does not
+single this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the
+patches are listed in
+third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 63fbe1d..cea5d27 100644

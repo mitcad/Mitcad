@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design path-pattern-edges.mitcad-ui saved (mitcad#2105), recomputed without the UI: PathPattern1 (F6) along the one top edge of c1 with Tangent Chain, three elements 77.854 mm apart (half the chain, 55 + 2.5 pi + 15). From the chain's free end at (0, 0, 20) the copies follow the outline: halfway up the rounded side at x = 60, (60, 20), and at its far end, (0, 40)."},
+  {"expect":{"feature":"PathPattern1","status":"ok"}},
+  {"expect":{"query":{"query":"feature","uid":"F6"},"result":{"def":{"path":{"body":"F2.b0","edges":["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"]}}}}},
+  {"expect":{"body":"F6.b0","volume":64,"bbox":{"min":[58,18,0],"max":[62,22,4]},"tolerance":1e-6}},
+  {"expect":{"body":"F6.b1","volume":64,"bbox":{"min":[-2,38,0],"max":[2,42,4]},"tolerance":1e-6}}
+]

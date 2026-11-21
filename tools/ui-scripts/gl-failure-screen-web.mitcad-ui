@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# A screen change while Component from Web's window is open (mitcad#2125,
+# the reported session: the browser window open, two screen changes as the
+# system announced its screens again, the design view's attach failing at
+# the same moment). MITCAD_TEST_GL_FAILURE=reconnect on first.mitcad
+# (gl-failure.json); the TestDriver's screen-change tells every shown
+# window that its screen changed, and with the switch set the design
+# view's window counts that as Qt making the view's surface again.
+#   1. The view attaches; Component from Web's window opens with its
+#      start page (the web browser component the build made).
+#   2. A screen change: the browser takes it (its scale logged), the design
+#      view's attach fails; MitCad does not end, the message once.
+#   3. A second screen change with the switch at `throw`: the view's attach
+#      and the browser's screen change both throw; each is caught, the
+#      browser's failure logged once, the message not repeated; a third
+#      screen change logs nothing more.
+#   4. The switch cleared (unset-env): the view attaches and draws again; a
+#      screen change then is taken by the browser as before.
+#   5. The design still saves; the harness checks the clean exit and that
+#      no crash report was written.
+# Run by tools/ui-gl-failure-test.sh (Linux) and
+# tools/ui-windows-gl-failure-test.ps1 (Windows) where the build made the
+# web browser component; gl-failure-screen.mitcad-ui is the same without
+# the browser.
+wait-idle 60
+
+# 1. The view attached; the browser window open on its start page.
+wait-log '^OpenGL renderer: ' 30
+expect-never '^3D view: no graphics: '
+command insert.component_web
+focus-dialog '^Component from Web$'
+wait-log '^Component browser opened: ' 30
+wait-log '^Component browser load end data:' 60
+focus-main
+wait-idle
+
+# 2. The screen change: the browser takes it, the view's attach fails.
+mark
+screen-change
+wait-log '^Screen change told to ([2-9]|[1-9][0-9]+) window\(s\)$' 10
+wait-log '^Component browser scale: [0-9]+\.[0-9]+$' 30
+wait-log '^3D view: no graphics: the driver answers no GL version or vendor \(GL_VERSION null, GL_VENDOR null' 30
+wait-log '^Status error: The 3D view lost its connection to the graphics card\. Save your work and restart MitCad\.$' 30
+expect-never '^OCCT view event failed'
+expect-never '^Component browser: a screen change failed: '
+
+# 3. Both throw at the next screen change: caught, the browser's failure
+#    logged once, the message not repeated.
+set-env MITCAD_TEST_GL_FAILURE throw
+mark
+screen-change
+wait-log '^Component browser: a screen change failed: a screen change that throws \(MITCAD_TEST_GL_FAILURE\)$' 30
+command view.fit
+wait-idle
+sleep 300
+mark
+screen-change
+wait-log '^Screen change told to ' 10
+wait-log '^Component browser scale: ' 30
+command view.fit
+wait-idle
+sleep 300
+expect-no-log '^Component browser: a screen change failed: '
+expect-no-log '^3D view: no graphics: '
+expect-no-log '^Status error: The 3D view lost'
+expect-never '^Qt has caught an exception'
+expect-no-log '^3D view: attached to the graphics card again$'
+
+# 4. The switch cleared: attached and drawn again; the browser takes a
+#    screen change as before.
+unset-env MITCAD_TEST_GL_FAILURE
+mark
+command view.fit
+wait-log '^3D view: attached to the graphics card again$' 30
+wait-log '^3D view: drawn again after a graphics failure$' 30
+screen-change
+wait-log '^Component browser scale: [0-9]+\.[0-9]+$' 30
+wait-idle
+expect-no-log '^Status error: The 3D view lost'
+expect-no-log '^3D view: no graphics: '
+
+# 5. The design saves.
+model-command '{"cmd":"add_parameter","name":"afterFailure","unit":"mm","expression":"5 mm"}'
+command file.save
+wait-log '^Saved .*first[.]mitcad$' 30
+expect-never 'TestDriver: FAIL|^OCCT view event failed|^Qt has caught an exception'
+quit

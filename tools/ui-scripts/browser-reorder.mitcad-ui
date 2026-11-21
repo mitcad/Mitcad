@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# The order of components in the Browser (mitcad#2104), on the design of
+# browser-reorder.json: Arm:1, Base:1 and Lid:1 placed in the root.
+#   1. Lid:1 dragged onto Arm:1's row (its middle: before it): one undo
+#      step, Lid:1 first.
+#   2. Move Down in the first row's menu: Lid:1 after Arm:1.
+#   3. Undo once: Lid:1 first again.
+#   4. Base:1 dragged onto Arm:1's Bodies folder: refused, nothing changes.
+#   5. Saved (the wrapper opens the file again and checks the order with
+#      browser-reorder-check.json).
+# The order is read from the Browser's colors line, which lists the
+# component rows in the tree's order.
+# Run by tools/ui-browser-reorder-test.sh (Linux),
+# tools/ui-windows-browser-reorder-test.ps1 (Windows) and
+# tools/ui-macos-browser-reorder-test.sh (macOS).
+wait-idle
+command view.fit
+wait-idle
+expect-ever '^Browser Root/Lid:1 at '
+expect-ever '^Browser Root/Arm:1/Bodies at '
+expect-ever '^Browser colors: .*Root/Arm:1 .*, Root/Base:1 .*, Root/Lid:1 '
+capture-undo-depth start
+
+# 1. The third before the first, by a drag.
+mark
+drag-logged '^Browser Root/Lid:1 at ' '^Browser Root/Arm:1 at '
+wait-log '^Browser drop aim before Root/Arm:1: allowed$'
+wait-log '^Browser drop: Lid:1 before Root/Arm:1$'
+wait-log '^Reordered Lid:1 before Arm:1$'
+wait-log '^Browser colors: .*Root/Lid:1 .*, Root/Arm:1 .*, Root/Base:1 '
+expect-undo-depth ${start} 1
+
+# 2. Move Down on the first row.
+mark
+context-menu-logged '^Browser Root/Lid:1 at ' 'Move Down'
+wait-log '^Context menu: .*Move Up [|] Move Down'
+wait-log '^Reordered Lid:1 after Arm:1$'
+wait-log '^Browser colors: .*Root/Arm:1 .*, Root/Lid:1 .*, Root/Base:1 '
+expect-undo-depth ${start} 2
+
+# 3. Undo once.
+mark
+command edit.undo
+wait-log '^Undo: Reorder Lid:1$'
+wait-log '^Browser colors: .*Root/Lid:1 .*, Root/Arm:1 .*, Root/Base:1 '
+expect-undo-depth ${start} 1
+
+# 4. Onto another component's folder: refused, the order as it is.
+mark
+drag-logged '^Browser Root/Base:1 at ' '^Browser Root/Arm:1/Bodies at '
+wait-log '^Browser drop aim onto Root/Arm:1/Bodies: refused$'
+wait-log '^Browser drop refused: Base:1 onto Root/Arm:1/Bodies$'
+wait-idle
+expect-no-log '^Reordered '
+expect-undo-depth ${start} 1
+
+# 5. Saved.
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

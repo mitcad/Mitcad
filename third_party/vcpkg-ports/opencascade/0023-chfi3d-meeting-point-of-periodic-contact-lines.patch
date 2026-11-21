@@ -21,10 +21,17 @@ Test:
 geometry/tests/port/p0023-meeting-point-of-periodic-contact-lines.cpp
 (ctest geometry.port.0023), test_roundings_meet_near_a_shallow_corner: a
 plate's outline turning by 10 degrees from a line into an arc of radius
-40, both top edges rounded with 2: valid, no self-interference
-(BOPAlgo_ArgumentAnalyzer), the two roundings' volume. A new test: its
-failure without the patch is still to be shown in the port's before/after
-run (mitcad#1986).
+40, both top edges rounded with 2, the arc's edge added first and then
+the line's: valid, no self-interference (BOPAlgo_ArgumentAnalyzer), the
+two roundings' volume, and the line's rounding running on up to the near
+crossing (points it removes 4 to 10 back from the vertex are outside the
+result; met at the far crossing, 13.7 back, the arc's torus runs on there
+and leaves them inside). The arc's stripe first puts its periodic trace
+first, the crossings sorted along it with the near one first, so the far
+one, nearer the trace's end 47 degrees past the vertex, replaced it.
+test_roundings_meet_at_the_only_crossing, the boundary: the plate only 10
+long, the line's contact ending before the far crossing, the same checks.
+It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

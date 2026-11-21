@@ -4,8 +4,9 @@
 # Where fully constrained curves get their halo (mitcad#2034), through the
 # test driver (tools/ui-scripts/sketch-halo-face.mitcad-ui, shared with
 # Linux and Windows): the decision read from the "Sketch halos:" log, the
-# same as on the other platforms. No contrast check: lines are 1 px wide
-# in the core profile here.
+# same as on the other platforms. No contrast check (the core profile
+# drew lines 1 px wide before OCCT port patch 1840, mitcad#2063; the
+# widths are app.ui-macos-selection-look's).
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"

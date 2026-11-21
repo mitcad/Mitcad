@@ -429,6 +429,37 @@ bool chosenPart(const Shared& shared, const CommandState& state, Part& part) {
   return shared.catalog.find(state.choice(kPart), part);
 }
 
+// A carriage's travel limits (mitcad#2088): Min and Max of its slide along
+// its rail, from the rail's end A; empty for the default (flush with end A,
+// flush with end B, following the rail's length).
+const QString kTravelMin = QStringLiteral("travel_min");
+const QString kTravelMax = QStringLiteral("travel_max");
+
+// Whether the chosen part slides on another (its `linear.mate`: a carriage
+// on its rail), so that it gets travel limits.
+bool slidesOnMate(const Shared& shared, const CommandState& state) {
+  Part part;
+  return chosenPart(shared, state, part) &&
+         part.build.value(QStringLiteral("linear")).toObject().value(QStringLiteral("mate")).isObject();
+}
+
+// `limits` as build_place and build_edit take them from the Min and Max
+// value fields `min` and `max`: each as typed (units, expressions), or null
+// while the field is empty, for its default.
+QJsonObject travelLimits(const CommandState& state, const QString& min, const QString& max) {
+  const auto value = [&state](const QString& id) {
+    return state.text(id).trimmed().isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(state.expression(id));
+  };
+  return QJsonObject{{QStringLiteral("min"), value(min)}, {QStringLiteral("max"), value(max)}};
+}
+
+// What an empty Min or Max field shows: the default it stands for.
+std::function<QString(const CommandState&, const CommandContext&)> travelDefault(bool max) {
+  return [max](const CommandState&, const CommandContext&) {
+    return max ? QObject::tr("Flush with end B") : QObject::tr("Flush with end A");
+  };
+}
+
 // A cut-to-length part starts with its default length (its stock length,
 // else 500 mm, mitcad#394), unless a length was typed: the length shown
 // follows the chosen part while it is the default one.
@@ -1437,6 +1468,12 @@ Placement placement(const Shared& shared, const QString& role, const CommandStat
     }
     fields.insert(QStringLiteral("rotate"), angleValue(state.choice(QStringLiteral("rotate"))));
     fields.insert(QStringLiteral("flip"), state.checked(QStringLiteral("flip")));
+    // A carriage's travel limits as typed (mitcad#2088); none typed: the
+    // defaults.
+    if (role == QStringLiteral("linear") && slidesOnMate(shared, state) &&
+        !(state.text(kTravelMin).trimmed().isEmpty() && state.text(kTravelMax).trimmed().isEmpty())) {
+      fields.insert(QStringLiteral("limits"), travelLimits(state, kTravelMin, kTravelMax));
+    }
     // A profile on a side leans along the part it stands on (mitcad#444).
     if (profile && result.how == Against::Side && cmd::nonZero(state, QStringLiteral("tilt"))) {
       fields.insert(QStringLiteral("tilt"), state.expression(QStringLiteral("tilt")));
@@ -2444,6 +2481,22 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
                           QObject::tr("The lean along the component it stands on, up to 80 degrees; 0 stands square")));
   }
   inputs.append(flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withVisible(onPart));
+  if (role == QStringLiteral("linear")) {
+    // A carriage's travel on its rail (mitcad#2088); empty: flush with
+    // the rail's ends.
+    const auto slides = [shared, onPart](const CommandState& state) {
+      return onPart(state) && slidesOnMate(*shared, state);
+    };
+    inputs.append(valueInput(kTravelMin, QObject::tr("Min"), ValueKind::Length, QString())
+                      .withVisible(slides)
+                      .withAuto(travelDefault(false))
+                      .withTooltip(QObject::tr("How near the rail's end A the component may slide, from end A; "
+                                               "empty: flush with end A")));
+    inputs.append(valueInput(kTravelMax, QObject::tr("Max"), ValueKind::Length, QString())
+                      .withVisible(slides)
+                      .withAuto(travelDefault(true))
+                      .withTooltip(QObject::tr("How far from the rail's end A the component may slide; empty: flush with end B")));
+  }
   // Placement as icon buttons (mitcad#427: shown directly, no More), once
   // the design has a part to go on; each button's tooltip names it.
   inputs.append(choiceInput(QStringLiteral("place"), QObject::tr("Placement"), kPlaces, QStringLiteral("auto"))
@@ -2583,9 +2636,12 @@ void addLineInputs(QVector<InputDef>& inputs) {
           .withVisible(lines)
           .withTooltip(QObject::tr("Miters where two lines meet at their ends, butts where a line ends on another")),
   };
-  // After Method, before the placement inputs by clicks.
+  // After Method and Place On (hidden along lines), before the other
+  // placement inputs by clicks: Place On stays the first selection input,
+  // the one a face picked before the command fills and the view's context
+  // menu offers Profile by (mitcad#494; mitcad#2024).
   int at = 0;
-  while (at < inputs.size() && inputs[at].id != kProfileHow) {
+  while (at < inputs.size() && inputs[at].id != kAt) {
     ++at;
   }
   at = at < inputs.size() ? at + 1 : static_cast<int>(inputs.size());
@@ -8025,6 +8081,30 @@ const QString kPlacementLoaded = QStringLiteral("loaded_offset");
 // normal, Rotate turns it about its axis by any angle; no From.
 const QString kPlacementRotate = QStringLiteral("rotate");
 const QString kPlacementGround = QStringLiteral("on_ground");
+// A carriage on its rail (mitcad#2088): its travel limits, Min and Max,
+// empty for a default, and their texts as the pick loaded them.
+const QString kPlacementSlides = QStringLiteral("slides");
+const QString kPlacementMin = QStringLiteral("min");
+const QString kPlacementMax = QStringLiteral("max");
+const QString kPlacementMinLoaded = QStringLiteral("loaded_min");
+const QString kPlacementMaxLoaded = QStringLiteral("loaded_max");
+
+// A travel limit's text as Placement shows it: empty while it is the
+// default (build_parts' `limits`), else its length.
+QString travelText(const QJsonObject& limits, const char* key, const char* fallback, const CommandContext& model) {
+  const QJsonValue value = limits.value(QLatin1String(key));
+  const double fallbackValue = limits.value(QLatin1String(fallback)).toDouble();
+  if (!value.isDouble() || std::abs(value.toDouble() - fallbackValue) < 1e-6) {
+    return QString();
+  }
+  return cmd::lengthText(value.toDouble(), model);
+}
+
+// Whether Min or Max changed since the pick: then build_edit sends both.
+bool travelChanged(const CommandState& state) {
+  return state.text(kPlacementMin).trimmed() != state.text(kPlacementMinLoaded).trimmed() ||
+         state.text(kPlacementMax).trimmed() != state.text(kPlacementMaxLoaded).trimmed();
+}
 
 // What a part on a side or a rail is placed from (build_parts' `from`);
 // empty for a part placed otherwise.
@@ -8065,6 +8145,23 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
                   state.setValue(kPlacementOffset, kNaN);
                 }
                 state.setText(kPlacementLoaded, state.text(kPlacementOffset));
+                // A carriage's travel limits (mitcad#2088), empty while
+                // they are the defaults.
+                const QJsonObject limits = part->raw.value(QStringLiteral("limits")).toObject();
+                const bool slides = part->raw.value(QStringLiteral("slides")).toBool() && !limits.isEmpty();
+                state.setChecked(kPlacementSlides, slides);
+                state.setText(kPlacementMin, slides ? travelText(limits, "min", "default_min", model) : QString());
+                state.setValue(kPlacementMin, kNaN);
+                state.setText(kPlacementMax, slides ? travelText(limits, "max", "default_max", model) : QString());
+                state.setValue(kPlacementMax, kNaN);
+                state.setText(kPlacementMinLoaded, state.text(kPlacementMin));
+                state.setText(kPlacementMaxLoaded, state.text(kPlacementMax));
+                if (slides) {
+                  qInfo().noquote() << QStringLiteral("BUILD travel of %1: min %2, max %3")
+                                           .arg(part->component)
+                                           .arg(limits.value(QStringLiteral("min")).toDouble())
+                                           .arg(limits.value(QStringLiteral("max")).toDouble());
+                }
                 const bool ground = groundOf(*part);
                 state.setChecked(kPlacementGround, ground);
                 if (ground) {
@@ -8090,7 +8187,18 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
       valueInput(kPlacementRotate, QObject::tr("Rotate"), ValueKind::Angle, QStringLiteral("0 deg"))
           .withVisible([](const CommandState& state) { return state.checked(kPlacementGround); })
           .withTooltip(QObject::tr("About the component's axis, at any angle")),
+      valueInput(kPlacementMin, QObject::tr("Min"), ValueKind::Length, QString())
+          .withVisible([](const CommandState& state) { return state.checked(kPlacementSlides); })
+          .withAuto(travelDefault(false))
+          .withTooltip(QObject::tr("How near the rail's end A the component may slide, from end A; empty: "
+                                   "flush with end A")),
+      valueInput(kPlacementMax, QObject::tr("Max"), ValueKind::Length, QString())
+          .withVisible([](const CommandState& state) { return state.checked(kPlacementSlides); })
+          .withAuto(travelDefault(true))
+          .withTooltip(QObject::tr("How far from the rail's end A the component may slide; empty: flush with end B")),
       textInput(kPlacementLoaded, kPlacementLoaded).withVisible([](const CommandState&) { return false; }),
+      textInput(kPlacementMinLoaded, kPlacementMinLoaded).withVisible([](const CommandState&) { return false; }),
+      textInput(kPlacementMaxLoaded, kPlacementMaxLoaded).withVisible([](const CommandState&) { return false; }),
   };
   def.enabled = [&context] { return build::hasBuildParts(context); };
   def.inspect = [](const CommandState& state, const CommandContext& model) {
@@ -8133,6 +8241,19 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
     result.log = QStringLiteral("%1 from %2, offset %3%4")
                      .arg(part.component, state.choice(kPlacementFrom), state.text(kPlacementOffset),
                           keeps ? QStringLiteral(" (kept in place)") : QString());
+    // A carriage's travel (mitcad#2088): its limits, the defaults named.
+    if (state.checked(kPlacementSlides)) {
+      const QString min = state.text(kPlacementMin).trimmed();
+      const QString max = state.text(kPlacementMax).trimmed();
+      const QString travel =
+          QObject::tr("Travel from %1 to %2")
+              .arg(min.isEmpty() ? QObject::tr("flush with end A") : min,
+                   max.isEmpty() ? QObject::tr("flush with end B") : max);
+      result.text += QStringLiteral("<br>") + travel.toHtmlEscaped();
+      result.log += QStringLiteral(", travel %1 to %2")
+                        .arg(min.isEmpty() ? QStringLiteral("default") : min,
+                             max.isEmpty() ? QStringLiteral("default") : max);
+    }
     return result;
   };
   def.apply = [&host](CommandState& state, const CommandContext& model) {
@@ -8169,17 +8290,31 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
     if (!keeps) {
       at.insert(QStringLiteral("offset"), state.expression(kPlacementOffset));
     }
+    QJsonObject edit{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
+                     {QStringLiteral("component"), part.component},
+                     {QStringLiteral("at"), at}};
+    // A carriage's travel limits, when Min or Max changed (mitcad#2088):
+    // both, an empty one its default.
+    const bool travel = state.checked(kPlacementSlides) && travelChanged(state);
+    if (travel) {
+      edit.insert(QStringLiteral("limits"), travelLimits(state, kPlacementMin, kPlacementMax));
+    }
     QJsonObject result;
-    if (!host.runModelCommand(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
-                                          {QStringLiteral("component"), part.component},
-                                          {QStringLiteral("at"), at}},
-                              &result)) {
+    if (!host.runModelCommand(edit, &result)) {
       return false;
     }
-    qInfo().noquote() << QStringLiteral("Placement of %1: from %2, %3")
+    qInfo().noquote() << QStringLiteral("Placement of %1: from %2, %3%4")
                              .arg(part.component, state.choice(kPlacementFrom),
                                   keeps ? QStringLiteral("kept in place")
-                                        : QStringLiteral("offset ") + state.expression(kPlacementOffset));
+                                        : QStringLiteral("offset ") + state.expression(kPlacementOffset),
+                                  travel ? QStringLiteral(", travel %1 to %2")
+                                               .arg(state.text(kPlacementMin).trimmed().isEmpty()
+                                                        ? QStringLiteral("default")
+                                                        : state.text(kPlacementMin).trimmed(),
+                                                    state.text(kPlacementMax).trimmed().isEmpty()
+                                                        ? QStringLiteral("default")
+                                                        : state.text(kPlacementMax).trimmed())
+                                         : QString());
     return true;
   };
   return def;

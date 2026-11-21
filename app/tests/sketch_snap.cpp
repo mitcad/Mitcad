@@ -8,7 +8,11 @@
 // point placed there on the axis's entity. What a drawing tool adds
 // automatically (mitcad#1024): a quadrant's coincident and centre
 // alignment, the horizontal, vertical and tangent candidates, and the
-// reason a refused (redundant) candidate is skipped with.
+// reason a refused (redundant) candidate is skipped with. The extensions
+// of acquired lines (mitcad#2035): onto a line's extension beyond its
+// ends, where two acquired lines' extensions meet and where one crosses a
+// circle, only with the switch on; a sketch point there wins; parallel
+// lines meet nowhere.
 #include "UnitTests.hpp"
 #include "sketch/SketchSnap.hpp"
 
@@ -589,6 +593,119 @@ void autoConstraintTests() {
   CHECK(autoConstraintReason(QStringLiteral("something else")) == QStringLiteral("something else"));
 }
 
+// The extensions of acquired lines (mitcad#2035): a vertical line c1 from
+// (0, 0) to (0, 20), a level line c4 from (30, 40) to (45, 40) (their
+// extensions meet at (0, 40)), a circle c7 about (3, 50) of radius 5 that
+// c1's extension crosses at (0, 46) and (0, 54), and a line c9 from
+// (10, 0) to (10, 20) parallel to c1.
+void extensionSnapTests() {
+  SketchModel model;
+  addPoint(model, "p2", V2{0.0, 0.0});
+  addPoint(model, "p3", V2{0.0, 20.0});
+  addCurve(model, "c1", "line", Curve2::line(V2{0.0, 0.0}, V2{0.0, 20.0}), "p2", "p3", "");
+  addPoint(model, "p5", V2{30.0, 40.0});
+  addPoint(model, "p6", V2{45.0, 40.0});
+  addCurve(model, "c4", "line", Curve2::line(V2{30.0, 40.0}, V2{45.0, 40.0}), "p5", "p6", "");
+  addPoint(model, "p8", V2{3.0, 50.0});
+  addCurve(model, "c7", "circle", Curve2::circle(V2{3.0, 50.0}, 5.0), "", "", "p8");
+  addPoint(model, "p10", V2{10.0, 0.0});
+  addPoint(model, "p11", V2{10.0, 20.0});
+  addCurve(model, "c9", "line", Curve2::line(V2{10.0, 0.0}, V2{10.0, 20.0}), "p10", "p11", "");
+  SnapSettings settings;
+  settings.model = &model;
+  settings.toScreen = screenOf;
+  settings.grid = false;
+  settings.extensions = true;
+
+  // Not acquired: nothing 3 pixels off c1's extension above its end.
+  CHECK(snapAt(settings, V2{0.3, 30.0}).kind == Snap::Kind::None);
+  // Acquired: onto its extension above and below it, as an OnCurve onto c1.
+  settings.acquired = QStringList{QStringLiteral("c1")};
+  Snap s = snapAt(settings, V2{0.3, 30.0});
+  CHECK(s.kind == Snap::Kind::OnCurve && s.curve == QStringLiteral("c1") && s.extended && !s.extended2);
+  CHECK(s.axis.isEmpty() && s.onExtension() && s.alongCurve());
+  CHECK(sameAt(s.at, V2{0.0, 30.0}));
+  CHECK(s.describe() == QStringLiteral("on the extension of a line (c1)"));
+  s = snapAt(settings, V2{-0.2, -12.0});
+  CHECK(s.kind == Snap::Kind::OnCurve && s.extended && sameAt(s.at, V2{0.0, -12.0}));
+  // The curves' tolerance (6 pixels): 5.5 pixels on, 6.5 off.
+  CHECK(snapAt(settings, V2{0.55, 30.0}).extended);
+  CHECK(snapAt(settings, V2{0.65, 30.0}).kind == Snap::Kind::None);
+  // Along the line itself: its own OnCurve, not the extension.
+  s = snapAt(settings, V2{0.3, 7.0});
+  CHECK(s.kind == Snap::Kind::OnCurve && s.curve == QStringLiteral("c1") && !s.onExtension());
+  // Its guide: from its nearer end, the top one.
+  s = snapAt(settings, V2{0.3, 30.0});
+  auto guides = extensionGuides(model, s);
+  CHECK(guides.size() == 1);
+  if (guides.size() == 1) {
+    CHECK(sameAt(guides[0].first, V2{0.0, 20.0}) && sameAt(guides[0].second, V2{0.0, 30.0}));
+  }
+  CHECK(extensionGuides(model, snapAt(settings, V2{0.3, 7.0})).empty());
+
+  // The switch off: an acquired line gives no extension, nor any crossing
+  // of extensions.
+  settings.extensions = false;
+  CHECK(snapAt(settings, V2{0.3, 30.0}).kind == Snap::Kind::None);
+  CHECK(snapAt(settings, V2{0.3, 46.3}).kind != Snap::Kind::Intersection);
+  settings.acquired = QStringList{QStringLiteral("c1"), QStringLiteral("c4")};
+  CHECK(snapAt(settings, V2{0.3, 40.2}).kind == Snap::Kind::None);
+  settings.extensions = true;
+
+  // Two acquired lines: where their extensions meet, beyond both.
+  s = snapAt(settings, V2{0.3, 40.2});
+  CHECK(s.kind == Snap::Kind::Intersection && s.extended && s.extended2);
+  CHECK(s.curve == QStringLiteral("c1") && s.curve2 == QStringLiteral("c4"));
+  CHECK(sameAt(s.at, V2{0.0, 40.0}));
+  CHECK(s.describe() == QStringLiteral("where two line extensions meet (c1, c4)"));
+  guides = extensionGuides(model, s);
+  CHECK(guides.size() == 2);
+  if (guides.size() == 2) {
+    CHECK(sameAt(guides[0].first, V2{0.0, 20.0}) && sameAt(guides[1].first, V2{30.0, 40.0}));
+    CHECK(sameAt(guides[0].second, V2{0.0, 40.0}) && sameAt(guides[1].second, V2{0.0, 40.0}));
+  }
+  // Not acquired, they meet nowhere to snap to.
+  settings.acquired.clear();
+  CHECK(snapAt(settings, V2{0.3, 40.2}).kind == Snap::Kind::None);
+
+  // An acquired line's extension crossing the circle: an intersection with
+  // it, the extended line first.
+  settings.acquired = QStringList{QStringLiteral("c1")};
+  s = snapAt(settings, V2{0.3, 46.3});
+  CHECK(s.kind == Snap::Kind::Intersection && s.extended && !s.extended2);
+  CHECK(s.curve == QStringLiteral("c1") && s.curve2 == QStringLiteral("c7"));
+  CHECK(sameAt(s.at, V2{0.0, 46.0}));
+  CHECK(s.describe() == QStringLiteral("where the extension of a line meets a curve (c1, c7)"));
+  CHECK(extensionGuides(model, s).size() == 1);
+  // Not acquired: on the circle only.
+  settings.acquired.clear();
+  s = snapAt(settings, V2{0.3, 46.3});
+  CHECK(s.kind == Snap::Kind::OnCurve && s.curve == QStringLiteral("c7"));
+
+  // Parallel acquired lines meet nowhere: each gives its extension only.
+  CHECK(!lineMeet(model.curves[0].curve, model.curves[3].curve).has_value());
+  settings.acquired = QStringList{QStringLiteral("c1"), QStringLiteral("c9")};
+  for (const double y : {-30.0, 30.0, 300.0}) {
+    CHECK(snapAt(settings, V2{0.3, y}).kind == Snap::Kind::OnCurve);
+    CHECK(snapAt(settings, V2{10.3, y}).kind == Snap::Kind::OnCurve);
+  }
+  CHECK(snapAt(settings, V2{10.3, 30.0}).curve == QStringLiteral("c9"));
+
+  // A sketch point on the extension wins, and so does one where two
+  // extensions meet.
+  addPoint(model, "p12", V2{0.0, 70.0});
+  addPoint(model, "p13", V2{0.0, 40.0});
+  settings.acquired = QStringList{QStringLiteral("c1")};
+  s = snapAt(settings, V2{0.3, 70.2});
+  CHECK(s.kind == Snap::Kind::Point && s.point == QStringLiteral("p12"));
+  settings.acquired = QStringList{QStringLiteral("c1"), QStringLiteral("c4")};
+  s = snapAt(settings, V2{0.3, 40.2});
+  CHECK(s.kind == Snap::Kind::Point && s.point == QStringLiteral("p13"));
+  // A curve the tool leaves out is no extension.
+  settings.skipCurves.insert(QStringLiteral("c1"));
+  CHECK(!snapAt(settings, V2{0.3, 30.0}).onExtension());
+}
+
 } // namespace
 
 int sketchSnapTests() {
@@ -597,6 +714,7 @@ int sketchSnapTests() {
   outOfPlaneTests();
   axisSnapTests();
   autoConstraintTests();
+  extensionSnapTests();
   return failures;
 }
 MITCAD_UNIT_TEST(sketchSnapTests);

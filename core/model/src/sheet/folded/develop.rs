@@ -380,6 +380,81 @@ fn changed(
     })
 }
 
+/// The edges of a planar panel's chart that are not lines.
+fn curved_edges(patch: &SheetPatch) -> Vec<&MaterialEdge> {
+    if !matches!(patch.domain, SheetDomainRef::Panel(_))
+        || !matches!(patch.embedding, SheetEmbedding::Plane { .. })
+    {
+        return Vec::new();
+    }
+    patch
+        .regions
+        .iter()
+        .flat_map(|r| &r.loops)
+        .flat_map(|l| &l.edges)
+        .filter(|e| !matches!(e.curve.geometry, SegmentGeometry::Line { .. }))
+        .collect()
+}
+
+/// Pairs of coplanar planar panels whose boundaries meet along a curve
+/// other than a line (a disc of a Face inside a hole of another of its
+/// regions, a half disc at an edge; mitcad#1942), with a point of the curve
+/// on the front surface. No registered seam pairs them, being straight, but
+/// the sheet's construction fuses them into one material, so they develop
+/// together. Two edges meet where their ends and middles coincide.
+fn fused_seams(
+    state: &SheetState,
+    thickness: f64,
+) -> Result<Vec<(SheetDomainRef, SheetDomainRef, V3)>, String> {
+    let samples = |edge: &MaterialEdge| -> Result<[[f64; 2]; 3], String> {
+        let range = edge.curve.range;
+        Ok([
+            edge.curve.point(range.first)?,
+            edge.curve.point((range.first + range.last) / 2.0)?,
+            edge.curve.point(range.last)?,
+        ])
+    };
+    let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= CLOSURE;
+    let mut out = Vec::new();
+    for (i, a) in state.charts.iter().enumerate() {
+        let edges_a = curved_edges(a);
+        if edges_a.is_empty() {
+            continue;
+        }
+        for b in &state.charts[i + 1..] {
+            let edges_b = curved_edges(b);
+            if edges_b.is_empty() {
+                continue;
+            }
+            let Ok(map) = planar_map(&a.embedding, &b.embedding) else {
+                continue;
+            };
+            let mut found = None;
+            'pairs: for ea in &edges_a {
+                let [p0, pm, p1] = samples(ea)?;
+                let (q0, qm, q1) = (map.point(p0), map.point(pm), map.point(p1));
+                for eb in &edges_b {
+                    let [r0, rm, r1] = samples(eb)?;
+                    if near(qm, rm)
+                        && ((near(q0, r1) && near(q1, r0)) || (near(q0, r0) && near(q1, r1)))
+                    {
+                        found = Some(pm);
+                        break 'pairs;
+                    }
+                }
+            }
+            if let Some(at) = found {
+                out.push((
+                    a.domain,
+                    b.domain,
+                    chart_point(&a.embedding, at, 0.0, thickness),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Changes the listed bends to developed (`true`) or folded (`false`) while
 /// `stationary` stays fixed. Every other domain is carried rigidly.
 pub(crate) fn reconfigure(
@@ -422,11 +497,39 @@ pub(crate) fn reconfigure(
             changing.insert(*id, (record, *open));
         }
     }
+    let fused = fused_seams(state, thickness)?;
     let mut placements: BTreeMap<SheetDomainRef, Placement> = BTreeMap::new();
     placements.insert(fixed, Placement::Rigid(Transform::IDENTITY));
     let mut queue = VecDeque::from([fixed]);
     while let Some(domain) = queue.pop_front() {
         let patch = &state.charts[index[&domain]];
+        // Coplanar panels of one material along a curve: rigidly together.
+        if let Placement::Rigid(carried) = placements[&domain] {
+            for (a, b, at) in &fused {
+                let next = match domain {
+                    d if d == *a => *b,
+                    d if d == *b => *a,
+                    _ => continue,
+                };
+                match &placements.get(&next) {
+                    Some(Placement::Rigid(existing)) => {
+                        if !agree(existing, &carried, *at) {
+                            return Err(format!(
+                                "non-developable cycle: {} and {} do not close in this \
+                                 configuration",
+                                domain_label(domain),
+                                domain_label(next)
+                            ));
+                        }
+                    }
+                    Some(Placement::Changed { .. }) => unreachable!("panels are always rigid"),
+                    None => {
+                        placements.insert(next, Placement::Rigid(carried));
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
         for port in &state.joins {
             for (own, other) in [(&port.first, &port.second), (&port.second, &port.first)] {
                 if own.boundary.domain != domain {

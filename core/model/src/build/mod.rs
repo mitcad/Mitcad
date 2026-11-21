@@ -21,6 +21,8 @@ mod auto_name;
 // A part centred in a free stretch whose neighbour goes (mitcad#1401).
 mod gap;
 pub(crate) mod geometry;
+// Drags leave BUILD's parts where they were placed (mitcad#2088).
+mod held;
 // A library part's material (mitcad#1817).
 mod library_material;
 mod meta;

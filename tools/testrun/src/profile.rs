@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::concurrency::{self, UiCap};
+use crate::concurrency;
 use crate::corpus::{self, FileRun};
 
 /// The runs kept per test.
@@ -151,10 +151,10 @@ pub struct Profiles {
     pub machine: Machine,
     #[serde(default)]
     pub tests: BTreeMap<String, TestProfile>,
-    /// The UI entries at once each platform's runs on this machine have
-    /// learnt (`concurrency`), by `std::env::consts::OS`.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub ui_caps: BTreeMap<String, UiCap>,
+    // An older runner's `ui_caps` (the UI entries at once it learnt down
+    // from contention failures) is no field: an old file reads without it,
+    // and its next save drops it (the machine's cap is the bound,
+    // mitcad#2124).
 }
 
 impl Default for Profiles {
@@ -163,7 +163,6 @@ impl Default for Profiles {
             format: FORMAT,
             machine: Machine::default(),
             tests: BTreeMap::new(),
-            ui_caps: BTreeMap::new(),
         }
     }
 }
@@ -776,18 +775,17 @@ mod tests {
         // Older or partial files read with defaults.
         let partial: Profiles = serde_json::from_str(r#"{"format":1}"#).unwrap();
         assert!(partial.tests.is_empty());
-        assert!(partial.ui_caps.is_empty());
+        // An older runner's learnt caps read and are dropped.
+        let old: Profiles =
+            serde_json::from_str(r#"{"format":1,"ui_caps":{"linux":{"cap":2,"clean_runs":0}}}"#)
+                .unwrap();
+        assert!(!serde_json::to_string(&old).unwrap().contains("ui_caps"));
         // The UI fields are left out where unset, kept where set.
         assert!(
             !text.contains("beside") && !text.contains("ui_room"),
             "{text}"
         );
         let mut learnt = Profiles::default();
-        let cap = UiCap {
-            cap: 3,
-            clean_runs: 1,
-        };
-        learnt.ui_caps.insert("linux".into(), cap);
         let mut ui = TestProfile::default();
         let mut failed = run(ResultKind::Failed, 1.0, 1.0, 1.0);
         failed.beside = Some(4);

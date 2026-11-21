@@ -40,7 +40,9 @@ test_rounding_between_a_plate_and_a_tilted_rod_is_a_rolling_ball,
 test_rounding_of_a_tilted_rods_top_is_a_rolling_ball,
 test_rounding_between_a_plate_and_a_tilted_cone_is_a_rolling_ball: the
 tests written with 0075 to 0077. Its failure without the patch is still to
-be shown in the port's before/after run (mitcad#1986).
+be shown: with it and the 10 later patches that change the same lines
+reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 index 2a4d6f1a..b5089130 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx

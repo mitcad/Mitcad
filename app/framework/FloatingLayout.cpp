@@ -171,6 +171,8 @@ FloatingLayout::FloatingLayout(OcctViewer* viewer, QWidget* header, QWidget* par
   // The view's size and place are what the cards follow.
   viewer->installEventFilter(this);
   connect(viewer, &OcctViewer::badgeWidthChanged, this, &FloatingLayout::requestLayout);
+  // The cube's size (mitcad#2071): the upper right cards below it at once.
+  connect(viewer, &OcctViewer::cubeAreaChanged, this, &FloatingLayout::requestLayout);
 }
 
 void FloatingLayout::adopt(GlassCard* card) {
@@ -682,8 +684,8 @@ void FloatingLayout::layoutCards() {
   // How far the cube and the upper right cards move left (0: none).
   const int rightPanels = view.right() + 1 - kMargin - rightEdge;
   const int cubeShift = rightPanels > 0 ? kMargin + rightPanels : 0;
-  const QRect cubeCorner(view.right() + 1 - cubeShift - OcctViewer::kCubeArea, view.top() + insetTop,
-                         OcctViewer::kCubeArea, OcctViewer::kCubeArea);
+  const int cubeArea = m_viewer->cubeAreaSize(); // at the cube's size (mitcad#2071)
+  const QRect cubeCorner(view.right() + 1 - cubeShift - cubeArea, view.top() + insetTop, cubeArea, cubeArea);
   // The upper left cards (Projects, Configuration, Browser) stack in the
   // order they were added and share the column from the rows down to the
   // bottom card (mitcad#1020): each at most its content's height, the
@@ -805,7 +807,7 @@ void FloatingLayout::layoutCards() {
     const int width = std::min(entry.sizing.width > 0 ? entry.sizing.width : 300,
                                std::max(1, view.width() - 2 * kMargin));
     const int share = static_cast<int>((view.height() - 2 * kMargin) * entry.sizing.maxHeightShare);
-    int top = std::max(view.top() + insetTop + OcctViewer::kCubeArea, topLimit);
+    int top = std::max(view.top() + insetTop + cubeArea, topLimit);
     int limit = std::min(share, cardsBottom - top);
     QSize size = sized(entry, width, limit);
     const int tallLimit = std::min(share, cardsBottom - topLimit);

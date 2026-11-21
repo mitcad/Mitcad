@@ -11,8 +11,8 @@
 //! the constraints and dimensions that then say nothing, and removes the
 //! point. Points the model makes again or moves itself are never merged
 //! away: projected points (they follow their source), points a derived
-//! offset computes, and the points of patterns (originals, copies and
-//! centres).
+//! offset computes, the points of patterns (originals, copies and
+//! centres) and the points of sketch block instances.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -144,8 +144,8 @@ impl SketchEdit<'_> {
 
     /// Whether a point may be merged into another or become the end of
     /// another curve: not projected (a reference point, or one a linked
-    /// projection lists), not computed by a derived offset and not a point
-    /// of a pattern.
+    /// projection lists), not computed by a derived offset, not a point
+    /// of a pattern and not a block instance's.
     pub(crate) fn mergeable_point(&self, p: EntityUid) -> bool {
         let Some(e) = self.def.entity(p) else {
             return false;
@@ -156,7 +156,26 @@ impl SketchEdit<'_> {
                 .projections
                 .iter()
                 .any(|pr| pr.entities.contains(&Ref::Point(p)));
-        !projected && self.computing_offset(p).is_none() && !self.pattern_point(p)
+        !projected
+            && self.computing_offset(p).is_none()
+            && !self.pattern_point(p)
+            && !self.block_point(p)
+    }
+
+    /// Whether a block instance owns a point (mitcad#2110): one of its
+    /// points, its base point or its direction line's tip. Merging it away
+    /// would drop the instance (its base point gone) or leave its geometry
+    /// naming a point it does not own; a Coincident on it stays a
+    /// constraint.
+    fn block_point(&self, p: EntityUid) -> bool {
+        self.def.blocks.iter().any(|b| {
+            b.base == p
+                || b.entities.values().any(|r| *r == Ref::Point(p))
+                || self
+                    .def
+                    .entity(b.direction)
+                    .is_some_and(|e| e.kind.points().contains(&p))
+        })
     }
 
     /// Whether a pattern uses a point: its centre, an original or a point

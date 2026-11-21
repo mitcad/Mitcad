@@ -80,8 +80,9 @@
 // pairwise rows, so that every value of every column meets every value of
 // every other column in some row (table()).
 //
-//   test_dressup_consumes_face [--part core|kinds|chains]
-// runs one of the table's three parts, all without --part.
+//   test_dressup_consumes_face [--part core|kinds|chains|ring]
+// runs one of the table's three parts (or the ring's floor, mitcad#1821), all
+// without --part.
 
 #include <algorithm>
 #include <array>
@@ -112,6 +113,7 @@
 #include <BRepGProp.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRep_Builder.hxx>
@@ -127,6 +129,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
@@ -1351,6 +1354,118 @@ void run_openings() {
   row(0.0, Kind::Equal, 1.0);
 }
 
+// --- A ring's floor chamfered inside a rounded octagon (mitcad#1821) -------
+
+// A reported nut's end, as a pocket: a plate 70 x 70 x 10 with an octagonal
+// pocket 5 deep (apothem 26.6, corners rounded `corner`) and a bore of
+// radius 26 through its floor, so that the floor is a ring 0.6 wide along
+// the octagon's sides and about 2.6 at its corners; the floor's rim along
+// the walls (16 concave edges, 8 over sharp corners) chamfered by `size`.
+// Where a corner is rounded more tightly than the chamfer reaches, the
+// kernel's bevel round the corner's arc folds over: it left a groove down
+// to the floor between the two bevels and a sliver of the floor past their
+// contact lines' crossing (0.05 mm2 and 0.003 mm2 on the nut). The bevels
+// meet at a mitre there instead. One valid closed solid, more material
+// than the plate (a chamfer of concave edges only adds), a face of the
+// chamfer along each side of the octagon, every face named, no face under
+// 0.01 mm2, no piece of the floor under 0.1 mm2 and no note.
+void run_ring_floor(double corner, double size) {
+  std::fprintf(stderr, "ring floor, corners %g, chamfer %g\n", corner, size);
+  const double r = 26.6 / std::cos(kPi / 8);
+  BRepBuilderAPI_MakeWire wire;
+  for (int k = 0; k < 8; ++k) {
+    const double a0 = kPi / 8 + k * kPi / 4;
+    const double a1 = a0 + kPi / 4;
+    wire.Add(BRepBuilderAPI_MakeEdge(gp_Pnt(r * std::cos(a0), r * std::sin(a0), 5),
+                                     gp_Pnt(r * std::cos(a1), r * std::sin(a1), 5))
+                 .Edge());
+  }
+  TopoDS_Face octagon = BRepBuilderAPI_MakeFace(wire.Wire(), true).Face();
+  if (corner > 0.0) {
+    BRepFilletAPI_MakeFillet2d rounding(octagon);
+    std::vector<TopoDS_Vertex> corners;
+    for (TopExp_Explorer v(octagon, TopAbs_VERTEX); v.More(); v.Next()) {
+      const TopoDS_Vertex vertex = TopoDS::Vertex(v.Current());
+      if (std::none_of(corners.begin(), corners.end(), [&](const TopoDS_Vertex& c) { return c.IsSame(vertex); })) {
+        corners.push_back(vertex);
+      }
+    }
+    for (const TopoDS_Vertex& vertex : corners) {
+      rounding.AddFillet(vertex, corner);
+    }
+    rounding.Build();
+    CHECK(rounding.IsDone());
+    if (!rounding.IsDone()) {
+      return;
+    }
+    octagon = TopoDS::Face(rounding.Shape());
+  }
+  const TopoDS_Shape pocket = BRepPrimAPI_MakePrism(octagon, gp_Vec(0, 0, 6)).Shape();
+  const TopoDS_Shape bore = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -1), gp_Dir(0, 0, 1)), 26.0, 12.0).Shape();
+  const TopoDS_Shape plate = BRepPrimAPI_MakeBox(gp_Pnt(-35, -35, 0), 70, 70, 10).Shape();
+  const ShapePtr body = named(BRepAlgoAPI_Cut(BRepAlgoAPI_Cut(plate, pocket).Shape(), bore).Shape());
+  std::string floor;
+  for (int f = 0; f < body->face_count(); ++f) {
+    if (std::abs(centre_z(body->face(f)) - 5) < 1e-6) {
+      floor = body->face_names(f).front();
+    }
+  }
+  CHECK(!floor.empty());
+  std::vector<std::string> edges;
+  for (int e = 0; e < body->edge_count(); ++e) {
+    const BRepAdaptor_Curve curve(body->edge(e));
+    const gp_Pnt m = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()));
+    if (std::abs(m.Z() - 5) < 1e-6 && std::hypot(m.X(), m.Y()) > 26.3 && std::hypot(m.X(), m.Y()) < 30) {
+      edges.push_back(body->edge_name(e));
+    }
+  }
+  CHECK(edges.size() == (corner > 0.0 ? 16u : 8u));
+  ShapePtr result;
+  try {
+    ChamferSet set;
+    set.edges = edges;
+    set.spec.distance = size;
+    result = chamfer("C", *body, {set});
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "  failed: %s\n", error.what());
+  }
+  CHECK(result != nullptr);
+  if (!result) {
+    return;
+  }
+  for (const std::string& note : result->notes()) {
+    std::fprintf(stderr, "  note: %s\n", note.c_str());
+  }
+  double smallest = 1e300;
+  for (int f = 0; f < result->face_count(); ++f) {
+    const NameList& names = result->face_names(f);
+    const double area = area_of(result->face(f));
+    smallest = std::min(smallest, area);
+    CHECK(!names.empty());
+    if (!names.empty() && area < 0.1 && names.front().rfind(floor, 0) == 0) {
+      std::fprintf(stderr, "  a piece of the floor of %.3g mm2: %s\n", area, names.front().c_str());
+      CHECK(false);
+    }
+  }
+  CHECK(smallest > 0.01);
+  CHECK(result->notes().empty());
+  // A chamfer of concave edges only adds material.
+  CHECK(volume_of(result->occt()) > volume_of(body->occt()));
+  CHECK(closed_valid_solid(result->occt()));
+  CHECK(faces_starting(*result, "C:chamfer(") >= 8);
+}
+
+void run_ring_floors() {
+  int id = 0;
+  const auto row = [&](double corner, double size) {
+    const std::string name = "ring floor row " + std::to_string(++id);
+    guarded(name.c_str(), [&] { run_ring_floor(corner, size); });
+  };
+  row(1.0, 2.55);
+  row(1.0, 2.0);
+  row(0.0, 2.55);
+}
+
 // --- A free-form narrow face (mitcad#1849) ----------------------------------
 
 // The convex step of the table (the edge's other face 8 wide at z = 10, the
@@ -1443,7 +1558,7 @@ int main(int argc, char** argv) {
       part = argv[i + 1];
     }
   }
-  if (!part.empty() && part != "core" && part != "kinds" && part != "chains") {
+  if (!part.empty() && part != "core" && part != "kinds" && part != "chains" && part != "ring") {
     std::fprintf(stderr, "no part %s\n", part.c_str());
     return 1;
   }
@@ -1460,6 +1575,9 @@ int main(int argc, char** argv) {
     test::run_rows("chains", rows.chains);
     test::run_openings();
     test::guarded("free-form narrow face", [] { test::run_freeform(); });
+  }
+  if (part.empty() || part == "ring") {
+    test::run_ring_floors();
   }
   if (test::failures == 0) {
     std::puts("test_dressup_consumes_face: all checks passed");

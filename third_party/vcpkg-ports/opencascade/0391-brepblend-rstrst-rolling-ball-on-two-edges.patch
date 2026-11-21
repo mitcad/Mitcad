@@ -48,8 +48,8 @@ geometry.suite.fillet_rolling_ball): a ring whose section is a house, its
 inner wall off the axis, its ridge rounded with 3 so that both roof faces
 are narrower than the ball's contacts: the ball rests on both eaves, each
 tangent to it (before, that start was refused and the rounding missed the
-eaves by 1.2). Its failure without the patch, stated in its documentation,
-is still to be shown in the port's before/after run (mitcad#1986).
+eaves by 1.2). It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_CurvPointRadInv.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_CurvPointRadInv.cxx
 index 9df7002..ef0b65b 100644

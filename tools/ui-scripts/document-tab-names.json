@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The document tabs' names (mitcad#2060), tools/ui-document-tab-names-test.sh: a 60 x 40 x 10 box, saved as Bracket and as a design with a 60-character name."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 60, "width": 40, "height": 10, "operation": "new_body"}}
+]

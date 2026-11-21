@@ -120,7 +120,7 @@ impl FeatureInfo for CoordinateSystemDef {
 /// Checks that a reference can give an axis's direction: an axis or a line
 /// (a straight or circular edge, a sketch line, a face of revolution), or a
 /// plane (an origin or construction plane, a planar face, a fixed plane).
-fn check_direction(ctx: &CheckContext<'_>, reference: &GeomRef) -> Result<(), String> {
+pub(crate) fn check_direction(ctx: &CheckContext<'_>, reference: &GeomRef) -> Result<(), String> {
     match reference {
         GeomRef::Origin(origin) if origin.kind() == DatumKind::Point => Err(format!(
             "{reference} is a point, which gives no direction for an axis"
@@ -191,8 +191,9 @@ impl<K: Kernel> Evaluate<K> for CoordinateSystemDef {
 
 /// The unit direction a reference gives an axis of the frame (see the
 /// module): a straight edge away from `origin`, a plane's normal, an axis's
-/// direction.
-fn direction<K: Kernel>(
+/// direction. Also a construction plane's reference direction
+/// (`perpendicular_at_point`, mitcad#2111).
+pub(crate) fn direction<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     reference: &GeomRef,
     origin: Vec3,

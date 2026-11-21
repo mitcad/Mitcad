@@ -410,6 +410,18 @@ pub enum ThicknessLocation {
 /// With `direction` (a rib's, a unit vector in the sketch plane) the rib
 /// grows along it instead of at right angles to the chord (mitcad#1746);
 /// `flip` turns it as it turns the chord's.
+///
+/// With `draft_angle` (radians, 0 for none; mitcad#2102) both sides lean
+/// by that angle so that the wall is thicker where it meets the bodies:
+/// `thickness` is measured at the curves, and at a distance `u` from them
+/// the wall is `thickness + 2 u tan(draft_angle)` thick, each side moved
+/// `u tan(draft_angle)` out of where `location` puts it. A rib widens from
+/// its curves the way it grows. A web whose curves lie on a face of
+/// `bodies` (the material just behind the sketch plane) narrows the way
+/// it grows from the sketch plane; any other web widens. A negative angle
+/// does the opposite. The draft is built into the tool, so To Next and
+/// `extend_ends` are solved for the drafted wall; an angle that makes the
+/// sides meet before the wall's far end fails. Face names are as without.
 #[derive(Debug, Clone)]
 pub struct RibSpec<'a, S> {
     pub feature: FeatureUid,
@@ -424,6 +436,7 @@ pub struct RibSpec<'a, S> {
     pub extend_ends: bool,
     pub end_offset: f64,
     pub direction: Option<[f64; 3]>,
+    pub draft_angle: f64,
 }
 
 /// Input of [`crate::Kernel::helix`] (FreeCAD's additive and subtractive

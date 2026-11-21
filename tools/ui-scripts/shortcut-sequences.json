@@ -1,0 +1,6 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A 30 x 20 mm rectangle in a sketch (Sketch1, F1): a design to give key sequences in (mitcad#2095)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":30,"height":20}
+]

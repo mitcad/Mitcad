@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# A drawing's dimensioning standard (mitcad#2047) on drawing-standard.json:
+# Drawing1 (ISO) with a vertical dimension of 20 on its front view.
+#   1. The sheet's panel (nothing selected): Standard ASME relays the
+#      dimension out (its value horizontal, 0 degrees); one Ctrl+Z puts
+#      ISO back (along its line, 90 degrees).
+#   2. Create Drawing: the ANSI template sets Standard to ASME; the new
+#      drawing is made with standard asme, and the choice is kept: the
+#      next Create Drawing starts with it (Cancel).
+# Run by tools/ui-drawing-standard-test.sh (Linux),
+# tools/ui-windows-drawing-standard-test.ps1 (Windows) and
+# tools/ui-macos-drawing-standard-test.sh (macOS).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing dimension texts [(]iso[)]: A[0-9]+ 20 at 90°$'
+wait-idle
+
+# 1. Standard ASME in the sheet's panel, then undone in one step.
+mark
+qt-choice drawingDefaultStandard 'ASME'
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing")(?=.*"standard":"asme")'
+wait-log '^Drawing dimension texts [(]asme[)]: A[0-9]+ 20 at 0°$'
+wait-idle
+expect-no-log '^Drawing command refused'
+mark
+key Ctrl+z
+wait-log '^Drawing dimension texts [(]iso[)]: A[0-9]+ 20 at 90°$'
+wait-idle
+expect-no-log '^Drawing closed'
+
+# 2. Create Drawing with the ANSI template: Standard ASME, kept.
+mark
+command drawing.close
+wait-log '^Drawing closed'
+wait-idle
+mark
+command file.create_drawing
+focus-dialog '^Create Drawing$'
+wait-log '^Create Drawing dialog opened'
+qt-choice drawingTemplate 'ANSI'
+expect-widget-property drawingStandard currentText ASME
+button '^OK$'
+focus-main
+wait-log '^Create Drawing dialog: template ansi, ANSI_B, third_angle, standard asme$'
+wait-log '^Drawing created: D[0-9]+ '
+wait-log '^Create Drawing choice kept: template ansi, ANSI_B, landscape, third_angle, standard asme$'
+expect-setting createDrawing/standard asme
+wait-log '^Drawing opened: D[0-9]+ '
+wait-idle
+key Escape
+wait-idle
+mark
+command drawing.close
+wait-log '^Drawing closed'
+wait-idle
+mark
+command file.create_drawing
+focus-dialog '^Create Drawing$'
+wait-log '^Create Drawing dialog starts with template ansi, ANSI_B, landscape, third_angle [(]the last choice[)], standard asme$'
+expect-widget-property drawingStandard currentText ASME
+button '^Cancel$'
+focus-main
+wait-log '^Create Drawing cancelled$'
+expect-never 'TestDriver: FAIL'

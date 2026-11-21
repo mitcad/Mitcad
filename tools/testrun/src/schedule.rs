@@ -22,7 +22,7 @@ pub struct Limits {
     pub sensitive_load: f64,
     /// Timing-sensitive tests at once.
     pub sensitive_max: usize,
-    /// UI entries at once: the machine's learnt cap (`concurrency`).
+    /// UI entries at once: the machine's cap, the bound (`concurrency`).
     pub ui_max: usize,
     /// The share of the budget kept for the priority lane while lane tests
     /// wait.
@@ -772,6 +772,37 @@ mod tests {
         lonely.ui_room = Some(0);
         let idle = Running::default();
         assert_eq!(admit(&lonely, &idle, &calm, &LIMITS), Ok(()));
+    }
+
+    /// How many UI entries start one after another under the machine's cap
+    /// for `bound`, with memory, cores and slots to spare.
+    fn ui_starts(bound: Option<usize>) -> usize {
+        let limits = Limits {
+            ui_max: crate::concurrency::machine_cap(bound),
+            max_parallel: 64,
+            budget: gib(256.0),
+            cores: 64.0,
+            ..LIMITS
+        };
+        let calm = Now::default();
+        let mut ui = test(30.0, 0.1, 0.5);
+        ui.ui = true;
+        let mut started = Running::default();
+        while started.count < 64 && admit(&ui, &started, &calm, &limits).is_ok() {
+            started.add(&ui);
+        }
+        started.ui
+    }
+
+    #[test]
+    fn the_scheduler_holds_ui_entries_to_the_reported_cap() {
+        // No --ui-max, no MITCAD_UI_JOBS: the default the report names (4),
+        // not every UI entry the memory budget fits (a follow-up of
+        // mitcad#2124: the Windows VM ran 15 at once under "cap 4").
+        assert_eq!(ui_starts(None), crate::concurrency::DEFAULT_BOUND);
+        assert_eq!(ui_starts(None), 4);
+        // A bound is the cap.
+        assert_eq!(ui_starts(Some(6)), 6);
     }
 
     #[test]

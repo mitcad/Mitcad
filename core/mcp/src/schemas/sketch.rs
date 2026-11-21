@@ -64,6 +64,10 @@ pub(super) const COMMANDS: &[&str] = &[
     "sketch.paste",
     "sketch.scale",
     "sketch.auto_constrain",
+    "sketch.break",
+    "sketch.blend_curve",
+    "sketch.insert_block",
+    "sketch.explode_block",
     "sketch3d.create",
     "sketch3d.add_point",
     "sketch3d.add_line",
@@ -861,14 +865,18 @@ fn planar(name: &str) -> Option<Value> {
             "examples": [{"cmd": "sketch.paste", "sketch": "F1", "fragment": {"version": 1, "base": [0, 0], "entities": []}, "at": [20, 0]}]
         }),
         "sketch.scale" => json!({
-            "description": "Scales the whole sketch once by a factor about a point.",
+            "description": "Scales the whole sketch, or selected points, curves and texts (Sketch Scale), once by a factor about a point. With entities: the constraints among them stay, what ties them to the rest stays while it holds and is removed otherwise (counted in notes); nothing else moves. Result: made (the copies, with copy).",
             "properties": {
                 "sketch": sketch(),
                 "factor": number("The factor"),
-                "center": point_once("The centre; the sketch origin when left out")
+                "center": point_once("The centre; the sketch origin when left out"),
+                "entities": ids("The points, curves and texts to scale (p<n>, c<n>, t<n>); the whole sketch when left out"),
+                "dimensions": json!({"type": "string", "enum": ["scale", "keep"], "default": "scale", "description": "The driving lengths among them (dimensions, offset distances, pattern spacings): multiplied by the factor, or kept and the scaled geometry solved with them"}),
+                "copy": flag(false, "Scales copies; the selection stays")
             },
             "required": ["sketch", "factor"],
-            "examples": [{"cmd": "sketch.scale", "sketch": "F1", "factor": 2, "center": "p1"}]
+            "examples": [{"cmd": "sketch.scale", "sketch": "F1", "factor": 2, "center": "p1"},
+                         {"cmd": "sketch.scale", "sketch": "F1", "entities": ["c3", "c4", "t5"], "factor": 1.5, "center": "p2", "dimensions": "keep"}]
         }),
         "sketch.auto_constrain" => json!({
             "description": "Auto Constrain: adds the relations the geometry has within the tolerances (joined ends, points on curves, tangents, horizontal and vertical, parallel, perpendicular, equal, concentric, symmetric, the origin and axes), then driving dimensions with the current values for what is left free. Result: the editing commands' fields, added (by type), relations, joined, dof, summary.",
@@ -883,6 +891,52 @@ fn planar(name: &str) -> Option<Value> {
             "required": ["sketch"],
             "examples": [{"cmd": "sketch.auto_constrain", "sketch": "F1"},
                          {"cmd": "sketch.auto_constrain", "sketch": "F1", "entities": ["c3", "c4"], "dimensions": false, "length_tolerance": 0.05}]
+        }),
+        "sketch.break" => json!({
+            "description": "Break (crossings) or Split at Point (point): splits a curve into pieces that all stay, sharing their ends; a line's pieces collinear, an arc's equal; constraints and dimensions go to the piece they belong to. Result: made (the pieces, the curve first), notes.",
+            "properties": {
+                "sketch": sketch(),
+                "curve": id("The curve (c<n>)"),
+                "at": {"type": ["array", "string"], "description": "The pick [x, y]; with mode point also an existing point id (p<n>) that becomes the shared end"},
+                "mode": {"type": "string", "enum": ["crossings", "point"], "description": "crossings (default): at the crossings around the pick; point: at the curve point nearest the pick"}
+            },
+            "required": ["sketch", "curve", "at"],
+            "examples": [{"cmd": "sketch.break", "sketch": "F1", "curve": "c3", "at": [5, 0]},
+                         {"cmd": "sketch.break", "sketch": "F1", "curve": "c3", "at": [2, 0], "mode": "point"}]
+        }),
+        "sketch.blend_curve" => json!({
+            "description": "Blend Curve: a spline from the end of curve1 nearest at1 to the end of curve2 nearest at2 (both on one open curve allowed), its ends the curves' end points, with a tangent (degree 3) or smooth, curvature-continuous (degree 5) constraint at each end that keeps it attached. Lines, arcs, elliptical arcs and open splines; refused for closed curves, one end picked twice and ends that already meet. Result: made (the spline), constraints.",
+            "properties": {
+                "sketch": sketch(),
+                "curve1": id("The first curve (c<n>)"),
+                "at1": position("Near the end of curve1 to join"),
+                "curve2": id("The second curve (c<n>), or curve1 again"),
+                "at2": position("Near the end of curve2 to join"),
+                "continuity": choice(&["tangent", "curvature"], "tangent (G1, the default) or curvature (G2)")
+            },
+            "required": ["sketch", "curve1", "at1", "curve2", "at2"],
+            "examples": [{"cmd": "sketch.blend_curve", "sketch": "F1", "curve1": "c3", "at1": [9, 0], "curve2": "c4", "at2": [20, 11], "continuity": "curvature"}]
+        }),
+        // Sketch blocks (mitcad#2110).
+        "sketch.insert_block" => json!({
+            "description": "Insert Block: an instance of one of the design's sketch blocks, a rigid copy that follows every edit of the block, placed and turned by constraints and dimensions on its points and curves (its base point, its direction line). Result: the editing commands' fields, block, name, instance (k<n>).",
+            "properties": {
+                "sketch": sketch(),
+                "block": id("The block, by its name or its number"),
+                "at": point_once("Where its base point goes; the origin when left out"),
+                "angle": number("Its turn from the sketch's x axis, radians (0 when left out)")
+            },
+            "required": ["sketch", "block"],
+            "examples": [{"cmd": "sketch.insert_block", "sketch": "F1", "block": "Slot", "at": [60, 0], "angle": 0.5}]
+        }),
+        "sketch.explode_block" => json!({
+            "description": "Explode Block: an instance of a sketch block becomes plain sketch geometry with its block's constraints and dimensions; it no longer follows the block.",
+            "properties": {
+                "sketch": sketch(),
+                "instance": {"type": "string", "pattern": "^k[0-9]+$", "description": "The instance (k<n>, the sketch query's blocks)"}
+            },
+            "required": ["sketch", "instance"],
+            "examples": [{"cmd": "sketch.explode_block", "sketch": "F1", "instance": "k7"}]
         }),
         _ => return None,
     };

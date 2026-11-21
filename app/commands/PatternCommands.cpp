@@ -3,6 +3,7 @@
 // "Patterns", "mirror"): of bodies, of features (picked in the timeline or
 // through a face they made) or of faces of one body. A pattern's instances
 // can be suppressed one by one (P9).
+#include <algorithm>
 #include <cmath>
 
 #include <QJsonArray>
@@ -520,12 +521,23 @@ CommandDef circularPatternCommand(const CommandContext& context) {
 // ---------------------------------------------------------------------------
 // Pattern on Path
 
+namespace {
+
+// The path holds edges of a body (mitcad#2105): Tangent Chain applies.
+bool pathHasEdges(const CommandState& state) {
+  const Selection& items = state.items(QStringLiteral("path"));
+  return std::any_of(items.begin(), items.end(),
+                     [](const SelectionItem& item) { return item.kind == SelectKind::Edge; });
+}
+
+} // namespace
+
 CommandDef pathPatternCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("solid.path_pattern");
   def.name = QObject::tr("Pattern on Path");
   def.icon = QStringLiteral("path-pattern");
-  def.tooltip = QObject::tr("Copies along a sketch line, arc or circle, or a chain of lines and arcs");
+  def.tooltip = QObject::tr("Copies along sketch curves, a chain of lines and arcs, or edges of a body");
   def.keywords = {QStringLiteral("array"), QStringLiteral("path pattern"), QStringLiteral("curve")};
   def.featureType = QStringLiteral("path_pattern");
   def.inputs = patternObjects();
@@ -538,11 +550,17 @@ CommandDef pathPatternCommand(const CommandContext& context) {
       // timeline.
       // Or curves of a 3D sketch, or its route whole from the Browser or
       // the timeline (mitcad#1550).
+      // Or edges of one body, joined end to end; with Tangent Chain one
+      // edge brings the edges that continue it smoothly (mitcad#2105).
       selectionInput(QStringLiteral("path"), QObject::tr("Path"),
-                     SelectKind::SketchCurve | SelectKind::Feature | SelectKind::Sketch, 1, 0)
-          .withTooltip(QObject::tr("A sketch line, arc or circle, a chain of them, an intersection curve, or 3D "
-                                   "sketch curves"))
+                     SelectKind::SketchCurve | SelectKind::Feature | SelectKind::Sketch | SelectKind::Edge, 1, 0)
+          .withTooltip(QObject::tr("A sketch curve or a chain of them, an intersection curve, 3D sketch curves, or "
+                                   "edges of a body"))
+          .withHoverChain(SelectKind::Edge, QStringLiteral("tangent_chain"))
           .withAccepts([&context](const SelectionItem& item) {
+            if (item.kind == SelectKind::Edge) {
+              return true;
+            }
             // A planar sketch gives lines, arcs and circles; a 3D sketch
             // any curve that is a path piece.
             if (item.kind == SelectKind::SketchCurve && !isLine(item) && !isCircular(item)) {
@@ -577,6 +595,10 @@ CommandDef pathPatternCommand(const CommandContext& context) {
       // Flip stays while symmetric (mitcad#545): the definition keeps it, and
       // it puts an even quantity's extra copy at the other side.
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withTooltip(QObject::tr("Copies the other way along the path")),
+      // As Fillet's (mitcad#2105): shown while the path holds edges.
+      checkInput(QStringLiteral("tangent_chain"), QObject::tr("Tangent Chain"), true)
+          .withTooltip(QObject::tr("Also take the edges that continue the selected ones smoothly"))
+          .withVisible(pathHasEdges),
       suppressedInput(),
   };
   def.enabled = [&context] { return hasBodies(context); };
@@ -594,7 +616,8 @@ CommandDef pathPatternCommand(const CommandContext& context) {
     const bool spatial = !spatialOwner(curves, context).isEmpty() ||
                          (curves.size() == 1 && wholeSketchPick(curves.first()));
     const QJsonValue path = spatial ? pathOf(curves, false, result, id, context, keptPathReversed(state, id))
-                            : curves.size() > 1 || curves.first().kind == SelectKind::Feature
+                            : curves.size() > 1 || curves.first().kind == SelectKind::Feature ||
+                                      curves.first().kind == SelectKind::Edge
                                 ? pathOf(curves, false, result, id)
                                 : curves.first().reference();
     if (!result.error.isEmpty()) {
@@ -615,6 +638,9 @@ CommandDef pathPatternCommand(const CommandContext& context) {
     if (state.choice(QStringLiteral("orientation")) == QStringLiteral("path")) {
       result.def.insert(QStringLiteral("along_path"), true);
     }
+    if (pathHasEdges(state) && !state.checked(QStringLiteral("tangent_chain"))) {
+      result.def.insert(QStringLiteral("tangent_chain"), false);
+    }
     setDirectionType(result.def, state.choice(QStringLiteral("direction_type")));
     addCompute(result.def, state);
     addSuppressed(result.def, state);
@@ -625,7 +651,8 @@ CommandDef pathPatternCommand(const CommandContext& context) {
     loadObjects(feature, state, context);
     loadSuppressed(feature, state);
     const QJsonValue path = feature.value(QStringLiteral("path"));
-    if (path.toObject().contains(QStringLiteral("curves")) || path.toObject().contains(QStringLiteral("feature"))) {
+    if (path.toObject().contains(QStringLiteral("curves")) || path.toObject().contains(QStringLiteral("feature")) ||
+        path.toObject().contains(QStringLiteral("edges"))) {
       state.setItems(QStringLiteral("path"), pathItems(path, context).value_or(Selection{}));
     } else {
       state.setItems(QStringLiteral("path"), {itemOf(path, context)});
@@ -639,16 +666,18 @@ CommandDef pathPatternCommand(const CommandContext& context) {
     loadValue(state, QStringLiteral("distance"), feature.value(QStringLiteral("distance")), feature, context);
     state.setText(QStringLiteral("start"), number(feature.value(QStringLiteral("start")).toDouble()));
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
+    state.setChecked(QStringLiteral("tangent_chain"), feature.value(QStringLiteral("tangent_chain")).toBool(true));
     state.setChoice(QStringLiteral("orientation"), feature.value(QStringLiteral("along_path")).toBool()
                                                        ? QStringLiteral("path")
                                                        : QStringLiteral("identical"));
   };
 
   // A fixed line as the path has no input; a 3D sketch's path is its
-  // curves (mitcad#1550).
+  // curves (mitcad#1550); a body's path its edges (mitcad#2105).
   def.canEdit = [](const QJsonObject& feature) {
     const QJsonObject path = feature.value(QStringLiteral("path")).toObject();
-    return path.contains(QStringLiteral("sketch")) || path.contains(QStringLiteral("spatial_sketch"));
+    return path.contains(QStringLiteral("sketch")) || path.contains(QStringLiteral("spatial_sketch")) ||
+           path.contains(QStringLiteral("edges"));
   };
 
   def.describe = [build = def.build](const CommandState& state, const CommandContext& model) {

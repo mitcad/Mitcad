@@ -93,6 +93,11 @@ install_compiler_caches() {
     rm -rf "$WORK/ccache-extract" "$archive"
   fi
   ccache --version | sed -n '1p'
+  # Room for OCCT's objects from vcpkg's port builds beside MitCad's own;
+  # a limit the user set already is kept.
+  if ccache --show-config | grep -q '^(default) max_size '; then
+    ccache --set-config "max_size=$CCACHE_MAX_SIZE"
+  fi
 
   echo "== sccache $SCCACHE_MACOS_VERSION"
   if [ "$("$HOME/.local/bin/sccache" --version 2> /dev/null || true)" != "sccache $SCCACHE_MACOS_VERSION" ]; then

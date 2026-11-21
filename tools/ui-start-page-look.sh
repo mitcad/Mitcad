@@ -20,6 +20,8 @@
 #                                        the cards (or docks) back
 #   <dir>/start-page-<layout>-<theme>-project.png  the project browser
 #                                        (mitcad#1301): Shop's folder parts
+#   <dir>/start-page-<layout>-<theme>-tree.png     Tree (mitcad#2093): Shop's
+#                                        folders as a tree, parts chosen
 #   <dir>/start-page-<layout>-<theme>-search.png   the search "pla": Shop's
 #                                        plate and the recent plate, each
 #                                        with its folder
@@ -183,6 +185,13 @@ picture() {
   ui_step "its folder parts"               ui_click_logged "Start page folder Shop/parts/"
   ui_expect_new "Start page cards: Shop/parts/" "parts shown"
   shot "$name-project"
+  ui_mark
+  ui_step "Tree"                           ui_click_logged "Start page browse Tree"
+  ui_expect_new "Start page tree: Shop " "the tree"
+  shot "$name-tree"
+  ui_mark
+  ui_step "Cards again"                    ui_click_logged "Start page browse Cards"
+  ui_expect_new "Start page browse view: cards" "the cards again"
   ui_mark
   ui_step "the search"                     ui_click_logged "Start page search"
   xdotool type --delay 20 -- "pla"

@@ -126,7 +126,31 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   m_status->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
   connect(m_status, &QLabel::linkActivated, this, [this](const QString&) { selectConflicts(); });
   layout->addWidget(m_title);
-  layout->addWidget(m_status);
+  // Show Unconstrained at the status's right (mitcad#2026, GitHub
+  // mitcad/Mitcad#413): the curves and points that are not fully
+  // constrained selected, as the command of the same name does. On the
+  // status's row, so that the palette grows no taller.
+  if (chromeStyle() == ChromeStyle::Floating) {
+    m_showUnconstrained = new CapsuleButton(tr("Show Unconstrained"));
+  } else {
+    m_showUnconstrained = new QPushButton(tr("Show Unconstrained"));
+    m_showUnconstrained->setFocusPolicy(Qt::NoFocus);
+  }
+  m_showUnconstrained->setObjectName(QStringLiteral("paletteShowUnconstrained"));
+  m_showUnconstrained->setToolTip(tr("Selects the curves and points that are not fully constrained"));
+  {
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    row->addWidget(m_status, 1);
+    row->addWidget(m_showUnconstrained, 0, Qt::AlignTop);
+    layout->addLayout(row);
+  }
+  connect(m_showUnconstrained, &QAbstractButton::clicked, this, [this] {
+    if (QAction* action = m_registry.action(QStringLiteral("sketch.show_unconstrained"))) {
+      qDebug().noquote() << QStringLiteral("Palette: Show Unconstrained");
+      action->trigger();
+    }
+  });
   m_solve = new QLabel;
   m_solve->setObjectName(QStringLiteral("paletteSolveNotices"));
   m_solve->setWordWrap(true);
@@ -225,8 +249,32 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
                          tr("Selected curves become construction geometry, as X does; else new geometry does"));
   m_signed = check(tr("Signed distances"), QStringLiteral("paletteSignedDistances"),
                    tr("Sketch Dimension makes horizontal and vertical distances signed"));
-  m_grid = check(tr("Snap to grid"), QStringLiteral("paletteGrid"),
+  m_grid = check(tr("Grid"), QStringLiteral("paletteGrid"),
                  tr("Points that snap to nothing else snap to a grid that follows the zoom"));
+  // Lines acquired by resting the pointer on them (mitcad#2035).
+  m_extensions = check(tr("Line extensions"), QStringLiteral("paletteExtensions"),
+                       tr("Rest the pointer on a line to snap onto its extension and to where two such "
+                          "extensions meet"));
+  // The snaps on one row after "Snap to" (mitcad#2035): the settings take
+  // no taller a section for Line extensions, so that the Create buttons
+  // below stay in sight in a 1024x768 window (as Look At's row,
+  // mitcad#1705). Each box keeps its whole name for screen readers.
+  m_grid->setAccessibleName(tr("Snap to grid"));
+  m_extensions->setAccessibleName(tr("Snap to line extensions"));
+  {
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    auto* label = new QLabel(tr("Snap to"));
+    label->setObjectName(QStringLiteral("paletteSnapLabel"));
+    m_snapLabel = label;
+    optionLayout->removeWidget(m_grid);
+    optionLayout->removeWidget(m_extensions);
+    row->addWidget(label);
+    row->addWidget(m_grid);
+    row->addWidget(m_extensions);
+    row->addStretch(1);
+    optionLayout->addLayout(row);
+  }
   m_dimensions = check(tr("Show dimensions"), QStringLiteral("paletteDimensions"), QString());
   // What dimensions show (mitcad#231).
   {
@@ -309,6 +357,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   });
   connect(m_signed, &QCheckBox::toggled, &m_c, &SketchController::setSignedDistances);
   connect(m_grid, &QCheckBox::toggled, &m_c, &SketchController::setGridSnap);
+  connect(m_extensions, &QCheckBox::toggled, &m_c, &SketchController::setExtensionSnap);
   connect(m_dimensions, &QCheckBox::toggled, &m_c, &SketchController::setShowDimensions);
   connect(m_constraints, &QCheckBox::toggled, &m_c, &SketchController::setShowConstraints);
   connect(m_points, &QCheckBox::toggled, &m_c, &SketchController::setShowPoints);
@@ -690,6 +739,8 @@ void SketchPalette::refresh() {
     status = tr("%n degree(s) of freedom", nullptr, model.dof);
   }
   m_status->setText(status);
+  // Nothing to show once everything is fixed (mitcad#2026).
+  m_showUnconstrained->setEnabled(!model.fullyConstrained());
   // Redundant constraints a warning, unmet inactive ones information, as
   // the model's notices say (mitcad#1040).
   QStringList solve;
@@ -762,6 +813,7 @@ void SketchPalette::refresh() {
   refreshConstruction();
   set(m_signed, m_c.signedDistances());
   set(m_grid, m_c.gridSnap());
+  set(m_extensions, m_c.extensionSnap());
   set(m_dimensions, m_c.showDimensions());
   set(m_constraints, m_c.showConstraints());
   set(m_points, m_c.showPoints());
@@ -912,7 +964,8 @@ bool SketchPalette::eventFilter(QObject* watched, QEvent* event) {
 
 void SketchPalette::logLayout() const {
   for (const QCheckBox* box :
-       {m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial}) {
+       {m_construction, m_signed, m_grid, m_extensions, m_dimensions, m_constraints, m_points, m_profiles,
+        m_hideAbove, m_spatial}) {
     // The box's indicator: a click there toggles it whatever the width of
     // the label, which a click on the widget's middle may miss.
     QStyleOptionButton option;
@@ -928,6 +981,11 @@ void SketchPalette::logLayout() const {
     const QPoint center = GlassCard::mapToHost(finish, finish->rect().center());
     qDebug().noquote() << QStringLiteral("Palette Finish Sketch at %1,%2").arg(center.x()).arg(center.y());
   }
+  // Show Unconstrained, for UI tests that click it (mitcad#2026).
+  if (m_showUnconstrained != nullptr && m_showUnconstrained->isVisible()) {
+    const QPoint center = GlassCard::mapToHost(m_showUnconstrained, m_showUnconstrained->rect().center());
+    qDebug().noquote() << QStringLiteral("Palette Show Unconstrained at %1,%2").arg(center.x()).arg(center.y());
+  }
   // Look At, for UI tests that click it (mitcad#1060).
   if (m_lookAt != nullptr && m_lookAt->isVisible()) {
     const QPoint center = GlassCard::mapToHost(m_lookAt, m_lookAt->rect().center());
@@ -935,7 +993,8 @@ void SketchPalette::logLayout() const {
   }
   // Each option row's place and size against its size hint, and the
   // palette's against its own: a row laid out below its hint overlaps the
-  // next one (mitcad#470).
+  // next one (mitcad#470). Line extensions shares Snap to grid's row
+  // (mitcad#2035), so that row is logged once, by its grid box.
   for (const QWidget* row : std::initializer_list<const QWidget*>{
            m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial,
            m_dimensionText, m_finish}) {
@@ -1006,8 +1065,9 @@ void SketchPalette::logRows() const {
     }
   }
   for (const QWidget* row : std::initializer_list<const QWidget*>{
-           m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial,
-           m_dimensionLabel, m_dimensionText, m_lookAt, m_projectAgain, m_cleanUp, m_autoFirst, m_autoLast}) {
+           m_construction, m_signed, m_grid, m_extensions, m_dimensions, m_constraints, m_points, m_profiles,
+           m_hideAbove, m_spatial, m_snapLabel, m_dimensionLabel, m_dimensionText, m_lookAt, m_projectAgain,
+           m_cleanUp, m_autoFirst, m_autoLast, m_status, m_showUnconstrained}) {
     check(row, view);
   }
   for (const QCheckBox* box : std::as_const(m_autoChecks)) {

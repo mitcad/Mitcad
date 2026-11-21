@@ -39,6 +39,8 @@ mod library_rows;
 mod untrusted;
 // Libraries over HTTP without the git program (mitcad#1224).
 mod library_https;
+// In-app tutorials fetched as libraries are (mitcad#2012).
+mod tutorials_tests;
 
 /// A fresh folder in the temporary directory, removed afterwards.
 struct Scratch(PathBuf);

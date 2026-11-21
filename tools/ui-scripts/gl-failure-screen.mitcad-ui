@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+# A screen change while the design view's attach fails (mitcad#2125),
+# without Component from Web's window: gl-failure-screen-web.mitcad-ui for
+# a build without the web browser component. MITCAD_TEST_GL_FAILURE=
+# reconnect on first.mitcad (gl-failure.json); the TestDriver's
+# screen-change tells every shown window that its screen changed, and with
+# the switch set the design view's window counts that as Qt making the
+# view's surface again.
+#   1. The view attaches.
+#   2. A screen change: the view's attach fails; MitCad does not end, the
+#      message once.
+#   3. More screen changes, the second with the switch at `throw`: tried
+#      again, not told again.
+#   4. The switch cleared (unset-env): the view attaches and draws again.
+#   5. The design still saves; the harness checks the clean exit and that
+#      no crash report was written.
+# Run by tools/ui-gl-failure-test.sh (Linux) and
+# tools/ui-windows-gl-failure-test.ps1 (Windows).
+wait-idle 60
+
+# 1. The view attached.
+wait-log '^OpenGL renderer: ' 30
+expect-never '^3D view: no graphics: '
+
+# 2. The screen change: the view's attach fails.
+mark
+screen-change
+wait-log '^Screen change told to [1-9][0-9]* window\(s\)$' 10
+wait-log '^3D view: no graphics: the driver answers no GL version or vendor \(GL_VERSION null, GL_VENDOR null' 30
+wait-log '^Status error: The 3D view lost its connection to the graphics card\. Save your work and restart MitCad\.$' 30
+expect-never '^OCCT view event failed'
+
+# 3. More screen changes: tried again, not told again.
+mark
+screen-change
+command view.fit
+wait-idle
+sleep 300
+set-env MITCAD_TEST_GL_FAILURE throw
+screen-change
+command view.fit
+wait-idle
+sleep 300
+expect-no-log '^3D view: no graphics: '
+expect-no-log '^Status error: The 3D view lost'
+expect-no-log '^3D view: attached to the graphics card again$'
+expect-never '^Qt has caught an exception'
+
+# 4. The switch cleared: attached and drawn again.
+unset-env MITCAD_TEST_GL_FAILURE
+mark
+command view.fit
+wait-log '^3D view: attached to the graphics card again$' 30
+wait-log '^3D view: drawn again after a graphics failure$' 30
+screen-change
+wait-idle
+expect-no-log '^Status error: The 3D view lost'
+expect-no-log '^3D view: no graphics: '
+
+# 5. The design saves.
+model-command '{"cmd":"add_parameter","name":"afterFailure","unit":"mm","expression":"5 mm"}'
+command file.save
+wait-log '^Saved .*first[.]mitcad$' 30
+expect-never 'TestDriver: FAIL|^OCCT view event failed|^Qt has caught an exception'
+quit

@@ -24,6 +24,13 @@
 //! wrong in words; their places are the walls of the edges that meet there
 //! (as the input sheet has them) and the corner, painted on hover
 //! (`docs/ui-conventions.md`, "What a message says").
+//!
+//! Two edge ends that face each other across a corner gap the sheet
+//! records ([`crate::sheet::SheetGap`]: a rip of Convert to Sheet Metal,
+//! or the gap between two walls of an earlier flange on several edges) are
+//! one corner too (mitcad#2098), its point where the two edges' lines come
+//! closest; the walls are mitred there exactly as at a touching corner.
+//! Each flange on several edges records the gap at each of its corners.
 
 use std::f64::consts::{PI, TAU};
 
@@ -131,6 +138,8 @@ struct EdgeGeometry {
     wall_origin: V3,
     /// The wall's normal from its back surface to its front (`x × y`).
     wall_normal: V3,
+    /// Along the wall away from its root (its chart's `x`).
+    wall_x: V3,
     thickness: f64,
 }
 
@@ -152,6 +161,7 @@ impl EdgeGeometry {
             width: frame.width,
             wall_origin: front_frame.origin,
             wall_normal: cross(front_frame.x_axis, front_frame.y_axis),
+            wall_x: front_frame.x_axis,
             thickness: metrics.thickness,
         })
     }
@@ -188,6 +198,29 @@ impl EdgeGeometry {
 struct Corner {
     edges: [usize; 2],
     ends: [End; 2],
+    /// Whether the ends face each other across a recorded corner gap
+    /// (mitcad#2098) rather than touch.
+    gap: bool,
+}
+
+/// An edge of a flange as [`corners`] reads it: its panel, its two ends
+/// and its direction.
+#[derive(Debug, Clone, Copy)]
+struct EdgeEnds {
+    panel: PanelId,
+    points: [V3; 2],
+    e: V3,
+}
+
+impl EdgeEnds {
+    fn of(state: &SheetState, edge: &BoundaryRef) -> Result<Self, String> {
+        let frame = port_frame(state, edge)?;
+        Ok(Self {
+            panel: edge.panel,
+            points: [frame.origin, add(frame.origin, scale(frame.e, frame.width))],
+            e: frame.e,
+        })
+    }
 }
 
 /// Where a point lies on a bend's tangent line: its axial coordinate and
@@ -232,6 +265,45 @@ fn meet(state: &SheetState, thickness: f64, p: V3, q: V3) -> bool {
     })
 }
 
+/// Whether the end `p` of an edge on panel `a` and the end `q` of an edge
+/// on panel `b` face each other across a corner gap the sheet records
+/// (mitcad#2098): the two panels are the gap's, and both ends lie at the
+/// same place of the gap's corner line, each no further from it than the
+/// gap and the sheet's thickness twice over (an end on a panel cut at the
+/// gap lies on its cut, on either surface). The gap itself is never
+/// guessed from the ends' distance.
+fn across_gap(
+    state: &SheetState,
+    thickness: f64,
+    (a, p): (PanelId, V3),
+    (b, q): (PanelId, V3),
+) -> bool {
+    a != b
+        && state.gaps.iter().any(|gap| {
+            if gap.panels != [a, b] && gap.panels != [b, a] {
+                return false;
+            }
+            let [start, end] = gap.line;
+            let along = sub(end, start);
+            let length = norm(along);
+            if length <= MEET {
+                return false;
+            }
+            let u = scale(along, 1.0 / length);
+            let bound = gap.width.max(0.0) + 2.0 * thickness + MEET;
+            let at = |x: V3| {
+                let d = sub(x, start);
+                let v = dot(d, u);
+                let off = norm(sub(d, scale(u, v)));
+                (v >= -bound && v <= length + bound && off <= bound).then_some(v)
+            };
+            match (at(p), at(q)) {
+                (Some(v), Some(w)) => (v - w).abs() <= bound,
+                _ => false,
+            }
+        })
+}
+
 /// The middle of the shortest segment between two lines, or none when
 /// they are parallel.
 fn closest(p: V3, d: V3, q: V3, f: V3) -> Option<V3> {
@@ -248,18 +320,24 @@ fn closest(p: V3, d: V3, q: V3, f: V3) -> Option<V3> {
 }
 
 /// The corners of the flange's edges, each given by its two ends (by the
-/// edge's start and end, [`End`]): each pair of ends that meet. Each end
+/// edge's start and end, [`End`]): each pair of ends that meet, or that
+/// face each other across a recorded corner gap (mitcad#2098). Each end
 /// meets at most one other, and the edges make one chain or loop.
-fn corners(state: &SheetState, thickness: f64, ends: &[[V3; 2]]) -> Result<Vec<Corner>, String> {
+fn corners(state: &SheetState, thickness: f64, ends: &[EdgeEnds]) -> Result<Vec<Corner>, String> {
     let mut found = Vec::new();
     for i in 0..ends.len() {
         for j in i + 1..ends.len() {
             for a in [End::Start, End::End] {
                 for b in [End::Start, End::End] {
-                    if meet(state, thickness, ends[i][a.index()], ends[j][b.index()]) {
+                    let (p, q) = (ends[i].points[a.index()], ends[j].points[b.index()]);
+                    let touching = meet(state, thickness, p, q);
+                    if touching
+                        || across_gap(state, thickness, (ends[i].panel, p), (ends[j].panel, q))
+                    {
                         found.push(Corner {
                             edges: [i, j],
                             ends: [a, b],
+                            gap: !touching,
                         });
                     }
                 }
@@ -306,11 +384,26 @@ fn corners(state: &SheetState, thickness: f64, ends: &[[V3; 2]]) -> Result<Vec<C
     Ok(found)
 }
 
+/// Where the corner `c` of the edges `ends` is: the middle of their two
+/// ends (on the front surface, as the sheet has them); across a corner gap
+/// (mitcad#2098) where the two edges' lines come closest, the gap's corner.
+fn corner_point(ends: &[EdgeEnds], c: &Corner) -> V3 {
+    let [i, j] = c.edges;
+    let (p, q) = (
+        ends[i].points[c.ends[0].index()],
+        ends[j].points[c.ends[1].index()],
+    );
+    let middle = scale(add(p, q), 0.5);
+    if !c.gap {
+        return middle;
+    }
+    closest(p, ends[i].e, q, ends[j].e).unwrap_or(middle)
+}
+
 /// The corners a flange on `edges` of the sheet `state` would have (the
 /// `sheet_flange_corners` query, mitcad#1877: the Flange panel's Corners
 /// map a picked corner to its two edges): each pair of edges that meet, by
-/// their indices in `edges`, and where (the middle of their two ends on the
-/// front surface, as the sheet has them).
+/// their indices in `edges`, and where ([`corner_point`]).
 pub(crate) fn edge_corners(
     state: &SheetState,
     thickness: f64,
@@ -318,21 +411,11 @@ pub(crate) fn edge_corners(
 ) -> Result<Vec<([usize; 2], V3)>, String> {
     let ends = edges
         .iter()
-        .map(|edge| {
-            let frame = port_frame(state, edge)?;
-            Ok([frame.origin, add(frame.origin, scale(frame.e, frame.width))])
-        })
+        .map(|edge| EdgeEnds::of(state, edge))
         .collect::<Result<Vec<_>, String>>()?;
     Ok(corners(state, thickness, &ends)?
         .into_iter()
-        .map(|c| {
-            let [i, j] = c.edges;
-            let at = scale(
-                add(ends[i][c.ends[0].index()], ends[j][c.ends[1].index()]),
-                0.5,
-            );
-            (c.edges, at)
-        })
+        .map(|c| (c.edges, corner_point(&ends, &c)))
         .collect())
 }
 
@@ -370,12 +453,65 @@ fn short_of(other: &EdgeGeometry, along: V3, gap: f64) -> Option<Keep> {
     })
 }
 
+/// The point of a corner's bisecting plane: where the two walls' root
+/// lines come closest, or across from `vertex` on them when they are
+/// parallel.
+fn mitre_point(gi: &EdgeGeometry, gj: &EdgeGeometry, vertex: V3) -> V3 {
+    closest(gi.root(), gi.e, gj.root(), gj.e).unwrap_or_else(|| {
+        let on = |g: &EdgeGeometry| add(g.root(), scale(g.e, dot(sub(vertex, g.root()), g.e)));
+        scale(add(on(gi), on(gj)), 0.5)
+    })
+}
+
+/// The corner gap a flange records between the walls of the edges
+/// `c.edges` (mitcad#2098): its line in the bisecting plane, along the
+/// walls from where their roots meet, as far as a wall reaches (`reach`).
+fn corner_gap(
+    uid: FeatureUid,
+    geometry: &[EdgeGeometry],
+    ends: &[EdgeEnds],
+    c: &Corner,
+    (gap, reach): (f64, f64),
+) -> Option<crate::sheet::SheetGap> {
+    let [i, j] = c.edges;
+    let (gi, gj) = (&geometry[i], &geometry[j]);
+    let difference = sub(gi.away(c.ends[0]), gj.away(c.ends[1]));
+    let length = norm(difference);
+    if length < 1e-9 {
+        return None;
+    }
+    let n = scale(difference, 1.0 / length);
+    let point = mitre_point(gi, gj, corner_point(ends, c));
+    // In the bisecting plane and in the wall's plane (where the two walls
+    // lie in one plane, the line between them).
+    let mut along = cross(n, gi.wall_normal);
+    let size = norm(along);
+    along = if size < 1e-9 {
+        gi.wall_x
+    } else {
+        scale(along, 1.0 / size)
+    };
+    if dot(along, gi.wall_x) < 0.0 {
+        along = scale(along, -1.0);
+    }
+    Some(crate::sheet::SheetGap {
+        panels: [i, j].map(|k| PanelId {
+            feature: uid,
+            slot: k as u32,
+        }),
+        line: [point, add(point, scale(along, reach))],
+        width: gap,
+    })
+}
+
 /// The keeps of each edge's two ends from the corners between the edges
 /// (`edges` the flange's edges, for the places of a refusal).
+#[allow(clippy::too_many_arguments)]
 fn corner_rules(
     d: &SheetFlangeDef<f64>,
     edges: &[&BoundaryRef],
     geometry: &[EdgeGeometry],
+    ends: &[EdgeEnds],
     corners: &[Corner],
     gap: f64,
     rules: &mut [[EndRule; 2]],
@@ -384,7 +520,8 @@ fn corner_rules(
         let [i, j] = c.edges;
         let (gi, gj) = (&geometry[i], &geometry[j]);
         let (ui, uj) = (gi.away(c.ends[0]), gj.away(c.ends[1]));
-        let vertex = scale(add(gi.point(c.ends[0]), gj.point(c.ends[1])), 0.5);
+        // The corner's place: across a gap, the gap's corner (mitcad#2098).
+        let vertex = corner_point(ends, c);
         // Where a refusal about this corner paints: both walls, the corner.
         let places = vec![
             edge_place(edges[i]),
@@ -401,10 +538,7 @@ fn corner_rules(
             ));
         }
         let n = scale(difference, 1.0 / length);
-        let point = closest(gi.root(), gi.e, gj.root(), gj.e).unwrap_or_else(|| {
-            let on = |g: &EdgeGeometry| add(g.root(), scale(g.e, dot(sub(vertex, g.root()), g.e)));
-            scale(add(on(gi), on(gj)), 0.5)
-        });
+        let point = mitre_point(gi, gj, vertex);
         let [keep_i, keep_j] = Keep::flipped(n, point, gap);
         let flat = coplanar(gi, gj);
         let (ri, rj) = (c.ends[0].index(), c.ends[1].index());
@@ -490,6 +624,7 @@ fn flat_wall(
         // The front surface, the back a thickness along `-normal`.
         wall_origin: frame.origin,
         wall_normal: scale(normal, -parity.sign()),
+        wall_x: frame.y_axis,
         thickness,
     };
     Some((geometry, patch))
@@ -1062,9 +1197,14 @@ fn mitred<K: Kernel>(
         .iter()
         .map(|edge| EdgeGeometry::new(&state, edge, tangent, &metrics))
         .collect::<Result<Vec<_>, String>>()?;
-    let ends_of: Vec<[V3; 2]> = geometry
+    let ends_of: Vec<EdgeEnds> = geometry
         .iter()
-        .map(|g| [g.point(End::Start), g.point(End::End)])
+        .zip(&edges)
+        .map(|(g, edge)| EdgeEnds {
+            panel: edge.panel,
+            points: [g.point(End::Start), g.point(End::End)],
+            e: g.e,
+        })
         .collect();
     let found = corners(&state, thickness, &ends_of)?;
     for c in &d.corner_miters {
@@ -1090,7 +1230,7 @@ fn mitred<K: Kernel>(
             })
         })
         .collect();
-    corner_rules(d, &edges, &geometry, &found, gap, &mut ends)?;
+    corner_rules(d, &edges, &geometry, &ends_of, &found, gap, &mut ends)?;
     // A free end that meets an existing flange of the sheet across a bend
     // (mitcad#1877).
     let is_flange = |uid: FeatureUid| {
@@ -1130,6 +1270,15 @@ fn mitred<K: Kernel>(
             ctx, &mut state, edge, k, &metrics, tangent, length, gap, &ends[k],
         )?;
     }
+    // The gap at each corner between the new walls (mitcad#2098), for a
+    // later flange on their edges.
+    let reach = length + metrics.radius + 2.0 * thickness + gap;
+    let uid = ctx.uid;
+    state.gaps.extend(
+        found
+            .iter()
+            .filter_map(|c| corner_gap(uid, &geometry, &ends_of, c, (gap, reach))),
+    );
     // Walls that still meet: the refusal paints them, as the input sheet
     // has them, and their corner (mitcad#1877).
     let uid = ctx.uid;
@@ -1172,3 +1321,7 @@ fn mitred<K: Kernel>(
         }
     })
 }
+
+#[cfg(test)]
+#[path = "flange_edges_tests.rs"]
+mod tests;

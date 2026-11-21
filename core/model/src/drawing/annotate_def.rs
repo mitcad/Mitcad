@@ -69,10 +69,16 @@ pub enum AnnotationType {
     /// two of them meet (a corner rounded or chamfered away), or one by a
     /// length (mitcad#729).
     EdgeExtension,
+    /// A leader note on a hole (mitcad#2054): its count, size, depth or
+    /// thread and its counterbore or countersink as the model's hole
+    /// callout writes them, worked out whenever the sheet is drawn, with
+    /// the drawing's own texts before, after or in place of them
+    /// (`format`).
+    HoleCallout,
 }
 
 impl AnnotationType {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Linear,
         Self::Angle,
         Self::Radius,
@@ -89,6 +95,7 @@ impl AnnotationType {
         Self::Balloon,
         Self::CenterPattern,
         Self::EdgeExtension,
+        Self::HoleCallout,
     ];
 
     /// Its name in commands and files.
@@ -110,6 +117,7 @@ impl AnnotationType {
             Self::Balloon => "balloon",
             Self::CenterPattern => "center_pattern",
             Self::EdgeExtension => "edge_extension",
+            Self::HoleCallout => "hole_callout",
         }
     }
 
@@ -159,7 +167,7 @@ impl AnnotationType {
             Self::Angle => Want::Straight,
             Self::EdgeExtension => Want::Line,
             Self::Radius | Self::Diameter => Want::Round,
-            Self::CenterMark | Self::CenterPattern => Want::Circle,
+            Self::CenterMark | Self::CenterPattern | Self::HoleCallout => Want::Circle,
             Self::Datum => Want::Datum,
             _ => Want::Any,
         }
@@ -178,6 +186,7 @@ impl AnnotationType {
                 | Self::HoleTable
                 | Self::PartsList
                 | Self::Balloon
+                | Self::HoleCallout
         )
     }
 }
@@ -723,6 +732,20 @@ impl ViewAnnotation {
             crate::document::check_format(&self.format)?;
             if let Some(tolerance) = &self.tolerance {
                 crate::document::check_tolerance(tolerance, kind.measure_kind())?;
+            }
+        } else if kind == AnnotationType::HoleCallout {
+            // Its own texts before, after and in place of the hole's lines
+            // (mitcad#2054); the hole's sizes are written as the model's
+            // callout writes them.
+            if self.format.decimals.is_some()
+                || self.format.prefix.is_some()
+                || self.tolerance.is_some()
+            {
+                return Err(
+                    "a hole callout takes texts before, after or in place of its lines: no \
+                     decimals, prefix or tolerance"
+                        .to_owned(),
+                );
             }
         } else if !self.format.is_default() || self.tolerance.is_some() {
             return Err(format!("a {name} has no value's format or tolerance"));

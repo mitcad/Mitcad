@@ -9,7 +9,9 @@ def scenario(frontend="qt"):
     picker = ["command insert.open_design", "focus-dialog '^Insert from an Open Design$'",
               "expect-widget-property openDesignChoice count 1",
               choose + " openDesignChoice second.mitcad", "button '^Insert$'"]
-    copy = ["focus-dialog '^Insert second[.]mitcad linked,'", "button '^Copy$'", "focus-main"]
+    # Insert Component's Linked (Whole design / Choose parts...) or Copy
+    # dialog (mitcad#2130): Copy chosen, then OK.
+    copy = ["focus-dialog '^Insert Component$'", "button '^Copy$'", "button '^OK$'", "focus-main"]
     save_question = "focus-dialog '^Save second[.]mitcad before inserting it[?]$'"
     return "\n".join([
         "wait-idle", "capture-document-window first", "expect-model-bodies 1 6000",

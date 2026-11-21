@@ -2,6 +2,7 @@
 # check-all sources: app/sketch/SketchItemList.cpp app/sketch/SketchItemList.hpp
 # check-all sources: app/sketch/SketchController.cpp app/sketch/SketchController.hpp app/sketch/SketchReveal.cpp
 # check-all sources: app/sketch/SketchModel.cpp app/sketch/DrawTools.cpp app/MainWindow.cpp
+# check-all sources: app/commands/EqualSpacingCommands.cpp
 # check-all sources: app/framework/TestDriver.cpp tools/cli
 # check-all sources: core/sketch/src/order.rs core/sketch/src/steps.rs core/model-api/src/sketch.rs
 # check-all sources: core/model-api/src/dispatch.rs core/model/src/document.rs
@@ -18,7 +19,11 @@
 # icon in its own colors; the dimension's value editor from its cell; a
 # refused Parallel's error badge on the Rectangle cell; the Rectangle's
 # items selected from its cell and deleted with it; a sketch saved without
-# steps shown one cell per item, its inactive Horizontal's cell dimmed; and
+# steps shown one cell per item, its inactive Horizontal's cell dimmed; a
+# rectangular pattern's step opening Edit Pattern on a double-click and
+# Edit Pattern and Free Pattern on a right-click (mitcad#2089); an Equal
+# Spacing step opening Edit Equal Spacing on a double-click and offering it
+# on a right-click (mitcad#2099); and
 # the timeline back after Finish Sketch, in the Docked layout and in the
 # Floating one, where the hover list is over the message band's card
 # (mitcad#1763). In both the icons are in the bar's middle (mitcad#1760);
@@ -89,7 +94,7 @@ function Run-App([string]$Layout, [string]$Script) {
   $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot "ui-scripts/$Script"
   Ui-StartApp "sketch-item-list-$Layout" @('--ui=qt', '--no-mcp', "--chrome=$Layout", '--open', $design)
   $null = $script:UiProcess.Handle
-  if (-not $script:UiProcess.WaitForExit(240000)) { Ui-Fail "sketch step list driver timed out ($Layout)" }
+  if (-not $script:UiProcess.WaitForExit(300000)) { Ui-Fail "sketch step list driver timed out ($Layout)" }
   $exitCode = $script:UiProcess.ExitCode
   if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
     Ui-Fail "sketch step list driver failed ($Layout, exit code $exitCode)"
@@ -114,6 +119,13 @@ foreach ($layout in @('docked', 'floating')) {
   Ui-ExpectLog ' [error]' "${layout}: the conflict badge on its step"
   Ui-ExpectLog 'Sketch steps: p1 point, p2 point, c3 line, k4 horizontal inactive' "${layout}: a sketch without steps: one cell per item"
   Ui-ExpectLog 'Sketch step k4 drawn: dimmed, icon disabled' "${layout}: an inactive item's cell dimmed"
+  Ui-ExpectLog 'double-clicked: pattern' "${layout}: a pattern's step opens Edit Pattern"
+  Ui-ExpectLog 'menu: Edit Pattern | Free Pattern' "${layout}: a pattern's step's menu"
+  Ui-ExpectLog 'Freed pattern k' "${layout}: Free Pattern from the step's menu"
+  Ui-ExpectLog 'double-clicked: equal spacing' "${layout}: an Equal Spacing step opens Edit Equal Spacing"
+  Ui-ExpectLog 'Edited equal spacing k' "${layout}: the spacing edited from its step"
+  Ui-ExpectLog 'menu: Edit Equal Spacing' "${layout}: an Equal Spacing step's menu"
+  Ui-ExpectLog 'double-clicked: nothing' "${layout}: the original's step opens nothing"
   Ui-ExpectLog 'Timeline back in its place' "${layout}: the timeline back after the sketch"
   Ui-ExpectLog 'TestDriver: done' "${layout}: the steps listed, hovered, selected, deleted and edited"
   Check-Bar $layout ($limit[$layout])

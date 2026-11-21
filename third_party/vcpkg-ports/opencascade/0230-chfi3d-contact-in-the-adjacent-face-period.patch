@@ -16,10 +16,12 @@ the face bounds that fit wholly inside after a whole-period shift. Closed
 contacts crossing a seam retain the existing split-at-vertex handling.
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow), test_chamfer_as_wide_as_a_lug_in_a_bore:
-its variants with the bore's seam turned, the result valid. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+geometry.suite.chamfer_overflow), test_chamfer_of_a_flange_under_teeth:
+a flange's top circle chamfered past the strip between the circle and the
+teeth, its contact running on into the teeth's faces and round the root
+roundings' cylinders; without the patch the result is invalid. It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py). (The lug
+in a bore with its seam turned, named before, succeeds without the patch.)
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

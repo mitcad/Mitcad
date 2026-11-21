@@ -1768,3 +1768,97 @@ fn a_sweep_built_in_pieces_where_it_passes_through_itself_says_so() {
         ]
     );
 }
+
+/// A rib's and a web's Draft Angle (mitcad#2102): an angle or an
+/// expression reaches the kernel in radians and is saved as the feature's
+/// parameter; a rib or web saved without it loads unchanged and sends none,
+/// and so does one at 0; one past a right angle is refused.
+#[test]
+fn rib_and_web_draft_angle_reaches_the_kernel() {
+    let (mut b, _) = with_path();
+    // Saved without it, as ribs made before it: no draft, nothing written.
+    let old = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "depth", "depth": 6}}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, old), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        "rib F5 chains c1 thickness 4 Symmetric depth Some(6.0) flip false bodies 1"
+    );
+    assert!(saved_def(&b.doc, old).get("draft_angle").is_none());
+
+    // 2 degrees: in radians to the kernel, a parameter of the rib.
+    let rib = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "to_next"}, "draft_angle": "1 deg * 2"}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, rib), FeatureStatus::Ok);
+    let spec = last_spec(&b.doc);
+    let sent: f64 = spec
+        .rsplit_once(" draft ")
+        .map(|(_, v)| v.parse().unwrap())
+        .unwrap_or_else(|| panic!("{spec}"));
+    assert!((sent - 2f64.to_radians()).abs() < 1e-12, "{spec}");
+    let saved = saved_def(&b.doc, rib);
+    let name = saved["draft_angle"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{saved}"));
+    let id = match &b.doc.feature(rib).unwrap().def {
+        mitcad_model::features::FeatureDef::Rib(def) => def.draft_angle.unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(b.doc.parameters().name(id), name);
+    assert!((b.doc.parameters().value(id).unwrap() - 2f64.to_radians()).abs() < 1e-12);
+    // Its JSON round-trips: read back and written again, it is the same.
+    let back: mitcad_model::features::FeatureDef<String> =
+        serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&back).unwrap(), saved);
+
+    // A web takes it too; a negative angle goes as it is.
+    let web = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10},
+               "draft_angle": -0.02}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, web), FeatureStatus::Ok);
+    assert!(
+        last_spec(&b.doc).starts_with("web ") && last_spec(&b.doc).ends_with(" draft -0.02"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    assert!(saved_def(&b.doc, web).get("draft_angle").is_some());
+
+    // At 0 the kernel gets no draft.
+    let flat = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}, "draft_angle": 0}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, flat), FeatureStatus::Ok);
+    assert!(
+        !last_spec(&b.doc).contains("draft"),
+        "{}",
+        last_spec(&b.doc)
+    );
+
+    // Past a right angle the sides would lean over the way the wall grows.
+    let message = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "to_next"}, "draft_angle": "100 deg"}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        message.contains("the rib's draft angle must lie between -90 and 90 degrees"),
+        "{message}"
+    );
+}

@@ -190,9 +190,10 @@ Paint disabledPaint(IconRole role, bool dark, bool stroke, QRgb source) {
 // device pixel ratio it is asked for.
 class SvgIconEngine : public QIconEngine {
 public:
-  SvgIconEngine(QByteArray svg, IconBackdrop backdrop) : m_svg(std::move(svg)), m_backdrop(backdrop) {}
+  SvgIconEngine(QByteArray svg, IconBackdrop backdrop, double outlineWeight)
+      : m_svg(std::move(svg)), m_backdrop(backdrop), m_outlineWeight(outlineWeight) {}
 
-  QIconEngine* clone() const override { return new SvgIconEngine(m_svg, m_backdrop); }
+  QIconEngine* clone() const override { return new SvgIconEngine(m_svg, m_backdrop, m_outlineWeight); }
 
   QString key() const override { return QStringLiteral("mitcad-svg"); }
 
@@ -227,7 +228,7 @@ public:
     }
     QByteArray& themed = m_themed[(dark ? 2 : 0) + (disabled ? 1 : 0)];
     if (themed.isEmpty()) {
-      themed = themedIconSvg(m_svg, dark, disabled);
+      themed = themedIconSvg(m_svg, dark, disabled, m_outlineWeight);
     }
     QSvgRenderer renderer(themed);
     renderer.setAspectRatioMode(Qt::KeepAspectRatio);
@@ -274,8 +275,105 @@ private:
   // disabled, made when first needed.
   std::array<QByteArray, 4> m_themed;
   IconBackdrop m_backdrop;
+  double m_outlineWeight;
   QHash<QString, QPixmap> m_cache;
 };
+
+// True for a stroke of the Outline role: a source colour of the role.
+bool outlineStroke(const QString& stroke) {
+  if (!stroke.startsWith(QLatin1Char('#')) || stroke.size() != 7) {
+    return false;
+  }
+  const QColor colour(stroke);
+  return colour.isValid() && iconRole(colour) == IconRole::Outline;
+}
+
+// A width as the sources write it: 0.65, 1.3.
+QString widthText(double width) { return QString::number(width, 'g', 4); }
+
+// The source with the Outline role's strokes at `weight` times their width
+// (mitcad#2092). Each element's stroke and width are its own or its
+// parent's; an Outline stroke is drawn at its width times `weight`, any
+// other at its width. An element whose drawn width would differ from the one
+// it inherits gets a stroke-width of its own: an action stroke that took the
+// root's 1.3 keeps 1.3 when the root's outline becomes 0.65.
+QByteArray weightOutline(const QByteArray& source, double weight) {
+  static const QRegularExpression tag(
+      QStringLiteral("<!--[\\s\\S]*?-->|<[?!][^>]*>|<(/?)([A-Za-z][\\w:.-]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>"));
+  static const QRegularExpression strokeAttribute(QStringLiteral("(?:^|\\s)stroke=\"([^\"]*)\""));
+  static const QRegularExpression widthAttribute(QStringLiteral("(?:^|\\s)stroke-width=\"([^\"]*)\""));
+  struct Inherited {
+    QString stroke;   // the source's colour, or none
+    double width;     // the source's width
+    double drawn;     // the width the element's children inherit as written
+  };
+  QList<Inherited> stack{{QStringLiteral("none"), 1.0, 1.0}};
+  const QString text = QString::fromUtf8(source);
+  QString result;
+  result.reserve(text.size() + text.size() / 8);
+  qsizetype from = 0;
+  QRegularExpressionMatchIterator matches = tag.globalMatch(text);
+  while (matches.hasNext()) {
+    const QRegularExpressionMatch match = matches.next();
+    if (match.captured(2).isEmpty()) {
+      continue; // a comment, a declaration or an instruction
+    }
+    if (!match.captured(1).isEmpty()) {
+      if (stack.size() > 1) {
+        stack.removeLast();
+      }
+      continue;
+    }
+    QString attributes = match.captured(3);
+    const bool empty = attributes.endsWith(QLatin1Char('/'));
+    if (empty) {
+      attributes.chop(1);
+    }
+    const Inherited parent = stack.constLast();
+    const QRegularExpressionMatch ownStroke = strokeAttribute.match(attributes);
+    const QRegularExpressionMatch ownWidth = widthAttribute.match(attributes);
+    const QString stroke = ownStroke.hasMatch() ? ownStroke.captured(1).trimmed() : parent.stroke;
+    bool numeric = false;
+    const double width = ownWidth.hasMatch() ? ownWidth.captured(1).toDouble(&numeric) : parent.width;
+    if (ownWidth.hasMatch() && !numeric) {
+      // A width the code cannot scale: left as drawn.
+      stack.append({stroke, parent.width, parent.drawn});
+      if (empty) {
+        stack.removeLast();
+      }
+      continue;
+    }
+    const double wanted = outlineStroke(stroke) ? width * weight : width;
+    double drawn = parent.drawn;
+    if (ownWidth.hasMatch()) {
+      attributes.replace(ownWidth.capturedStart(1), ownWidth.capturedLength(1), widthText(wanted));
+      drawn = wanted;
+    } else if (stroke != QLatin1String("none") && !stroke.isEmpty() && !qFuzzyCompare(wanted, parent.drawn)) {
+      attributes += QStringLiteral(" stroke-width=\"%1\"").arg(widthText(wanted));
+      drawn = wanted;
+    }
+    result += text.mid(from, match.capturedStart() - from);
+    result += QLatin1Char('<') + match.captured(2) + attributes + (empty ? QStringLiteral("/>") : QStringLiteral(">"));
+    from = match.capturedEnd();
+    if (!empty) {
+      stack.append({stroke, width, drawn});
+    }
+  }
+  result += text.mid(from);
+  return result.toUtf8();
+}
+
+// The name and backdrop of each icon themeIcon made, by its cache key, so
+// that the same drawing can be made with another outline weight.
+struct IconOrigin {
+  QString name;
+  IconBackdrop backdrop;
+};
+
+QHash<qint64, IconOrigin>& iconOrigins() {
+  static QHash<qint64, IconOrigin> origins;
+  return origins;
+}
 
 } // namespace
 
@@ -301,9 +399,9 @@ QColor iconRoleColour(IconRole role, bool dark, bool stroke, const QColor& sourc
   return colour;
 }
 
-QByteArray themedIconSvg(const QByteArray& source, bool dark, bool disabled) {
+QByteArray themedIconSvg(const QByteArray& source, bool dark, bool disabled, double outlineWeight) {
   static const QRegularExpression attribute(QStringLiteral("\\b(fill|stroke|stop-color)=\"(#[0-9a-fA-F]{6})\""));
-  const QString text = QString::fromUtf8(source);
+  const QString text = QString::fromUtf8(outlineWeight == 1.0 ? source : weightOutline(source, outlineWeight));
   QString result;
   result.reserve(text.size() + text.size() / 4);
   qsizetype from = 0;
@@ -333,9 +431,9 @@ QByteArray themedIconSvg(const QByteArray& source, bool dark, bool disabled) {
   return result.toUtf8();
 }
 
-QIcon themeIcon(const QString& name, IconBackdrop backdrop) {
+QIcon themeIcon(const QString& name, IconBackdrop backdrop, double outlineWeight) {
   static QHash<QString, QIcon> cache;
-  const QString key = QStringLiteral("%1:%2").arg(int(backdrop)).arg(name);
+  const QString key = QStringLiteral("%1:%2:%3").arg(int(backdrop)).arg(outlineWeight).arg(name);
   const auto cached = cache.constFind(key);
   if (cached != cache.cend()) {
     return cached.value();
@@ -343,10 +441,19 @@ QIcon themeIcon(const QString& name, IconBackdrop backdrop) {
   QIcon icon;
   QFile file(QStringLiteral(":/icons/%1.svg").arg(name));
   if (!name.isEmpty() && file.open(QIODevice::ReadOnly)) {
-    icon = QIcon(new SvgIconEngine(file.readAll(), backdrop));
+    icon = QIcon(new SvgIconEngine(file.readAll(), backdrop, outlineWeight));
+    iconOrigins().insert(icon.cacheKey(), {name, backdrop});
   }
   cache.insert(key, icon);
   return icon;
+}
+
+QIcon withOutlineWeight(const QIcon& icon, double outlineWeight) {
+  const auto origin = iconOrigins().constFind(icon.cacheKey());
+  if (icon.isNull() || origin == iconOrigins().cend()) {
+    return icon;
+  }
+  return themeIcon(origin->name, origin->backdrop, outlineWeight);
 }
 
 QIcon swatchIcon(const QColor& color) {

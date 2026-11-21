@@ -27,18 +27,37 @@ local minimum no larger than the line's step there ends it (and likewise
 for the start, from the end's side). Where the line comes nearest to an
 end once, that is the point taken before.
 
+The line also passes an end inside a step whose two points lie on either
+side of it: the end's foot on the step falls between them, no further from
+the end than the step is long, and the nearer of the two points ends the
+line (mitcad#2151). Near a point where the surfaces touch the walk may
+step back and forth across it: at the corner of two blends both tangent to
+the end face, where their tangent lines on that face meet, the walk stepped
+from 0.049 before the point to 0.0037 past it, back to 0.0015 before it,
+then 0.025 past it onto the other branch and back near it. The point rule
+took the point stepped back to (the first local minimum), so the line kept
+the step past the point and back, and the cut edge bulged past the blend's
+tangent line (a face unorientable in the shell). The steps hang on the walk's rounding noise: one slab of 202 on
+Windows (MSVC), none on Linux.
+
 Upstream: new.
 
-Test: pending (mitcad#1986): no synthetic body is known that reaches its
-case; it is verified on the stored design's bodies only
-(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded with
-0.86). A regression test needs such a body first.
+Test: geometry.port.0901
+(geometry/tests/port/p0901-cap-line-cut-where-it-first-passes-the-end.cpp):
+the roof slab of test_fillet_eave.cpp, 20 to 30 long every 0.1, the tip's
+edge, the eave's end edge and the slope's top edge on the end face rounded
+with 0.9 and with 1.0 (the three blends cut each other at the tip, their
+caps walked): every result one valid solid, on Linux and on Windows.
+Without the patch (reverted at the port's tip) 9 and 5 of the 101 slabs
+came out invalid on Linux, which of them hanging on the walk's rounding
+noise; with the point rule alone, the slab 28.0 long rounded with 1.0 on
+Windows.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 71c22312..d0b223c8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -5854,6 +5854,49 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
+@@ -5854,6 +5854,88 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
          indd = nbp - indd + 1;
          indf = nbp - indf + 1;
        }
@@ -46,8 +65,12 @@ index 71c22312..d0b223c8 100644
 +      // tangent to the face at the end where its contact meets that face's
 +      // tangent edge), the walk passes through it onto the intersection's
 +      // other branch, wanders and may come back near it: the line ends where
-+      // it first passes the end, the first point nearest to it within a
-+      // step of the line, not where it last comes back to it.
++      // it first passes the end, not where it last comes back to it. The
++      // line passes the end at a point nearest to it within a step of the
++      // line, or inside a step where the end's foot on the step lies between
++      // its points, no further from it than the step is long: near such an
++      // end the walk may step back and forth across it, its first point past
++      // the end farther from it than one it steps back to.
 +      {
 +        const auto aDist = [&](const int k, const gp_Pnt& P) {
 +          return L2S->Value(k).Value().Distance(P);
@@ -64,23 +87,58 @@ index 71c22312..d0b223c8 100644
 +          }
 +          return s;
 +        };
++        // Where the line passes P inside its step from point a to point b,
++        // the nearer of the two points to P; 0 where it does not.
++        const auto aPassInside = [&](const int a, const int b, const gp_Pnt& P) {
++          const gp_XYZ A  = L2S->Value(a).Value().XYZ();
++          const gp_XYZ AB = L2S->Value(b).Value().XYZ() - A;
++          const double l2 = AB.SquareModulus();
++          if (l2 <= 0.)
++          {
++            return 0;
++          }
++          const double t = (P.XYZ() - A).Dot(AB) / l2;
++          if (t <= 0. || t >= 1. || (P.XYZ() - (A + t * AB)).SquareModulus() > l2)
++          {
++            return 0;
++          }
++          return aDist(a, P) <= aDist(b, P) ? a : b;
++        };
 +        for (i = indd + 1; i < indf; i++)
 +        {
-+          const double d = aDist(i, pntf);
-+          if (d <= aDist(i - 1, pntf) && d <= aDist(i + 1, pntf) && d <= aStep(i))
++          int k = aPassInside(i - 1, i, pntf);
++          if (k == indd)
 +          {
-+            dfin = d;
-+            indf = i;
++            k = i;
++          }
++          const double d = aDist(i, pntf);
++          if (k == 0 && d <= aDist(i - 1, pntf) && d <= aDist(i + 1, pntf) && d <= aStep(i))
++          {
++            k = i;
++          }
++          if (k != 0)
++          {
++            dfin = aDist(k, pntf);
++            indf = k;
 +            break;
 +          }
 +        }
 +        for (i = indf - 1; i > indd; i--)
 +        {
-+          const double d = aDist(i, pntd);
-+          if (d <= aDist(i - 1, pntd) && d <= aDist(i + 1, pntd) && d <= aStep(i))
++          int k = aPassInside(i + 1, i, pntd);
++          if (k == indf)
 +          {
-+            ddeb = d;
-+            indd = i;
++            k = i;
++          }
++          const double d = aDist(i, pntd);
++          if (k == 0 && d <= aDist(i - 1, pntd) && d <= aDist(i + 1, pntd) && d <= aStep(i))
++          {
++            k = i;
++          }
++          if (k != 0)
++          {
++            ddeb = aDist(k, pntd);
++            indd = k;
 +            break;
 +          }
 +        }

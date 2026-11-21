@@ -355,6 +355,16 @@ impl Rewrite<'_> {
                 for link in r.object_links.values_mut() {
                     changed |= self.link(link)?;
                 }
+                // Its cut scope (mitcad#2131), as an extrusion's.
+                if let Some(scope) = &mut r.cut_scope {
+                    changed |= self.scope(scope)?;
+                }
+            }
+            // A hole's cut scope (mitcad#2131), as an extrusion's.
+            FeatureDef::Hole(h) if h.cut_scope.is_some() => {
+                if let Some(scope) = &mut h.cut_scope {
+                    changed |= self.scope(scope)?;
+                }
             }
             FeatureDef::ConstructionPlane(p) => {
                 for link in p.links.values_mut().chain(p.datum_links.values_mut()) {
@@ -491,9 +501,9 @@ fn rewrite_references(
             let o = rewrite.occurrence;
             // Dormant cut choices are editor metadata, not active occurrence
             // references, but their saved paths must follow an assembly move.
-            let saved_cut_path = matches!(&def, FeatureDef::Extrude(extrude)
-                if extrude.cut_scope.as_ref().is_some_and(|scope|
-                    scope.paths().iter().any(|path| path.0.contains(&o))));
+            let saved_cut_path = def
+                .stored_cut_scope()
+                .is_some_and(|scope| scope.paths().iter().any(|path| path.0.contains(&o)));
             if !saved_cut_path && !crate::joints::referenced_occurrences(&def).contains(&o) {
                 continue;
             }
@@ -1197,6 +1207,8 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
         if let Some(o) = state.assembly.occurrence_mut(moved.occurrence) {
             o.parent = plan.destination;
             o.transform = moved.transform;
+            // Its folder was one of the old parent's (mitcad#2103).
+            o.folder = None;
         }
     }
     for (i, def) in &plan.changes.features {

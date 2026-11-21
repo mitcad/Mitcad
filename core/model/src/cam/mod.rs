@@ -577,10 +577,33 @@ impl CamMachine {
             engine::dialect(&m.controller).is_some()
         };
         if !known {
-            return Err(format!(
-                "The machine {} has a controller MitCad does not write for.",
-                m.name
-            ));
+            // A dialect of the other kind of machine says which kind it is
+            // for (mitcad#2119); an unknown one is only refused.
+            return Err(if lathe {
+                match engine::dialect(&m.controller) {
+                    Some(d) => format!(
+                        "The lathe {} needs a lathe controller; {} writes for milling machines.",
+                        m.name,
+                        d.label()
+                    ),
+                    None => format!(
+                        "The machine {} has a controller MitCad does not write for.",
+                        m.name
+                    ),
+                }
+            } else {
+                match engine::turning_dialect(&m.controller) {
+                    Some(d) => format!(
+                        "The machine {} is a milling machine; {} writes for lathes.",
+                        m.name,
+                        d.label()
+                    ),
+                    None => format!(
+                        "The machine {} has a controller MitCad does not write for.",
+                        m.name
+                    ),
+                }
+            });
         }
         if let Some(l) = &m.lathe {
             l.validate()

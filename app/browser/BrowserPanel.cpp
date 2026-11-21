@@ -1053,6 +1053,35 @@ public:
   }
 
 protected:
+  // Where dragged rows would go (mitcad#2103): a line before or after the
+  // row, or a frame around the row they would go into, in the color of a
+  // drop taken (DropAllowed) or refused (DropRefused).
+  void paintEvent(QPaintEvent* event) override {
+    QTreeWidget::paintEvent(event);
+    QTreeWidgetItem* const dropItem = itemFromIndex(m_dropIndex);
+    if (dropItem == nullptr) {
+      return;
+    }
+    const QRect row = visualItemRect(dropItem);
+    if (row.isEmpty()) {
+      return;
+    }
+    QPainter painter(viewport());
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QColor color = themeColor(m_dropAllowed ? ColorRole::DropAllowed : ColorRole::DropRefused, palette());
+    const double left = std::max(0, row.left() - indentation());
+    const double right = viewport()->width() - 2.0;
+    if (m_dropPlace == BrowserDrop::Onto) {
+      painter.setPen(QPen(color, 2.0));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRoundedRect(QRectF(QPointF(left + 1.0, row.top() + 1.0), QPointF(right, row.bottom())), 3.0, 3.0);
+      return;
+    }
+    const double y = m_dropPlace == BrowserDrop::Before ? row.top() + 1.0 : row.bottom();
+    painter.setPen(QPen(color, 3.0, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(left + 2.0, y), QPointF(right - 1.0, y));
+  }
+
   void drawRow(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     if (m_rows) {
       paintRowBox(painter, option, index);
@@ -1097,10 +1126,17 @@ protected:
                     item == currentItem() && item->isSelected() && (item->flags() & Qt::ItemIsEditable) &&
                     state() != QAbstractItemView::EditingState && partsOf(item).name.contains(at);
     m_pressAt = at;
-    // A CAM operation's row may be dragged onto another (mitcad#1013).
+    // A CAM operation's row may be dragged onto another (mitcad#1013), body
+    // and component rows onto folders and their parents' rows (mitcad#2103):
+    // with the rows selected with them (a press on a selected row keeps the
+    // selection), taken before the press changes it.
     m_camDragging = false;
     m_camPress = event->button() == Qt::LeftButton && item != nullptr ? m_panel.nodeOf(item) : BrowserNode();
-    if (m_camPress.type != BrowserNode::Type::CamOperation) {
+    m_dragSources.clear();
+    if (m_camPress.type == BrowserNode::Type::Body ||
+        (m_camPress.type == BrowserNode::Type::Component && !m_camPress.occurrence.isEmpty())) {
+      m_dragSources = draggedWith(item, m_camPress);
+    } else if (m_camPress.type != BrowserNode::Type::CamOperation) {
       m_camPress = BrowserNode();
     }
     QTreeWidget::mousePressEvent(event);
@@ -1119,6 +1155,9 @@ protected:
         viewport()->setCursor(Qt::ClosedHandCursor);
       }
       if (m_camDragging) {
+        if (!m_dragSources.isEmpty()) {
+          aimDrop(event->position().toPoint());
+        }
         event->accept();
         return;
       }
@@ -1130,6 +1169,35 @@ protected:
     if (m_partPress) {
       if (event->button() == Qt::LeftButton) {
         m_partPress = false;
+      }
+      event->accept();
+      return;
+    }
+    if (m_camDragging && event->button() == Qt::LeftButton && !m_dragSources.isEmpty()) {
+      // Body or component rows let go (mitcad#2103): where dropFor takes
+      // them, else nothing changes.
+      m_camDragging = false;
+      m_camPress = BrowserNode();
+      viewport()->unsetCursor();
+      aimDrop(event->position().toPoint());
+      const QVector<BrowserNode> sources = std::exchange(m_dragSources, {});
+      QTreeWidgetItem* const dropItem = itemFromIndex(m_dropIndex);
+      const BrowserNode target = dropItem != nullptr ? m_panel.nodeOf(dropItem) : BrowserNode();
+      const bool allowed = m_dropAllowed;
+      const BrowserDrop place = m_dropPlace;
+      clearDrop();
+      QStringList names;
+      for (const BrowserNode& source : sources) {
+        names << source.name;
+      }
+      const QString where = target.isValid() ? target.path : QStringLiteral("nowhere");
+      if (allowed) {
+        qDebug().noquote() << QStringLiteral("Browser drop: %1 %2 %3")
+                                  .arg(names.join(QStringLiteral(", ")), dropWords(place), where);
+        emit m_panel.rowsDropped(sources, target, place);
+      } else {
+        qDebug().noquote() << QStringLiteral("Browser drop refused: %1 %2 %3")
+                                  .arg(names.join(QStringLiteral(", ")), dropWords(place), where);
       }
       event->accept();
       return;
@@ -1152,6 +1220,7 @@ protected:
       return;
     }
     m_camPress = BrowserNode();
+    m_dragSources.clear();
     const bool slowClick = m_renamePress && event->button() == Qt::LeftButton;
     m_renamePress = false;
     QTreeWidget::mouseReleaseEvent(event);
@@ -1299,6 +1368,69 @@ private:
     painter->restore();
   }
 
+  // The rows a press on `item` drags (mitcad#2103): the selected rows of
+  // its kind, in the tree's order, when it is selected; else it alone.
+  QVector<BrowserNode> draggedWith(QTreeWidgetItem* item, const BrowserNode& pressed) {
+    if (item == nullptr || !item->isSelected()) {
+      return {pressed};
+    }
+    QVector<BrowserNode> rows;
+    for (QTreeWidgetItemIterator it(this, QTreeWidgetItemIterator::Selected); *it != nullptr; ++it) {
+      const BrowserNode selected = m_panel.nodeOf(*it);
+      const bool root = selected.type == BrowserNode::Type::Component && selected.occurrence.isEmpty();
+      if (selected.type == pressed.type && !root) {
+        rows.append(selected);
+      }
+    }
+    return rows.isEmpty() ? QVector<BrowserNode>{pressed} : rows;
+  }
+
+  // The row under the pointer while rows are dragged, where they would go
+  // there and whether they may: painted (paintEvent), the cursor a closed
+  // hand or a no-entry sign, logged when it changes ("Browser drop aim
+  // onto Root/Frame: allowed", "...: refused").
+  void aimDrop(const QPoint& at) {
+    QTreeWidgetItem* onto = itemAt(at);
+    BrowserDrop place = BrowserDrop::Onto;
+    bool allowed = false;
+    if (onto != nullptr) {
+      const QRect row = visualItemRect(onto);
+      allowed = BrowserPanel::dropFor(m_dragSources, m_panel.nodeOf(onto), at.y() > row.center().y(), &place);
+    }
+    if (onto == itemFromIndex(m_dropIndex) && place == m_dropPlace && allowed == m_dropAllowed) {
+      return;
+    }
+    m_dropIndex = onto != nullptr ? QPersistentModelIndex(indexFromItem(onto, kName)) : QPersistentModelIndex();
+    m_dropPlace = place;
+    m_dropAllowed = allowed;
+    viewport()->setCursor(onto == nullptr || allowed ? Qt::ClosedHandCursor : Qt::ForbiddenCursor);
+    viewport()->update();
+    if (onto != nullptr) {
+      qDebug().noquote() << QStringLiteral("Browser drop aim %1 %2: %3")
+                                .arg(dropWords(place), m_panel.nodeOf(onto).path,
+                                     allowed ? QStringLiteral("allowed") : QStringLiteral("refused"));
+    }
+  }
+
+  void clearDrop() {
+    m_dropIndex = QPersistentModelIndex();
+    m_dropAllowed = false;
+    m_dropPlace = BrowserDrop::Onto;
+    viewport()->update();
+  }
+
+  static QString dropWords(BrowserDrop place) {
+    switch (place) {
+    case BrowserDrop::Before:
+      return QStringLiteral("before");
+    case BrowserDrop::After:
+      return QStringLiteral("after");
+    case BrowserDrop::Onto:
+      break;
+    }
+    return QStringLiteral("onto");
+  }
+
   // Clicks the light bulb or the radio button at a point; false when there
   // is none.
   bool clickPart(const QPoint& at, bool doubleClick) {
@@ -1352,6 +1484,12 @@ private:
   // distance it moves onto the row it is let go on.
   BrowserNode m_camPress;
   bool m_camDragging = false;
+  // Body or component rows pressed (mitcad#2103): the rows they drag, and
+  // where they would go now (aimDrop).
+  QVector<BrowserNode> m_dragSources;
+  QPersistentModelIndex m_dropIndex; // the row, gone with it
+  BrowserDrop m_dropPlace = BrowserDrop::Onto;
+  bool m_dropAllowed = false;
 };
 
 BrowserPanel::BrowserPanel(QWidget* parent) : QWidget(parent), m_tree(new BrowserTree(*this)) {
@@ -1648,6 +1786,68 @@ BrowserNode BrowserPanel::nodeOf(const QTreeWidgetItem* item) const {
   return m_nodes.value(const_cast<QTreeWidgetItem*>(item));
 }
 
+bool BrowserPanel::dropFor(const QVector<BrowserNode>& sources, const BrowserNode& target, bool lowerHalf,
+                           BrowserDrop* place) {
+  *place = BrowserDrop::Onto;
+  if (sources.isEmpty() || !target.isValid()) {
+    return false;
+  }
+  const BrowserNode::Type kind = sources.first().type;
+  // The occurrence path of the occurrence a component's row is placed in
+  // ("O1/O4": "O1"; "O1": the root's, "").
+  const auto parentOf = [](const QString& path) {
+    const qsizetype slash = path.lastIndexOf(QLatin1Char('/'));
+    return slash < 0 ? QString() : path.left(slash);
+  };
+  const bool component = kind == BrowserNode::Type::Component;
+  if (!component && kind != BrowserNode::Type::Body) {
+    return false;
+  }
+  // Rows of one parent: the occurrences of one occurrence's component, or
+  // the bodies of one component.
+  const QString parent = component ? parentOf(sources.first().occurrence) : sources.first().component;
+  bool foldered = false;
+  for (const BrowserNode& source : sources) {
+    if (source.type != kind || (component ? source.occurrence.isEmpty() || parentOf(source.occurrence) != parent
+                                          : source.component != parent)) {
+      return false;
+    }
+    foldered = foldered || !source.folder.isEmpty();
+  }
+  const auto anyOutside = [&sources](const QString& folder) {
+    return std::any_of(sources.begin(), sources.end(),
+                       [&folder](const BrowserNode& source) { return source.folder != folder; });
+  };
+  if (component) {
+    // Into a folder of their parent's occurrences; out of their folders
+    // onto their parent's row.
+    if (target.type == BrowserNode::Type::ComponentFolder && target.occurrence == parent) {
+      return anyOutside(target.uid);
+    }
+    if (target.type == BrowserNode::Type::Component && target.occurrence == parent) {
+      return foldered;
+    }
+    // Before or after a sibling's row (mitcad#2104), in its group: into its
+    // folder, or out of theirs, at that place.
+    if (target.type == BrowserNode::Type::Component && !target.occurrence.isEmpty() &&
+        parentOf(target.occurrence) == parent) {
+      *place = lowerHalf ? BrowserDrop::After : BrowserDrop::Before;
+      return std::none_of(sources.begin(), sources.end(),
+                          [&target](const BrowserNode& source) { return source.occurrence == target.occurrence; });
+    }
+    return false;
+  }
+  // Into a folder of their Bodies folder; out of their folders onto the
+  // Bodies folder.
+  if (target.type == BrowserNode::Type::BodyFolder && target.component == parent) {
+    return anyOutside(target.uid);
+  }
+  if (target.type == BrowserNode::Type::Bodies && target.component == parent) {
+    return foldered;
+  }
+  return false;
+}
+
 void BrowserPanel::hoverNode(const BrowserNode& node) {
   hoverJoint(node);
   hoverBodies(node);
@@ -1916,6 +2116,12 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("body-folder:") + node.uid + at;
   case BrowserNode::Type::SketchCurve: // mitcad#1978: under each of its sketch's rows
     return QStringLiteral("curve:%1/%2>%3").arg(node.uid, node.curve, node.feature) + at;
+  case BrowserNode::Type::SketchBlocks: // mitcad#2110
+    return QStringLiteral("sketch-blocks");
+  case BrowserNode::Type::SketchBlock:
+    return QStringLiteral("sketch-block:") + node.uid;
+  case BrowserNode::Type::ComponentFolder: // mitcad#2103
+    return QStringLiteral("component-folder:") + node.uid + at;
   case BrowserNode::Type::None:
     break;
   }
@@ -2096,7 +2302,11 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                          node.type == BrowserNode::Type::ContactSet ||
                          node.type == BrowserNode::Type::Drawing ||
                          node.type == BrowserNode::Type::ImageReference ||
+                         node.type == BrowserNode::Type::SketchBlock ||
                          node.type == BrowserNode::Type::CamSetup || node.type == BrowserNode::Type::CamOperation ||
+                         // A folder of bodies or of components (mitcad#2103).
+                         node.type == BrowserNode::Type::BodyFolder ||
+                         node.type == BrowserNode::Type::ComponentFolder ||
                          (node.type == BrowserNode::Type::NamedView &&
                           node.uid.startsWith(QStringLiteral("named:")));
   if (renamable) {
@@ -2198,6 +2408,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       node.visible = body.visible;
       node.hasEye = true;
       node.transparent = body.transparent;
+      node.folder = body.folder; // mitcad#2103: dragged out of it
       node.mesh = body.mesh;
       // Left out by Isolate (mitcad#1700): its eye off, its name greyed.
       node.isolatedOut = !DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
@@ -2845,77 +3056,134 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
 
   addComponentRows(rootItem, snapshot, rootNode.uid, QString(), true, uses);
 
-  // The occurrences, each with its component's rows.
-  std::function<void(QTreeWidgetItem*, const QVector<DocumentSnapshot::Occurrence>&, bool)> place =
-      [&](QTreeWidgetItem* parent, const QVector<DocumentSnapshot::Occurrence>& occurrences,
-          bool shown) {
-        for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
-          BrowserNode row;
-          row.type = BrowserNode::Type::Component;
-          row.uid = occurrence.component;
-          row.component = occurrence.component;
-          row.occurrence = occurrence.path;
-          row.name = occurrence.name;
-          row.visible = occurrence.visible;
-          row.hasEye = true;
-          row.transparent = occurrence.transparent;
-          // Left out by Isolate (mitcad#1700): neither in an isolated
-          // occurrence nor holding an isolated item.
-          row.isolatedOut = !DocumentSnapshot::isolationReaches(snapshot.isolation, occurrence.path);
-          const DocumentSnapshot::Component* def = snapshot.component(occurrence.component);
-          QString tip = tr("Occurrence %1 of %2").arg(occurrence.name, snapshot.componentName(occurrence.component));
-          if (occurrence.grounded) {
-            tip += tr(", grounded");
-          }
-          // Its own joints move in its parent (mitcad#1793).
-          if (occurrence.flexible) {
-            tip += tr(", flexible");
-          }
-          // What its joints leave it (mitcad#55), with the others held.
-          if (const int dof = snapshot.occurrenceDof(occurrence.uid); dof >= 0) {
-            tip += tr(", %n degree(s) of freedom", nullptr, dof);
-          }
-          if (def != nullptr && def->linked) {
-            tip += tr(", linked to a file");
-          }
-          QTreeWidgetItem* item =
-              addRow(parent, row,
-                     occurrence.grounded ? QStringLiteral("component-grounded") : QStringLiteral("component"),
-                     tip);
-          const bool visible = shown && occurrence.visible && !row.isolatedOut;
-          if (!visible) {
-            setNameRole(item, ColorRole::TextHidden);
-          }
-          item->setData(kName, kRadioRole, snapshot.activeComponent == occurrence.component);
-          // Shown when a condition holds (mitcad#809).
-          if (!occurrence.visibleWhen.isEmpty()) {
-            markBound(item, m_nodes.value(item).path, {tr("Shown when %1").arg(occurrence.visibleWhen)}, 1);
-          }
-          // Its light bulb follows the condition (mitcad#863).
-          if (!occurrence.visibleWhen.isEmpty()) {
-            markConditionBulb(item, m_nodes.value(item).path, occurrence.visible,
-                              conditionBulbTip(occurrence.name, occurrence.visible, occurrence.visibleWhen,
-                                               snapshot.conditionParts(occurrence.visibleWhen)),
-                              true);
-          }
-          // Its rows and those of the occurrences in it are hidden with it
-          // while its light bulb is off (mitcad#1995): the nearest hidden
-          // occurrence is named.
-          const QString hiddenWith = m_hiddenWith;
-          const QStringList hiddenParents = m_hiddenParents;
-          if (!occurrence.visible) {
-            m_hiddenWith = occurrence.name;
-            m_hiddenParents.append(occurrence.path);
-          }
-          addComponentRows(item, snapshot, occurrence.component, occurrence.path, visible, uses);
-          place(item, occurrence.children, visible);
-          m_hiddenWith = hiddenWith;
-          m_hiddenParents = hiddenParents;
+  // The occurrences, each with its component's rows; those in folders
+  // (mitcad#2103) under their folders' rows, which come first.
+  std::function<void(QTreeWidgetItem*, const QVector<DocumentSnapshot::Occurrence>&, bool, const QString&,
+                     const QString&)>
+      place;
+  const auto placeOne = [&](QTreeWidgetItem* parent, const DocumentSnapshot::Occurrence& occurrence, bool shown) {
+    BrowserNode row;
+    row.type = BrowserNode::Type::Component;
+    row.uid = occurrence.component;
+    row.component = occurrence.component;
+    row.occurrence = occurrence.path;
+    row.name = occurrence.name;
+    row.visible = occurrence.visible;
+    row.hasEye = true;
+    row.transparent = occurrence.transparent;
+    row.folder = occurrence.folder; // mitcad#2103
+    // Left out by Isolate (mitcad#1700): neither in an isolated
+    // occurrence nor holding an isolated item.
+    row.isolatedOut = !DocumentSnapshot::isolationReaches(snapshot.isolation, occurrence.path);
+    const DocumentSnapshot::Component* def = snapshot.component(occurrence.component);
+    QString tip = tr("Occurrence %1 of %2").arg(occurrence.name, snapshot.componentName(occurrence.component));
+    if (occurrence.grounded) {
+      tip += tr(", grounded");
+    }
+    // Its own joints move in its parent (mitcad#1793).
+    if (occurrence.flexible) {
+      tip += tr(", flexible");
+    }
+    // What its joints leave it (mitcad#55), with the others held.
+    if (const int dof = snapshot.occurrenceDof(occurrence.uid); dof >= 0) {
+      tip += tr(", %n degree(s) of freedom", nullptr, dof);
+    }
+    if (def != nullptr && def->linked) {
+      tip += tr(", linked to a file");
+    }
+    // Machined by cuts made in this assembly (mitcad#2131): said on its
+    // own line, in the model's words.
+    if (!occurrence.machinedNote.isEmpty()) {
+      tip += QLatin1Char('\n') + modelMessage(occurrence.machinedNote);
+    }
+    QTreeWidgetItem* item =
+        addRow(parent, row,
+               occurrence.grounded ? QStringLiteral("component-grounded") : QStringLiteral("component"),
+               tip);
+    if (!occurrence.machinedNote.isEmpty()) {
+      // A log line for the UI tests ("Browser machined Root/Plate:1").
+      qDebug().noquote() << QStringLiteral("Browser machined %1").arg(m_nodes.value(item).path);
+    }
+    const bool visible = shown && occurrence.visible && !row.isolatedOut;
+    if (!visible) {
+      setNameRole(item, ColorRole::TextHidden);
+    }
+    item->setData(kName, kRadioRole, snapshot.activeComponent == occurrence.component);
+    // Shown when a condition holds (mitcad#809).
+    if (!occurrence.visibleWhen.isEmpty()) {
+      markBound(item, m_nodes.value(item).path, {tr("Shown when %1").arg(occurrence.visibleWhen)}, 1);
+    }
+    // Its light bulb follows the condition (mitcad#863).
+    if (!occurrence.visibleWhen.isEmpty()) {
+      markConditionBulb(item, m_nodes.value(item).path, occurrence.visible,
+                        conditionBulbTip(occurrence.name, occurrence.visible, occurrence.visibleWhen,
+                                         snapshot.conditionParts(occurrence.visibleWhen)),
+                        true);
+    }
+    // Its rows and those of the occurrences in it are hidden with it
+    // while its light bulb is off (mitcad#1995): the nearest hidden
+    // occurrence is named.
+    const QString hiddenWith = m_hiddenWith;
+    const QStringList hiddenParents = m_hiddenParents;
+    if (!occurrence.visible) {
+      m_hiddenWith = occurrence.name;
+      m_hiddenParents.append(occurrence.path);
+    }
+    addComponentRows(item, snapshot, occurrence.component, occurrence.path, visible, uses);
+    place(item, occurrence.children, visible, occurrence.path, occurrence.component);
+    m_hiddenWith = hiddenWith;
+    m_hiddenParents = hiddenParents;
+  };
+  // The folders of a component's occurrences (mitcad#2103): before the
+  // occurrences in no folder, in the order of their first occurrences
+  // (BrowserOrder.hpp), closed when they first show. A folder's eye shows
+  // whether an occurrence in it is shown and shows or hides them all; the
+  // row is grayed while the view shows none of them.
+  place = [&](QTreeWidgetItem* parent, const QVector<DocumentSnapshot::Occurrence>& occurrences, bool shown,
+              const QString& parentPath, const QString& parentComponent) {
+    QStringList folderNames;
+    for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+      if (!occurrence.folder.isEmpty() && !folderNames.contains(occurrence.folder)) {
+        folderNames << occurrence.folder;
+      }
+    }
+    for (const QString& folderName : std::as_const(folderNames)) {
+      BrowserNode folderNode;
+      folderNode.type = BrowserNode::Type::ComponentFolder;
+      folderNode.uid = folderName;
+      folderNode.name = folderName;
+      folderNode.occurrence = parentPath;
+      folderNode.component = parentComponent;
+      folderNode.hasEye = true;
+      bool anyVisible = false;
+      bool anyReached = false;
+      for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+        if (occurrence.folder == folderName) {
+          anyVisible = anyVisible || occurrence.visible;
+          anyReached = anyReached || DocumentSnapshot::isolationReaches(snapshot.isolation, occurrence.path);
         }
-      };
+      }
+      folderNode.visible = anyVisible;
+      folderNode.isolatedOut = !anyReached;
+      QTreeWidgetItem* folderRow = addRow(parent, folderNode, QStringLiteral("folder"));
+      if (!(shown && anyVisible && anyReached)) {
+        setNameRole(folderRow, ColorRole::TextHidden);
+      }
+      for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+        if (occurrence.folder == folderName) {
+          placeOne(folderRow, occurrence, shown);
+        }
+      }
+    }
+    for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+      if (occurrence.folder.isEmpty()) {
+        placeOne(parent, occurrence, shown);
+      }
+    }
+  };
   m_hiddenWith.clear();
   m_hiddenParents.clear();
-  place(rootItem, snapshot.occurrences, true);
+  place(rootItem, snapshot.occurrences, true, QString(), rootNode.uid);
   rootItem->setData(kName, kRadioRole, snapshot.activeComponent == rootNode.uid);
 
   // The analyses kept in the document (mitcad#41), one shown at a time.
@@ -2976,6 +3244,35 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       } else if (!row.visible) {
         setNameRole(item, ColorRole::TextHidden);
       }
+    }
+  }
+
+  // Sketch blocks (mitcad#2110): the root's Sketch Blocks folder, a row per
+  // block; its tooltip and the log say how many instances it has.
+  if (!snapshot.sketchBlocks.isEmpty()) {
+    BrowserNode folder;
+    folder.type = BrowserNode::Type::SketchBlocks;
+    folder.component = rootNode.uid;
+    folder.name = tr("Sketch Blocks");
+    QTreeWidgetItem* blocks = addRow(rootItem, folder, QStringLiteral("folder"));
+    QStringList logged;
+    for (const QJsonValue& value : snapshot.sketchBlocks) {
+      const QJsonObject block = value.toObject();
+      BrowserNode row;
+      row.type = BrowserNode::Type::SketchBlock;
+      row.component = rootNode.uid;
+      row.uid = block.value(QStringLiteral("name")).toString();
+      row.name = row.uid;
+      const int count = block.value(QStringLiteral("instances")).toInt();
+      row.featureType = QString::number(count);
+      addRow(blocks, row, QStringLiteral("insert-block"),
+             tr("Block %1: %n instance(s)", nullptr, count).arg(row.name));
+      logged << QStringLiteral("%1 (%2)").arg(row.name).arg(count);
+    }
+    const QString line = logged.join(QStringLiteral(", "));
+    if (line != m_loggedSketchBlocks) {
+      m_loggedSketchBlocks = line;
+      qDebug().noquote() << QStringLiteral("Browser Sketch Blocks: %1").arg(line);
     }
   }
 
@@ -3752,9 +4049,13 @@ bool BrowserPanel::revealKeys(const QSet<QString>& keys) {
 void BrowserPanel::startRename(const BrowserNode& node) {
   for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
     if (keyOf(it.value()) == keyOf(node) && (it.key()->flags() & Qt::ItemIsEditable)) {
+      // Logged by the row's own path: `node` may name the row by its key
+      // alone (a folder made by Move to Folder › New Folder, mitcad#2103).
+      const BrowserNode row = it.value();
+      const QString logged = row.path.isEmpty() ? row.name : row.path;
       if (m_presentationRenamer) {
         if (m_presentationRenamer(keyOf(node))) {
-          qDebug().noquote() << QStringLiteral("Renaming %1").arg(node.path.isEmpty() ? node.name : node.path);
+          qDebug().noquote() << QStringLiteral("Renaming %1").arg(logged);
         }
         return;
       }
@@ -3762,7 +4063,7 @@ void BrowserPanel::startRename(const BrowserNode& node) {
       m_tree->setCurrentItem(it.key(), kName);
       m_tree->scrollToItem(it.key());
       m_tree->editItem(it.key(), kName);
-      qDebug().noquote() << QStringLiteral("Renaming %1").arg(node.path.isEmpty() ? node.name : node.path);
+      qDebug().noquote() << QStringLiteral("Renaming %1").arg(logged);
       return;
     }
   }

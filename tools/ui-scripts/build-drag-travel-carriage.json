@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The synthetic carriage of the drag and travel UI test (mitcad#2088, tools/ui-build-drag-travel-test.sh): a block 40 long along X, 30 wide and 20 high, centred on the origin in X and Y, with its frame rail on its underside (z down, x along X), so that it reaches 20 to either side of it along the rail."},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-20, -15], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "mount:rail", "def": {"type": "joint_origin",
+    "geometry": {"origin": [0, 0, 0], "normal": [0, 0, -1], "x_axis": [1, 0, 0]}}},
+  {"expect": {"bodies": 1}}
+]

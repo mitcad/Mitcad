@@ -63,6 +63,15 @@ if [ "$("$HOME/.local/bin/sccache" --version 2> /dev/null || true)" != "sccache 
 fi
 "$HOME/.local/bin/sccache" --version
 
+# ccache (install-packages.sh) compiles MitCad's C++ and vcpkg's port builds,
+# OCCT among them; its default 5G limit would let one OCCT build evict the
+# rest. A limit the user set already is kept.
+echo "== ccache size limit"
+if ccache --show-config | grep -q '^(default) max_size '; then
+  ccache --set-config "max_size=$CCACHE_MAX_SIZE"
+fi
+ccache --show-config | grep -E '\) (cache_dir|max_size) '
+
 echo "== vcpkg at $VCPKG_COMMIT"
 if [ ! -d "$HOME/vcpkg/.git" ]; then
   git clone --quiet https://github.com/microsoft/vcpkg "$HOME/vcpkg"

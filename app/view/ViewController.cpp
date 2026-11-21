@@ -3,6 +3,7 @@
 #include "NavigationPreferences.hpp"
 #include "GridSpacing.hpp"
 #include "DefaultView.hpp"
+#include "../platform/SpaceMouseDevice.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,7 @@
 #include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDate>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -35,6 +37,12 @@
 #include <QKeyCombination>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QLocale>
+#include <QMarginsF>
+#include <QPageLayout>
+#include <QPageSize>
+#include <QPrinter>
+#include <QStandardPaths>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -59,10 +67,13 @@
 #include "../browser/BrowserBackground.hpp"
 #include "../browser/DocumentHost.hpp"
 #include "../drawings/DrawingPreferences.hpp"
+#include "../build/ListPages.hpp"
+#include "../printing/PaperPrint.hpp"
 #include "../framework/CommandLayout.hpp"
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/NoticeLevel.hpp"
+#include "../framework/Ribbon.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "../framework/AppSettings.hpp"
 #include "../framework/AppTheme.hpp"
@@ -127,6 +138,7 @@
 #include "VersionWatermark.hpp"
 #include "OriginPreference.hpp"
 #include "SelectionLook.hpp"
+#include "ShortcutOverview.hpp"
 #include "SmallCirclesPreference.hpp"
 
 namespace mitcad {
@@ -494,6 +506,10 @@ ViewSettings ViewSettings::load(const QSettings& store) {
       s.cubeProjection = projection;
     }
   }
+  s.cubeSize = number("cubeSize", s.cubeSize); // mitcad#2071
+  if (!OcctViewer::isCubeScale(s.cubeSize)) {
+    s.cubeSize = 100;
+  }
   s.anaglyph = flag("anaglyph", s.anaglyph); // mitcad#1449
   s.stereoDepth = std::clamp(number("stereoDepth", s.stereoDepth), kMinStereoDepth, kMaxStereoDepth);
   s.stereoConvergence =
@@ -527,6 +543,7 @@ void ViewSettings::save() const {
   store.setValue(kGroup + QStringLiteral("ghostInactive"), ghostInactive);
   store.setValue(kGroup + QStringLiteral("activePickPriority"), activePickPriority);
   store.setValue(kGroup + QStringLiteral("cubeProjection"), cubeProjectionId(cubeProjection));
+  store.setValue(kGroup + QStringLiteral("cubeSize"), cubeSize); // mitcad#2071
   store.setValue(kGroup + QStringLiteral("navigationBar"), navigationBar); // mitcad#1086
   store.setValue(kGroup + QStringLiteral("anaglyph"), anaglyph);           // mitcad#1449
   store.setValue(kGroup + QStringLiteral("stereoDepth"), stereoDepth);
@@ -947,6 +964,7 @@ void ViewController::apply() {
   m_viewer.setFocalLengths(m_settings.focalLength, m_settings.anaglyphFocalLength);
   m_viewer.setAnaglyph(m_settings.anaglyph);
   m_viewer.setCubeProjection(m_settings.cubeProjection); // mitcad#774
+  m_viewer.setCubeScale(m_settings.cubeSize);             // mitcad#2071
   QColor top;
   QColor bottom;
   bool gradient = true;
@@ -1260,12 +1278,38 @@ void ViewController::showOrientationCubeMenu(const QPoint& globalPosition) {
       cameraEntries << a->text().remove(QLatin1Char('&'));
     }
   }
+  // The cube's own size (mitcad#2071, GitHub mitcad/Mitcad#447), as
+  // Preferences › Display has it: a short list that fits the menu, the
+  // current one checked; a choice applies and saves at once.
+  QMenu* size = menu.addMenu(tr("Cube Size"));
+  entries << size->title();
+  QStringList sizeEntries;
+  auto* sizes = new QActionGroup(size);
+  for (const int percent : {75, 100, 125, 150}) {
+    //: The orientation cube's size in percent, e.g. "125 %".
+    QAction* choice = size->addAction(tr("%1 %").arg(percent));
+    choice->setCheckable(true);
+    choice->setChecked(percent == m_settings.cubeSize);
+    sizes->addAction(choice);
+    connect(choice, &QAction::triggered, this, [this, percent] { setCubeSize(percent); });
+    sizeEntries << choice->text();
+  }
   for (const char* id : {"view.set_home", "view.reset_home", "view.fit"}) {
     addId(id);
   }
   qDebug().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
   qDebug().noquote() << QStringLiteral("Context menu Camera: %1").arg(cameraEntries.join(QStringLiteral(" | ")));
+  qDebug().noquote() << QStringLiteral("Context menu Cube Size: %1").arg(sizeEntries.join(QStringLiteral(" | ")));
   execMenu(&menu, globalPosition);
+}
+
+void ViewController::setCubeSize(int percent) {
+  if (!OcctViewer::isCubeScale(percent) || percent == m_settings.cubeSize) {
+    return;
+  }
+  m_settings.cubeSize = percent;
+  m_settings.save();
+  m_viewer.setCubeScale(percent); // logs "Orientation cube size 125 %"
 }
 
 // ---------------------------------------------------------------------------
@@ -1423,7 +1467,7 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
       open->raise();
       open->activateWindow();
     }
-    if (auto* search = qobject_cast<PreferencesSearchField*>(open->searchField())) {
+    if (auto* search = dynamic_cast<PreferencesSearchField*>(open->searchField())) {
       if (!query.isEmpty()) {
         search->setText(query);
       }
@@ -1954,6 +1998,9 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   offer(QStringLiteral("view.orthographic"));
   offer(QStringLiteral("view.perspective"));
   offer(spaceMouseLockRotationCommand()); // mitcad#1910
+  // The 3D Mouse tab's driver hint (mitcad#1981): whether the vendor's
+  // driver runs now.
+  spaceMouseStatus().vendorDriver = spaceMouseVendorDriverRunning();
   auto* navigation = new NavigationPreferences(m_settings.navigation, navigationSchemes, nullptr, buttonCommands);
   navigationLayout->addWidget(navigation);
   // Lock Rotation's toggle and a device's default button change the 3D
@@ -2005,10 +2052,52 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   cameraRow->addSpacing(12);
   cameraRow->addWidget(cubeProjectionLabel);
   cameraRow->addWidget(cubeProjection);
+  // The cube's size (mitcad#2071, GitHub mitcad/Mitcad#447) after its
+  // projection, the same short list as the cube's menu: the view takes a
+  // change at once (put back when the dialog is cancelled); saved when the
+  // dialog is accepted, at once in the Settings window.
+  auto* cubeSize = new QComboBox;
+  cubeSize->setObjectName(QStringLiteral("preferencesCubeSize"));
+  for (const int percent : {75, 100, 125, 150}) {
+    cubeSize->addItem(tr("%1 %").arg(percent), percent);
+    if (percent == m_settings.cubeSize) {
+      cubeSize->setCurrentIndex(cubeSize->count() - 1);
+    }
+  }
+  cubeSize->setToolTip(tr("The orientation cube's size, with its arrows and Home button"));
+  // No mnemonic of its own: every letter of "Size" is taken on the page
+  // (Alt+Z is Corner dot size's).
+  auto* cubeSizeLabel = new QLabel(tr("Size:"));
+  cubeSizeLabel->setBuddy(cubeSize);
+  cameraRow->addSpacing(6);
+  cameraRow->addWidget(cubeSizeLabel);
+  cameraRow->addWidget(cubeSize);
   cameraRow->addStretch(1);
   auto* cameraLabel = new QLabel(tr("C&amera:"));
   cameraLabel->setBuddy(camera);
   display->addRow(cameraLabel, cameraRow);
+  connect(cubeSize, &QComboBox::currentIndexChanged, host,
+          [this, cubeSize] { m_viewer.setCubeScale(cubeSize->currentData().toInt()); });
+  // Whether it saved anything: only a change shows the saved note.
+  const auto saveCubeSize = [this, cubeSize]() -> bool {
+    const int percent = cubeSize->currentData().toInt();
+    if (percent == m_settings.cubeSize) {
+      return false;
+    }
+    m_settings.cubeSize = percent;
+    m_settings.save();
+    qDebug().noquote() << QStringLiteral("Preferences: orientation cube size %1 %").arg(percent);
+    return true;
+  };
+  if (window != nullptr) {
+    connect(cubeSize, &QComboBox::currentIndexChanged, host, [saveCubeSize, saved] {
+      if (saveCubeSize()) {
+        saved();
+      }
+    });
+  } else {
+    connect(dialog.get(), &QDialog::accepted, cubeSize, saveCubeSize);
+  }
   // The focal lengths (mitcad#1717, GitHub mitcad/Mitcad#282) of the
   // perspective camera and of Anaglyph 3D, each a slider with its value
   // field, in mm as on a 35 mm frame, side by side in one row as Anaglyph
@@ -3615,6 +3704,7 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     m_viewer.setNavigation(m_settings.navigation);
     applyStereo(m_settings.stereoDepth, m_settings.stereoConvergence); // mitcad#1449
     applyFocalLengths(m_settings.focalLength, m_settings.anaglyphFocalLength); // mitcad#1717
+    m_viewer.setCubeScale(m_settings.cubeSize); // mitcad#2071
     return;
   }
   (*commit)();
@@ -3687,28 +3777,13 @@ void ViewController::showShortcutOverview() {
   tree->setRootIsDecorated(true);
   layout->addWidget(tree);
 
-  int count = 0;
-  const auto section = [tree](const QString& title) {
-    auto* item = new QTreeWidgetItem(tree, {title});
-    QFont bold = item->font(0);
-    bold.setBold(true);
-    item->setFont(0, bold);
-    item->setFirstColumnSpanned(true);
-    item->setExpanded(true);
-    return item;
-  };
-  const auto addRow = [](QTreeWidgetItem* parent, const QString& keys, const QString& what, const QString& id) {
-    auto* row = new QTreeWidgetItem(parent, {keys, what});
-    for (int column = 0; column < 2; ++column) {
-      row->setData(column, NativeControlIdentifierRole,
-                   QStringLiteral("shortcutOverview.%1.%2").arg(id).arg(column));
-    }
-    return row;
-  };
-  QTreeWidgetItem* mouse = section(tr("Mouse (%1)").arg(schemeName(m_settings.navigation.scheme)));
-  int mouseRow = 0;
+  // The rows by group (the mouse, the fixed keys, the commands with keys
+  // by tab and group), the same in the window and on its cheat sheet
+  // (mitcad#2095).
+  QVector<OverviewGroup> groups;
+  OverviewGroup mouse{tr("Mouse (%1)").arg(schemeName(m_settings.navigation.scheme)), {}};
   for (const auto& [keys, what] : mouseRows(m_settings.navigation)) {
-    addRow(mouse, keys, what, QStringLiteral("mouse.%1").arg(mouseRow++));
+    mouse.rows.append({keys, what, QStringLiteral("mouse.%1").arg(mouse.rows.size()), QString()});
   }
   for (const auto& [keys, what] :
        QVector<QPair<QString, QString>>{{tr("Left click"), tr("Select; %1 or Shift adds or removes").arg(ctrlKey())},
@@ -3720,9 +3795,9 @@ void ViewController::showShortcutOverview() {
                                         {tr("Trackpad: two-finger double tap"), tr("Fit (in every scheme)")},
                                         {tr("Orientation cube: click"), tr("Turn to a face, edge or corner")},
                                         {tr("Orientation cube: drag"), tr("Orbit")}}) {
-    addRow(mouse, keys, what, QStringLiteral("mouse.%1").arg(mouseRow++));
+    mouse.rows.append({keys, what, QStringLiteral("mouse.%1").arg(mouse.rows.size()), QString()});
   }
-  QTreeWidgetItem* keys = section(tr("Keys"));
+  groups.append(mouse);
   // Ctrl is Cmd on macOS, where Backspace (the delete key) deletes too.
   const QString fileKeys =
       QStringList{QKeySequence(QKeySequence::Open).toString(QKeySequence::NativeText),
@@ -3734,7 +3809,7 @@ void ViewController::showShortcutOverview() {
 #else
   const QString deleteKeys = tr("Delete");
 #endif
-  int keyRow = 0;
+  OverviewGroup fixedKeys{tr("Keys"), {}};
   for (const auto& [key, what] :
        QVector<QPair<QString, QString>>{{tr("Enter"), tr("OK: finish the command, or the typed value")},
                                         {tr("Esc"), tr("Cancel the command, step back in a sketch tool, clear the selection")},
@@ -3742,26 +3817,58 @@ void ViewController::showShortcutOverview() {
                                         {deleteKeys, tr("Delete the selection")},
                                         {tr("F2"), tr("Rename in the Browser or history; Return activates")},
                                         {fileKeys, tr("Open, Save, Save As")}}) {
-    addRow(keys, key, what, QStringLiteral("key.%1").arg(keyRow++));
+    fixedKeys.rows.append({key, what, QStringLiteral("key.%1").arg(fixedKeys.rows.size()), QString()});
   }
-  // The commands with shortcuts, by tab and group.
-  QHash<QString, QTreeWidgetItem*> groups;
-  for (const auto& def : m_registry.commands()) {
-    const QList<QKeySequence> sequences = m_registry.effectiveShortcuts(def->id);
-    if (sequences.isEmpty()) {
-      continue;
+  groups.append(fixedKeys);
+  const QVector<OverviewGroup> commands = commandShortcutGroups(m_registry, [](const QString& id) {
+    const LayoutPlace home = commandLayout().home(id);
+    // The tab and group as the toolbar shows them, as Command Search does:
+    // "Solid › Create", never the layout's keys "SOLID / CREATE" (mitcad#2096).
+    return home.isEmpty() ? ViewController::tr("General")
+                          : QStringLiteral("%1 › %2").arg(displayName(home.tab), displayName(home.group));
+  });
+  int count = 0;
+  for (const OverviewGroup& group : commands) {
+    count += static_cast<int>(group.rows.size());
+    groups.append(group);
+  }
+  // Shift with the step that adds a sketch constraint or dimension
+  // (mitcad#2090): the one item that blocks it replaced at once, under the
+  // constraints' group.
+  if (const LayoutPlace constraints = commandLayout().home(QStringLiteral("sketch.constraint.horizontal_vertical"));
+      !constraints.isEmpty()) {
+    const QString caption =
+        QStringLiteral("%1 › %2").arg(displayName(constraints.tab), displayName(constraints.group));
+    auto it = std::find_if(groups.begin(), groups.end(),
+                           [&caption](const OverviewGroup& group) { return group.caption == caption; });
+    if (it == groups.end()) {
+      groups.append(OverviewGroup{caption, {}});
+      it = groups.end() - 1;
     }
-    const LayoutPlace home = commandLayout().home(def->id);
-    const QString group = home.isEmpty() ? tr("General") : QStringLiteral("%1 / %2").arg(home.tab, home.group);
-    QTreeWidgetItem*& parent = groups[group];
-    if (parent == nullptr) {
-      parent = section(group);
+    it->rows.append({tr("Shift + the click that adds a constraint"),
+                     tr("Replace the one constraint or dimension that blocks it"),
+                     QStringLiteral("sketch.replace.click"), QString()});
+    it->rows.append({tr("Shift+Enter in a dimension's value"),
+                     tr("Add the dimension, replacing the one item that blocks it"),
+                     QStringLiteral("sketch.replace.enter"), QString()});
+  }
+  for (const OverviewGroup& group : std::as_const(groups)) {
+    auto* section = new QTreeWidgetItem(tree, {group.caption});
+    QFont bold = section->font(0);
+    bold.setBold(true);
+    section->setFont(0, bold);
+    section->setFirstColumnSpanned(true);
+    section->setExpanded(true);
+    for (const OverviewRow& entry : group.rows) {
+      auto* row = new QTreeWidgetItem(section, {entry.keys, entry.does});
+      for (int column = 0; column < 2; ++column) {
+        row->setData(column, NativeControlIdentifierRole,
+                     QStringLiteral("shortcutOverview.%1.%2").arg(entry.id).arg(column));
+      }
+      if (!entry.icon.isEmpty()) {
+        row->setIcon(1, themeIcon(entry.icon));
+      }
     }
-    QStringList labels;
-    for (const QKeySequence& sequence : sequences) labels.append(sequence.toString(QKeySequence::NativeText));
-    auto* row = addRow(parent, labels.join(QStringLiteral(", ")), def->name, def->id);
-    row->setIcon(1, themeIcon(def->icon));
-    ++count;
   }
   connect(filter, &QLineEdit::textChanged, &dialog, [tree](const QString& text) {
     for (int i = 0; i < tree->topLevelItemCount(); ++i) {
@@ -3769,8 +3876,7 @@ void ViewController::showShortcutOverview() {
       int shown = 0;
       for (int j = 0; j < top->childCount(); ++j) {
         QTreeWidgetItem* row = top->child(j);
-        const bool match = text.isEmpty() || row->text(0).contains(text, Qt::CaseInsensitive) ||
-                           row->text(1).contains(text, Qt::CaseInsensitive);
+        const bool match = overviewRowMatches({row->text(0), row->text(1), QString(), QString()}, text);
         row->setHidden(!match);
         shown += match ? 1 : 0;
       }
@@ -3785,6 +3891,68 @@ void ViewController::showShortcutOverview() {
       shortcuts->trigger();
     }
   });
+  // The cheat sheet (mitcad#2095): the rows the search leaves, in
+  // portrait on the paper File › Print remembers when it is A4 or Letter.
+  QPushButton* savePdf = buttons->addButton(tr("Save as &PDF…"), QDialogButtonBox::ActionRole);
+  savePdf->setObjectName(QStringLiteral("shortcutOverviewSavePdf"));
+  savePdf->setToolTip(tr("Saves the rows shown as a cheat sheet to print"));
+  QPushButton* print = buttons->addButton(tr("Pr&int…"), QDialogButtonBox::ActionRole);
+  print->setObjectName(QStringLiteral("shortcutOverviewPrint"));
+  print->setToolTip(tr("Prints the rows shown as a cheat sheet"));
+  const QString scheme = schemeName(m_settings.navigation.scheme);
+  const auto sheet = [groups, filter, scheme] {
+    return shortcutCheatSheet(groups, filter->text(), scheme, QDate::currentDate());
+  };
+  const auto pageLayout = [] {
+    return QPageLayout(QPageSize(printing::listPaper(printing::savedPrintPaper(), QLocale::system().measurementSystem())),
+                       QPageLayout::Portrait, QMarginsF(12, 12, 12, 12), QPageLayout::Millimeter);
+  };
+  const build::ListPageOptions options{true, true};
+  connect(savePdf, &QPushButton::clicked, &dialog, [&dialog, sheet, pageLayout, options] {
+    const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString suggested = QDir(dialogStartFolder(DialogGroup::Export, documents)).filePath(cheatSheetFileName());
+    const QString path = dialogSaveFileName(&dialog, ViewController::tr("Save Keyboard and Mouse Overview as PDF"),
+                                            suggested, ViewController::tr("PDF documents (*.pdf)"));
+    if (path.isEmpty()) {
+      return;
+    }
+    rememberDialogFolder(DialogGroup::Export, path);
+    const CheatSheet contents = sheet();
+    const QPageLayout layout = pageLayout();
+    QString error;
+    int pages = 0;
+    if (!build::writeListPdf(path, contents.title, contents.subtitle, contents.tables, error, layout, options, &pages)) {
+      qWarning().noquote() << QStringLiteral("Shortcut overview PDF not written: %1").arg(error);
+      sheetWarning(&dialog, ViewController::tr("Save as PDF"), error);
+      return;
+    }
+    qInfo().noquote() << QStringLiteral("Shortcut overview PDF written: %1 (%2 page(s), %3)")
+                             .arg(QDir::toNativeSeparators(path))
+                             .arg(pages)
+                             .arg(QPageSize::key(layout.pageSize().id()));
+  });
+  connect(print, &QPushButton::clicked, &dialog, [&dialog, sheet, pageLayout, options] {
+    const CheatSheet contents = sheet();
+    const std::unique_ptr<QPrinter> made = printing::newPrinter(&dialog);
+    QPrinter& printer = *made;
+    printer.setDocName(contents.title);
+    printer.setCreator(QStringLiteral("MitCad"));
+    printer.setPageLayout(pageLayout());
+    if (!printing::askPrinter(printer, &dialog, 0)) {
+      return;
+    }
+    const int pages = build::paintListPages(printer, contents.title, contents.subtitle, contents.tables, options);
+    if (pages < 0) {
+      const QString error = ViewController::tr("Could not print to %1.").arg(printing::printerTarget(printer));
+      qWarning().noquote() << QStringLiteral("Shortcut overview not printed: %1").arg(error);
+      sheetWarning(&dialog, ViewController::tr("Print"), error);
+      return;
+    }
+    qInfo().noquote() << QStringLiteral("Printed %1: %2 page(s) to %3")
+                             .arg(contents.title)
+                             .arg(pages)
+                             .arg(printing::printerTarget(printer));
+  });
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   layout->addWidget(buttons);
   mac::styleDialogButtons(buttons);
@@ -3792,6 +3960,9 @@ void ViewController::showShortcutOverview() {
   mac::styleDialog(&dialog);
   dialog.resize(560, 620);
   qDebug().noquote() << QStringLiteral("Shortcut overview: %1 command shortcuts").arg(count);
+  QStringList captions;
+  for (const OverviewGroup& group : std::as_const(groups)) captions.append(group.caption);
+  qDebug().noquote() << QStringLiteral("Shortcut overview groups: %1").arg(captions.join(QStringLiteral(" | ")));
   prepareModal(&dialog);
   execDialog(&dialog);
 }

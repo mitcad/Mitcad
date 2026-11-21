@@ -74,7 +74,9 @@ use mitcad_model_drawing::sheet::{Group, Item, Pen};
 use mitcad_model_drawing::tables::{
     HOLE_COLUMNS, Levels, PARTS_COLUMNS, TableSettings, header, lay_out_table,
 };
-use mitcad_model_drawing::{CutFace, CutPlane, P2, Units, ViewCurve, ViewSpec, ViewSpline, clip};
+use mitcad_model_drawing::{
+    CutFace, CutPlane, P2, Standard, Units, ViewCurve, ViewSpec, ViewSpline, clip,
+};
 
 /// A pick as a command gives it: model topology, or a point on the sheet
 /// (mm) where the nearest pick of the view is found.
@@ -449,6 +451,9 @@ pub(super) struct ViewAt<'a> {
     /// How many occurrences below the drawing's component its subject lies
     /// (an occurrence's path; 0 for the design or chosen bodies).
     pub(super) subject_depth: usize,
+    /// Its drawing's dimensioning standard (mitcad#2047): how its
+    /// dimensions' values are laid out, placed and dragged.
+    pub(super) standard: Standard,
     /// Whether it draws its automatic centre marks, and the picks of its
     /// centre mark annotations (mitcad#1338: a click on a mark's line
     /// picks its circle's centre).
@@ -506,6 +511,7 @@ impl ViewAt<'_> {
             map: &self.placed.map,
             view_box: self.placed.sheet_box(),
             text,
+            standard: self.standard,
         }
     }
 
@@ -939,7 +945,7 @@ fn retrieved_dimension(
         ..AnnotationFormat::default()
     };
     let (words, _) = value_text(kind, &format, None, value, units);
-    let mut g = sketch_dimension(dim, spec, &view.placed.map, &words.text)?;
+    let mut g = sketch_dimension(dim, spec, &view.placed.map, &words.text, view.standard)?;
     g.class = "retrieved-dimension";
     Some(g)
 }
@@ -1652,6 +1658,7 @@ fn noun(kind: AnnotationType) -> &'static str {
         AnnotationType::Balloon => "balloon",
         AnnotationType::CenterPattern => "center pattern",
         AnnotationType::EdgeExtension => "edge extension",
+        AnnotationType::HoleCallout => "hole callout",
         _ => "dimension",
     }
 }
@@ -2172,6 +2179,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 _ => 0,
             },
             visible_lines: std::cell::OnceCell::new(),
+            standard: drawing.defaults.standard,
         })
     }
 
@@ -2291,6 +2299,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                     | AnnotationType::Frame
                     | AnnotationType::Finish
                     | AnnotationType::Balloon
+                    | AnnotationType::HoleCallout
             )
         });
         // A table: its place on the sheet and its settings.
@@ -2405,6 +2414,12 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 }
             }
             annotate::measure(&annotation, &own).map_err(ApiError)?;
+            // A hole callout writes its hole (mitcad#2054): refused when its
+            // pick gives no hole or circle.
+            if kind == AnnotationType::HoleCallout {
+                let units = sheet_units(self, &old, si).map_err(ApiError)?;
+                hole_callout_lines_of(self, &annotation.picks[0], units).map_err(ApiError)?;
+            }
             // Drawn from its picks alone: refused when they cannot draw it
             // (mitcad#729: parallel edges meet nowhere).
             if matches!(
@@ -2950,7 +2965,9 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         sketches: &[(FeatureUid, SketchDimension)],
     ) -> Annotated {
         let sheet = &drawing.sheets[si];
-        let words_units = WordUnits::new(units.symbol, units.mm);
+        // The values in the drawing's standard (mitcad#2047).
+        let units = units.under(drawing.defaults.standard);
+        let words_units = WordUnits::of_sheet(units);
         // What the drawing's dimensions and annotations take without their
         // own (mitcad#729).
         let defaults = &drawing.defaults;
@@ -3174,6 +3191,27 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                                     .and_then(|_| Err(self.unlisted(annotation, reference))),
                             }
                         }
+                        // The hole's lines in the entry, what Replace Value
+                        // takes the place of (mitcad#2054).
+                        AnnotationType::HoleCallout => {
+                            hole_callout_lines_of(self, &annotation.picks[0], words_units).and_then(
+                                |lines| {
+                                    let text =
+                                        annotate::hole_callout_text(&lines, &annotation.format)
+                                            .join("\n");
+                                    entry["measured"] = json!(lines.join("\n"));
+                                    entry["lines"] = json!(lines);
+                                    self.lay_out_annotation(
+                                        annotation,
+                                        v,
+                                        words_units,
+                                        &datums,
+                                        Some(text.as_str()),
+                                        defaults,
+                                    )
+                                },
+                            )
+                        }
                         _ => self.lay_out_annotation(
                             annotation,
                             v,
@@ -3341,8 +3379,9 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let units = match &drawing.sheets.get(si)?.units {
             Some(symbol) => Units::by_symbol(symbol)?,
             None => Units::of(self.parameters().context().default_length_unit),
-        };
-        let words_units = WordUnits::new(units.symbol, units.mm);
+        }
+        .under(drawing.defaults.standard);
+        let words_units = WordUnits::of_sheet(units);
         let letters = self.all_datum_letters();
         let datums: Vec<&str> = letters.iter().map(String::as_str).collect();
         let (_, value, text, _) = self
@@ -3442,7 +3481,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             Some(symbol) => Units::by_symbol(symbol)
                 .ok_or_else(|| ApiError(format!("unknown length unit “{symbol}”")))?,
             None => Units::of(self.parameters().context().default_length_unit),
-        };
+        }
+        .under(old.defaults.standard);
         let evaluated = self.evaluate_views(&old, si);
         // What the sheet draws now: the model's annotations this view
         // brings in.
@@ -3474,7 +3514,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let view = self
             .view_at(&old, si, &evaluated, c.view)
             .map_err(ApiError)?;
-        let items = self.model_items(WordUnits::new(units.symbol, units.mm));
+        let words = WordUnits::of_sheet(units);
+        let items = self.model_items(words);
         // A datum's letter once on the drawing.
         let mut letters: Vec<String> = old
             .sheets
@@ -3492,6 +3533,13 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 .ok_or_else(|| refused("the model has no such annotation".to_owned()))?;
             let (mut annotation, _) = model_item_in_view(&view, item)
                 .ok_or_else(|| refused(format!("view {} does not see it", c.view)))?;
+            // A hole callout is kept as the drawing's own hole callout, not
+            // as a note of its words, so that it follows the hole
+            // (mitcad#2054).
+            if item.annotation.kind == MeasureKind::HoleCallout {
+                annotation.kind = AnnotationType::HoleCallout;
+                annotation.text = None;
+            }
             annotation.picks = kept_picks(self, &view, item).map_err(refused)?;
             if let Some(letter) = &annotation.letter {
                 if letters.contains(letter) {
@@ -3508,6 +3556,9 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             // Drawn from its own picks from now on: they must draw it.
             let seen = self.annotation_seen(&view, &annotation).map_err(refused)?;
             annotate::measure(&annotation, &seen).map_err(refused)?;
+            if annotation.kind == AnnotationType::HoleCallout {
+                hole_callout_lines_of(self, &annotation.picks[0], words).map_err(refused)?;
+            }
             annotate::keep_tip_along(&mut annotation, &seen);
             kept.push(annotation);
         }
@@ -3526,6 +3577,53 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
     fn edge_pick_at(&self, view: &ViewAt<'_>, at: P2) -> Option<ViewPick> {
         self.pick_at(view, at, Want::Edge).map(|c| c.pick)
     }
+}
+
+/// The unit a sheet writes its lengths in: its own, else the design's.
+fn sheet_units<K: Kernel>(
+    doc: &Document<K>,
+    drawing: &Drawing,
+    si: usize,
+) -> Result<WordUnits, String> {
+    let units = match drawing.sheets.get(si).and_then(|s| s.units.as_ref()) {
+        Some(symbol) => Units::by_symbol(symbol)
+            .ok_or_else(|| format!("the sheet's length unit “{symbol}” is not known"))?,
+        None => Units::of(doc.parameters().context().default_length_unit),
+    };
+    Ok(WordUnits::new(units.symbol, units.mm))
+}
+
+/// A drawing's hole callout's lines (mitcad#2054): the model's hole
+/// callout's of the hole or circle its pick names, worked out now, so that
+/// they follow the hole's size, depth and thread. Why there are none, in
+/// words, when the pick gives no hole or circle.
+fn hole_callout_lines_of<K: Kernel>(
+    doc: &Document<K>,
+    pick: &ViewPick,
+    units: WordUnits,
+) -> Result<Vec<String>, String> {
+    if pick.edge.is_none() && pick.face.is_none() {
+        return Err("a hole callout points at a hole: a circle or a round face".to_owned());
+    }
+    let mut measured = MeasurePick {
+        body: Some(pick.body),
+        face: pick.face.clone(),
+        edge: pick.edge.clone(),
+        occurrence: pick.occurrence.clone(),
+        ..MeasurePick::default()
+    };
+    // The drawing's occurrence path where the design's places it, else the
+    // body as it is.
+    let picks = match doc.measure_picks(&measured, None) {
+        Ok(picks) => picks,
+        Err(_) => {
+            measured.occurrence = None;
+            doc.measure_picks(&measured, None).map_err(|_| {
+                "the hole or circle the hole callout points at is not in the model".to_owned()
+            })?
+        }
+    };
+    doc.hole_callout_lines(&measured, &picks, units.drawing())
 }
 
 /// The picks of the drawing's own annotation a model annotation is kept as
@@ -5481,6 +5579,17 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         if points && annotation.kind == AnnotationType::Linear && found.len() == 2 {
             value = Some(mitcad_vec3::distance(found[0].at, found[1].at));
         }
+        // A hole callout's lines from its hole, with its own texts
+        // (mitcad#2054), unless the caller has them.
+        let own: String;
+        let number = match (annotation.kind, number) {
+            (AnnotationType::HoleCallout, None) => {
+                let lines = hole_callout_lines_of(self, &annotation.picks[0], units)?;
+                own = annotate::hole_callout_text(&lines, &annotation.format).join("\n");
+                Some(own.as_str())
+            }
+            (_, number) => number,
+        };
         written(
             annotation, view, &seen, value, number, units, datums, defaults,
         )
@@ -6140,6 +6249,17 @@ fn written(
                     .collect::<Vec<_>>()
                     .join(" / "),
                 AnnotationType::Datum => annotation.letter.clone().unwrap_or_default(),
+                // Its lines on one (mitcad#2054).
+                AnnotationType::HoleCallout => words
+                    .as_ref()
+                    .map(|w| {
+                        w.text
+                            .lines()
+                            .map(str::trim_end)
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    })
+                    .unwrap_or_default(),
                 AnnotationType::Finish => annotation
                     .finish
                     .as_ref()

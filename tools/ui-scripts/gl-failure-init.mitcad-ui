@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# The 3D view's first attach to the graphics card fails (mitcad#2125):
+# MITCAD_TEST_GL_FAILURE=init makes it see a driver that answers no GL
+# version, as after a graphics driver reset, on first.mitcad
+# (gl-failure.json).
+#   1. MitCad does not end: the message once, the reason in the log once,
+#      no attach.
+#   2. Frames meanwhile try again without telling it again.
+#   3. The switch cleared (unset-env): the next frame attaches, the view
+#      draws again, and the message is not repeated.
+#   4. The design still saves; the harness checks the clean exit and that
+#      no crash report was written.
+# Run by tools/ui-gl-failure-test.sh (Linux) and
+# tools/ui-windows-gl-failure-test.ps1 (Windows).
+wait-idle 60
+
+# 1. The failure told once.
+wait-log '^3D view: no graphics: the driver answers no GL version or vendor \(GL_VERSION null, GL_VENDOR null' 30
+wait-log '^Status error: The 3D view lost its connection to the graphics card\. Save your work and restart MitCad\.$' 30
+expect-never '^OpenGL renderer: '
+expect-never '^OCCT view event failed'
+
+# 2. More frames: tried again, not told again.
+mark
+command view.fit
+wait-idle
+sleep 300
+command view.fit
+wait-idle
+sleep 300
+expect-no-log '^3D view: no graphics: '
+expect-no-log '^Status error: The 3D view lost'
+expect-no-log '^3D view: attached to the graphics card again$'
+
+# 3. The switch cleared: attached and drawn again.
+unset-env MITCAD_TEST_GL_FAILURE
+mark
+command view.fit
+wait-log '^3D view: attached to the graphics card again$' 30
+wait-log '^OpenGL renderer: ' 30
+wait-log '^3D view: drawn again after a graphics failure$' 30
+expect-no-log '^Status error: The 3D view lost'
+
+# 4. The design saves.
+model-command '{"cmd":"add_parameter","name":"afterFailure","unit":"mm","expression":"5 mm"}'
+command file.save
+wait-log '^Saved .*first[.]mitcad$' 30
+expect-never 'TestDriver: FAIL|^OCCT view event failed'
+quit

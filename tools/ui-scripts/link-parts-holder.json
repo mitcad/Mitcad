@@ -1,0 +1,5 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design tools/ui-scripts/link-parts.mitcad-ui opens (mitcad#2130): empty, saved beside the design it links parts of."},
+  {"expect": {"query": {"query": "components"}, "result": {"active": "C0"}}}
+]

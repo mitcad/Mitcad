@@ -23,6 +23,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "resolve_comment",
     "reopen_comment",
     "delete_comment",
+    "remove_comment_attachment",
     "set_property",
     "remove_property",
     "define_property_type",
@@ -54,6 +55,23 @@ fn comment() -> Value {
 /// Who wrote it: the MCP layer sets its client's name.
 fn author() -> Value {
     json!({"type": "string", "description": "Set by MCP to the client's name; a value given is replaced"})
+}
+
+/// Images attached to a comment or a reply (mitcad#2011).
+fn attachments() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "data": {"type": "string", "minLength": 1, "description": "The PNG or JPEG file's bytes in base64, at most 4 MB of file"},
+                "name": {"type": "string", "description": "The file's name, shown with the image (capture.png)"}
+            },
+            "required": ["data"],
+            "additionalProperties": false
+        },
+        "description": "Images to attach: a picture of the place or of the result; comment_attachment gives one back"
+    })
 }
 
 /// What a comment is pinned to (`CommentTarget`).
@@ -139,11 +157,12 @@ fn configurations() -> Value {
 pub(super) fn spec(name: &str) -> Option<Value> {
     let spec = match name {
         "add_comment" => json!({
-            "description": "Pins a comment to the model. Result: id.",
+            "description": "Pins a comment to the model. Result: id, and attachments (the images' ids) when it has images.",
             "properties": {
                 "text": text("The comment"),
                 "target": comment_target(),
-                "author": author()
+                "author": author(),
+                "attachments": attachments()
             },
             "required": ["text", "target"],
             "examples": [{"cmd": "add_comment", "text": "Make this wall 3 mm", "target": {"feature": "F2"}},
@@ -159,11 +178,12 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "edit_comment", "id": "C1", "text": "Make this wall 4 mm"}]
         }),
         "reply_comment" => json!({
-            "description": "Replies to a comment; its status stays.",
+            "description": "Replies to a comment; its status stays. Result: reply (its number from 1), and attachments (the images' ids) when it has images.",
             "properties": {
                 "id": comment(),
                 "text": text("The reply"),
-                "author": author()
+                "author": author(),
+                "attachments": attachments()
             },
             "required": ["id", "text"],
             "examples": [{"cmd": "reply_comment", "id": "C1", "text": "Done in Extrude2"}]
@@ -199,6 +219,15 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "properties": {"id": comment()},
             "required": ["id"],
             "examples": [{"cmd": "delete_comment", "id": "C1"}]
+        }),
+        "remove_comment_attachment" => json!({
+            "description": "Removes an image from a comment or one of its replies; its id is not given again.",
+            "properties": {
+                "comment": comment(),
+                "id": {"type": "string", "minLength": 1, "description": "The image (A2), as the comments query lists it"}
+            },
+            "required": ["comment", "id"],
+            "examples": [{"cmd": "remove_comment_attachment", "comment": "C1", "id": "A2"}]
         }),
         "set_property" => json!({
             "description": "Sets a typed property of a component, occurrence or body. Result: owner, set, key, type, value (as stored), edited.",

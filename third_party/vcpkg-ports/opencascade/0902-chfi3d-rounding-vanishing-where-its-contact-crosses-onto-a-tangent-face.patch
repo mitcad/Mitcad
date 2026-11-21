@@ -35,10 +35,17 @@ ChFi3d_ComputeArete used it.
 
 Upstream: new.
 
-Test: pending (mitcad#1986): no synthetic body is known that reaches its
-case; it is verified on the stored design's bodies only
-(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded with
-0.86). A regression test needs such a body first.
+Test: none, because no synthetic body reached its failure (mitcad#1986).
+Tried with the patch's code traced and with the patch reverted: the tower
+on a slab of test_fillet_vanishing_own_edge.cpp (the tower's corner 0.2 to
+0.8, its foot 1.5 to 5, the rounding 0.1 to 0.8, the foot's torus 0 to
+0.001 off the side; 231 bodies) and the vanishing cases of
+test_fillet_corners.cpp reach ChFi3d_ContactOntoTangentFaceAtEnd, but each
+builds alike without the patch (the material taken within 1e-5 of it): the
+next piece's walk between the tangent faces failed only on the design's
+faces a few micrometres off. Verified on the stored design's bodies
+(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded
+with 0.86).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index a8b031df..05fee9d3 100644

@@ -10,7 +10,8 @@
 // what it needs of MitCad (the import, the bridge's zip reader, MitCad's
 // dialogs, menus, window sizes and colors, its folders) it asks of the host
 // the application hands it. mitcad itself links nothing of CEF and starts
-// without the component.
+// without the component. The same module shows the in-app tutorials' pages
+// (mitcad#2012, TutorialPage below).
 
 #include <QColor>
 #include <QPoint>
@@ -62,6 +63,36 @@ public:
   virtual QString profileFolder() = 0;
 };
 
+// The tutorial pane's page (mitcad#2012, docs/tutorials.md): a CEF view of
+// an installed tutorial package's local pages, docked in the design's window
+// (tutorials/MainWindowTutorials.cpp). The bridge `window.mitcad` is given
+// to the pages of that package's folder only (the folder given at its
+// creation), never to other pages; its calls come to the host, and the
+// guide's events go to the page. Made by the module (the object is its
+// widget, a child of the parent given, and goes with it).
+class TutorialPage {
+public:
+  virtual ~TutorialPage() = default;
+  virtual QWidget* widget() = 0;
+  // Shows `page`, a local file (in the package's folder for its bridge).
+  virtual void open(const QString& page) = 0;
+  // An event of the guide or the tutorial ({"event": ...}) to the page's
+  // window.mitcad.on listeners.
+  virtual void sendEvent(const QString& json) = 0;
+};
+
+class TutorialPageHost {
+public:
+  virtual ~TutorialPageHost() = default;
+  // A call of window.mitcad from a page of the package: {"call", "args"}
+  // (docs/tutorials.md "The bridge"); its answer's JSON, or false with the
+  // reason. Called from the event loop, never from within CEF.
+  virtual bool bridgeCall(const QString& request, QString* answer, QString* error) = 0;
+  // As ComponentBrowserHost's.
+  virtual QString componentFolder() = 0;
+  virtual QString profileFolder() = 0;
+};
+
 // The module's entry points (C linkage, resolved by name): its interface's
 // version, which must be kComponentBrowserAbi, and the window, a
 // ComponentBrowser that asks `host` (the caller keeps `host` alive while
@@ -69,10 +100,15 @@ public:
 // (component.json's "abi", the update manifest's browser packages): a
 // MitCad loads only a component of its own interface. Raise it with every
 // change of this file. (CMake reads it from here: keep the line's form.)
-constexpr int kComponentBrowserAbi = 2;
+constexpr int kComponentBrowserAbi = 3;
 using ComponentBrowserAbiFunction = int (*)();
 using CreateComponentBrowserFunction = QDialog* (*)(ComponentBrowserHost* host, QWidget* parent);
 inline constexpr char kComponentBrowserAbiSymbol[] = "mitcad_component_browser_abi";
 inline constexpr char kCreateComponentBrowserSymbol[] = "mitcad_create_component_browser";
+// The tutorial pane's page (interface 3, mitcad#2012): its bridge for the
+// pages in `folder`; null when CEF does not start (`host` lives while the
+// page does).
+using CreateTutorialPageFunction = TutorialPage* (*)(TutorialPageHost* host, const QString& folder, QWidget* parent);
+inline constexpr char kCreateTutorialPageSymbol[] = "mitcad_create_tutorial_page";
 
 } // namespace mitcad

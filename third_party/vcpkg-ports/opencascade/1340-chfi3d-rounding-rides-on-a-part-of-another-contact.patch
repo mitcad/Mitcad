@@ -53,9 +53,10 @@ the foot and below the top, the boss's foot and rim rounded: valid and
 closed, the volume continuing the smaller radii's within 2e-5 mm3, the
 cylinder's area that of the bar's top from the rim's contact on; the
 port's notes record the fillet failing without the patch, and the smaller
-radii, which build without it, are the boundary cases. Its failure without
-the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+radii, which build without it, are the boundary cases. It fails without
+the patch at its place in the chain: OCCT with the patches before it,
+without and with this one (shown 2026-11-20 by tools/occt-port-proof.py
+--in-chain, with 1662, 1701 carried, which add API the MitCad code uses).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index b0d8907b..b4816e40 100644

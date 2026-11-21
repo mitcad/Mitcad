@@ -176,6 +176,10 @@ const StepSpec kSpecs[] = {
     {"system-window-menu", 1, 1, kInputOfMain},
 #ifdef Q_OS_MACOS
     {"expect-system-menu-bar", 1, -1, kIdle},
+    // An item of the AppKit menu bar by its title (a regex) and its key
+    // equivalent (none when omitted): a command with a key sequence shows
+    // it in its title and has none (mitcad#2095).
+    {"expect-system-menu-item", 1, 2, kIdle},
 #endif
     {"expect-document-windows", 1, 1, kIdle},
     {"expect-document-window-gone", 1, 1, kIdle},
@@ -214,6 +218,8 @@ const StepSpec kSpecs[] = {
     {"dblclick-logged", 1, 2, kInputOfMain},
     {"dialog-click-logged", 1, 1, kInputOfTarget},
     {"dialog-dblclick-logged", 1, 1, kInputOfTarget},
+    // A drag in a dialog (mitcad#2011): the logged place and two offsets.
+    {"dialog-drag-logged", 5, 5, kInputOfTarget},
     {"context-menu-logged", 2, 2, kInputOfMain},
     {"click-pick", 1, 2, kInputOfMain},
     {"native-viewport-click-pick", 1, 1, kInputOfMain},
@@ -302,6 +308,11 @@ const StepSpec kSpecs[] = {
     {"capture-view-target", 1, 1, kIdle},
     {"capture-view-pixel", 2, 2, kIdle},
     {"expect-view-pixel", 3, 3, kIdle},
+    // The framebuffer's colour where a model point is (mitcad#2069).
+    {"capture-view-point-pixel", 2, 2, kIdle},
+    {"expect-view-point-pixel", 2, 4, kIdle},
+    // A line's width in the view's own frame (mitcad#2063).
+    {"view-line-width", 3, 4, kIdle},
     // A see-through preview without a pattern of its triangles (mitcad#1575).
     {"expect-view-smooth", 1, 1, kIdle},
     {"expect-view-stepped", 1, 1, kIdle},
@@ -379,6 +390,7 @@ const StepSpec kSpecs[] = {
     {"focus-main", 0, 0, kPlain},
     {"reveal-widget", 1, 1, kInputOfMain},
     {"focus-widget", 1, 1, kInputOfTarget},
+    {"expect-clear-of-cube", 1, 1, kIdle},
     {"expect-widget-property", 3, 3, kIdle},
     {"expect-no-qt-popup", 0, 0, kIdle},
     {"expect-projects-layout", 1, 1, kIdle},
@@ -386,6 +398,8 @@ const StepSpec kSpecs[] = {
     {"expect-ribbon-labels", 1, -1, kIdle},
     {"expect-ribbon-scroll", 1, 1, kIdle},
     {"workspace", 1, 1, kIdle},
+    {"show-workspace", 1, 1, kInputOfMain},
+    {"capture-toolbar-height", 1, 1, kIdle},
     {"leave-start-page", 0, 0, kInputOfMain},
     {"expect-tree-rename", 1, 1, kIdle},
     {"native-drag", 2, 2, kInputOfTarget},
@@ -416,6 +430,7 @@ const StepSpec kSpecs[] = {
     {"capture", 2, 3, kPlain},
     {"set", 2, 2, kPlain},
     {"expect-near", 2, 4, kPlain},
+    {"expect-less", 2, 2, kPlain},
     {"wait-idle", 0, 1, kPlain},
     {"sleep", 1, 1, kPlain},
     // The hang marker and the session log (mitcad#1896).
@@ -548,6 +563,13 @@ const StepSpec kSpecs[] = {
     // Where a click with no command picks each face, edge and vertex, as
     // "Pick places:" (mitcad#1955: a surface body's free edges).
     {"idle-pick-places", 0, 0, kIdle},
+    // A test switch (MITCAD_TEST_*) set or cleared while the app runs:
+    // MITCAD_TEST_GL_FAILURE's failure ends (mitcad#2125).
+    {"set-env", 2, 2, kPlain},
+    {"unset-env", 1, 1, kPlain},
+    // Every shown window told that its screen changed, as when the system
+    // announces its screens again (mitcad#2125).
+    {"screen-change", 0, 0, kPlain},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -902,6 +924,84 @@ bool revealedPanelPlace(QWidget* main, QWidget* top, const QString& logged, QPoi
   }
   at = top->mapFromGlobal(target->mapToGlobal(target->rect().center()));
   return true;
+}
+
+// The width in pixels of the line drawn through a pixel of a frame
+// (view-line-width, mitcad#2063). The line's colour is the pixel near it
+// most unlike the frame `reach` pixels away; each pixel across the line
+// counts by how far its colour lies from the background on its side
+// towards the line's (the multisampling's fringe counts in part). Across
+// a line in four directions (the axes and the diagonals), the narrowest
+// count is its width, at most 8 % too wide for a line between them.
+double lineWidthAt(const QImage& frame, QPoint at, int reach, QPoint& centre, QColor& colour) {
+  const auto rgb = [&frame](QPoint p) {
+    const QPoint inside(std::clamp(p.x(), 0, frame.width() - 1), std::clamp(p.y(), 0, frame.height() - 1));
+    const QColor c = frame.pixelColor(inside);
+    return std::array<double, 3>{c.redF(), c.greenF(), c.blueF()};
+  };
+  const std::array<QPoint, 4> directions = {QPoint(1, 0), QPoint(0, 1), QPoint(1, 1), QPoint(1, -1)};
+  std::array<double, 3> farAway = {0.0, 0.0, 0.0};
+  for (const QPoint& direction : directions) {
+    for (const int side : {-1, 1}) {
+      const std::array<double, 3> c = rgb(at + direction * (side * reach));
+      for (int i = 0; i < 3; ++i) {
+        farAway[i] += c[i] / 8.0;
+      }
+    }
+  }
+  const auto distance = [](const std::array<double, 3>& a, const std::array<double, 3>& b) {
+    return std::abs(a[0] - b[0]) + std::abs(a[1] - b[1]) + std::abs(a[2] - b[2]);
+  };
+  centre = at;
+  double unlike = -1.0;
+  for (int dy = -2; dy <= 2; ++dy) {
+    for (int dx = -2; dx <= 2; ++dx) {
+      const double d = distance(rgb(at + QPoint(dx, dy)), farAway);
+      if (d > unlike) {
+        unlike = d;
+        centre = at + QPoint(dx, dy);
+      }
+    }
+  }
+  const std::array<double, 3> line = rgb(centre);
+  colour = frame.pixelColor(centre);
+  double width = std::numeric_limits<double>::max();
+  for (const QPoint& direction : directions) {
+    double count = 1.0;
+    bool along = false;
+    for (const int side : {-1, 1}) {
+      const std::array<double, 3> background = rgb(centre + direction * (side * reach));
+      double span = 0.0;
+      for (int i = 0; i < 3; ++i) {
+        span += (line[i] - background[i]) * (line[i] - background[i]);
+      }
+      if (span < 1e-4) {
+        // The line's own colour that far away: this direction runs along
+        // the line, not across it (a line of shallow slope crossed
+        // horizontally), and says nothing of its width.
+        along = true;
+        break;
+      }
+      for (int step = 1; step < reach; ++step) {
+        const std::array<double, 3> c = rgb(centre + direction * (side * step));
+        double toward = 0.0;
+        for (int i = 0; i < 3; ++i) {
+          toward += (c[i] - background[i]) * (line[i] - background[i]);
+        }
+        const double cover = std::clamp(toward / span, 0.0, 1.0);
+        if (cover < 0.05) {
+          break;
+        }
+        count += cover;
+      }
+    }
+    if (along) {
+      continue;
+    }
+    const double length = (direction.x() != 0 && direction.y() != 0) ? std::sqrt(2.0) : 1.0;
+    width = std::min(width, count * length);
+  }
+  return width == std::numeric_limits<double>::max() ? 0.0 : width;
 }
 
 } // namespace
@@ -1535,6 +1635,7 @@ void TestDriver::sendKey(const KeyPress& press) {
   if (!popup && !offer.isAccepted() && triggerShortcut(window, press)) {
     return;
   }
+  m_sequenceKeys.clear();
   QKeyEvent down(QEvent::KeyPress, press.key, modifiers, press.text);
   QCoreApplication::sendEvent(receiver, &down);
   QKeyEvent up(QEvent::KeyRelease, press.key, modifiers, press.text);
@@ -1622,41 +1723,80 @@ GlassCard* TestDriver::cardAt(const QPoint& windowPos) const {
 // QShortcut or button mnemonic of the window that has it.
 bool TestDriver::triggerShortcut(QWidget* window, const KeyPress& press) {
   const Qt::KeyboardModifiers modifiers = press.modifiers & ~Qt::KeypadModifier;
-  const QKeySequence wanted(QKeyCombination(modifiers, static_cast<Qt::Key>(press.key)));
+  const QKeyCombination key(modifiers, static_cast<Qt::Key>(press.key));
+  // A sequence begun in another window does not go on in this one.
+  if (!m_sequenceKeys.isEmpty() && m_sequenceWindow.data() != window) {
+    dropSequence(QStringLiteral("another window"));
+  }
   QList<QWidget*> widgets = window->findChildren<QWidget*>();
   widgets.prepend(window);
-  for (QWidget* widget : std::as_const(widgets)) {
-    const QList<QAction*> actions = widget->actions();
-    for (QAction* action : actions) {
-      if (!action->isEnabled() || !action->isVisible() || action->shortcutContext() == Qt::WidgetShortcut ||
-          action->shortcutContext() == Qt::WidgetWithChildrenShortcut || !action->shortcuts().contains(wanted)) {
-        continue;
+  // As Qt's shortcut map: the keys so far and this one; a key that
+  // continues no sequence is tried again on its own.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    QList<QKeyCombination> keys = m_sequenceKeys;
+    keys.append(key);
+    while (keys.size() > 4) keys.removeFirst();
+    const QKeySequence wanted(keys.value(0), keys.value(1, QKeyCombination::fromCombined(0)),
+                              keys.value(2, QKeyCombination::fromCombined(0)),
+                              keys.value(3, QKeyCombination::fromCombined(0)));
+    bool partial = false;
+    for (QWidget* widget : std::as_const(widgets)) {
+      const QList<QAction*> actions = widget->actions();
+      for (QAction* action : actions) {
+        if (!action->isEnabled() || !action->isVisible() || action->shortcutContext() == Qt::WidgetShortcut ||
+            action->shortcutContext() == Qt::WidgetWithChildrenShortcut) {
+          continue;
+        }
+        const QList<QKeySequence> shortcuts = action->shortcuts();
+        if (shortcuts.contains(wanted)) {
+          m_sequenceKeys.clear();
+          action->trigger();
+          return true;
+        }
+        for (const QKeySequence& shortcut : shortcuts) {
+          partial = partial || wanted.matches(shortcut) == QKeySequence::PartialMatch;
+        }
       }
-      action->trigger();
+    }
+    const QList<QShortcut*> shortcuts = window->findChildren<QShortcut*>();
+    for (QShortcut* shortcut : shortcuts) {
+      if (shortcut->isEnabled() && shortcut->context() != Qt::WidgetShortcut &&
+          shortcut->context() != Qt::WidgetWithChildrenShortcut && shortcut->key() == wanted) {
+        m_sequenceKeys.clear();
+        emit shortcut->activated();
+        return true;
+      }
+    }
+    if (keys.size() == 1) {
+      const QList<QAbstractButton*> buttons = window->findChildren<QAbstractButton*>();
+      for (QAbstractButton* button : buttons) {
+        if (button->isEnabled() && button->isVisibleTo(window) && !button->shortcut().isEmpty() &&
+            button->shortcut() == wanted) {
+          m_sequenceKeys.clear();
+          button->click();
+          return true;
+        }
+      }
+    }
+    if (partial) {
+      // The start of a sequence: Qt keeps the key and waits for the next.
+      m_sequenceKeys = keys;
+      m_sequenceWindow = window;
+      qDebug().noquote() << QStringLiteral("TestDriver: key sequence so far: %1")
+                                .arg(wanted.toString(QKeySequence::PortableText));
       return true;
     }
-  }
-  const QList<QShortcut*> shortcuts = window->findChildren<QShortcut*>();
-  for (QShortcut* shortcut : shortcuts) {
-    if (shortcut->isEnabled() && shortcut->context() != Qt::WidgetShortcut &&
-        shortcut->context() != Qt::WidgetWithChildrenShortcut && shortcut->key() == wanted) {
-      emit shortcut->activated();
-      return true;
-    }
-  }
-  const QList<QAbstractButton*> buttons = window->findChildren<QAbstractButton*>();
-  for (QAbstractButton* button : buttons) {
-    if (button->isEnabled() && button->isVisibleTo(window) && !button->shortcut().isEmpty() &&
-        button->shortcut() == wanted) {
-      button->click();
-      return true;
+    const bool started = !m_sequenceKeys.isEmpty();
+    m_sequenceKeys.clear();
+    if (!started) {
+      break;
     }
   }
 #ifdef Q_OS_MACOS
   // AppKit dispatches the global menu's Close even when a Qt tool window is key.
   if (window != m_main.data() && m_main) {
     if (auto* close = m_main->findChild<QAction*>(QStringLiteral("command_file.close"));
-        close && close->isEnabled() && close->shortcuts().contains(wanted)) {
+        close && close->isEnabled() && close->shortcuts().contains(QKeySequence(key))) {
       close->trigger();
       return true;
     }
@@ -1665,7 +1805,20 @@ bool TestDriver::triggerShortcut(QWidget* window, const KeyPress& press) {
   return false;
 }
 
+void TestDriver::dropSequence(const QString& why) {
+  if (m_sequenceKeys.isEmpty()) return;
+  const QKeySequence started(m_sequenceKeys.value(0), m_sequenceKeys.value(1, QKeyCombination::fromCombined(0)),
+                             m_sequenceKeys.value(2, QKeyCombination::fromCombined(0)),
+                             m_sequenceKeys.value(3, QKeyCombination::fromCombined(0)));
+  qDebug().noquote() << QStringLiteral("TestDriver: key sequence dropped: %1 (%2)")
+                            .arg(started.toString(QKeySequence::PortableText), why);
+  m_sequenceKeys.clear();
+  m_sequenceWindow.clear();
+}
+
 void TestDriver::sendText(const QString& text) {
+  // Typed text is text, not the rest of a started sequence (mitcad#2096).
+  dropSequence(QStringLiteral("typed text"));
   if (mac::test::sendText(text)) return;
   for (const QChar c : text) {
     KeyPress press;
@@ -1783,6 +1936,37 @@ void TestDriver::queueDialogClick(const QPoint& at, int clicks) {
     queue([send, i] { send(i == 0 ? QEvent::MouseButtonPress : QEvent::MouseButtonDblClick); });
     queue([send] { send(QEvent::MouseButtonRelease); });
   }
+}
+
+void TestDriver::queueDialogDrag(const QPoint& from, const QPoint& to) {
+  const QPointer<QWidget> window(targetWindow());
+  if (!window || window == m_main) {
+    fail(m_line, QStringLiteral("dialog pointer input requires focus-dialog"));
+    return;
+  }
+  const QPoint start = topWindow()->mapToGlobal(from);
+  const QPoint end = topWindow()->mapToGlobal(to);
+  const QPointer<QWidget> receiver(window->childAt(window->mapFromGlobal(start)));
+  if (!receiver || !receiver->isVisible()) {
+    fail(m_line, QStringLiteral("logged dialog point is outside its visible controls"));
+    return;
+  }
+  const auto send = [window, receiver](QEvent::Type type, const QPoint& global, Qt::MouseButton button,
+                                       Qt::MouseButtons buttons) {
+    if (!window || !receiver) return;
+    QMouseEvent event(type, receiver->mapFromGlobal(global), window->mapFromGlobal(global), global, button, buttons,
+                      Qt::NoModifier);
+    QCoreApplication::sendEvent(receiver, &event);
+  };
+  queue([send, start] { send(QEvent::MouseMove, start, Qt::NoButton, Qt::NoButton); });
+  queue([send, start] { send(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton); });
+  for (int i = 1; i <= kDragSteps; ++i) {
+    const QPoint at(start.x() + (end.x() - start.x()) * i / kDragSteps,
+                    start.y() + (end.y() - start.y()) * i / kDragSteps);
+    queue([send, at] { send(QEvent::MouseMove, at, Qt::NoButton, Qt::LeftButton); });
+  }
+  queue([] {}); // a pause before the button goes up
+  queue([send, end] { send(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton); });
 }
 
 void TestDriver::queueDrag(const QPoint& from, const QPoint& to, Qt::MouseButton button, Qt::KeyboardModifiers modifiers) {
@@ -2091,6 +2275,15 @@ void TestDriver::run(const Step& step) {
     whenReady([this, frame, expected = a] {
       return frame && mac::systemMenuBarMatches(*frame->menuBar(), expected, m_waitDetail);
     }, 5, QStringLiteral("the native system menu bar or application roles did not match [%1]").arg(a.join(QStringLiteral(", "))));
+  } else if (name == QLatin1String("expect-system-menu-item")) {
+    if (QGuiApplication::platformName().startsWith(QLatin1String("offscreen"))) {
+      // Qt's offscreen platform has no AppKit menu bar.
+      qInfo().noquote() << QStringLiteral("TestDriver: system menu item not checked (offscreen): %1").arg(a.at(0));
+    } else {
+      whenReady([this, title = a.at(0), key = a.value(1)] {
+        return mac::systemMenuItemMatches(title, key, m_waitDetail);
+      }, 5, QStringLiteral("no AppKit menu item matched %1 with the key equivalent '%2'").arg(a.at(0), a.value(1)));
+    }
 #endif
   } else if (name == QLatin1String("system-window-menu")) {
     const QPointer<QWidget> presenter = mainWindow;
@@ -3380,12 +3573,17 @@ void TestDriver::run(const Step& step) {
     double dx = 0, dy = 0;
     QRegularExpression re;
     if ((phase != QStringLiteral("press") && phase != QStringLiteral("move") && phase != QStringLiteral("release")) ||
-        (!none && a.at(2) != QStringLiteral("left")) || (phase != QStringLiteral("move") && none) ||
-        a.size() == 4 || (a.size() == 5 && (!toNumber(a.at(3), dx) || !toNumber(a.at(4), dy)))) {
-      fail(line, QStringLiteral("pointer-logged press|move|release <regex> none|left [dx dy]")); return;
+        (!none && a.at(2) != QStringLiteral("left") && a.at(2) != QStringLiteral("right")) ||
+        (phase != QStringLiteral("move") && none) || a.size() == 4 ||
+        (a.size() == 5 && (!toNumber(a.at(3), dx) || !toNumber(a.at(4), dy)))) {
+      fail(line, QStringLiteral("pointer-logged press|move|release <regex> none|left|right [dx dy]")); return;
     }
     if (!regex(a.at(1), re)) return;
-    const Qt::MouseButton button = none ? Qt::NoButton : Qt::LeftButton;
+    // The right button for a context menu where it is logged (mitcad#2071:
+    // the orientation cube's).
+    const Qt::MouseButton button = none                               ? Qt::NoButton
+                                   : a.at(2) == QStringLiteral("right") ? Qt::RightButton
+                                                                        : Qt::LeftButton;
     const auto at = std::make_shared<QPoint>();
     whenReady(
         [this, re, at] {
@@ -3431,7 +3629,15 @@ void TestDriver::run(const Step& step) {
           .arg(view->glVersion());
       return true;
     }, 10, QStringLiteral("the viewport framebuffer does not match its actual backing scale"));
-  } else if (name == QLatin1String("capture-view-target")) {
+  } else {
+    stepMatched = false;
+  }
+  // The first chain split again, past MSVC's nesting limit (C1061).
+  if (stepMatched) {
+    return;
+  }
+  stepMatched = true;
+  if (name == QLatin1String("capture-view-target")) {
     auto* view = qobject_cast<OcctViewer*>(viewer());
     if (!view || !view->isValid()) { fail(line, QStringLiteral("capture-view-target requires an initialized viewport")); return; }
     const gp_Pnt target = view->camera().target;
@@ -3498,6 +3704,180 @@ void TestDriver::run(const Step& step) {
             m_vars.insert(variable, seen->name());
           }
           qDebug().noquote() << QStringLiteral("TestDriver: view pixel %1").arg(m_waitDetail);
+        });
+  } else if (name == QLatin1String("view-line-width")) {
+    // The width of the line the view draws at a logged pick place or at a
+    // sketch point, in the view's own frame (without the widgets over it):
+    // at least <least> logical pixels (less half a pixel), and wider than
+    // ${narrower} when given (mitcad#2063: lines 1 pixel wide whatever
+    // their width in a core profile).
+    double least = 0.0;
+    if (!toNumber(a.at(1), least) || least <= 0.0) {
+      fail(line, QStringLiteral("view-line-width <var> <least px> <place regex>|sketch:<x>,<y> [<narrower var>]"));
+      return;
+    }
+    const QString place = a.at(2);
+    QRegularExpression re;
+    double sketchX = 0.0;
+    double sketchY = 0.0;
+    const bool inSketch = place.startsWith(QLatin1String("sketch:"));
+    if (inSketch) {
+      const QStringList xy = place.mid(7).split(QLatin1Char(','));
+      if (xy.size() != 2 || !toNumber(xy.at(0), sketchX) || !toNumber(xy.at(1), sketchY)) {
+        fail(line, QStringLiteral("'%1' is not sketch:<x>,<y>").arg(place));
+        return;
+      }
+    } else if (!regex(QStringLiteral("^Pick (?:.*)(?:%1)").arg(place), re)) {
+      // Matched against "Pick <kind> <owner>/<name>", the view's own pick
+      // points as click-pick-offset finds them (no "Pick places" logged).
+      return;
+    }
+    double narrower = 0.0;
+    if (a.size() > 3) {
+      if (!m_vars.contains(a.at(3)) || !toNumber(m_vars.value(a.at(3)), narrower)) {
+        fail(line, QStringLiteral("no line width in ${%1}").arg(a.at(3)));
+        return;
+      }
+    }
+    const QString variable = a.at(0);
+    const auto width = std::make_shared<double>(0.0);
+    whenReady(
+        [this, re, inSketch, sketchX, sketchY, least, narrower, width] {
+          auto* view = qobject_cast<OcctViewer*>(viewer());
+          if (view == nullptr || m_main.isNull()) {
+            m_waitDetail = QStringLiteral("no 3D view");
+            return false;
+          }
+          QPoint at; // in the view
+          bool found = false;
+          if (inSketch) {
+            found = sketchPoint(sketchX, sketchY, at);
+            at = view->mapFrom(topWindow(), at);
+          } else {
+            for (const auto& [item, point] : view->pickPoints(SelectKind::Face | SelectKind::Edge | SelectKind::Vertex)) {
+              const QString description = QStringLiteral("Pick %1 %2/%3")
+                                              .arg(SelectionItem::kindName(item.kind), item.owner, item.name);
+              if (re.match(description).hasMatch()) {
+                at = point;
+                found = true;
+              }
+            }
+          }
+          if (!found) {
+            m_waitDetail = inSketch ? QStringLiteral("no sketch view logged") : QStringLiteral("no pick point");
+            return false;
+          }
+          view->settleCamera();
+          const QImage frame = view->grabFramebuffer();
+          const qreal ratio = view->devicePixelRatioF();
+          const QPoint pixel = (QPointF(at) * ratio).toPoint();
+          if (frame.isNull() || !frame.rect().contains(pixel)) {
+            m_waitDetail = QStringLiteral("%1,%2 is outside the view's frame").arg(pixel.x()).arg(pixel.y());
+            return false;
+          }
+          // Wider than the widest highlight (6 logical pixels) and its fringe.
+          const int reach = static_cast<int>(std::ceil(10.0 * ratio));
+          QPoint centre;
+          QColor colour;
+          *width = lineWidthAt(frame, pixel, reach, centre, colour);
+          m_waitDetail = QStringLiteral("%1 px at %2,%3 in %4, ratio %5")
+                             .arg(*width, 0, 'f', 1)
+                             .arg(centre.x())
+                             .arg(centre.y())
+                             .arg(colour.name())
+                             .arg(ratio);
+          const double wanted = least * ratio - 0.5;
+          if (narrower > 0.0) {
+            m_waitDetail += QStringLiteral(", wider than %1 px").arg(narrower, 0, 'f', 1);
+          }
+          m_waitDetail += QStringLiteral(", at least %1 px wanted").arg(wanted, 0, 'f', 1);
+          return *width >= wanted && (narrower <= 0.0 || *width > narrower + 0.5);
+        },
+        6, QStringLiteral("the view's line at '%1' is too narrow").arg(place),
+        [this, variable, width] {
+          m_vars.insert(variable, QString::number(*width, 'f', 2));
+          qDebug().noquote() << QStringLiteral("TestDriver: view line width %1").arg(m_waitDetail);
+        });
+  } else if (name == QLatin1String("capture-view-point-pixel") ||
+             name == QLatin1String("expect-view-point-pixel")) {
+    // The view's own frame where a model point is on the screen
+    // (mitcad#2069): its colour into a variable, or a test of its look:
+    // blue-over-red (its blue channel above its red), or nearer <a> <b>
+    // (nearer colour a than colour b, each #rrggbb or a view colour role's
+    // name on a light background, e.g. PreviewRemove).
+    const bool capture = name == QLatin1String("capture-view-point-pixel");
+    const QStringList coordinates = a.at(capture ? 1 : 0).split(QLatin1Char(','));
+    double xyz[3] = {0.0, 0.0, 0.0};
+    bool parsed = coordinates.size() == 3;
+    for (int i = 0; parsed && i < 3; ++i) {
+      parsed = toNumber(coordinates.at(i).trimmed(), xyz[i]);
+    }
+    const auto colorOf = [](const QString& text) {
+      for (const ColorRole role : allColorRoles()) {
+        if (colorRoleName(role) == text) {
+          return viewColor(role, false);
+        }
+      }
+      return QColor(text);
+    };
+    const QString rule = capture ? QString() : a.at(1);
+    QColor nearColor;
+    QColor farColor;
+    if (!capture && rule == QLatin1String("nearer") && a.size() == 4) {
+      nearColor = colorOf(a.at(2));
+      farColor = colorOf(a.at(3));
+    }
+    if (!parsed || (!capture && !(rule == QLatin1String("blue-over-red") && a.size() == 2) &&
+                    !(rule == QLatin1String("nearer") && nearColor.isValid() && farColor.isValid()))) {
+      fail(line, capture ? QStringLiteral("capture-view-point-pixel <var> <x,y,z>")
+                         : QStringLiteral("expect-view-point-pixel <x,y,z> blue-over-red | nearer <color> <color>"));
+      return;
+    }
+    const gp_Pnt point(xyz[0], xyz[1], xyz[2]);
+    const QString variable = capture ? a.at(0) : QString();
+    const auto seen = std::make_shared<QColor>();
+    whenReady(
+        [this, point, seen, capture, rule, nearColor, farColor] {
+          auto* view = qobject_cast<OcctViewer*>(viewer());
+          if (view == nullptr || m_main.isNull()) {
+            m_waitDetail = QStringLiteral("no 3D view");
+            return false;
+          }
+          view->settleCamera();
+          const QImage frame = view->grabFramebuffer();
+          const QPoint pixel = (QPointF(view->toWidget(point)) * view->devicePixelRatioF()).toPoint();
+          if (frame.isNull() || !frame.rect().contains(pixel)) {
+            m_waitDetail = QStringLiteral("%1,%2 is outside the view's frame").arg(pixel.x()).arg(pixel.y());
+            return false;
+          }
+          *seen = frame.pixelColor(pixel);
+          m_waitDetail = QStringLiteral("%1 at %2,%3").arg(seen->name()).arg(pixel.x()).arg(pixel.y());
+          if (capture) {
+            return true;
+          }
+          if (rule == QLatin1String("blue-over-red")) {
+            m_waitDetail += QStringLiteral(", blue %1 over red %2").arg(seen->blue()).arg(seen->red());
+            return seen->blue() > seen->red();
+          }
+          const auto off = [&seen](const QColor& to) {
+            return std::abs(seen->red() - to.red()) + std::abs(seen->green() - to.green()) +
+                   std::abs(seen->blue() - to.blue());
+          };
+          m_waitDetail += QStringLiteral(", off %1 from %2 and %3 from %4")
+                              .arg(off(nearColor))
+                              .arg(nearColor.name())
+                              .arg(off(farColor))
+                              .arg(farColor.name());
+          return off(nearColor) < off(farColor);
+        },
+        6,
+        capture ? QStringLiteral("no view pixel at %1").arg(a.at(1))
+                : QStringLiteral("the view's pixel at %1 is not %2").arg(a.at(0), a.mid(1).join(QLatin1Char(' '))),
+        [this, variable, seen, capture] {
+          if (capture) {
+            m_vars.insert(variable, seen->name());
+          }
+          qDebug().noquote() << QStringLiteral("TestDriver: view point pixel %1").arg(m_waitDetail);
         });
   } else if (name == QLatin1String("preview-back-faces")) {
     // preview-back-faces cull|draw: see-through previews drawn as the fix
@@ -5215,6 +5595,25 @@ void TestDriver::run(const Step& step) {
           if (dialog) queueDialogClick(*at, clicks);
           else queueClick(*at, button, modifiers, clicks);
         }, dialog ? targetWindow() : mainWindow);
+  } else if (name == QLatin1String("dialog-drag-logged")) {
+    QRegularExpression re;
+    if (!regex(a.at(0), re)) {
+      return;
+    }
+    double d[4] = {0, 0, 0, 0};
+    for (int i = 0; i < 4; ++i) {
+      if (!toNumber(a.at(i + 1), d[i])) {
+        fail(line, QStringLiteral("dialog-drag-logged <regex> <dx1> <dy1> <dx2> <dy2>"));
+        return;
+      }
+    }
+    const auto at = std::make_shared<QPoint>();
+    whenReady([this, re, at] { return loggedPoint(re, 0, *at); }, 6,
+              QStringLiteral("no place logged for '%1'").arg(a.at(0)),
+              [this, at, d0 = d[0], d1 = d[1], d2 = d[2], d3 = d[3]] {
+                queueDialogDrag(*at + QPoint(qRound(d0), qRound(d1)), *at + QPoint(qRound(d2), qRound(d3)));
+              },
+              targetWindow());
   } else if (name == QLatin1String("drag-logged") || name == QLatin1String("drag-from")) {
     const bool relative = name == QLatin1String("drag-from");
     QRegularExpression first;
@@ -5959,7 +6358,19 @@ void TestDriver::run(const Step& step) {
         for (QTreeWidget* rows : {tree, browserRows}) {
           if (!rows || rows->viewport()->height() < std::max(rows->fontMetrics().height() + 6,
                                                             rows->sizeHintForRow(0))) {
-            m_waitDetail = QStringLiteral("a docked tree cannot show one complete row");
+            // The window against its own minimum and the screen: a window
+            // server that keeps the frame on a short screen leaves the
+            // stacked docks less than their minimum.
+            const QWidget* top = m_main->window();
+            const QSize lowest = top->minimumSizeHint().expandedTo(top->minimumSize());
+            const QSize room = top->screen() != nullptr ? top->screen()->availableGeometry().size() : QSize();
+            m_waitDetail = QStringLiteral("a docked tree cannot show one complete row: '%1' viewport %2 high, "
+                                          "row %3; window %4x%5 (frame %6 high), minimum %7x%8, screen available %9x%10")
+                               .arg(rows ? rows->objectName() : QStringLiteral("browser rows missing"))
+                               .arg(rows ? rows->viewport()->height() : -1)
+                               .arg(rows ? std::max(rows->fontMetrics().height() + 6, rows->sizeHintForRow(0)) : -1)
+                               .arg(top->width()).arg(top->height()).arg(top->frameGeometry().height())
+                               .arg(lowest.width()).arg(lowest.height()).arg(room.width()).arg(room.height());
             return false;
           }
         }
@@ -6110,6 +6521,36 @@ void TestDriver::run(const Step& step) {
       fail(line, QStringLiteral("Qt popup '%1' (%2) owns input or remains logically visible")
                      .arg(popup->objectName(), QString::fromLatin1(popup->metaObject()->className())));
     }
+  } else if (name == QLatin1String("expect-clear-of-cube")) {
+    // expect-clear-of-cube <object-name>: wait until that visible widget
+    // (a floating card) lies clear of the orientation cube's corner
+    // (mitcad#2071: below a larger cube without a window resize).
+    const QString widgetName = a.at(0);
+    whenReady(
+        [this, widgetName] {
+          auto* window = qobject_cast<MainWindow*>(m_main.data());
+          QWidget* widget = namedWidget(m_main.data(), widgetName);
+          if (window == nullptr || widget == nullptr || !widget->isVisible()) {
+            m_waitDetail = QStringLiteral("no visible %1").arg(widgetName);
+            return false;
+          }
+          OcctViewer& view = window->viewer();
+          const QRect cube = view.overlayCubeArea();
+          const QRect card(view.mapFromGlobal(widget->mapToGlobal(QPoint(0, 0))), widget->size());
+          m_waitDetail = QStringLiteral("%1 %2,%3 %4x%5, the cube's corner %6,%7 %8x%9")
+                             .arg(widgetName)
+                             .arg(card.x())
+                             .arg(card.y())
+                             .arg(card.width())
+                             .arg(card.height())
+                             .arg(cube.x())
+                             .arg(cube.y())
+                             .arg(cube.width())
+                             .arg(cube.height());
+          return !card.intersects(cube);
+        },
+        6, QStringLiteral("%1 is not clear of the orientation cube").arg(widgetName),
+        [this] { qDebug().noquote() << QStringLiteral("TestDriver: clear of the cube: %1").arg(m_waitDetail); });
   } else if (name == QLatin1String("expect-widget-property")) {
     QWidget* window = targetWindow();
     QObject* widget = namedWidget(window, a.at(0));
@@ -6321,6 +6762,41 @@ void TestDriver::run(const Step& step) {
     } else {
       ribbon->setWorkspace(a.at(0).toUpper());
     }
+  } else if (name == QLatin1String("show-workspace")) {
+    // show-workspace DESIGN|RENDER: that workspace shown in either layout
+    // (mitcad#2092): chosen in the toolbar panel's selector as `workspace`
+    // does, or in the Docked layout by a click on its tab (RENDER, or SOLID
+    // for the Design workspace).
+    auto* ribbon = m_main ? m_main->findChild<Ribbon*>() : nullptr;
+    const QString workspace = a.at(0).toUpper();
+    if (workspace != QLatin1String("DESIGN") && workspace != QLatin1String("RENDER")) {
+      fail(line, QStringLiteral("show-workspace DESIGN|RENDER"));
+      return;
+    }
+    if (ribbon != nullptr && ribbon->isPanel()) {
+      ribbon->setWorkspace(workspace);
+    } else {
+      Step click = step;
+      click.name = QStringLiteral("click-logged");
+      click.args = QStringList{workspace == QLatin1String("RENDER") ? QStringLiteral("^Ribbon tab RENDER at ")
+                                                                    : QStringLiteral("^Ribbon tab SOLID at ")};
+      run(click);
+    }
+  } else if (name == QLatin1String("capture-toolbar-height")) {
+    // The toolbar's height as laid out into ${var} (mitcad#2092): the
+    // Floating layout's toolbar panel, the Docked layout's toolbar (the
+    // ribbon either way).
+    const auto* ribbon = m_main ? m_main->findChild<Ribbon*>() : nullptr;
+    if (ribbon == nullptr || !ribbon->isVisible()) {
+      fail(line, QStringLiteral("capture-toolbar-height needs the toolbar shown"));
+      return;
+    }
+    m_vars.insert(a.at(0), QString::number(ribbon->height()));
+    qDebug().noquote() << QStringLiteral("TestDriver: toolbar height %1: %2 px (%3, %4)")
+                              .arg(a.at(0))
+                              .arg(ribbon->height())
+                              .arg(ribbon->isPanel() ? QStringLiteral("panel") : QStringLiteral("toolbar"),
+                                   ribbon->buttonLabels() ? QStringLiteral("labels") : QStringLiteral("icons"));
   } else if (name == QLatin1String("leave-start-page")) {
     // The Start page left as a user does (mitcad#1990): a click on the
     // design's tab in the Floating title row, where the toolbar panel is
@@ -6472,7 +6948,9 @@ void TestDriver::run(const Step& step) {
     // The command's icon as the ribbon, the menus and the command search
     // show it (they all take the command's action's icon), compared with an
     // icon of app/icons by its rendering; with a second command, the two
-    // look different (mitcad#1096).
+    // look different (mitcad#1096). The toolbar panel's buttons draw that
+    // icon with the thin outline (commandButtonIcon, mitcad#2092), every
+    // other button and the action with the sources' outline.
     const auto rendered = [](const QIcon& icon) {
       return icon.pixmap(QSize(24, 24), 1.0).toImage().convertToFormat(QImage::Format_ARGB32);
     };
@@ -6483,19 +6961,26 @@ void TestDriver::run(const Step& step) {
       return;
     }
     const QImage want = rendered(expected);
+    const QImage wantThin = rendered(themeIcon(a.at(1), IconBackdrop::Palette, kThinOutlineWeight));
     if (rendered(action->icon()) != want) {
       fail(line, QStringLiteral("the command %1 does not show the icon %2").arg(a.at(0), a.at(1)));
       return;
     }
     int buttons = 0;
+    int thin = 0;
     for (const QToolButton* button : m_main->findChildren<QToolButton*>()) {
       if (button->defaultAction() != action) {
         continue;
       }
       ++buttons;
-      if (rendered(button->icon()) != want) {
-        fail(line, QStringLiteral("a button of %1 (%2) does not show the icon %3")
-                       .arg(a.at(0), button->objectName(), a.at(1)));
+      const QIcon drawn = commandButtonIcon(button);
+      // A button of the toolbar panel (Ribbon.cpp's kThinOutlineProperty).
+      const bool toolbar = button->property("mitcadThinOutline").toBool();
+      thin += toolbar ? 1 : 0;
+      if (rendered(drawn) != (toolbar ? wantThin : want) || rendered(button->icon()) != want) {
+        fail(line, QStringLiteral("a button of %1 (%2) does not show the icon %3%4")
+                       .arg(a.at(0), button->objectName(), a.at(1),
+                            toolbar ? QStringLiteral(" with the thin outline") : QString()));
         return;
       }
     }
@@ -6506,9 +6991,10 @@ void TestDriver::run(const Step& step) {
         return;
       }
     }
-    qDebug().noquote() << QStringLiteral("TestDriver: command %1 shows the icon %2 (%3 buttons)")
+    qDebug().noquote() << QStringLiteral("TestDriver: command %1 shows the icon %2 (%3 buttons, %4 thin)")
                               .arg(a.at(0), a.at(1))
-                              .arg(buttons);
+                              .arg(buttons)
+                              .arg(thin);
   } else if (name == QLatin1String("click-parameter") || name == QLatin1String("expect-parameter-cell")) {
     QWidget* window = targetWindow();
     auto* table = window ? window->findChild<QTreeWidget*>(QStringLiteral("parametersTable")) : nullptr;
@@ -6645,6 +7131,17 @@ void TestDriver::run(const Step& step) {
         [this, variable, value] { m_vars.insert(variable, *value); });
   } else if (name == QLatin1String("set")) {
     m_vars.insert(a.at(0), a.at(1));
+  } else if (name == QLatin1String("expect-less")) {
+    double smaller = 0;
+    double larger = 0;
+    if (!toNumber(a.at(0), smaller) || !toNumber(a.at(1), larger)) {
+      fail(line, QStringLiteral("expect-less <smaller> <larger>: not a number"));
+      return;
+    }
+    if (!(smaller < larger)) {
+      fail(line, QStringLiteral("%1 is not less than %2").arg(smaller, 0, 'g', 12).arg(larger, 0, 'g', 12));
+      return;
+    }
   } else if (name == QLatin1String("expect-near")) {
     double actual = 0;
     double expected = 0;
@@ -6906,6 +7403,37 @@ void TestDriver::run(const Step& step) {
     std::_Exit(0);
   } else if (name == QLatin1String("stay")) {
     m_stay = true;
+  } else if (name == QLatin1String("set-env") || name == QLatin1String("unset-env")) {
+    // Only the app's test switches, which it reads again when it needs
+    // them (mitcad#2125).
+    if (!a.at(0).startsWith(QLatin1String("MITCAD_TEST_"))) {
+      fail(line, QStringLiteral("%1 takes a MITCAD_TEST_ variable, not '%2'").arg(name, a.at(0)));
+      return;
+    }
+    const QByteArray variable = a.at(0).toUtf8();
+    if (name == QLatin1String("set-env")) {
+      qputenv(variable.constData(), a.at(1).toUtf8());
+      qDebug().noquote() << QStringLiteral("TestDriver: %1 set to %2").arg(a.at(0), a.at(1));
+    } else {
+      qunsetenv(variable.constData());
+      qDebug().noquote() << QStringLiteral("TestDriver: %1 cleared").arg(a.at(0));
+    }
+  } else if (name == QLatin1String("screen-change")) {
+    // A simulated screen change (mitcad#2125): every shown top-level
+    // window is told that its screen changed, on the screen it is on, as
+    // when the system announces its screens again (a graphics driver
+    // reset). Qt's widgets and whatever listens (Component from Web's
+    // view, the 3D view under MITCAD_TEST_GL_FAILURE) take it as a real one.
+    int told = 0;
+    const QWindowList windows = QGuiApplication::topLevelWindows();
+    for (QWindow* window : windows) {
+      if (window == nullptr || !window->isVisible() || window->screen() == nullptr) {
+        continue;
+      }
+      emit window->screenChanged(window->screen());
+      ++told;
+    }
+    qDebug().noquote() << QStringLiteral("Screen change told to %1 window(s)").arg(told);
   }
 }
 

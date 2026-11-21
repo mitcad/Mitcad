@@ -1,0 +1,8 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M2 17 L12 13 L16 14.6 L6 18.6 Z" fill="#c9ddf6"/>
+  <path d="M2 17 V18.5 L6 20 V18.6" fill="#9cc0ec"/>
+  <path d="M16 14.6 C18 13.8 18 11.2 16 10.4 L7 6.8 L3 8.4 L12 12" fill="#9cc0ec" stroke="#e07b1a"/>
+  <path d="M6 20 L16.4 15.8 C19.6 14.5 19.6 9.9 16.4 8.6 L7 4.8 L3 6.4 V8.4" fill="#7aa6dc"/>
+</svg>

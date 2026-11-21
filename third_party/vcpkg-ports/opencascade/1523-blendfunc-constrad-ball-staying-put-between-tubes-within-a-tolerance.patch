@@ -38,9 +38,13 @@ cone rim's chain now builds through the mitre of the vertical rounding and
 the stored B-spline rounding between the flat side and the cone; both rims
 valid, the result with the stored body's faces, within 2.1e-4 mm of it.
 
-Test: pending (mitcad#2003): the port test written for this patch does not
-reach its case yet. Existing: geometry/tests/test_fillet_stationary_ball.cpp
-(the case's stored body before the rounding).
+Test: geometry/tests/port/p1523-still-ball-tolerance.cpp (ctest
+geometry.port.1523): half a lid of radius 23 whose flat side's edges are
+rounded with 1, the rounding along its top replaced by a fitted B-spline
+tube whose section's radius ripples by 6e-6 or 1e-5; the top rim rounded
+with 1 through the mitres, where its ball stays put: built, valid, taking
+off what it takes off on the unrippled tube (without the patch: not
+built). The boundary: the tube fitted without a ripple, as before.
 
 Upstream: new.
 

@@ -76,12 +76,14 @@ and 0.5 where the front turns outward by 3 and 5 degrees about a slanted
 crease, the edges given either way: valid, no edge tolerance above 1e-4,
 the material taken within 0.5 % of the two edges' sections; the port's
 notes record the fillet failing at a vertex without the patch. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986). It covers StartSol's turn about the crease only: the other
-four changes (StopChainsAtTurns, the guide's stretch, KinkIntoEndFace,
-PerformSetOfSurfOnElSpine) have no synthetic test, as no synthetic body
-reproduced the creases' micrometre jumps at one section; they are verified
-on the design's body only (left, mitcad#1986).
+without the patch is still to be shown: with it and the 7 later patches
+that change the same lines reverted at the port's tip, the test does not
+build (tried 2026-11-20 by tools/occt-port-proof.py). It covers StartSol's
+turn about the crease only: the other four changes (StopChainsAtTurns, the
+guide's stretch, KinkIntoEndFace, PerformSetOfSurfOnElSpine) have no
+synthetic test, as no synthetic body reproduced the creases' micrometre
+jumps at one section; they are verified on the design's body only (left,
+mitcad#1986).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
 index 5d80857e..589debd1 100644

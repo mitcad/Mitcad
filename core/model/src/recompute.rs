@@ -374,6 +374,8 @@ pub struct Output<S> {
     /// own (mitcad#1827). Not kept in the result store (construction
     /// features are not storable).
     pub drawn: Option<crate::features::construction::DrawnExtent>,
+    /// The occurrences an assembly cut machined (mitcad#2131).
+    pub machined: Vec<crate::assembly_cut::MachinedChange>,
 }
 
 pub struct FeatureResult<S> {
@@ -514,6 +516,21 @@ pub(crate) fn placement_bits(t: &Transform) -> [u64; 12] {
             t.linear[r][c].to_bits()
         }
     })
+}
+
+/// The placement [`placement_bits`] wrote (mitcad#2131: where a feature's
+/// evaluation saw an occurrence, from its [`Read::Placement`]).
+pub(crate) fn placement_from_bits(bits: &[u64; 12]) -> Transform {
+    let mut t = Transform::IDENTITY;
+    for (i, value) in bits.iter().enumerate() {
+        let (r, c) = (i / 4, i % 4);
+        if c == 3 {
+            t.translation[r] = f64::from_bits(*value);
+        } else {
+            t.linear[r][c] = f64::from_bits(*value);
+        }
+    }
+    t
 }
 
 impl Read {
@@ -1051,6 +1068,7 @@ impl<S: Clone> Recomputed<S> {
             split_pieces: self.split_pieces.clone(),
             changed_pieces: self.changed_pieces.clone(),
             gone_pieces: self.gone_pieces.clone(),
+            machined: self.machined.clone(),
             preview_tool: self.preview_tool.clone(),
             resume: None,
         }
@@ -1090,6 +1108,7 @@ impl<S: Clone> Recomputed<S> {
             split_pieces: self.split_pieces.clone(),
             changed_pieces: self.changed_pieces.clone(),
             gone_pieces: self.gone_pieces.clone(),
+            machined: self.machined.clone(),
             ..Self::default()
         }
     }
@@ -1334,6 +1353,10 @@ pub struct Recomputed<S> {
     /// What a later recompute needs to go on after this one's features
     /// (mitcad#841, [`recompute_after`]); None when it cannot.
     pub(crate) resume: Option<ResumePoint<S>>,
+    /// The occurrences assembly cuts machined before the marker
+    /// (mitcad#2131): the document shows their pieces in place of the
+    /// bodies they stand for.
+    pub machined: crate::assembly_cut::Machined,
 }
 
 /// Where a recompute ended, for one that goes on after its features
@@ -1370,6 +1393,7 @@ impl<S> Default for Recomputed<S> {
             gone_pieces: BTreeMap::new(),
             preview_tool: None,
             resume: None,
+            machined: crate::assembly_cut::Machined::default(),
         }
     }
 }
@@ -1944,6 +1968,7 @@ impl<'s, S> Walk<'s, S> {
             body_attributes: &state.body_attributes,
             layer_height: state.design_layer_height(),
             gravity: state.gravity.as_ref().map(|g| g.direction),
+            machined: &self.done.machined,
         }
     }
 }
@@ -2162,6 +2187,10 @@ impl<'s, S: Clone + Send + Sync> Walk<'s, S> {
             }
             if status.is_ok() {
                 follow_pieces(done, entry.uid, &output);
+                // The occurrences an assembly cut machined (mitcad#2131).
+                if !output.machined.is_empty() {
+                    done.machined.apply(entry.uid, &output.machined);
+                }
             }
         }
         if let FeatureStatus::Failed(error) = &status {
@@ -2465,6 +2494,7 @@ fn evaluate<K: Kernel>(
             spatial,
             flex,
             drawn: produced.drawn,
+            machined: produced.machined,
         },
         Err(message) => Output {
             sheet_rules: None,
@@ -2508,6 +2538,7 @@ fn evaluate<K: Kernel>(
             spatial,
             flex,
             drawn: None,
+            machined: Vec::new(),
         },
     };
     Arc::new(output)

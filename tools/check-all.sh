@@ -1120,8 +1120,9 @@ UI_RUNNING=0
 UI_AGAIN=()
 UI_ALONE=0
 # How many other UI tests ran beside each one (its most), handed to the test
-# runner afterwards so that it learns this machine's UI cap (mitcad#790 step
-# 5): a test that fails beside others and passes alone lowers it.
+# runner afterwards so that it learns each test's room (mitcad#790 step 5,
+# mitcad#872): a test that fails beside others and passes alone lowers its
+# own room, never the machine's UI cap (mitcad#2124).
 declare -A UI_BESIDE
 # ui_started name: the new test and every running one count each other.
 ui_started() {
@@ -1249,8 +1250,10 @@ if [ "$DRY" = 1 ]; then
   echo "== UI tests that would run: ${UI_TESTS[*]}"
 elif [ ${#UI_TESTS[@]} -gt 0 ]; then
   take_lock
-  # The cap the test runner learnt for this machine, within UI_JOBS
-  # (mitcad#790 step 5), unless --ui-jobs set the number.
+  # The machine's UI cap from the test runner, unless --ui-jobs set the
+  # number: the bound UI_JOBS itself (MITCAD_UI_JOBS, else 4), kept for the
+  # memory budget only; contention failures lower only the tests' rooms
+  # below, never this cap (mitcad#2124).
   rooms=""
   if [ "$UI_JOBS_GIVEN" = 0 ] && [ "$TESTRUN" != off ] && [ -x "$TESTRUN_BIN" ]; then
     UI_JOBS=$("$TESTRUN_BIN" --ui-cap --ui-max "$UI_JOBS" 2> /dev/null || echo "$UI_JOBS")

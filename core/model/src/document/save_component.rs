@@ -250,6 +250,8 @@ impl<K: Kernel> Document<K> {
                 // The bodies keep their materials: they are the file's.
                 looks: true,
                 given: Vec::new(),
+                parts: None,
+                unlinked: Vec::new(),
             };
             self.replace_with_link(component, link, bodies)?;
             saved.link = Some(recorded);
@@ -1899,6 +1901,16 @@ fn keep_links(
                     .collect(),
                 looks: l.looks,
                 given: l.given.clone(),
+                // The parts it links (mitcad#2130) are named in the design it links.
+                parts: l.parts.clone(),
+                unlinked: l
+                    .unlinked
+                    .iter()
+                    .map(|f| EnvelopeFrame {
+                        geometry: copy_geometry(&f.geometry, &copy.features),
+                        frame: f.frame,
+                    })
+                    .collect(),
             }
         });
         if let Some(c) = design.assembly.component_mut(target) {

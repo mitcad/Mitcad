@@ -388,6 +388,11 @@ CommandState CommandDef::initialState() const {
 }
 
 bool CommandDef::completedBy(const Selection& selection, bool creation) const {
+  // Spread over its inputs, the selection gives each of them its item
+  // (mitcad#2111).
+  if (takesSpread && takesSpread(selection)) {
+    return !completes || completes(selection);
+  }
   const InputDef* first = primarySelection();
   const int count = static_cast<int>(selection.size());
   if (first == nullptr || count == 0 || count < first->min || (first->max > 0 && count > first->max) ||

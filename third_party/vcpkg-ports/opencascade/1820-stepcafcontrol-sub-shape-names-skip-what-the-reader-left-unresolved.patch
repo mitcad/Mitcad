@@ -1,0 +1,134 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+STEP read with sub-shape names: the name pass walks past a face bound, a
+loop, a shell or an edge list the file reader left null instead of
+dereferencing it (mitcad#2028).
+
+Expected: a STEP file whose FACE_BOUND refers to an entity that is not in
+the file reads as the shape transfer reads it, with the names and colours
+of everything else. Actual (observed, a crash report of a Windows build
+and the reproducer below on Linux): with
+DESTEP_Parameters::ReadSubshapeNames on, STEPCAFControl_Reader::Transfer
+crashes with an access violation in Standard_Transient::IsInstance, called
+from ExpandShell <- ExpandManifoldSolidBrep <- ExpandSubShapes.
+
+The file reader leaves a reference it cannot resolve null (StepData_
+StepReaderData::ReadEntity reports "Unresolved reference" or "Entity has
+illegal type" in the entity's check and sets nothing). The shape transfer
+treats those fields as optional: StepToTopoDS_TranslateFace skips a null
+face bound and a null loop, so the solid is made of the rest. The name
+pass after it (ExpandSubShapes) walks the same entities and already skips
+a null face, bound array, oriented edge and edge, but it dereferenced a
+null face bound (aWires->Value(w)->Bound()), a null loop
+(aWire->IsInstance), a null edge list (anEdgeLoop->EdgeList()), a null
+outer shell or face array (aMSB->Outer(), Shell->CfsFaces()) and a null
+boundary array of a shell based surface model (aSBSM->SbsmBoundary()),
+whose null shell it passed on to ExpandShell.
+
+- ExpandManifoldSolidBrep and ExpandSBSM return on an item of another
+  type and on a null boundary array.
+- ExpandShell returns on a null shell or face array and goes on to the
+  next bound on a null face bound or loop, and to the next loop on a null
+  edge list.
+What is null has no sub-shape in the transferred shape to put a name on;
+the names of everything else are set as before.
+
+Test: geometry.port.1820 (geometry/tests/port/p1820-step-sub-shape-names-
+unresolved-bound.cpp): a box as a MANIFOLD_SOLID_BREP of a named product,
+one face with a second FACE_BOUND whose bound is an entity not in the
+file, read through STEPCAFControl_Reader with sub-shape names: stock OCCT
+crashes; with the patch it is one valid solid of 1000 mm3 with six faces
+under the product's name. geometry.io reads the same text with
+read_step_structured.
+
+Upstream: changes only files with unresolved references, which crashed
+before; every other file is read as before. OCCT master has the same
+ExpandShell (read 18.11.2026).
+diff --git a/src/DataExchange/TKDESTEP/STEPCAFControl/STEPCAFControl_Reader.cxx b/src/DataExchange/TKDESTEP/STEPCAFControl/STEPCAFControl_Reader.cxx
+--- a/src/DataExchange/TKDESTEP/STEPCAFControl/STEPCAFControl_Reader.cxx
++++ b/src/DataExchange/TKDESTEP/STEPCAFControl/STEPCAFControl_Reader.cxx
+@@ -6292,7 +6292,11 @@
+ {
+   // Access outer shell
+   occ::handle<StepShape_ManifoldSolidBrep> aMSB = occ::down_cast<StepShape_ManifoldSolidBrep>(Repr);
+-  occ::handle<StepShape_ConnectedFaceSet>  aShell = aMSB->Outer();
++  if (aMSB.IsNull())
++  {
++    return;
++  }
++  occ::handle<StepShape_ConnectedFaceSet> aShell = aMSB->Outer();
+ 
+   // Expand shell contents to CAF tree
+   ExpandShell(aShell, ShapeLab, TP, ShapeTool);
+@@ -6307,9 +6311,17 @@
+ {
+   occ::handle<StepShape_ShellBasedSurfaceModel> aSBSM =
+     occ::down_cast<StepShape_ShellBasedSurfaceModel>(Repr);
++  if (aSBSM.IsNull())
++  {
++    return;
++  }
+ 
+   // Access boundary shells
+   occ::handle<NCollection_HArray1<StepShape_Shell>> aShells = aSBSM->SbsmBoundary();
++  if (aShells.IsNull())
++  {
++    return;
++  }
+   for (int s = aShells->Lower(); s <= aShells->Upper(); ++s)
+   {
+     const StepShape_Shell&                  aShell = aShells->Value(s);
+@@ -6337,11 +6349,23 @@
+                                         const occ::handle<Transfer_TransientProcess>&  TP,
+                                         const occ::handle<XCAFDoc_ShapeTool>& ShapeTool) const
+ {
++  // A shell, face bound, loop or edge list the file reader could not
++  // resolve is null: it has no sub-shapes to name, as the shape transfer
++  // has none for it (StepToTopoDS_TranslateFace skips such a bound).
++  if (Shell.IsNull())
++  {
++    return;
++  }
++
+   // Record CAF data
+   SettleShapeData(Shell, RootLab, ShapeTool, TP);
+ 
+   // Access faces
+   occ::handle<NCollection_HArray1<occ::handle<StepShape_Face>>> aFaces = Shell->CfsFaces();
++  if (aFaces.IsNull())
++  {
++    return;
++  }
+   for (int f = aFaces->Lower(); f <= aFaces->Upper(); ++f)
+   {
+     const occ::handle<StepShape_Face>& aFace = aFaces->Value(f);
+@@ -6361,7 +6385,16 @@
+     }
+     for (int w = aWires->Lower(); w <= aWires->Upper(); ++w)
+     {
+-      const occ::handle<StepShape_Loop>& aWire = aWires->Value(w)->Bound();
++      const occ::handle<StepShape_FaceBound>& aFaceBound = aWires->Value(w);
++      if (aFaceBound.IsNull())
++      {
++        continue;
++      }
++      const occ::handle<StepShape_Loop>& aWire = aFaceBound->Bound();
++      if (aWire.IsNull())
++      {
++        continue;
++      }
+ 
+       // Record CAF data
+       SettleShapeData(aWire, RootLab, ShapeTool, TP);
+@@ -6377,6 +6410,10 @@
+       occ::handle<StepShape_EdgeLoop> anEdgeLoop = occ::down_cast<StepShape_EdgeLoop>(aWire);
+       occ::handle<NCollection_HArray1<occ::handle<StepShape_OrientedEdge>>> anEdges =
+         anEdgeLoop->EdgeList();
++      if (anEdges.IsNull())
++      {
++        continue;
++      }
+       for (int e = anEdges->Lower(); e <= anEdges->Upper(); ++e)
+       {
+         occ::handle<StepShape_OrientedEdge> anOrientedEdge = anEdges->Value(e);

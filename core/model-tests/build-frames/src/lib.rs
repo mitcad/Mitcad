@@ -49,3 +49,6 @@ mod auto_name_tests;
 // Offset and Rotate at any angle on a plane or a face, edited with
 // Placement (mitcad#2046).
 mod ground_offset_tests;
+// Drags leave placed parts at their Offset, a carriage's travel limits and
+// joints named after the parts they join (mitcad#2088).
+mod drag_travel_tests;

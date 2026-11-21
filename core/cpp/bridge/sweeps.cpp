@@ -306,6 +306,7 @@ std::shared_ptr<geometry::Shape> rib_solid(rust::Str feature, const Frame& frame
   if (input.has_direction) {
     spec.direction = direction(input.direction);
   }
+  spec.draft_angle = input.draft_angle;
   for (std::size_t i = 0; i < bodies.size(); ++i) {
     spec.bodies.push_back(body_at(bodies, i));
   }

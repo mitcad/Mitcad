@@ -33,11 +33,17 @@ Imported with mitcad-cli import-f3d (saved, with its JSON report), then:
   takes the file's Front view (along -Z, +Y up) onto MitCad's (along +Y,
   +Z up), and the occurrences are compared turned with it.
 
+With --worker the design is imported by the application's import worker
+instead (`mitcad --import-worker`, the process the Import command starts,
+with its import threads and trace; mitcad#2085, where it stopped in the
+application while the CLI imported the design), and the same checks run on
+the design and the report it writes.
+
 The failures name the bodies by their ids in the import and in the file
 (their names stay in the private files). Skipped when the folder, the
 archive or the expectations are not there.
 
-  python3 f3d-reported-house-test.py --cli <mitcad-cli> --work <folder>
+  python3 f3d-reported-house-test.py --cli <mitcad-cli> --work <folder> [--worker <mitcad>]
 """
 
 import argparse
@@ -76,8 +82,8 @@ def find(folder, suffix, wanted):
     return None
 
 
-def run(args):
-    done = subprocess.run(args, capture_output=True, text=True)
+def run(args, env=None):
+    done = subprocess.run(args, capture_output=True, text=True, env=env)
     return done.returncode, done.stdout + done.stderr
 
 
@@ -85,6 +91,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", required=True)
     parser.add_argument("--work", required=True)
+    parser.add_argument("--worker")
     options = parser.parse_args()
     reported = os.environ.get("MITCAD_MITCAD_REPORTED", "")
     folder = os.path.join(reported, "github-329")
@@ -111,13 +118,27 @@ def main():
 
     saved = os.path.join(work, "imported.mitcad")
     report_path = os.path.join(work, "report.json")
-    status, out = run([options.cli, "import-f3d", design, "--save", saved,
-                       "--report", report_path, "--threads", "4"])
-    if status != 0:
-        print(f"FAIL the import failed ({status}):\n{out[-4000:]}")
-        return 1
+    if options.worker:
+        # As the application starts it (app/files/F3dImport.cpp), its
+        # trace on; the process's last lines when it stops.
+        env = dict(os.environ, MITCAD_IMPORT_TRACE="1", QT_QPA_PLATFORM="offscreen")
+        status, out = run([options.worker, "--import-worker", design, "--output", saved,
+                           "--result", report_path,
+                           "--hand-off-store", os.path.join(work, "results")], env)
+        if status != 0 or "import-done" not in out:
+            print(f"FAIL the import worker stopped ({status}):\n{out[-4000:]}")
+            return 1
+    else:
+        status, out = run([options.cli, "import-f3d", design, "--save", saved,
+                           "--report", report_path, "--threads", "4"])
+        if status != 0:
+            print(f"FAIL the import failed ({status}):\n{out[-4000:]}")
+            return 1
     with open(report_path, encoding="utf-8") as f:
-        report = json.load(f)["designs"][0]
+        report = json.load(f)
+    # (The worker's result is the import command's answer, its report
+    # under "report".)
+    report = report.get("report", report)["designs"][0]
     with open(saved, encoding="utf-8") as f:
         doc = json.load(f)
     failures = []

@@ -28,8 +28,8 @@ Test: geometry/tests/test_fillet_top_chains.cpp, test_pit_beside_the_foot
 with 5 in one fillet: valid, the pit's cylinder of 5 in the result, the
 volume of the two made alone within 0.01 mm3 (without the patch the pit's
 rounding was left out); and test_sets and test_thirteen_sets with and
-without the pit's edges. Its failure without the patch is still to be
-shown in the port's before/after run (mitcad#1986).
+without the pit's edges. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 index 6884b94d..fa9444c9 100644

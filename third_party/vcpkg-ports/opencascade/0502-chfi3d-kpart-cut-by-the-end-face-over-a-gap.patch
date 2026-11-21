@@ -34,8 +34,9 @@ test_thin_rim_rounding_wider_than_the_rim_is_cut_by_the_pocket_and_the_caps
 wider than the rim, cut where its round cap meets it before the contact on
 the top comes back over the pocket, against the outer wall rounded alone
 with the ring it loses taken off the rim outside the caps. Its failure
-without the patch, stated in its documentation, is still to be shown in the
-port's before/after run (mitcad#1986).
+without the patch is still to be shown: with it and the 15 later patches
+that change the same lines reverted at the port's tip, OCCT does not build
+(tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 5df681c..a94eaa4 100644

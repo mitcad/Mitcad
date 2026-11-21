@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: MIT
+# The Hem command (mitcad#2112; app/COMMANDS.md "Hem"), on sheet-hem.json
+# (the 35 x 20 sheet F3.b0 of Sketch1 F2, its side face at x = 5 free; t =
+# 2, r = 3, K = 0.3; the volumes those of cli.sheet_hem_forms):
+#   1. Hem on the side face at x = 5 with its defaults: a Flat hem of
+#      length 10 at Tangent to Side, its gap a tenth of the thickness
+#      (1770.2300767579509 mm3); OK adds F4 (SheetFlange1).
+#   2. SheetFlange1 opens in Hem as a Flat hem; Form Open, Gap 2: the
+#      bend of radius 1 and a wall of 7 (1811.3274122871835 mm3).
+#   3. Edited to Rolled: 270 degrees of the rules' radius and no wall
+#      (1953.9822368615503 mm3), the Length row hidden.
+#   4. Edited to Double: Length 25, Gap 2, Setback 1, Own Bend Radius 1
+#      (3462.654824574367 mm3).
+#   5. Unfold of its three bends: the flat sheet, its developed area
+#      1681.0619298297468 mm2 times the thickness (3362.1238596594936
+#      mm3); Refold: the double hem again.
+# Run by tools/ui-sheet-hem-test.sh (Linux),
+# tools/ui-windows-sheet-hem-test.ps1 (Windows) and
+# tools/ui-macos-sheet-hem-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+
+# 1. A new Hem: Flat by default, on the free side face at x = 5.
+mark
+command sheet.hem
+wait-log '^Pick places:' 30
+wait-idle
+expect-choice-text form '^Flat$'
+expect-choice-text position '^Tangent to Side$'
+mark
+# Face the free x = 5 side directly: its thin strip is not an edge pick.
+command view.right
+wait-idle
+command view.fit
+wait-idle
+click-pick 'face F3[.]b0/[^ ]*sheet_side[0-9]*[(]F2:sheet_curve[(]c2[[]c1,c3[]][)][)] at'
+wait-log '^Preview Hem: ok' 30
+wait-idle
+expect-ever '^Panel Hem input length at '
+expect-ever '^Panel Hem input gap at .*[(]hidden[)]'
+mark
+button '^OK$'
+wait-log '^Added flat hem, length ' 30
+wait-log '^Added Hem as F4$' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 1770.2300767579509
+
+# 2. Opened in Hem; Open with a gap of 2.
+mark
+dblclick-logged '^Timeline SheetFlange1 at '
+wait-log '^Editing F4 with Hem$'
+wait-idle
+expect-choice-text form '^Flat$'
+mark
+qt-choice input_form 'Open'
+wait-log '^Preview Hem: ok' 30
+wait-idle
+mark
+type-in '^Panel Hem input gap at ' '2'
+wait-log '^Preview Hem: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited F4' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 1811.3274122871835
+
+# 3. Rolled: 270 degrees, no wall.
+mark
+dblclick-logged '^Timeline SheetFlange1 at '
+wait-log '^Editing F4 with Hem$'
+wait-idle
+expect-choice-text form '^Open$'
+mark
+qt-choice input_form 'Rolled'
+wait-log '^Preview Hem: ok' 30
+wait-idle
+expect-ever '^Panel Hem input length at .*[(]hidden[)]'
+mark
+button '^OK$'
+wait-log '^Edited F4' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 1953.9822368615503
+
+# 4. Double: length 25, gap 2, setback 1, its own bend radius 1.
+mark
+dblclick-logged '^Timeline SheetFlange1 at '
+wait-log '^Editing F4 with Hem$'
+wait-idle
+expect-choice-text form '^Rolled$'
+mark
+qt-choice input_form 'Double'
+wait-log '^Preview Hem: ok' 30
+wait-idle
+mark
+type-in '^Panel Hem input length at ' '25'
+wait-idle
+mark
+type-in '^Panel Hem input gap at ' '2'
+wait-idle
+mark
+click-logged '^Panel Hem input custom_radius at '
+wait-idle
+mark
+type-in '^Panel Hem input radius at ' '1'
+wait-log '^Preview Hem: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited F4' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 3462.654824574367
+
+# 5. Unfolded and refolded: the flat sheet's volume is its developed area
+# times the thickness.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"sheet_unfold","body":"F3.b0","stationary":{"feature":"F3","slot":0},"bends":[{"feature":"F4","slot":0},{"feature":"F4","slot":1},{"feature":"F4","slot":2}]}}'
+wait-log '^TestDriver model command: add_feature$' 30
+wait-idle
+expect-model-bodies 1 3362.1238596594936
+mark
+model-command '{"cmd":"add_feature","def":{"type":"sheet_refold","body":"F3.b0","unfold":"F5"}}'
+wait-log '^TestDriver model command: add_feature$' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 3462.654824574367

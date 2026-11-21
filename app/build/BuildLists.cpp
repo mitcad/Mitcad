@@ -30,7 +30,6 @@
 #include <QPageSize>
 #include <QPainter>
 #include <QPair>
-#include <QPdfWriter>
 #include <QPrinter>
 #include <QPushButton>
 #include <QShortcut>
@@ -243,6 +242,7 @@ QVector<ListTable> cutListTables(const QJsonObject& answer) {
                   QObject::tr("End B"), QObject::tr("Machining"), QObject::tr("Own Features"), QObject::tr("Supplier"),
                   QObject::tr("Part Number"), QObject::tr("Mass Each (kg)")},
                  {}};
+  rows.nameColumn = 1;
   if (timber) {
     rows.columns << QObject::tr("Material") << QObject::tr("Grade") << QObject::tr("Finish")
                  << QObject::tr("Nominal (mm)") << QObject::tr("Actual (mm)") << QObject::tr("Running Meters (m)")
@@ -301,6 +301,7 @@ QVector<ListTable> cutListTables(const QJsonObject& answer) {
                    QObject::tr("Pieces (mm, in cutting order; | between stock pieces)"), QObject::tr("Stock Pieces"),
                    QObject::tr("Offcut (mm)"), QObject::tr("Too Long for the Stock (mm)")},
                   {}};
+  stock.nameColumn = 0;
   if (timber) {
     // Stock per size, each piece's stock length (mitcad#478).
     stock.columns << QObject::tr("Size") << QObject::tr("Stock Lengths (mm)");
@@ -353,6 +354,7 @@ QVector<ListTable> cutListTables(const QJsonObject& answer) {
                   {QObject::tr("Quantity"), QObject::tr("Component"), QObject::tr("Supplier"),
                    QObject::tr("Part Number")},
                   {}};
+  other.nameColumn = 1;
   for (const QJsonValue& value : answer.value(QStringLiteral("other")).toArray()) {
     const QJsonObject row = value.toObject();
     other.rows.append({countText(row.value(QStringLiteral("quantity"))),
@@ -413,6 +415,7 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
     parts.columns.prepend(QObject::tr("Item"));
   }
   parts.columns << keys;
+  parts.nameColumn = numbered ? 2 : 1;
   for (const QJsonValue& value : listed) {
     const QJsonObject row = value.toObject();
     // The suppliers' articles of the part's row (mitcad#949): "Würth 0084 6
@@ -463,6 +466,7 @@ QVector<ListTable> sheetMetalTables(const QJsonObject& answer) {
                     QObject::tr("Material"), QObject::tr("Flat Width (mm)"), QObject::tr("Flat Height (mm)"),
                     QObject::tr("Area (mm²)"), QObject::tr("Bends"), QObject::tr("Flat Pattern")},
                    {}};
+  sheets.nameColumn = 1;
   const auto number = [](const QJsonValue& value, int decimals) {
     return value.isDouble() ? QString::number(value.toDouble(), 'f', decimals) : QString();
   };
@@ -477,113 +481,6 @@ QVector<ListTable> sheetMetalTables(const QJsonObject& answer) {
                         text(row, "problem")});
   }
   return {sheets};
-}
-
-bool writeListPdf(const QString& path, const QString& title, const QString& subtitle,
-                  const QVector<ListTable>& tables, QString& error) {
-  QPdfWriter writer(path);
-  writer.setPageSize(QPageSize(QPageSize::A4));
-  writer.setPageOrientation(QPageLayout::Landscape);
-  writer.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout::Millimeter);
-  writer.setResolution(300);
-  writer.setTitle(title);
-  writer.setCreator(QStringLiteral("MitCad"));
-  const int pages = paintListPages(writer, title, subtitle, tables);
-  if (pages == -1) {
-    error = QObject::tr("%1 cannot be written").arg(QDir::toNativeSeparators(path));
-    return false;
-  }
-  if (pages < 0) {
-    error = QObject::tr("%1 was not written").arg(QDir::toNativeSeparators(path));
-    return false;
-  }
-  return true;
-}
-
-int paintListPages(QPagedPaintDevice& device, const QString& title, const QString& subtitle,
-                   const QVector<ListTable>& tables) {
-  QPainter painter;
-  if (!painter.begin(&device)) {
-    return -1;
-  }
-  const int width = device.width();
-  const int height = device.height();
-  int pages = 1;
-  QFont heading(QStringLiteral("Helvetica"));
-  heading.setPointSizeF(14);
-  heading.setBold(true);
-  QFont body(QStringLiteral("Helvetica"));
-  body.setPointSizeF(8.5);
-  QFont bold = body;
-  bold.setBold(true);
-  int y = 0;
-  const auto lineOf = [&painter](const QFont& font) {
-    painter.setFont(font);
-    return painter.fontMetrics().height();
-  };
-  const auto room = [&](int needed) {
-    if (y + needed > height) {
-      device.newPage();
-      ++pages;
-      y = 0;
-    }
-  };
-  // The title and the design's name with the date.
-  int line = lineOf(heading);
-  painter.drawText(QRect(0, y, width, line), Qt::AlignLeft | Qt::AlignVCenter, title);
-  y += line;
-  line = lineOf(body);
-  painter.drawText(QRect(0, y, width, line), Qt::AlignLeft | Qt::AlignVCenter, subtitle);
-  y += line * 2;
-  for (const ListTable& table : tables) {
-    if (table.rows.isEmpty()) {
-      continue;
-    }
-    // Columns as wide as their texts need, in the page's width.
-    QVector<double> widths(table.columns.size(), 0.0);
-    painter.setFont(bold);
-    for (int c = 0; c < table.columns.size(); ++c) {
-      widths[c] = painter.fontMetrics().horizontalAdvance(table.columns[c]);
-    }
-    painter.setFont(body);
-    for (const QStringList& row : table.rows) {
-      for (int c = 0; c < row.size() && c < widths.size(); ++c) {
-        widths[c] = std::max(widths[c], static_cast<double>(painter.fontMetrics().horizontalAdvance(row[c])));
-      }
-    }
-    double total = 0.0;
-    for (double& w : widths) {
-      w += painter.fontMetrics().averageCharWidth() * 2.0;
-      total += w;
-    }
-    const double scale = total > width ? width / total : 1.0;
-    const auto drawRow = [&](const QStringList& cells, const QFont& font) {
-      const int h = lineOf(font);
-      room(h);
-      double x = 0.0;
-      for (int c = 0; c < cells.size() && c < widths.size(); ++c) {
-        const int w = static_cast<int>(widths[c] * scale);
-        const QString shown = painter.fontMetrics().elidedText(cells[c], Qt::ElideRight, w - 4);
-        painter.drawText(QRect(static_cast<int>(x), y, w, h), Qt::AlignLeft | Qt::AlignVCenter, shown);
-        x += widths[c] * scale;
-      }
-      y += h;
-    };
-    line = lineOf(bold);
-    room(line * 3);
-    painter.drawText(QRect(0, y, width, line), Qt::AlignLeft | Qt::AlignVCenter, table.heading);
-    y += line;
-    drawRow(table.columns, bold);
-    painter.drawLine(0, y, width, y);
-    for (const QStringList& row : table.rows) {
-      drawRow(row, body);
-    }
-    y += line;
-  }
-  if (!painter.end()) {
-    return -2;
-  }
-  return pages;
 }
 
 BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& design, Page page, QWidget* parent)
@@ -1094,8 +991,7 @@ void BuildListsDialog::print() {
   QPrinter& printer = *made;
   printer.setDocName(QStringLiteral("%1 %2").arg(name, title));
   printer.setCreator(QStringLiteral("MitCad"));
-  printer.setPageLayout(QPageLayout(QPageSize(QPageSize::A4), QPageLayout::Landscape, QMarginsF(12, 12, 12, 12),
-                                    QPageLayout::Millimeter));
+  printer.setPageLayout(listPageLayout());
   if (!printing::askPrinter(printer, this, 0)) {
     return;
   }

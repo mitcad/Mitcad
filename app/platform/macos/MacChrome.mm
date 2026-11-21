@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include <QCoreApplication>
@@ -32,6 +33,7 @@
 #include <QPalette>
 #include <QPixmap>
 #include <QRectF>
+#include <QRegularExpression>
 #include <QSize>
 #include <QStringList>
 #include <QVariant>
@@ -242,6 +244,31 @@ bool prepareHeadlessTestApplication(QString& error) {
     return false;
   }
   return headlessTestApplicationIsolated(error);
+}
+
+bool systemMenuItemMatches(const QString& title, const QString& keyEquivalent, QString& error) {
+  const QRegularExpression pattern(title);
+  if (!pattern.isValid()) {
+    error = QStringLiteral("not a regular expression: %1").arg(title);
+    return false;
+  }
+  QStringList seen;
+  std::function<bool(NSMenu*)> search = [&](NSMenu* menu) -> bool {
+    for (NSMenuItem* item in menu.itemArray) {
+      const QString text = QString::fromNSString(item.title);
+      if (pattern.match(text).hasMatch()) {
+        const QString key = QString::fromNSString(item.keyEquivalent);
+        seen.append(QStringLiteral("%1 [%2]").arg(text, key));
+        if (key == keyEquivalent) return true;
+      }
+      if (item.submenu != nil && search(item.submenu)) return true;
+    }
+    return false;
+  };
+  const bool found = NSApp.mainMenu != nil && search(NSApp.mainMenu);
+  error = seen.isEmpty() ? QStringLiteral("no menu item's title matched")
+                         : QStringLiteral("matching items [key equivalent]: %1").arg(seen.join(QStringLiteral(", ")));
+  return found;
 }
 
 bool systemMenuBarMatches(QMenuBar& bar, const QStringList& expected, QString& error) {

@@ -40,6 +40,10 @@ target_link_libraries(mitcad_geometry_io
 # The faces' true areas of the mesh comparison come from the analysis
 # library's integrals, as every area MitCad reports (mitcad#1200).
 target_link_libraries(mitcad_geometry_io PRIVATE mitcad_geometry_analysis)
+# The STEP read runs as one of the geometry's operations, so that a crash
+# inside OCCT's reader is an error (guard.hpp, mitcad#2028). mitcad_geometry
+# does not link this library: no cycle.
+target_link_libraries(mitcad_geometry_io PRIVATE mitcad_geometry)
 
 if(BUILD_TESTING)
   add_executable(test_geometry_io tests/test_io.cpp)

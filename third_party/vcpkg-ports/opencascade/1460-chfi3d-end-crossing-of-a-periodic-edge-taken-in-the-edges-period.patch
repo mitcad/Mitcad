@@ -35,12 +35,11 @@ Test: geometry/tests/test_fillet_end_reversed_faces.cpp, test_pieces_alike
 fillet-end-on-reversed-faces, the piece of each body about the end (9
 faces) rounded: both closed and valid, with as many faces, the same volume
 and on each other within 1e-5 mm; without the patch MitCad's piece is
-invalid and 0.51 mm3 short (the port's notes). Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
-The test reads a stored case (MITCAD_GEOMETRY_CASES): a synthetic body
-needs an edge curve whose range runs past its period's end with a
-non-periodic p-curve beside it, as the import's bodies come (left,
-mitcad#1986).
+invalid and 0.51 mm3 short (the port's notes). It fails without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py). The test reads a stored
+case (MITCAD_GEOMETRY_CASES): a synthetic body needs an edge curve whose
+range runs past its period's end with a non-periodic p-curve beside it, as
+the import's bodies come (left, mitcad#1986).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index c3e27686..bf1d6071 100644

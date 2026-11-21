@@ -33,8 +33,8 @@ Test: geometry/tests/test_fillet_corners.cpp,
 test_rounding_ending_over_pieces_where_the_cap_edge_is_in_two (ctest
 geometry.suite.fillet_corners): a bar on a cylinder, its concave edge
 rounded with 3 on over the side's roundings and chamfers to the cap, the end
-over two pieces of the cap's edge. Its failure without the patch is still to
-be shown in the port's before/after run (mitcad#1986).
+over two pieces of the cap's edge. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 25e11c80..4c55507a 100644

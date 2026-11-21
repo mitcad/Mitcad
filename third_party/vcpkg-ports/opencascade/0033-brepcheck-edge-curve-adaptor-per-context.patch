@@ -16,11 +16,22 @@ own copy of the adaptor (ShallowCopy(), as GeomLib_CheckCurveOnSurface does
 for its threads); the sequential mode is unchanged, and so are the checks
 and their statuses.
 
-Test: geometry/tests/test_sweeps.cpp (ctest geometry.suite.sweeps.1),
-test_helices_on_cylinders: each result checked four times in the parallel
-mode. The race shows in some runs only, so its failure without the patch
-is likely, not certain, and is still to be shown in the port's
-before/after run (mitcad#1986).
+Test: geometry/tests/port/p0033-edge-checked-in-its-faces-at-once.cpp
+(ctest geometry.port.0033). An edge, a planar cubic B-spline of 23 spans,
+kept as the edge of five extrusions of it; in each of 2000 rounds a new
+BRepCheck_Edge in the parallel mode checks it in the first face, then in
+the four others on four threads at once, each evaluating the edge at 21
+parameters in 21 spans, so that every evaluation rebuilds the adaptor's
+cache. test_edge_of_many_spans_checked_in_its_faces_at_once: every
+context is BRepCheck_NoError (without the patch the threads rebuild the
+one cache under each other and a context is InvalidCurveOnSurface);
+test_edge_of_many_spans_checked_one_face_after_another (the sequential
+mode) and test_edge_of_one_span_checked_in_its_faces_at_once (a cache
+built once and only read) are the boundary cases, valid with and without
+the patch. The old witness, geometry/tests/test_sweeps.cpp
+(geometry.suite.sweeps.1, test_helices_on_cylinders), meets the race in
+some runs only. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Edge.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Edge.cxx
 index 9e33400..4031666 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Edge.cxx

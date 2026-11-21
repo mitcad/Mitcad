@@ -73,6 +73,35 @@ void saveRow(const Row& row) {
   }
 }
 
+QString viewKey() { return QStringLiteral("start/browseView"); }
+
+View loadView() {
+  return QSettings().value(viewKey()).toString() == QLatin1String("tree") ? View::Tree : View::Cards;
+}
+
+void saveView(View view) { QSettings().setValue(viewKey(), viewWord(view)); }
+
+QString viewWord(View view) { return view == View::Tree ? QStringLiteral("tree") : QStringLiteral("cards"); }
+
+QStringList openFolders(const QString& folder) {
+  QStringList folders;
+  QString path;
+  for (const QString& part : folder.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+    path = path.isEmpty() ? part : path + QLatin1Char('/') + part;
+    folders << path;
+  }
+  return folders;
+}
+
+QString treeLine(const ProjectRow& project, const QString& projectKey, const QString& folder) {
+  QStringList keys{placeKey(projectKey, QString())};
+  for (const QString& path : allFolders(project)) {
+    keys << placeKey(projectKey, path);
+  }
+  return QStringLiteral("Start page tree: %1 (current %2)")
+      .arg(keys.join(QStringLiteral(" | ")), placeKey(projectKey, folder));
+}
+
 Row shownRow(const Row& row, const QVector<ProjectRow>& projects) {
   if (row.kind != Row::Kind::Project) {
     return row;

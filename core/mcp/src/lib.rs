@@ -33,6 +33,9 @@ pub mod chat;
 // subscription, the author of comment commands and the resolve policy.
 mod comments;
 pub use comments::{COMMENTS_URI, RESOLVE_REFUSED};
+// Guided tutorials (mitcad#2012): ui_guide's resource of the guide step.
+mod ui_guide;
+pub use ui_guide::UI_GUIDE_URI;
 
 // Commands' JSON Schemas on demand through model_reference, with the
 // server's restrictions (mitcad#1897).
@@ -74,7 +77,7 @@ pub const INSTRUCTIONS_CHARS: usize = 2000;
 /// The headless server's instructions (mitcad#1506): only what applies
 /// across tools, the most important first, in labelled lines (mitcad#1897).
 const HEADLESS_INSTRUCTIONS: &str = "Documents: local headless CAD documents. document_create or document_open gives a handle; use the explicit document handle on every call. Documents last until closed or the server exits; files are confined to the configured workspace.\n\
-Comments: a design can hold comments, notes pinned to features, faces, edges and points for an agent: read the open ones first with model_query {\"query\": \"comments\", \"status\": \"open\"}, and after the change each asks for, put {\"cmd\": \"address_comment\", \"id\": ..., \"resolution\": \"<what was done, briefly>\"} in the same model_command array as that change; resolving comments is left to the user.\n\
+Comments: a design can hold comments, notes pinned to features, faces, edges and points for an agent, some with images (query comment_attachment shows one): read the open ones first with model_query {\"query\": \"comments\", \"status\": \"open\"}, and after the change each asks for, put {\"cmd\": \"address_comment\", \"id\": ..., \"resolution\": \"<what was done, briefly>\"} in the same model_command array as that change; resolving comments is left to the user.\n\
 Reference: model_reference gives commands, queries, feature types, their fields and commands' JSON Schemas (no arguments: its contents and every permitted name). How to model well here: model_reference {\"guide\": \"index\"}; unexpected results: {\"guide\": \"bug-reporting\"}.\n\
 Units: JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\").\n\
 Modeling: Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0.\n\
@@ -84,7 +87,7 @@ Commands: a model_command array runs in order as one undo step and stops at the 
 /// tools, the most important first, in labelled lines (mitcad#1897).
 const LIVE_INSTRUCTIONS: &str = "Control the documents open in the Mitcad application, alongside its user.\n\
 Documents: document_list gives every handle and the active flag. Pass document to target a specific design; omitting it uses the active design (a chat agent's own, or the last one it made with document_new).\n\
-Comments first: the user pins notes for you to features, faces, edges and points; ui_state's comments.open counts the open ones. Read them before other work (mitcad://comments, or model_query {\"query\": \"comments\", \"status\": \"open\"}); after the change one asks for, address it in the same model_command array, {\"cmd\": \"address_comment\", \"id\": \"C3\", \"resolution\": \"<what was done, briefly>\"}, so both undo together; resolving comments is left to the user.\n\
+Comments first: the user pins notes for you on the model, some with images (query comment_attachment shows one); ui_state's comments.open counts the open ones. Read them before other work (mitcad://comments, or model_query {\"query\": \"comments\", \"status\": \"open\"}); after the change one asks for, address it in the same model_command array, {\"cmd\": \"address_comment\", \"id\": \"C3\", \"resolution\": \"<what was done>\"}, so both undo together; resolving is left to the user.\n\
 Reference: model_reference gives commands, queries, feature types, their fields and commands' JSON Schemas (no arguments: its contents and every permitted name). How to model well here: model_reference {\"guide\": \"index\"}; unexpected results: {\"guide\": \"bug-reporting\"}.\n\
 Units: JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\").\n\
 Modeling: Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0.\n\
@@ -195,6 +198,9 @@ struct Session<B> {
     /// The `comments` query's answer as the application last gave it
     /// (live profile): the `mitcad://comments` resource.
     comments: Option<Value>,
+    /// The guide step's state as the application last gave it (live
+    /// profile, mitcad#2012): the `mitcad://ui-guide` resource.
+    guide_step: Option<Value>,
 }
 
 impl<B: Backend> Session<B> {
@@ -210,6 +216,7 @@ impl<B: Backend> Session<B> {
             input_tools: false,
             subscriptions: BTreeSet::new(),
             comments: None,
+            guide_step: None,
         }
     }
 
@@ -226,9 +233,12 @@ impl<B: Backend> Session<B> {
                         explain_refusal(&name, &arguments, &mut result.value, &self.vocabulary);
                         split_error(&mut result.value);
                     }
-                    // A preview image as an image block (mitcad#1486).
+                    // A preview image as an image block (mitcad#1486), and
+                    // a comment's image (mitcad#2011).
                     if name == "model_render" && !result.is_error {
                         success(&id, image_content(result.value))
+                    } else if asks_attachment(&name, &arguments) && !result.is_error {
+                        success(&id, attachment_content(result.value))
                     } else {
                         success(&id, tool_content(result.value, result.is_error))
                     }
@@ -350,6 +360,7 @@ impl<B: Backend> Session<B> {
                         })];
                         if live {
                             resources.push(comments::resource());
+                            resources.push(ui_guide::resource());
                         }
                         // The guides mirrored (mitcad#1508).
                         resources.extend(guide::resources());
@@ -363,7 +374,10 @@ impl<B: Backend> Session<B> {
                                 "uri must be a string",
                             ));
                         };
-                        if uri != COMMANDS_URI && uri != COMMENTS_URI && guide::read(uri).is_none()
+                        if uri != COMMANDS_URI
+                            && uri != COMMENTS_URI
+                            && uri != UI_GUIDE_URI
+                            && guide::read(uri).is_none()
                         {
                             return Dispatch::response(error(
                                 Some(id),
@@ -372,7 +386,8 @@ impl<B: Backend> Session<B> {
                             ));
                         }
                         // The reference and the guides never change while
-                        // connected; the comments notify (mitcad#1119).
+                        // connected; the comments (mitcad#1119) and the
+                        // guide step (mitcad#2012) notify.
                         if method == "resources/subscribe" {
                             self.subscriptions.insert(uri.to_owned());
                         } else {
@@ -403,6 +418,10 @@ impl<B: Backend> Session<B> {
                                     "The application has not given the comments yet; retry",
                                 ),
                             });
+                        }
+                        if live && uri == UI_GUIDE_URI {
+                            let state = self.guide_step.clone().unwrap_or_else(ui_guide::idle);
+                            return Dispatch::response(success(id, ui_guide::contents(&state)));
                         }
                         if let Some(contents) = guide::read(uri) {
                             return Dispatch::response(success(id, contents));
@@ -681,6 +700,20 @@ impl LiveSession {
             .then(|| comments::updated(COMMENTS_URI))
     }
 
+    /// The guide step's state (mitcad#2012): what `resources/read` of
+    /// `mitcad://ui-guide` returns from now on. When it differs from the last
+    /// one and the client subscribed to the resource, the
+    /// `notifications/resources/updated` message to send it.
+    pub fn set_guide_step(&mut self, state: Value) -> Option<Value> {
+        let session = &mut self.session;
+        if session.guide_step.as_ref() == Some(&state) {
+            return None;
+        }
+        session.guide_step = Some(state);
+        (session.phase == Phase::Ready && session.subscriptions.contains(UI_GUIDE_URI))
+            .then(|| comments::updated(UI_GUIDE_URI))
+    }
+
     /// The user's preference Preferences › AI Assistants › Agents may resolve
     /// comments (mitcad#1119): off, `resolve_comment` is refused.
     pub fn set_may_resolve_comments(&mut self, allowed: bool) {
@@ -714,6 +747,9 @@ impl LiveSession {
         // The live model_render's pictures too (mitcad#1487).
         let content = if matches!(name.as_str(), "ui_screenshot" | "model_render") && !is_error {
             image_content(value)
+        } else if asks_attachment(&name, &arguments) && !is_error {
+            // A comment's image (mitcad#2011).
+            attachment_content(value)
         } else {
             tool_content(value, is_error)
         };
@@ -760,6 +796,38 @@ fn image_content(mut value: Value) -> Value {
     );
     json!({
         "content": content,
+        "structuredContent": value,
+        "isError": false
+    })
+}
+
+/// Whether a call is `model_query` of `comment_attachment` (mitcad#2011).
+fn asks_attachment(name: &str, arguments: &Value) -> bool {
+    name == "model_query"
+        && arguments.pointer("/query/query").and_then(Value::as_str) == Some("comment_attachment")
+}
+
+/// An image of a comment or a reply as an MCP image block after its text
+/// (mitcad#2011), as a screenshot's is: the answer's `data` (the file in
+/// base64) leaves the JSON, which keeps the image's fields, its
+/// `media_type` the block's `mimeType`. An answer without data stays text.
+fn attachment_content(mut value: Value) -> Value {
+    let data = value
+        .get_mut("result")
+        .and_then(Value::as_object_mut)
+        .and_then(|fields| fields.remove("data"));
+    let Some(Value::String(data)) = data else {
+        return tool_content(value, false);
+    };
+    let mime = value["result"]["media_type"]
+        .as_str()
+        .unwrap_or("image/png")
+        .to_owned();
+    json!({
+        "content": [
+            {"type": "text", "text": value.to_string()},
+            {"type": "image", "data": data, "mimeType": mime}
+        ],
         "structuredContent": value,
         "isError": false
     })

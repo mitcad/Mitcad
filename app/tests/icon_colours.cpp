@@ -3,7 +3,8 @@
 // role, the themed sources carry only the themes' colours on both themes,
 // the warm colours stay with construction, status colours are readable on
 // the dark theme, and disabled icons follow their own rule; Press Pull's
-// arrow stays apart from Extrude's (mitcad#1660).
+// arrow stays apart from Extrude's (mitcad#1660); the thin outline of the
+// toolbar and the timeline halves only the outline's strokes (mitcad#2092).
 #include "UnitTests.hpp"
 #include "framework/Icons.hpp"
 
@@ -337,6 +338,60 @@ void pressPullTests() {
   CHECK(pressPull.center().y() > 24);
 }
 
+// The first element of `svg` that matches `pattern` (a regular expression
+// for its start tag), empty when there is none.
+QString element(const QByteArray& svg, const QString& pattern) {
+  const QRegularExpressionMatch match = QRegularExpression(pattern).match(QString::fromUtf8(svg));
+  return match.hasMatch() ? match.captured() : QString();
+}
+
+// The thin outline (mitcad#2092): the Outline role's strokes, the root's and
+// an inherited or own one, at half their width; an action stroke that took
+// the root's 1.3 keeps 1.3, one with its own width keeps it, and so do the
+// sketch's strokes. Every icon stays a valid drawing with the same colours.
+void outlineWeightTests() {
+  // Dimension: an action rectangle with no width of its own, a sketch line
+  // with its own 1.6, outline lines that take the root's.
+  const QByteArray dimension = iconSource(QStringLiteral("dimension"));
+  CHECK(!dimension.isEmpty());
+  CHECK(themedIconSvg(dimension, false, false, 1.0) == themedIconSvg(dimension, false));
+  for (const bool dark : {false, true}) {
+    const QByteArray thin = themedIconSvg(dimension, dark, false, kThinOutlineWeight);
+    const QString root = element(thin, QStringLiteral("<svg [^>]*>"));
+    CHECK(root.contains(QStringLiteral("stroke-width=\"0.65\"")));
+    const QString action = element(thin, QStringLiteral("<rect [^>]*>"));
+    CHECK(action.contains(QStringLiteral("stroke-width=\"1.3\"")));
+    CHECK(action.contains(QStringLiteral("stroke=\"%1\"")
+                              .arg(iconRoleColour(IconRole::Action, dark, true).name(QColor::HexRgb))));
+    const QString sketch = element(thin, QStringLiteral("<path d=\"M3 20 H21\"[^>]*>"));
+    CHECK(sketch.contains(QStringLiteral("stroke-width=\"1.6\"")));
+    // The outline's own lines inherit the root's 0.65.
+    CHECK(!element(thin, QStringLiteral("<path d=\"M3 10 H21\"[^>]*>")).contains(QStringLiteral("stroke-width")));
+  }
+  // Extrude: the action arrows' own 1.8 stays.
+  const QByteArray extrude = themedIconSvg(iconSource(QStringLiteral("extrude")), false, false, kThinOutlineWeight);
+  CHECK(element(extrude, QStringLiteral("<path d=\"M12 13 V3\"[^>]*>")).contains(QStringLiteral("stroke-width=\"1.8\"")));
+  // Bearing: a group's own outline width of 1 halved.
+  const QByteArray bearing = themedIconSvg(iconSource(QStringLiteral("bearing")), false, false, kThinOutlineWeight);
+  CHECK(element(bearing, QStringLiteral("<g [^>]*>")).contains(QStringLiteral("stroke-width=\"0.5\"")));
+  for (const QString& name : iconNames()) {
+    const QByteArray source = iconSource(name);
+    const QByteArray thin = themedIconSvg(source, false, false, kThinOutlineWeight);
+    if (!QSvgRenderer(thin).isValid() || paintAttributes(thin) != paintAttributes(themedIconSvg(source, false))) {
+      std::fprintf(stderr, "%s: the thin outline's drawing differs\n", qPrintable(name));
+      CHECK(false);
+    }
+  }
+  // An action's icon (a copy of themeIcon's) made thin again by its name;
+  // another icon stays as it is.
+  const QIcon icon = themeIcon(QStringLiteral("dimension"));
+  const QIcon thinIcon = withOutlineWeight(icon, kThinOutlineWeight);
+  CHECK(thinIcon.cacheKey() == themeIcon(QStringLiteral("dimension"), IconBackdrop::Palette, kThinOutlineWeight).cacheKey());
+  CHECK(thinIcon.cacheKey() != icon.cacheKey());
+  const QIcon swatch = swatchIcon(Qt::red);
+  CHECK(withOutlineWeight(swatch, kThinOutlineWeight).cacheKey() == swatch.cacheKey());
+}
+
 // With MITCAD_ICON_PREVIEW set to a folder: every icon on the dark and the
 // light theme's surface, normal over disabled, for a look at the colours.
 void writePreviews() {
@@ -381,6 +436,7 @@ int iconColourTests() {
   iconSourceTests();
   disabledTests();
   pressPullTests();
+  outlineWeightTests();
   writePreviews();
   return failures;
 }

@@ -1801,6 +1801,23 @@ void test_window_floor_rounded_up_to_pillar_ends_in_halves() {
   CHECK(rounded->face_count() == expected->face_count());
 }
 
+// The edge a dressup's face is named after, from a design's long names
+// (mitcad#1821): the edge's own name holds ")#" where it names a piece of
+// a face, so only a piece's "#k" at the very end comes off; a cut at the
+// first ")#" from the end left a stub that named no edge.
+void test_own_edge_of_long_names() {
+  using mitcad::geometry::detail::own_edge;
+  const std::string edge = "E{F187:end(r{b{E{F184:start(r{c3})|F185:high_thread(F184:side(c3))#0}}})#1|"
+                           "F216:side(c31[c30,c24])#0}";
+  CHECK(own_edge("F224:chamfer(" + edge + ")", "F224", "chamfer") == edge);
+  CHECK(own_edge("F224:chamfer(" + edge + ")#3", "F224", "chamfer") == edge);
+  CHECK(own_edge("F224:chamfer(" + edge + ")#12", "F224", "chamfer") == edge);
+  CHECK(own_edge("F9:fillet(E{N1|N5})#0", "F9", "fillet") == "E{N1|N5}");
+  CHECK(own_edge("F9:fillet(E{N1|N5})", "F9", "fillet") == "E{N1|N5}");
+  CHECK(own_edge("F224:corner(V{N1|N2|N3})", "F224", "chamfer").empty());
+  CHECK(own_edge("F224:chamfer(" + edge + ")", "F225", "chamfer").empty());
+}
+
 } // namespace
 
 Segment line_segment(const std::string& name, double x0, double y0, double x1, double y1) {
@@ -1945,6 +1962,7 @@ void dressup_tests() {
   guarded("test_chamfer_runs_out_over_a_slots_rounded_ends", test_chamfer_runs_out_over_a_slots_rounded_ends);
   guarded("test_chamfer_ends_flat_where_the_next_edge_is_too_short",
           test_chamfer_ends_flat_where_the_next_edge_is_too_short);
+  guarded("test_own_edge_of_long_names", test_own_edge_of_long_names);
 }
 
 } // namespace test

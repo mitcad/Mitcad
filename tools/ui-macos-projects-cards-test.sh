@@ -30,9 +30,14 @@ sed '/^collapse-card /d' "$here/ui-scripts/macos-projects-cards.mitcad-ui" > "$U
 cat >> "$UI_OUT/docked.mitcad-ui" <<'DRIVER'
 # A VM's 2x workspace can leave just 394 logical points for the window's
 # frame. Exercise that allowance in this process, including the real native
-# titlebar margins, without changing the physical display resolution.
-fit-main-frame 916 394
-expect-main-frame 916 394
+# titlebar margins, without changing the physical display resolution. The
+# Docked layout of the shared Qt UI has the Floating layout's top bar and
+# toolbar panel above its docks (mitcad#2082), as on Windows and Linux,
+# higher than the old Docked toolbar: the frame is 394 points high, or the
+# window's own minimum where the top bar and the docks cannot be that short
+# (`least`, mitcad#1590).
+fit-main-frame 916 394 least
+expect-main-frame 916 394 least
 expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 focus-widget projectsTree
@@ -40,27 +45,13 @@ key Home Right
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 key End
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
-# The current groups fit at this width; inspect this page's hidden arrows,
-# rather than another stacked page's control with the same object name.
-expect-ribbon-scroll none
 expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 screenshot ${MITCAD_TEST_SHOTS}/short-frame.png
-# Below the width of all group captions, overflow must work through ordinary
-# keyboard input and leave every complete group menu reachable.
-fit-main-frame 500 394
-expect-main-frame 500 394
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
-expect-ribbon-scroll start
-expect-widget-property ribbonScrollLeft enabled false
-focus-widget ribbonScrollRight
-key Space
-expect-widget-property ribbonScrollLeft enabled true
-expect-ribbon-scroll scrolled
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
-focus-widget ribbonScrollLeft
-key Space
-expect-widget-property ribbonScrollLeft enabled false
-expect-ribbon-scroll start
+# Below the width of all group captions: the toolbar panel puts the groups
+# that do not fit even collapsed into its page's » menu (it has no Classic
+# scroll arrows); every caption in sight whole, with its group's menu.
+fit-main-frame 500 394 least
+expect-main-frame 500 394 least
 expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 screenshot ${MITCAD_TEST_SHOTS}/ribbon-overflow.png
 DRIVER

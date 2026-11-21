@@ -209,9 +209,13 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
       continue;
     }
     const InputDef* input = def->primarySelection();
-    if (def->kind != CommandDef::Kind::Feature || input == nullptr || !isAvailable(*def) ||
-        !std::all_of(selection.begin(), selection.end(),
-                     [input](const SelectionItem& s) { return input->takes(s); }) ||
+    // Taken by the first selection input, or spread over the inputs
+    // (mitcad#2111: a face with a point).
+    const bool fits = input != nullptr &&
+                       (std::all_of(selection.begin(), selection.end(),
+                                    [input](const SelectionItem& s) { return input->takes(s); }) ||
+                        (def->takesSpread && def->takesSpread(selection)));
+    if (def->kind != CommandDef::Kind::Feature || !fits || !isAvailable(*def) ||
         (def->surfaceBodiesOnly && !surfaces) || (def->offeredFor && !def->offeredFor(selection))) {
       continue;
     }
@@ -531,6 +535,9 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
         if (!windowReadOnly()) {
           addCall(QStringLiteral("update"), tr("Update Link"), [this, component] { updateLink(component); });
           addCall(QStringLiteral("update"), tr("Update All Links"), [this] { updateLink(QString()); });
+          // Linked parts of the design only (mitcad#2130).
+          addCall(QStringLiteral("component"), tr("Choose Linked Parts…"),
+                  [this, component] { chooseLinkedParts(component); });
         }
         break;
       }

@@ -268,6 +268,10 @@ pub struct PlaceInput {
     /// (mitcad#1965).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines: Option<crate::lines::AlongLines>,
+    /// A part that slides on another (a carriage on its rail): its travel
+    /// limits, each left out for its default (mitcad#2088).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::travel::TravelInput>,
 }
 
 /// An end's cut in `build_edit`.
@@ -363,6 +367,10 @@ pub struct EditInput {
     /// placement's shared miter.
     #[serde(default)]
     pub shared_mitre: Option<EndFrom>,
+    /// A part that slides on another (a carriage on its rail): its travel
+    /// limits again, each left out for its default (mitcad#2088).
+    #[serde(default)]
+    pub limits: Option<crate::travel::TravelInput>,
 }
 
 /// A hole at one of a part's ends.
@@ -895,6 +903,9 @@ pub struct Plan {
     /// A member by two points: what its points are on, its ends cut back
     /// to the members they are in (mitcad#509).
     pub between: Option<crate::timber::Between>,
+    /// A part that slides on another: its joint's travel limits
+    /// (mitcad#2088).
+    pub travel: Option<crate::travel::Travel>,
 }
 
 /// The exact length the committed bound feature will measure. The
@@ -1926,7 +1937,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             &shown,
         )
         .designation;
-        let plan = Plan {
+        let mut plan = Plan {
             source,
             values,
             length,
@@ -1947,6 +1958,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             points,
             closing,
             between: None,
+            travel: None,
         };
         if let Some(length) = measured_bound_length(self, &plan)? {
             if let Some(previous) = measured {
@@ -1957,6 +1969,8 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 return self.plan_place_with_bound_length(input, Some(length));
             }
         }
+        // A carriage's travel limits (mitcad#2088).
+        crate::travel::plan_travel(self, &mut plan, input)?;
         Ok(plan)
     }
 
@@ -3683,7 +3697,8 @@ pub(crate) fn attach_part(
             offset: None,
             angle: (plan.rotate.abs() > 1e-12).then_some(ValueInput::Number(plan.rotate)),
             flip: plan_joint.flip,
-            limits: BTreeMap::new(),
+            // A carriage's travel (mitcad#2088).
+            limits: plan.travel.as_ref().map(|t| t.limits()).unwrap_or_default(),
             position,
             start: BTreeMap::new(),
         };
@@ -4083,8 +4098,33 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
         };
         let rest = self.plan_rest(&info, rotate, input.flip);
         let side_turn = self.plan_side_lie(&info, input.flip);
+        // A carriage's travel limits, and its offset within them
+        // (mitcad#2088).
+        let travel = crate::travel::edit_travel(
+            &*self,
+            &info,
+            input.limits.as_ref(),
+            rotate,
+            offset.as_ref().map(|(_, value, ..)| value),
+        )?;
         self.apply(|state| {
             let mut changed = Vec::new();
+            if let Some((slide_joint, travel)) = &travel {
+                let limits = travel.limits();
+                // With the new offset in the same edit: the old position may
+                // be outside the new limits, the new one within them.
+                let position = offset
+                    .as_ref()
+                    .filter(|_| joint == Some(*slide_joint))
+                    .map(|(motion, value, ..)| (*motion, value.clone()));
+                edit_joint(state, *slide_joint, |j| {
+                    j.limits = limits;
+                    if let Some((motion, value)) = position {
+                        j.position.insert(motion, value);
+                    }
+                })?;
+                changed.push("limits".to_owned());
+            }
             // Off the plane or face (mitcad#2046): the override's shift, and
             // a bound length's ray from as far off.
             if let Some((joint, shift, _, change)) = ground_edit {

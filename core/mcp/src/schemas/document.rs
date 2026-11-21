@@ -57,6 +57,12 @@ pub(super) const COMMANDS: &[&str] = &[
     "add_standard_box",
     "edit_standard_box",
     "add_glue_flap",
+    // Sketch blocks (mitcad#2110).
+    "add_sketch_block",
+    "rename_sketch_block",
+    "remove_sketch_block",
+    "edit_sketch_block",
+    "finish_sketch_block",
 ];
 
 /// The standard box styles (mitcad#1939).
@@ -574,6 +580,48 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             },
             "required": ["uid"],
             "examples": [{"cmd": "set_body_folder", "uid": "F2.b0", "folder": "Fasteners"}]
+        }),
+        // Sketch blocks (mitcad#2110).
+        "add_sketch_block" => json!({
+            "description": "Create Block: a sketch's points and curves become a named block of the design and an instance of it in place (keeping their ids); the block's own constraints and dimensions leave the sketch. Projected geometry and texts are refused. Result: the sketch edit's fields, block, name, sketch, instance.",
+            "properties": {
+                "sketch": feature_uid("The sketch (a planar sketch's uid)"),
+                "items": {"type": "array", "items": {"type": "string", "pattern": "^[pc][0-9]+$"}, "description": "Its points and curves (p3, c4)"},
+                "name": text("Its name; Block<n> when left out"),
+                "base": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}, "description": "Its base point, [x, y] in the sketch; the first item's first point when left out"},
+                "angle": {"type": "number", "default": 0, "description": "Its base direction from the sketch's x axis, radians"}
+            },
+            "required": ["sketch", "items"],
+            "examples": [{"cmd": "add_sketch_block", "sketch": "F1", "items": ["c1", "c2", "c3", "c4"], "name": "Slot", "base": [10, 0]}]
+        }),
+        "rename_sketch_block" => json!({
+            "description": "Renames a sketch block; a name another block has is refused.",
+            "properties": {"block": id("The block, by its name or its number"), "name": text("Its new name")},
+            "required": ["block", "name"],
+            "examples": [{"cmd": "rename_sketch_block", "block": "Slot", "name": "Long slot"}]
+        }),
+        "remove_sketch_block" => json!({
+            "description": "Deletes a sketch block; refused while it has instances in sketches or in other blocks.",
+            "properties": {"block": id("The block, by its name or its number")},
+            "required": ["block"],
+            "examples": [{"cmd": "remove_sketch_block", "block": "Slot"}]
+        }),
+        "edit_sketch_block" => json!({
+            "description": "Edit Block: opens a block for an edit, in place at an instance (sketch and instance: its geometry free with the block's constraints and dimensions) or, without them, in a sketch made for the edit (its base point at the origin). What the sketch editing commands make there joins the block; finish_sketch_block ends the edit. One block is open at a time. Result: sketch, instance.",
+            "properties": {
+                "block": id("The block, by its name or its number"),
+                "sketch": feature_uid("The sketch of the instance to edit it at"),
+                "instance": {"type": "string", "pattern": "^k[0-9]+$", "description": "The instance (k<n>)"}
+            },
+            "required": ["block"],
+            "examples": [{"cmd": "edit_sketch_block", "block": "Slot", "sketch": "F1", "instance": "k6"},
+                         {"cmd": "edit_sketch_block", "block": "Slot"}]
+        }),
+        "finish_sketch_block" => json!({
+            "description": "Finish Block: the open block's geometry becomes the block and every instance follows (constraints on removed geometry are reported in warnings), or with cancel the block stays as it was. A sketch made for the edit goes.",
+            "properties": {"cancel": flag(false, "Leave the block as it was")},
+            "required": [],
+            "examples": [{"cmd": "finish_sketch_block"}]
         }),
         _ => return None,
     };

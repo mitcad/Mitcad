@@ -22,8 +22,30 @@ constexpr double kNearPixels = 40.0;
 constexpr double kBodyTiePixels = 1.0;
 // So are the sketch's axes (mitcad#948): a sketch curve along an axis wins.
 constexpr double kAxisTiePixels = 1.0;
+// And the acquired lines' extensions and where they meet (mitcad#2035):
+// the sketch's own points, curves and intersections win, as over the axes.
+constexpr double kExtensionTiePixels = kAxisTiePixels;
 
 double screenDistance(const QPointF& a, const QPointF& b) { return std::hypot(a.x() - b.x(), a.y() - b.y()); }
+
+// The model's curve `id`, looked up here: test_app links SketchSnap.cpp
+// without SketchModel.cpp (SketchModel::curve).
+const CurveData* curveOf(const SketchModel& model, const QString& id) {
+  for (const CurveData& c : model.curves) {
+    if (c.id == id) {
+      return &c;
+    }
+  }
+  return nullptr;
+}
+
+// Whether `p` on the endless line of the line `c` lies beyond its ends.
+bool beyondEnds(const CurveData& c, const V2& p) {
+  double t = 0.0;
+  lineFoot(c.curve, p, &t);
+  constexpr double e = 1e-9;
+  return t < -e || t > 1.0 + e;
+}
 
 struct Candidate {
   int rank = std::numeric_limits<int>::max(); // lower wins
@@ -58,8 +80,17 @@ QString Snap::describe() const {
   case Kind::Quadrant:
     return QStringLiteral("quadrant of %1").arg(curve);
   case Kind::Intersection:
+    if (extended && extended2) {
+      return QStringLiteral("where two line extensions meet (%1, %2)").arg(curve, curve2);
+    }
+    if (extended) {
+      return QStringLiteral("where the extension of a line meets a curve (%1, %2)").arg(curve, curve2);
+    }
     return QStringLiteral("intersection of %1 and %2").arg(curve, curve2);
   case Kind::OnCurve:
+    if (extended) {
+      return QStringLiteral("on the extension of a line (%1)").arg(curve);
+    }
     if (!axis.isEmpty()) {
       return QStringLiteral("on the %1 axis (%2)").arg(axis, curve);
     }
@@ -186,6 +217,87 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
     }
   }
 
+  // The acquired lines' extensions (mitcad#2035): each line's endless line
+  // beyond its ends as a curve to snap onto, as the axes below; where two
+  // of them meet, and where one crosses another curve near the cursor, as
+  // intersections. All a little further than they are, so that the
+  // sketch's own geometry wins ties; within a line's extent its own snaps
+  // above hold.
+  if (settings.extensions && !settings.acquired.isEmpty()) {
+    std::vector<const CurveData*> lines;
+    for (const QString& id : settings.acquired) {
+      const CurveData* c = curveOf(model, id);
+      if (lines.size() < 2 && c != nullptr && c->isLine() && c->axis.isEmpty() &&
+          !settings.skipCurves.contains(id) && std::find(lines.begin(), lines.end(), c) == lines.end()) {
+        lines.push_back(c);
+      }
+    }
+    for (const CurveData* c : lines) {
+      double t = 0.0;
+      const V2 foot = lineFoot(c->curve, raw, &t);
+      if (t >= 0.0 && t <= 1.0) {
+        continue; // along the line itself: its own OnCurve
+      }
+      const double d = screenDistance(toScreen(foot), screen);
+      if (d > kCurvePixels) {
+        continue;
+      }
+      Snap s;
+      s.kind = Snap::Kind::OnCurve;
+      s.at = foot;
+      s.curve = c->id;
+      s.extended = true;
+      best.offer(2, d + kExtensionTiePixels, s);
+    }
+    const auto offerHit = [&](const V2& hit, const CurveData* a, bool extendedA, const CurveData* b, bool extendedB) {
+      const double d = screenDistance(toScreen(hit), screen);
+      if (d > kSpecialPixels) {
+        return;
+      }
+      for (const PointData& p : model.points) {
+        if (dist(p.at, hit) < 1e-6) {
+          return; // a point snap there wins
+        }
+      }
+      if (!extendedA) {
+        std::swap(a, b);
+        std::swap(extendedA, extendedB);
+      }
+      Snap s;
+      s.kind = Snap::Kind::Intersection;
+      s.at = hit;
+      s.curve = a->id;
+      s.curve2 = b->id;
+      s.extended = extendedA;
+      s.extended2 = extendedB;
+      best.offer(1, d + kExtensionTiePixels, s);
+    };
+    // Where the two lines' endless lines meet beyond the end of either
+    // (within both, an ordinary intersection); parallel lines meet nowhere.
+    if (lines.size() == 2) {
+      if (const auto hit = lineMeet(lines[0]->curve, lines[1]->curve)) {
+        const bool first = beyondEnds(*lines[0], *hit);
+        const bool second = beyondEnds(*lines[1], *hit);
+        if (first || second) {
+          offerHit(*hit, lines[0], first, lines[1], second);
+        }
+      }
+    }
+    // Where a line's extension crosses another curve near the cursor.
+    for (const CurveData* c : lines) {
+      for (const CurveData* other : nearby) {
+        if (std::find(lines.begin(), lines.end(), other) != lines.end()) {
+          continue;
+        }
+        for (const V2& hit : lineCrossings(c->curve, other->curve)) {
+          if (beyondEnds(*c, hit)) {
+            offerHit(hit, c, true, other, false);
+          }
+        }
+      }
+    }
+  }
+
   // The x and y axes as lines across the view (mitcad#948), as curves to
   // snap onto, a little further than they are: a sketch curve along an
   // axis wins, and so do points, the origin and the special points.
@@ -285,6 +397,29 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
   return result;
 }
 
+std::vector<std::pair<V2, V2>> extensionGuides(const SketchModel& model, const Snap& snap) {
+  std::vector<std::pair<V2, V2>> guides;
+  const auto guide = [&](const QString& id) {
+    const CurveData* c = curveOf(model, id);
+    if (c == nullptr || !c->isLine()) {
+      return;
+    }
+    const V2 a = c->curve.a;
+    const V2 b = c->curve.b;
+    guides.emplace_back(dist(a, snap.at) <= dist(b, snap.at) ? a : b, snap.at);
+  };
+  if (snap.kind != Snap::Kind::OnCurve && snap.kind != Snap::Kind::Intersection) {
+    return guides;
+  }
+  if (snap.extended) {
+    guide(snap.curve);
+  }
+  if (snap.extended2) {
+    guide(snap.curve2);
+  }
+  return guides;
+}
+
 QString axesAt(const SketchModel& model, const Snap& snap) {
   switch (snap.kind) {
   case Snap::Kind::Origin:
@@ -326,17 +461,6 @@ constexpr double kTouchOn = 1e-6;
 constexpr double kTouchSine = 1e-6;
 // Coordinates this close are the same for an axis alignment.
 constexpr double kAligned = 1e-9;
-
-// The model's curve `id`, looked up here: test_app links SketchSnap.cpp
-// without SketchModel.cpp (SketchModel::curve).
-const CurveData* curveOf(const SketchModel& model, const QString& id) {
-  for (const CurveData& c : model.curves) {
-    if (c.id == id) {
-      return &c;
-    }
-  }
-  return nullptr;
-}
 
 QJsonObject relation(const QString& type, const QString& a, const QString& b) {
   return {{QStringLiteral("type"), type}, {QStringLiteral("a"), a}, {QStringLiteral("b"), b}};

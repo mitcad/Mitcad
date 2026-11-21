@@ -1,0 +1,22 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The frame of the drag and travel UI test (mitcad#2088, tools/ui-build-drag-travel-test.sh and its Windows and macOS twins), placed from the runner's library (LIBRARY_URL) with build_place: Upright (C1, Upright:1, its derived part F1, grounded at the origin along +Z, 1000 long); Arm (C2, F2, Joint F3) on the upright's x+ slot 100 from end A, 500 long, along +X; Post (C3, F4, F5) on the arm's slot 200 from its end A, 300 long; Rail (C4, F6, F7) on the upright's y+ slot 100 from end A, 400 long; Carriage (C5, F8, F9) on the rail, its frame 100 from the rail's end A (travel 20 to 380)."},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "p-drag-test"},
+   "at": {"point": [0, 0, 0]}, "length": 1000, "name": "Upright"},
+  {"cmd": "build_place", "part": {"source": "S1"},
+   "at": {"occurrence": "Upright:1", "geometry": {"mount": "F1:mount(slot_x+_1)"}, "offset": 100},
+   "length": 500, "name": "Arm"},
+  {"cmd": "build_place", "part": {"source": "S1"},
+   "at": {"occurrence": "Arm:1", "geometry": {"mount": "F2:mount(slot_y+_1)"}, "offset": 200},
+   "length": 300, "name": "Post"},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "rail-drag-test"},
+   "at": {"occurrence": "Upright:1", "geometry": {"mount": "F1:mount(slot_y+_1)"}, "offset": 100},
+   "length": 400, "name": "Rail"},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "carriage-drag-test"},
+   "at": {"occurrence": "Rail:1", "geometry": {"mount": "F6:mount(rail)"}, "offset": 100},
+   "name": "Carriage"},
+  {"expect": {"query": {"query": "joints"}, "result": {"joints": [
+    {"name": "Arm on Upright", "state": "placed"}, {"name": "Post on Arm", "state": "placed"},
+    {"name": "Rail on Upright", "state": "placed"}, {"name": "Carriage on Rail", "state": "placed"}]}}},
+  {"expect": {"bodies": 5}}
+]

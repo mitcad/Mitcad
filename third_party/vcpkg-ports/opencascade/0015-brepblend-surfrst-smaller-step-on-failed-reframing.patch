@@ -14,12 +14,22 @@ lies outside the face. As BRepBlend_Walking does for blends between two
 faces, the step is now halved (Blend_StepTooLarge) while it is larger than
 twice the guide's tolerance; only then does the walk stop there.
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow),
-test_second_rounding_rolls_on_the_first_ones_contact_line: a disc's two
-rims rounded one after the other, the second rolling on the first's
-contact line. Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+Test:
+geometry/tests/port/p0015-rolling-walk-halves-a-step-off-the-far-branch.cpp
+(ctest geometry.port.0015), test_rounding_rolls_round_a_wide_steps_rim: a
+round step 0.5 high and 100 in radius on a plate, its foot rounded with
+0.6, the ball rolling on the step's top rim all round: built, valid, the
+exact volume, the step's side gone. The walk's steps of 4.5 to 9 degrees
+start the solver, from the previous section, nearer the ball on the far
+side of the rim (its centre 99.41 from the axis against 100.59), whose
+plate contact under the step cannot be reframed. The second rounding of
+geometry/tests/test_fillet_overflow.cpp's
+test_second_rounding_rolls_on_the_first_ones_contact_line rolls inside
+its rim, where such a start drifts towards the right ball, and so never
+came here. test_rounding_rolls_round_a_narrow_steps_rim, the boundary: the
+step 8.5 in radius, whose steps start by the right ball. It passes without
+the patch: the test does not prove it (shown 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
 index 5f06577..d79fc74 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx

@@ -57,8 +57,8 @@ edges' tolerance, the side's edge rounded with 0.3 up to the vertex where
 the three faces are tangent: valid, the blend ending in a point there, the
 vertices' tolerances below 0.01, the material taken within 0.5 % of the
 exact body's; the port's notes record the fillet failing without the
-patch. Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+patch. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 842564f3..e37986f7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

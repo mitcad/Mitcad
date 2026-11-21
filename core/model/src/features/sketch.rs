@@ -437,6 +437,31 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         if let Some(warning) = solved.status.not_parallel_warning() {
             ctx.warn(warning);
         }
+        // Constraints whose geometry an edit of a block removed
+        // (mitcad#2110), where that geometry was.
+        let lost: Vec<crate::notice::NoticePlace> = self
+            .blocks
+            .iter()
+            .flat_map(|b| &b.lost)
+            .map(|l| crate::notice::NoticePlace::Point {
+                at: frame.point(l.at),
+            })
+            .collect();
+        match lost.len() {
+            0 => {}
+            1 => ctx.warn_at(
+                "a constraint lost its geometry when its block was edited: the block no longer \
+                 has the curve or point it held",
+                lost,
+            ),
+            n => ctx.warn_at(
+                format!(
+                    "{n} constraints lost their geometry when their block was edited: the block \
+                     no longer has the curves or points they held"
+                ),
+                lost,
+            ),
+        }
         // Where linked projections and what hangs on them are now (the
         // definition with its offsets made again holds them where they are).
         let moved = match (&followed, &retrimmed) {

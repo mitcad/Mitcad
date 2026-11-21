@@ -537,9 +537,23 @@ void CamMachinesDialog::editMachine() {
   form->addRow(tr("Name"), name);
   auto* controller = new QComboBox;
   controller->setObjectName(QStringLiteral("camMachineController"));
+  // Only the dialects of the machine's kind (mitcad#2119): a lathe's
+  // controller writes turning, a mill's milling; the model refuses the
+  // other kind.
+  const bool lathe = body.value(QStringLiteral("lathe")).isObject();
   for (const QJsonValue& value : std::as_const(m_dialects)) {
-    controller->addItem(text(value.toObject(), "label"), text(value.toObject(), "id"));
+    const QJsonObject dialect = value.toObject();
+    if (dialect.value(QStringLiteral("lathe")).toBool() != lathe) {
+      continue;
+    }
+    controller->addItem(text(dialect, "label"), text(dialect, "id"));
   }
+  QStringList controllers;
+  for (int i = 0; i < controller->count(); ++i) {
+    controllers << controller->itemData(i).toString();
+  }
+  qInfo().noquote() << QStringLiteral("CAM machine controllers: %1: %2")
+                           .arg(text(machine, "id"), controllers.join(QStringLiteral(", ")));
   controller->setCurrentIndex(std::max(0, controller->findData(text(body, "controller"))));
   controller->setToolTip(tr("The controller the machine runs: the G-code it is written for"));
   form->addRow(tr("Controller"), controller);

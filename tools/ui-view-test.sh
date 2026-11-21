@@ -549,8 +549,12 @@ ui_sync
 ui_expect_new "Orbit cursor jumped" "the cursor jumps at the edge of the screen" 8
 at=$(orbit_cursor_x)
 [ "$at" -lt $((orbit_w / 2)) ] || ui_fail "the cursor did not continue from the opposite edge: x $at of $orbit_w"
+# The camera's line comes once the view rests after the release (with the
+# cube's places before it), which takes longer than a fixed pause on a busy
+# machine: waited for, not slept for.
+ui_mark
 xdotool mouseup 2
-sleep 0.5
+ui_expect_new "Camera direction" "the view rests after the drag over the edge" 15
 past=$(orbit_camera)
 length=$((orbit_w - 40 - orbit_x + orbit_w / 4))
 turned=$(orbit_degrees "$orbit_iso" "$past")
@@ -577,8 +581,9 @@ ui_expect_new "Orbit cursor jumped" "the cube's drag jumps at the top of the scr
 xdotool mousemove "$cube_x" "$cube_y"
 sleep 0.1
 ui_sync
+ui_mark
 xdotool mouseup 1
-sleep 0.5
+ui_expect_new "Camera direction" "the view rests after the cube's drag" 15
 back=$(orbit_camera)
 turned=$(orbit_degrees "$orbit_iso" "$back")
 echo "     released where it was pressed: $back; $turned degrees from isometric"

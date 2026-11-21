@@ -37,8 +37,13 @@ where that fails, under a handler like OCCT's own in Compute (a bad
 stripe, its spine's status an error: the fillet is not done). Any other
 failure of the rolling computation (a broken invariant, a signal) is
 rethrown.
-Test: pending (mitcad#2003): the port test written for this patch does not
-reach its case yet.
+Test: geometry/tests/port/p0430-rolls-before-another-roundings-face.cpp
+(ctest geometry.port.0430): a window through a wall 3.54 thick, its end a
+strip 0.5 wide and a face at 0.35, -0.35 or -10 degrees to it, its two
+vertical edges there rounded with 2: built, valid, the rounding beside the
+strip rolling on its far edge, the material exact; strips on both sides
+(one past a sliver of 0.003): both roll (without the patch: not built).
+The boundary: rounded with 1.5, the contacts apart, built as before.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 471aab46..98525871 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

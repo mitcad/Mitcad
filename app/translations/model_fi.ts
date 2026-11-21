@@ -1462,10 +1462,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 ja %2 eivät ole samankeskiset</translation>
     </message>
     <message>
-        <source>%1 and %2 are not connected through registered seams</source>
-        <translation>%1 ja %2 eivät ole yhteydessä rekisteröityjen saumojen kautta</translation>
-    </message>
-    <message>
         <source>%1 and %2 are not parallel: a roof stands on two parallel walls</source>
         <translation>%1 ja %2 eivät ole yhdensuuntaiset: katto lepää kahden yhdensuuntaisen seinän päällä</translation>
     </message>
@@ -2874,10 +2870,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 otsikkoa mutta %2 objektia</translation>
     </message>
     <message>
-        <source>%1 hem: a flange of 180 degrees whose inside radius is half its gap, its length measured from the bend&apos;s outer surface</source>
-        <translation>%1 reunataitos: 180 asteen laippa, jonka sisäsäde on puolet sen raosta ja pituus mitattuna taivutuksen ulkopinnasta</translation>
-    </message>
-    <message>
         <source>%1 holds a MitCad project: open it (Open from Cloud, mitcad-cli clone) instead of making a new one</source>
         <translation>%1 sisältää MitCad-projektin: avaa se (Avaa pilvestä, mitcad-cli clone) uuden tekemisen sijaan</translation>
     </message>
@@ -3822,10 +3814,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 ei ole JSON-objekti</translation>
     </message>
     <message>
-        <source>%1 is not a MitCad library or index (%2 or %3 at its root)</source>
-        <translation>%1 ei ole MitCad-kirjasto eikä -hakemisto (juuressa ei ole tiedostoa %2 tai %3)</translation>
-    </message>
-    <message>
         <source>%1 is not a MitCad project (it has no %2)</source>
         <translation>%1 ei ole MitCad-projekti (siinä ei ole tiedostoa %2)</translation>
     </message>
@@ -4224,10 +4212,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 is not built: it has no axis to check a belt on</source>
         <translation>%1 ei ole muodostettu: sillä ei ole akselia, jonka ympäri hihnan voisi tarkistaa</translation>
-    </message>
-    <message>
-        <source>%1 is not connected to %2 through registered seams</source>
-        <translation>%1 ei ole yhteydessä kohteeseen %2 rekisteröityjen saumojen kautta</translation>
     </message>
     <message>
         <source>%1 is not cut to length</source>
@@ -8898,10 +8882,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1rajauslaatikko %2 – %3, koko %4 x %5 x %6 mm</translation>
     </message>
     <message>
-        <source>%1path patterns along edges</source>
-        <translation>%1polkukuviot särmiä pitkin</translation>
-    </message>
-    <message>
         <source>%1scaled copies of faces</source>
         <translation>%1tahkojen skaalatut kopiot</translation>
     </message>
@@ -12474,10 +12454,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Viivanleveys</translation>
     </message>
     <message>
-        <source>Linked component is read-only; edit the source design instead.</source>
-        <translation>Linkitetty komponentti on vain luku; muokkaa sen sijaan lähdemallia.</translation>
-    </message>
-    <message>
         <source>List the bodies: name the piece if it is wanted, or join or remove it if the split was not intended.</source>
         <translation>Listaa kappaleet: nimeä pala, jos se on tarkoitettu, tai yhdistä tai poista se, jos jako ei ollut tarkoituksellinen.</translation>
     </message>
@@ -14350,10 +14326,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Asetetaan haaran %1 seurattava etähaara</translation>
     </message>
     <message>
-        <source>Shared component definition has multiple occurrences; occurrence-specific cuts are not supported.</source>
-        <translation>Jaetun komponentin määrittelyllä on useita esiintymiä; esiintymäkohtaisia leikkauksia ei tueta.</translation>
-    </message>
-    <message>
         <source>Shared miter of %1 and %2</source>
         <translation>Kohteiden %1 ja %2 yhteinen jiiri</translation>
     </message>
@@ -15202,12 +15174,324 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Viipaloijan projektimuoto ei voi jättää yhtä kappaletta viipaloijan omalle filamentille, kun se lähettää materiaalit muille. Valitse tälle kappaleelle materiaali tai valitse listan yläpuolelta Ei mitään ja Aseta kaikille, niin vain geometria lähetetään.</translation>
     </message>
     <message>
+        <source>&quot;%1&quot; is not a tutorial&apos;s id</source>
+        <translation>&quot;%1&quot; ei ole tutoriaalin tunniste</translation>
+    </message>
+    <message>
+        <source>&quot;next_comment_attachment&quot; must be a number from 1</source>
+        <translation>&quot;next_comment_attachment&quot; on oltava luku 1:stä alkaen</translation>
+    </message>
+    <message>
+        <source>%1 has no image %2</source>
+        <translation>kohteella %1 ei ole kuvaa %2</translation>
+    </message>
+    <message>
+        <source>%1 has no reply %2</source>
+        <translation>kohteella %1 ei ole vastausta %2</translation>
+    </message>
+    <message>
+        <source>%1 has no tutorial %2</source>
+        <translation>lähteessä %1 ei ole tutoriaalia %2</translation>
+    </message>
+    <message>
+        <source>%1 has no version</source>
+        <translation>kohteella %1 ei ole versiota</translation>
+    </message>
+    <message>
+        <source>%1 has not been fetched</source>
+        <translation>lähdettä %1 ei ole haettu</translation>
+    </message>
+    <message>
+        <source>%1 is a symbolic link or a submodule; tutorials hold files</source>
+        <translation>%1 on symbolinen linkki tai alimoduuli; tutoriaaleissa on tiedostoja</translation>
+    </message>
+    <message>
+        <source>%1 is no image id (A&lt;n&gt;)</source>
+        <translation>%1 ei ole kuvan tunniste (A&lt;n&gt;)</translation>
+    </message>
+    <message>
+        <source>%1 is not a MitCad library, index or tutorials repository (%2, %3 or %4 at its root)</source>
+        <translation>%1 ei ole MitCadin kirjasto-, hakemisto- tai tutoriaalirepositorio (%2, %3 tai %4 juuressa)</translation>
+    </message>
+    <message>
+        <source>%1 is not a file name</source>
+        <translation>%1 ei ole tiedostonimi</translation>
+    </message>
+    <message>
+        <source>%1 is not a folder</source>
+        <translation>%1 ei ole kansio</translation>
+    </message>
+    <message>
+        <source>%1 is not a path inside the tutorial</source>
+        <translation>%1 ei ole polku tutoriaalin sisällä</translation>
+    </message>
+    <message>
+        <source>%1 is not in the repository</source>
+        <translation>%1 ei ole repositoriossa</translation>
+    </message>
+    <message>
+        <source>%1&apos;s data is no base64: %2</source>
+        <translation>kohteen %1 data ei ole base64-muotoa: %2</translation>
+    </message>
+    <message>
+        <source>%1: two comments have the same number</source>
+        <translation>%1: kahdella kommentilla on sama numero</translation>
+    </message>
+    <message>
+        <source>&quot;at&quot; is a position [x, y] or a point id</source>
+        <translation>&quot;at&quot; on sijainti [x, y] tai pisteen tunnus</translation>
+    </message>
+    <message>
+        <source>&quot;at&quot; is a position [x, y] or a point id, not &quot;%1&quot;</source>
+        <translation>&quot;at&quot; on sijainti [x, y] tai pisteen tunnus, ei &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <source>&quot;mode&quot; of a break is &quot;crossings&quot; or &quot;point&quot;, not &quot;%1&quot;</source>
+        <translation>pilkonnan &quot;mode&quot; on &quot;crossings&quot; tai &quot;point&quot;, ei &quot;%1&quot;</translation>
+    </message>
+    <message>
+        <source>%1 and %2 are not connected through the sheet&apos;s bends and seams</source>
+        <translation>%1 ja %2 eivät ole yhteydessä levyn taivutusten ja saumojen kautta</translation>
+    </message>
+    <message>
+        <source>%1 constraints lost their geometry when their block was edited: the block no longer has the curves or points they held</source>
+        <translation>%1 rajoitetta menetti geometriansa, kun niiden lohkoa muokattiin: lohkossa ei enää ole käyriä tai pisteitä, joihin ne kohdistuivat</translation>
+    </message>
+    <message>
+        <source>%1 constraints or dimensions that held the whole split curve were removed</source>
+        <translation>%1 rajoitetta tai mittaa, jotka kohdistuivat koko jaettuun käyrään, poistettiin</translation>
+    </message>
+    <message>
+        <source>%1 does not slide along another part: it has no travel limits</source>
+        <translation>%1 ei liu&apos;u toista osaa pitkin: sillä ei ole liikevaran rajoja</translation>
+    </message>
+    <message>
+        <source>%1 has no direction at its end</source>
+        <translation>Kohteella %1 ei ole suuntaa päässään</translation>
+    </message>
+    <message>
+        <source>%1 has no end to blend from: pick an open curve</source>
+        <translation>Kohteella %1 ei ole päätä, josta liittää: poimi avoin käyrä</translation>
+    </message>
+    <message>
+        <source>%1 is %2 and has no end</source>
+        <translation>%1 on %2, eikä sillä ole päätä</translation>
+    </message>
+    <message>
+        <source>%1 is a library part or a design linked with options; only a design linked as it is links chosen parts</source>
+        <translation>%1 on kirjasto-osa tai vaihtoehdoin linkitetty malli; vain sellaisenaan linkitetty malli linkittää valitut osat</translation>
+    </message>
+    <message>
+        <source>%1 is closed and has no end</source>
+        <translation>%1 on suljettu, eikä sillä ole päätä</translation>
+    </message>
+    <message>
+        <source>%1 is computed by a derived offset</source>
+        <translation>%1 lasketaan johdetulla siirtymällä</translation>
+    </message>
+    <message>
+        <source>%1 is inside a block instance</source>
+        <translation>%1 on lohkon ilmentymän sisällä</translation>
+    </message>
+    <message>
+        <source>%1 is longer than %2: it has no room to travel on it</source>
+        <translation>%1 on pidempi kuin %2: sillä ei ole tilaa liikkua sitä pitkin</translation>
+    </message>
+    <message>
+        <source>%1 is no longer in %2; it has no saved shape to keep</source>
+        <translation>%1 ei ole enää kohteessa %2; sillä ei ole tallennettua muotoa, jonka voisi säilyttää</translation>
+    </message>
+    <message>
+        <source>%1 is no longer in %2; its saved shape is kept</source>
+        <translation>%1 ei ole enää kohteessa %2; sen tallennettu muoto säilytetään</translation>
+    </message>
+    <message>
+        <source>%1 is not a body id like F3.b0</source>
+        <translation>%1 ei ole kappaleen tunnus, kuten F3.b0</translation>
+    </message>
+    <message>
+        <source>%1 is not a linked component; only a linked design links chosen parts</source>
+        <translation>%1 ei ole linkitetty komponentti; vain linkitetty malli linkittää valitut osat</translation>
+    </message>
+    <message>
+        <source>%1 is not connected to %2 through the sheet&apos;s bends and seams</source>
+        <translation>%1 ei ole yhteydessä kohteeseen %2 levyn taivutusten ja saumojen kautta</translation>
+    </message>
+    <message>
+        <source>%1 is not in %2</source>
+        <translation>%1 ei ole kohteessa %2</translation>
+    </message>
+    <message>
+        <source>%1 is outside those travel limits: move it within them first, or keep Min and Max around where it is</source>
+        <translation>%1 on näiden liikevaran rajojen ulkopuolella: siirrä se ensin rajojen sisään tai aseta Min ja Maks sen nykyisen paikan molemmin puolin</translation>
+    </message>
+    <message>
+        <source>%1 is picked twice at the same end</source>
+        <translation>%1 on poimittu kahdesti samasta päästä</translation>
+    </message>
+    <message>
+        <source>%1 lost %2 geometry with the edit of the block</source>
+        <translation>%1 menetti geometriaa lohkon muokkauksessa (%2)</translation>
+    </message>
+    <message>
+        <source>%1 midpoint constraints on the split curve were removed: no piece has the old middle</source>
+        <translation>%1 jaetun käyrän keskipisterajoitetta poistettiin: millään osalla ei ole vanhaa keskikohtaa</translation>
+    </message>
+    <message>
+        <source>%1 names more than one occurrence of the design to link; name one by its number</source>
+        <translation>%1 nimeää useamman kuin yhden linkitettävän mallin esiintymän; nimeä yksi sen numerolla</translation>
+    </message>
+    <message>
+        <source>%1 now a driven distance between p%2 and p%3, the ends of the pieces of c%4</source>
+        <translation>%1 on nyt ohjattu etäisyys pisteiden p%2 ja p%3 välillä (käyrän c%4 osien päät)</translation>
+    </message>
+    <message>
+        <source>%1 now a driven distance between points, the ends of the pieces of a curve</source>
+        <translation>%1 on nyt ohjattu etäisyys pisteiden välillä (käyrän osien päät)</translation>
+    </message>
+    <message>
+        <source>%1 of the block left out while it is edited here: a turned instance has no horizontal or vertical of its block; edit the block on its own to keep them</source>
+        <translation>Lohkosta jätetty pois %1, kun sitä muokataan tässä: käännetyllä ilmentymällä ei ole lohkonsa vaaka- tai pystyrajoitteita; muokkaa lohkoa erikseen, jotta ne säilyvät</translation>
+    </message>
+    <message>
+        <source>%1 of the block left out: a turned instance has no horizontal or vertical of its block</source>
+        <translation>Lohkosta jätetty pois %1: käännetyllä ilmentymällä ei ole lohkonsa vaaka- tai pystyrajoitteita</translation>
+    </message>
+    <message>
+        <source>%1 removed: midpoint of a curve, which no piece has</source>
+        <translation>%1 poistettu: käyrän keskipiste, jota millään osalla ei ole</translation>
+    </message>
+    <message>
+        <source>%1 removed: midpoint of c%2, which no piece has</source>
+        <translation>%1 poistettu: käyrän c%2 keskipiste, jota millään osalla ei ole</translation>
+    </message>
+    <message>
+        <source>%1 removed: they held the whole of a curve</source>
+        <translation>%1 poistettu: ne kohdistuivat koko käyrään</translation>
+    </message>
+    <message>
+        <source>%1 removed: they held the whole of c%2</source>
+        <translation>%1 poistettu: ne kohdistuivat koko käyrään c%2</translation>
+    </message>
+    <message>
+        <source>%1 stays where it was placed: move it with Placement</source>
+        <translation>%1 pysyy siellä, mihin se sijoitettiin: siirrä sitä komennolla Sijoitus</translation>
+    </message>
+    <message>
+        <source>%1&apos;s linked bodies are missing</source>
+        <translation>Kohteen %1 linkitetyt kappaleet puuttuvat</translation>
+    </message>
+    <message>
+        <source>%1&apos;s travel limits: Min is greater than Max</source>
+        <translation>Kohteen %1 liikevaran rajat: Min on suurempi kuin Maks</translation>
+    </message>
+    <message>
+        <source>A chosen item</source>
+        <translation>Valittu kohde</translation>
+    </message>
+    <message>
+        <source>A curve cannot be split</source>
+        <translation>Käyrää ei voi jakaa</translation>
+    </message>
+    <message>
+        <source>A curve ends at the split point</source>
+        <translation>Käyrä päättyy jakopisteeseen</translation>
+    </message>
+    <message>
+        <source>A curve is a sketch axis</source>
+        <translation>Käyrä on luonnoksen akseli</translation>
+    </message>
+    <message>
+        <source>A curve is closed</source>
+        <translation>Käyrä on suljettu</translation>
+    </message>
+    <message>
+        <source>A curve is part of block instance %1</source>
+        <translation>Käyrä kuuluu lohkon ilmentymään %1</translation>
+    </message>
+    <message>
+        <source>A point is not on a curve</source>
+        <translation>Piste ei ole käyrällä</translation>
+    </message>
+    <message>
+        <source>Add Blocks</source>
+        <translation>Lisää lohkoja</translation>
+    </message>
+    <message>
+        <source>Blend Curve in %1</source>
+        <translation>Liitoskäyrä kohteessa %1</translation>
+    </message>
+    <message>
+        <source>Break in %1</source>
+        <translation>Pilkonta kohteessa %1</translation>
+    </message>
+    <message>
+        <source>Choose Linked Parts of %1</source>
+        <translation>Valitse kohteen %1 linkitetyt osat</translation>
+    </message>
+    <message>
+        <source>Create Block %1</source>
+        <translation>Luo lohko %1</translation>
+    </message>
+    <message>
+        <source>Delete Block %1</source>
+        <translation>Poista lohko %1</translation>
+    </message>
+    <message>
+        <source>Edit Block %1</source>
+        <translation>Muokkaa lohkoa %1</translation>
+    </message>
+    <message>
+        <source>Explode Block %1</source>
+        <translation>Pura lohko %1</translation>
+    </message>
+    <message>
         <source>Finger joints</source>
         <translation>Sormiliitokset</translation>
     </message>
     <message>
         <source>Glue flaps</source>
         <translation>Liimaläpät</translation>
+    </message>
+    <message>
+        <source>Remove Image</source>
+        <translation>Poista kuva</translation>
+    </message>
+    <message>
+        <source>Insert Block %1</source>
+        <translation>Lisää lohko %1</translation>
+    </message>
+    <message>
+        <source>Linked component, so it is left out; check it to machine this occurrence in this assembly only. Its design stays as it is.</source>
+        <translation>Linkitetty komponentti, joten se jätetään pois; valitse se työstääksesi tämän esiintymän vain tässä kokoonpanossa. Sen malli pysyy ennallaan.</translation>
+    </message>
+    <message>
+        <source>Machined in this assembly; its own design stays as it is.</source>
+        <translation>Työstetty tässä kokoonpanossa; sen oma malli pysyy ennallaan.</translation>
+    </message>
+    <message>
+        <source>Make Driven in %1</source>
+        <translation>Tee ohjatuksi luonnoksessa %1</translation>
+    </message>
+    <message>
+        <source>Make Driving in %1</source>
+        <translation>Tee ohjaavaksi luonnoksessa %1</translation>
+    </message>
+    <message>
+        <source>Placed more than once, so it is left out; check it to machine this occurrence only. The other occurrences stay as they are.</source>
+        <translation>Sijoitettu useammin kuin kerran, joten se jätetään pois; valitse se työstääksesi vain tämän esiintymän. Muut esiintymät pysyvät ennallaan.</translation>
+    </message>
+    <message>
+        <source>Rename Block %1</source>
+        <translation>Nimeä lohko %1 uudelleen</translation>
+    </message>
+    <message>
+        <source>Split at Point in %1</source>
+        <translation>Jako pisteessä kohteessa %1</translation>
+    </message>
+    <message>
+        <source>The cut no longer reaches a component it machines in this assembly; that component is left as it is.</source>
+        <translation>Leikkaus ei enää ulotu komponenttiin, jota se työstää tässä kokoonpanossa; komponentti jätetään ennalleen.</translation>
     </message>
     <message>
         <source>The machine %1 takes milling tools only.</source>
@@ -16582,6 +16866,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>blob-sivu lopun jälkeen</translation>
     </message>
     <message>
+        <source>a block being edited cannot go into another block: finish it first</source>
+        <translation>muokattavana olevaa lohkoa ei voi lisätä toiseen lohkoon: lopeta sen muokkaus ensin</translation>
+    </message>
+    <message>
+        <source>a block cannot hold an instance of itself, nor of a block that holds it</source>
+        <translation>lohko ei voi sisältää omaa ilmentymäänsä eikä sellaisen lohkon ilmentymää, joka sisältää sen</translation>
+    </message>
+    <message>
         <source>a block definition in a form MitCad does not read</source>
         <translation>lohkon määritys muodossa, jota MitCad ei lue</translation>
     </message>
@@ -16594,8 +16886,28 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>lohkon määrityksen nimi puuttuu</translation>
     </message>
     <message>
+        <source>a block instance keeps the shape of its block: a constraint or dimension between its own points and curves cannot be added; explode it first (Explode Block) or edit the block (Edit Block)</source>
+        <translation>lohkon ilmentymä säilyttää lohkonsa muodon: sen omien pisteiden ja käyrien välille ei voi lisätä rajoitetta tai mittaa; pura se ensin (Pura lohko) tai muokkaa lohkoa (Muokkaa lohkoa)</translation>
+    </message>
+    <message>
+        <source>a block instance lacks its base point or direction</source>
+        <translation>lohkon ilmentymältä puuttuu peruspiste tai suunta</translation>
+    </message>
+    <message>
         <source>a block instance of a version MitCad does not read</source>
         <translation>lohkon ilmentymä versiossa, jota MitCad ei lue</translation>
+    </message>
+    <message>
+        <source>a block is being edited in this sketch: finish it first</source>
+        <translation>tässä luonnoksessa muokataan lohkoa: lopeta sen muokkaus ensin</translation>
+    </message>
+    <message>
+        <source>a block is being edited: finish it (Finish Block) before editing another</source>
+        <translation>lohkoa muokataan: lopeta sen muokkaus (Lopeta lohko) ennen toisen muokkaamista</translation>
+    </message>
+    <message>
+        <source>a block named %1 exists</source>
+        <translation>lohko nimeltä %1 on jo olemassa</translation>
     </message>
     <message>
         <source>a body (from %1) belongs to %2, not to %3 where the transfer takes it from</source>
@@ -17178,6 +17490,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>välysreiässä ei ole kierrettä: jätä pois `clearance` tai `thread`</translation>
     </message>
     <message>
+        <source>a closed curve breaks between two curves crossing it, and fewer cross this one</source>
+        <translation>suljettu käyrä pilkotaan kahden sitä leikkaavan käyrän välistä, ja tätä leikkaa vähemmän käyriä</translation>
+    </message>
+    <message>
+        <source>a closed curve cannot be opened at one point: break it between two curves crossing it instead</source>
+        <translation>suljettua käyrää ei voi avata yhdestä pisteestä: pilko se sen sijaan kahden sitä leikkaavan käyrän välistä</translation>
+    </message>
+    <message>
+        <source>a closed curve has no end to blend from: pick an open curve</source>
+        <translation>suljetulla käyrällä ei ole päätä, josta liittää: poimi avoin käyrä</translation>
+    </message>
+    <message>
         <source>a closed curve is a closed path by itself, not a piece of a longer one</source>
         <translation>suljettu käyrä on itsessään suljettu polku, ei pidemmän polun osa</translation>
     </message>
@@ -17200,6 +17524,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a closed loop through %1</source>
         <translation>suljettu silmukka kohteen %1 kautta</translation>
+    </message>
+    <message>
+        <source>a closed spline</source>
+        <translation>suljettu splini</translation>
     </message>
     <message>
         <source>a closed spline is periodic at both ends</source>
@@ -17268,6 +17596,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a command checkpoint is already active</source>
         <translation>komennon tarkistuspiste on jo aktiivinen</translation>
+    </message>
+    <message>
+        <source>a comment is damaged</source>
+        <translation>kommentti on vioittunut</translation>
     </message>
     <message>
         <source>a comment that is not closed</source>
@@ -17390,12 +17722,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>rajoitetta käytetään useammin kuin kerran tai se on k0</translation>
     </message>
     <message>
+        <source>a constraint lost its geometry when its block was edited: the block no longer has the curve or point it held</source>
+        <translation>rajoite menetti geometriansa, kun sen lohkoa muokattiin: lohkossa ei enää ole käyrää tai pistettä, johon se kohdistui</translation>
+    </message>
+    <message>
         <source>a constraint of a later format</source>
         <translation>myöhemmän muodon rajoite</translation>
     </message>
     <message>
+        <source>a constraint or dimension</source>
+        <translation>rajoite tai mitta</translation>
+    </message>
+    <message>
         <source>a constraint or dimension left out: it references geometry the copied geometry lacks</source>
         <translation>rajoite tai mitta jätetty pois: se viittaa geometriaan, jota kopioidussa geometriassa ei ole</translation>
+    </message>
+    <message>
+        <source>a constraint or dimension that held the whole split curve was removed</source>
+        <translation>rajoite tai mitta, joka kohdistui koko jaettuun käyrään, poistettiin</translation>
     </message>
     <message>
         <source>a constraint set has at least one row</source>
@@ -17582,6 +17926,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>käyrä ei liity muihin: 3D-luonnoksen polun käyrät liittyvät toisiinsa vain yhteisessä pisteessä tai yhteneviksi tehdyissä pisteissä</translation>
     </message>
     <message>
+        <source>a curve has no solved geometry</source>
+        <translation>käyrällä ei ole ratkaistua geometriaa</translation>
+    </message>
+    <message>
         <source>a curve is in the sketch already: not projected again</source>
         <translation>käyrä on jo luonnoksessa: ei projisoida uudelleen</translation>
     </message>
@@ -17636,6 +17984,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a curve of its %1 has no id</source>
         <translation>sen kohteen %1 käyrällä ei ole tunnistetta</translation>
+    </message>
+    <message>
+        <source>a curve of the selection ends on the sketch&apos;s origin, which cannot go into a block: move it off the origin first</source>
+        <translation>jokin valinnan käyrä päättyy luonnoksen origoon, jota ei voi lisätä lohkoon: siirrä käyrä ensin pois origosta</translation>
     </message>
     <message>
         <source>a curve on a surface the builder makes, moved</source>
@@ -17892,6 +18244,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a design keeps at most %1 shots, got %2</source>
         <translation>mallissa voi olla enintään %1 kuvakulmaa, annettiin %2</translation>
+    </message>
+    <message>
+        <source>a design linked with options takes the whole design, not chosen parts</source>
+        <translation>vaihtoehdoin linkitetty malli ottaa koko mallin, ei valittuja osia</translation>
     </message>
     <message>
         <source>a destination created by a modeling feature is not supported; use an independently created component</source>
@@ -18486,6 +18842,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piirteen tunniste, kuten &quot;F3&quot;</translation>
     </message>
     <message>
+        <source>a feature is not a sketch</source>
+        <translation>piirre ei ole luonnos</translation>
+    </message>
+    <message>
         <source>a feature is not an object</source>
         <translation>piirre ei ole objekti</translation>
     </message>
@@ -19050,8 +19410,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>reikää %1 ei vielä muunneta</translation>
     </message>
     <message>
+        <source>a hole callout points at a hole: a circle or a round face</source>
+        <translation>reikämerkintä osoittaa reikää: ympyrää tai pyöreää pintaa</translation>
+    </message>
+    <message>
+        <source>a hole callout points at a hole: a circle seen end on, or a round face seen from the side</source>
+        <translation>reikämerkintä osoittaa reikää: päästä nähtyä ympyrää tai sivulta nähtyä pyöreää pintaa</translation>
+    </message>
+    <message>
         <source>a hole callout points at a hole: its round face or edge</source>
         <translation>reiän merkintä osoittaa reikään: sen pyöreään tahkoon tai särmään</translation>
+    </message>
+    <message>
+        <source>a hole callout takes texts before, after or in place of its lines: no decimals, prefix or tolerance</source>
+        <translation>reikämerkintä ottaa tekstejä rivien eteen, perään tai niiden tilalle: ei desimaaleja, etuliitettä eikä toleranssia</translation>
     </message>
     <message>
         <source>a hole cut %1 is not translated yet</source>
@@ -19284,6 +19656,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a library is given with the material it has</source>
         <translation>kirjasto annetaan sen sisältämän materiaalin kanssa</translation>
+    </message>
+    <message>
+        <source>a library part is inserted whole; chosen parts are for a linked design file</source>
+        <translation>kirjasto-osa lisätään kokonaisena; valitut osat ovat linkitettyä mallitiedostoa varten</translation>
     </message>
     <message>
         <source>a library source like &quot;S1&quot;</source>
@@ -19760,6 +20136,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a mid radius position was not decoded</source>
         <translation>keskisäteen sijaintia ei purettu</translation>
+    </message>
+    <message>
+        <source>a midpoint constraint on the split curve was removed: no piece has the old middle</source>
+        <translation>jaetun käyrän keskipisterajoite poistettiin: millään osalla ei ole vanhaa keskikohtaa</translation>
     </message>
     <message>
         <source>a midpoint line needs its middle and an end apart</source>
@@ -21202,6 +21582,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>yli neljän tavun jäljellä oleva pituus</translation>
     </message>
     <message>
+        <source>a reply of it has no author or no text</source>
+        <translation>sen vastauksesta puuttuu kirjoittaja tai teksti</translation>
+    </message>
+    <message>
         <source>a request id it has seen is not a commit id</source>
         <translation>sen näkemä pyyntötunniste ei ole commit-tunniste</translation>
     </message>
@@ -21316,10 +21700,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a role such as &apos;side&apos;</source>
         <translation>rooli, kuten &apos;side&apos;</translation>
-    </message>
-    <message>
-        <source>a rolled hem: a flange of its angle and radius with no wall</source>
-        <translation>rullattu reunataitos: sen kulman ja säteen laippa ilman seinämää</translation>
     </message>
     <message>
         <source>a rolling-ball blend without its slice curve</source>
@@ -22094,6 +22474,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>pyörähdyspinta tuntemattomasta käyrästä</translation>
     </message>
     <message>
+        <source>a surface revolution cuts nothing, so it takes no cut_scope</source>
+        <translation>pintapyöräytys ei leikkaa mitään, joten sillä ei ole cut_scope-arvoa</translation>
+    </message>
+    <message>
         <source>a surface revolution of curves turns by angles, not up to an object</source>
         <translation>käyrien pintapyöräytys kiertyy kulmien verran, ei kohteeseen asti</translation>
     </message>
@@ -22362,6 +22746,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tappi, joka ei mene läpi, tarvitsee pituuden</translation>
     </message>
     <message>
+        <source>a text cannot go into a block</source>
+        <translation>tekstiä ei voi lisätä lohkoon</translation>
+    </message>
+    <message>
+        <source>a text cannot go into a block: delete it, or finish the block without it</source>
+        <translation>tekstiä ei voi lisätä lohkoon: poista se tai lopeta lohkon muokkaus ilman sitä</translation>
+    </message>
+    <message>
         <source>a text has its place, `at`, not points</source>
         <translation>tekstillä on paikkansa, `at`, ei pisteitä</translation>
     </message>
@@ -22412,6 +22804,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a text stands on another frame plane, across the sketch plane</source>
         <translation>teksti on toisella kehyksen tasolla, poikittain luonnostasoon nähden</translation>
+    </message>
+    <message>
+        <source>a text was made while the block was open</source>
+        <translation>tekstiä luotiin, kun lohko oli auki</translation>
     </message>
     <message>
         <source>a text&apos;s elevation is not finite</source>
@@ -22612,6 +23008,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a turn of the attachment offset about an axis out of the support&apos;s plane, or with a shift: MitCad&apos;s planes turn about lines in them (an angle plane), and a turn about another axis (which also turns the plane within itself) has no parametric plane; the plane is fixed at FreeCAD&apos;s placement</source>
         <translation>kiinnityssiirtymän kierto tuen tason ulkopuolisen akselin ympäri tai siirron kanssa: MitCadin tasot kiertyvät niissä olevien viivojen ympäri (kulmataso), eikä kierrolle muun akselin ympäri (joka kiertää tasoa myös sen omassa tasossa) ole parametrista tasoa; taso kiinnitetään FreeCADin sijoitukseen</translation>
+    </message>
+    <message>
+        <source>a tutorial has at most %1 files and %2 MB</source>
+        <translation>tutoriaalissa on enintään %1 tiedostoa ja %2 Mt</translation>
     </message>
     <message>
         <source>a union with a half space</source>
@@ -23598,6 +23998,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>särmä: parametrit [%1, %2] ylittävät käyrän välin [%3, %4]</translation>
     </message>
     <message>
+        <source>an edit in place names the sketch and the instance</source>
+        <translation>paikallaan muokkaus nimeää luonnoksen ja ilmentymän</translation>
+    </message>
+    <message>
         <source>an electronics board: not translated</source>
         <translation>piirilevy: ei muunneta</translation>
     </message>
@@ -23660,6 +24064,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an elliptical arc does not lie in the sketch plane</source>
         <translation>ellipsikaari ei ole luonnostasossa</translation>
+    </message>
+    <message>
+        <source>an elliptical arc is tangent only to a spline that ends at one of its ends</source>
+        <translation>elliptinen kaari voi sivuta vain splinia, joka päättyy sen jompaankumpaan päähän</translation>
     </message>
     <message>
         <source>an elliptical arc needs &quot;start&quot; and &quot;end&quot;</source>
@@ -23898,6 +24306,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>ohjainpyörä tarvitsee kulkuhalkaisijan</translation>
     </message>
     <message>
+        <source>an image of a comment is damaged</source>
+        <translation>kommentin kuva on vioittunut</translation>
+    </message>
+    <message>
         <source>an image of its title block is %1 kB, more than the %2 kB a title block holds per image</source>
         <translation>nimiön kuva on %1 kt, enemmän kuin nimiöön mahtuvat %2 kt kuvaa kohden</translation>
     </message>
@@ -23946,8 +24358,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>upotusliitoksen b on ympyrä, ei kohde (%1) (insert_axis ottaa reiän tahkon)</translation>
     </message>
     <message>
+        <source>an instance</source>
+        <translation>ilmentymä</translation>
+    </message>
+    <message>
         <source>an instance number expected</source>
         <translation>odotettiin instanssinumeroa</translation>
+    </message>
+    <message>
+        <source>an instance of another block is only partly in the block: take all of it or none</source>
+        <translation>toisen lohkon ilmentymä on vain osittain lohkossa: ota se mukaan kokonaan tai ei lainkaan</translation>
     </message>
     <message>
         <source>an integer</source>
@@ -24016,6 +24436,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an offset between axes</source>
         <translation>akselien välinen siirtymä</translation>
+    </message>
+    <message>
+        <source>an offset computes this curve and it takes no constraints: free the offset first</source>
+        <translation>siirtymä laskee tämän käyrän, eikä sille voi lisätä rajoitteita: vapauta siirtymä ensin</translation>
     </message>
     <message>
         <source>an offset curve is gone</source>
@@ -24666,6 +25090,70 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohteen %2 blob-tunniste %1: %3</translation>
     </message>
     <message>
+        <source>block %1 cannot be deleted: it has %2; explode or delete them first</source>
+        <translation>lohkoa %1 ei voi poistaa: sillä on %2; pura tai poista ne ensin</translation>
+    </message>
+    <message>
+        <source>block %1 has no entities</source>
+        <translation>lohkossa %1 ei ole kohteita</translation>
+    </message>
+    <message>
+        <source>block %1 has no name</source>
+        <translation>lohkolla %1 ei ole nimeä</translation>
+    </message>
+    <message>
+        <source>block %1 holds block %2, which is not there</source>
+        <translation>lohko %1 sisältää lohkon %2, jota ei ole</translation>
+    </message>
+    <message>
+        <source>block %1 holds itself</source>
+        <translation>lohko %1 sisältää itsensä</translation>
+    </message>
+    <message>
+        <source>block %1 is listed more than once</source>
+        <translation>lohko %1 on luettelossa useammin kuin kerran</translation>
+    </message>
+    <message>
+        <source>block instance %1 does not exist</source>
+        <translation>lohkon ilmentymää %1 ei ole olemassa</translation>
+    </message>
+    <message>
+        <source>block instance %1 has no geometry left</source>
+        <translation>lohkon ilmentymällä %1 ei ole enää geometriaa</translation>
+    </message>
+    <message>
+        <source>block instance %1 is not open</source>
+        <translation>lohkon ilmentymä %1 ei ole auki</translation>
+    </message>
+    <message>
+        <source>block instance %1 is open</source>
+        <translation>lohkon ilmentymä %1 on auki</translation>
+    </message>
+    <message>
+        <source>block instance %1 is partly in the block</source>
+        <translation>lohkon ilmentymä %1 on osittain lohkossa</translation>
+    </message>
+    <message>
+        <source>block instance %1 is used more than once or is k0</source>
+        <translation>lohkon ilmentymää %1 käytetään useammin kuin kerran tai se on k0</translation>
+    </message>
+    <message>
+        <source>block instance %1: %2 is not in the sketch</source>
+        <translation>lohkon ilmentymä %1: %2 ei ole luonnoksessa</translation>
+    </message>
+    <message>
+        <source>block instance %1: its base point is missing</source>
+        <translation>lohkon ilmentymä %1: sen peruspiste puuttuu</translation>
+    </message>
+    <message>
+        <source>block instance %1: its direction is not a line from its base point</source>
+        <translation>lohkon ilmentymä %1: sen suunta ei ole viiva sen peruspisteestä</translation>
+    </message>
+    <message>
+        <source>block instances %1 and %2 share an entity</source>
+        <translation>lohkon ilmentymillä %1 ja %2 on yhteinen kohde</translation>
+    </message>
+    <message>
         <source>board (cardboard, corrugated board, fluted plastic sheet)</source>
         <translation>kartonki (taivekartonki, aaltopahvi, kennomuovilevy)</translation>
     </message>
@@ -25062,6 +25550,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>molemmat neljän tavun kokonaislukuja; ei tiedetä, kumpi on etumerkillinen</translation>
     </message>
     <message>
+        <source>both picks are at the same end of the curve: pick near the two ends to join</source>
+        <translation>molemmat poiminnat ovat käyrän samassa päässä: poimi läheltä kahta liitettävää päätä</translation>
+    </message>
+    <message>
         <source>both sides are on the same occurrence</source>
         <translation>molemmat puolet ovat samassa esiintymässä</translation>
     </message>
@@ -25230,6 +25722,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>käyrää c%1 ei voi siirtää tarkasti</translation>
     </message>
     <message>
+        <source>c%1 cannot be split</source>
+        <translation>käyrää c%1 ei voi jakaa</translation>
+    </message>
+    <message>
+        <source>c%1 ends at the split point</source>
+        <translation>käyrä c%1 päättyy jakopisteeseen</translation>
+    </message>
+    <message>
         <source>c%1 has fewer than two fit points</source>
         <translation>c%1: alle kaksi sovituspistettä</translation>
     </message>
@@ -25248,6 +25748,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>c%1 is a %2: points are inserted into splines only</source>
         <translation>c%1 on tyyppiä %2: pisteitä lisätään vain splineihin</translation>
+    </message>
+    <message>
+        <source>c%1 is a sketch axis</source>
+        <translation>käyrä c%1 on luonnoksen akseli</translation>
+    </message>
+    <message>
+        <source>c%1 is closed</source>
+        <translation>käyrä c%1 on suljettu</translation>
     </message>
     <message>
         <source>c%1 is in the sketch already: not projected again</source>
@@ -25286,6 +25794,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>käyrää c%1 ei ratkaista ohjauspisteineen</translation>
     </message>
     <message>
+        <source>c%1 is part of block instance %2</source>
+        <translation>käyrä c%1 kuuluu lohkon ilmentymään %2</translation>
+    </message>
+    <message>
         <source>c%1 lies on c%2 (the same curve twice): c%3 is offset%4</source>
         <translation>c%1 on käyrän c%2 päällä (sama käyrä kahdesti): c%3 siirretään%4</translation>
     </message>
@@ -25308,6 +25820,22 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>cannot write the copy of %1 into the project: %2</source>
         <translation>kohteen %1 kopiota ei voi kirjoittaa projektiin: %2</translation>
+    </message>
+    <message>
+        <source>choose at least one occurrence or body of the design to link</source>
+        <translation>valitse linkitettävästä mallista vähintään yksi esiintymä tai kappale</translation>
+    </message>
+    <message>
+        <source>constraints and dimensions</source>
+        <translation>rajoitteet ja mitat</translation>
+    </message>
+    <message>
+        <source>curvature continuity joins a spline (clamped knots) with a line, arc, elliptical arc or spline</source>
+        <translation>kaarevuusjatkuvuus liittää splinin (kiinnitetyt solmut) viivaan, kaareen, elliptiseen kaareen tai spliniin</translation>
+    </message>
+    <message>
+        <source>curve %1 has no solved geometry</source>
+        <translation>käyrällä %1 ei ole ratkaistua geometriaa</translation>
     </message>
     <message>
         <source>decimation needs a triangle count or a tolerance</source>
@@ -25348,6 +25876,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>face: missing for an edge</source>
         <translation>tahko: puuttuu särmältä</translation>
+    </message>
+    <message>
+        <source>feature %1 is not a sketch</source>
+        <translation>piirre %1 ei ole luonnos</translation>
+    </message>
+    <message>
+        <source>fewer than two curves cross a curve</source>
+        <translation>käyrää leikkaa vähemmän kuin kaksi käyrää</translation>
+    </message>
+    <message>
+        <source>fewer than two curves cross c%1</source>
+        <translation>käyrää c%1 leikkaa vähemmän kuin kaksi käyrää</translation>
     </message>
     <message>
         <source>for board</source>
@@ -26584,10 +27124,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>crossings of several segments</source>
         <translation>usean segmentin risteykset</translation>
-    </message>
-    <message>
-        <source>curvature continuity joins a spline (clamped knots) with a line, arc or spline</source>
-        <translation>kaarevuusjatkuvuus liittää splinin (kiinnitetyt solmut) viivaan, kaareen tai splinin</translation>
     </message>
     <message>
         <source>curve %1 does not exist</source>
@@ -31112,6 +31648,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Koneella %1 on ohjain, jolle MitCad ei kirjoita ohjelmia.</translation>
     </message>
     <message>
+        <source>The machine %1 is a milling machine; %2 writes for lathes.</source>
+        <translation>Kone %1 on jyrsinkone; %2 kirjoittaa ohjelmia sorveille.</translation>
+    </message>
+    <message>
+        <source>The lathe %1 needs a lathe controller; %2 writes for milling machines.</source>
+        <translation>Sorvi %1 tarvitsee sorvin ohjaimen; %2 kirjoittaa ohjelmia jyrsinkoneille.</translation>
+    </message>
+    <message>
         <source>The machine %1&apos;s feeds must be above zero.</source>
         <translation>Koneen %1 syöttöjen on oltava yli nollan.</translation>
     </message>
@@ -31746,6 +32290,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a part of the file longer than the file</source>
         <translation>tiedoston osa, joka on pidempi kuin tiedosto</translation>
+    </message>
+    <message>
+        <source>a part of the joined shape touches the bodies at most along an edge or at a point, so it became a body of its own</source>
+        <translation>osa liitetystä muodosta koskettaa kappaleita enintään särmää pitkin tai pisteessä, joten siitä tuli oma kappaleensa</translation>
     </message>
     <message>
         <source>a plane surface of size 0</source>
@@ -45984,6 +46532,158 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>printer_extruder_id: suutinmuunnelma kuuluu suulakkeelle, jota tulostimessa ei ole</translation>
     </message>
     <message>
+        <source>&quot;entities&quot; is empty: give the points, curves and texts to scale</source>
+        <translation>&quot;entities&quot; on tyhjä: anna skaalattavat pisteet, käyrät ja tekstit</translation>
+    </message>
+    <message>
+        <source>%1 already has a folder named %2</source>
+        <translation>%1: kansio %2 on jo olemassa</translation>
+    </message>
+    <message>
+        <source>%1 already has a folder named %2 among its bodies</source>
+        <translation>%1: kappaleiden joukossa on jo kansio %2</translation>
+    </message>
+    <message>
+        <source>%1 and %2 are not placed in the same component</source>
+        <translation>%1 ja %2 eivät ole samassa komponentissa</translation>
+    </message>
+    <message>
+        <source>%1 has no folder %2 among its bodies</source>
+        <translation>%1: kappaleiden joukossa ei ole kansiota %2</translation>
+    </message>
+    <message>
+        <source>%1 has no folder %2 among its components</source>
+        <translation>%1: komponenttien joukossa ei ole kansiota %2</translation>
+    </message>
+    <message>
+        <source>%1 hem: the flange&apos;s %2 hem of its gap and length, one bend of 180 degrees                  whose inside radius is half its gap</source>
+        <translation>reunataitos (%1): laipan reunataitos (%2) raostaan ja pituudestaan, yksi 180 asteen taivutus, jonka sisäsäde on puolet raosta</translation>
+    </message>
+    <message>
+        <source>%1 is a constraint or a dimension: give the points, curves and texts to scale</source>
+        <translation>%1 on rajoite tai mitta: anna skaalattavat pisteet, käyrät ja tekstit</translation>
+    </message>
+    <message>
+        <source>%1 is along the face&apos;s normal at the point: pick a reference across it</source>
+        <translation>%1 on pisteessä tahkon normaalin suuntainen: poimi viite, joka kulkee sen poikki</translation>
+    </message>
+    <message>
+        <source>%1 is projected geometry: it follows its source and is not scaled</source>
+        <translation>%1 on projisoitua geometriaa: se seuraa lähdettään eikä skaalaudu</translation>
+    </message>
+    <message>
+        <source>%1 only partly in the selection: select all of it, or none of it</source>
+        <translation>%1 vain osittain valinnassa: valitse se kokonaan tai jätä se kokonaan pois</translation>
+    </message>
+    <message>
+        <source>%1 takes the expression %2</source>
+        <translation>%1 saa arvonsa lausekkeesta %2</translation>
+    </message>
+    <message>
+        <source>%1 takes the parameter %2</source>
+        <translation>%1 saa arvonsa parametrista %2</translation>
+    </message>
+    <message>
+        <source>Constraints and dimensions that tied the scaled geometry to the rest were removed: %1 and %2</source>
+        <translation>Skaalatun geometrian muuhun sitoneita rajoitteita ja mittoja poistettiin: %1 ja %2</translation>
+    </message>
+    <message>
+        <source>Constraints that tied the scaled geometry to the rest were removed: %1</source>
+        <translation>Skaalatun geometrian muuhun sitoneita rajoitteita poistettiin: %1</translation>
+    </message>
+    <message>
+        <source>Dimensions that tied the scaled geometry to the rest were removed: %1</source>
+        <translation>Skaalatun geometrian muuhun sitoneita mittoja poistettiin: %1</translation>
+    </message>
+    <message>
+        <source>%1 tied the scaled geometry to the rest and no longer held: removed</source>
+        <translation>%1 sitoi skaalatun geometrian muuhun eikä enää pätenyt: poistettu</translation>
+    </message>
+    <message>
+        <source>%1: %2 is a %3, expected line, circle or arc</source>
+        <translation>%1: %2 on %3, odotettiin viivaa, ympyrää tai kaarta</translation>
+    </message>
+    <message>
+        <source>%1: keep the values, or change the parameter instead</source>
+        <translation>%1: säilytä arvot tai muuta sen sijaan parametria</translation>
+    </message>
+    <message>
+        <source>A hem goes only on a straight edge of the sheet.</source>
+        <translation>Reunataitos tehdään vain levyn suoralle särmälle.</translation>
+    </message>
+    <message>
+        <source>Perpendicular takes lines, circles and arcs, not a fitted spline</source>
+        <translation>Kohtisuora ottaa viivoja, ympyröitä ja kaaria, ei sovitettua splinia</translation>
+    </message>
+    <message>
+        <source>Perpendicular takes lines, circles and arcs, not a point</source>
+        <translation>Kohtisuora ottaa viivoja, ympyröitä ja kaaria, ei pistettä</translation>
+    </message>
+    <message>
+        <source>Perpendicular takes lines, circles and arcs, not a spline</source>
+        <translation>Kohtisuora ottaa viivoja, ympyröitä ja kaaria, ei splinia</translation>
+    </message>
+    <message>
+        <source>Perpendicular takes lines, circles and arcs, not an ellipse</source>
+        <translation>Kohtisuora ottaa viivoja, ympyröitä ja kaaria, ei ellipsiä</translation>
+    </message>
+    <message>
+        <source>Perpendicular takes lines, circles and arcs, not an elliptical arc</source>
+        <translation>Kohtisuora ottaa viivoja, ympyröitä ja kaaria, ei elliptistä kaarta</translation>
+    </message>
+    <message>
+        <source>a dimension of the selection takes its value from a parameter: keep the dimensions&apos; values, or change the parameter instead</source>
+        <translation>valinnan mitta saa arvonsa parametrista: säilytä mittojen arvot tai muuta sen sijaan parametria</translation>
+    </message>
+    <message>
+        <source>a flat hem&apos;s gap must be more than 0</source>
+        <translation>tasaisen reunataitoksen raon on oltava yli 0</translation>
+    </message>
+    <message>
+        <source>a flat hem&apos;s length must be at least its bend&apos;s outer radius, %1 mm</source>
+        <translation>tasaisen reunataitoksen pituuden on oltava vähintään sen taivutuksen ulkosäde, %1 mm</translation>
+    </message>
+    <message>
+        <source>a line, a circle or an arc</source>
+        <translation>viiva, ympyrä tai kaari</translation>
+    </message>
+    <message>
+        <source>a pattern or an offset is only partly in the selection: select all of it, or none of it</source>
+        <translation>kuvio tai siirtymä on vain osittain valinnassa: valitse se kokonaan tai jätä se kokonaan pois</translation>
+    </message>
+    <message>
+        <source>a rolled hem of up to 180 degrees: a flange of its angle and radius with no                      wall</source>
+        <translation>enintään 180 asteen rullattu reunataitos: kulmansa ja säteensä laippa ilman seinämää</translation>
+    </message>
+    <message>
+        <source>a rolled hem&apos;s angle must be more than 180 degrees and less than a full turn</source>
+        <translation>rullatun reunataitoksen kulman on oltava yli 180 astetta ja alle täyden kierroksen</translation>
+    </message>
+    <message>
+        <source>a rolled hem&apos;s radius must be more than 0</source>
+        <translation>rullatun reunataitoksen säteen on oltava yli 0</translation>
+    </message>
+    <message>
+        <source>a rolled hem: the flange&apos;s rolled hem of its angle and radius, with no wall</source>
+        <translation>rullattu reunataitos: laipan rullattu reunataitos kulmastaan ja säteestään, ilman seinämää</translation>
+    </message>
+    <message>
+        <source>a text on a path follows its curve: scale the curve with it</source>
+        <translation>polulla oleva teksti seuraa käyräänsä: skaalaa käyrä sen mukana</translation>
+    </message>
+    <message>
+        <source>an offset distance or a pattern spacing of the selection takes its value from a parameter: keep the values, or change the parameter instead</source>
+        <translation>valinnan siirtymäetäisyys tai kuvion väli saa arvonsa parametrista: säilytä arvot tai muuta sen sijaan parametria</translation>
+    </message>
+    <message>
+        <source>an open hem&apos;s gap must be more than 0</source>
+        <translation>avoimen reunataitoksen raon on oltava yli 0</translation>
+    </message>
+    <message>
+        <source>an open hem&apos;s length must be at least its bend&apos;s outer radius, %1 mm</source>
+        <translation>avoimen reunataitoksen pituuden on oltava vähintään sen taivutuksen ulkosäde, %1 mm</translation>
+    </message>
+    <message>
         <source>for metal</source>
         <translation>metallille</translation>
     </message>
@@ -45996,28 +46696,228 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>urasorvaustyökalu</translation>
     </message>
     <message>
+        <source>hole callout</source>
+        <translation>reikämerkintä</translation>
+    </message>
+    <message>
+        <source>id &quot;%1&quot; is not its folder&apos;s name &quot;%2&quot;</source>
+        <translation>tunniste &quot;%1&quot; ei ole sen kansion nimi &quot;%2&quot;</translation>
+    </message>
+    <message>
+        <source>id &quot;%1&quot; is not lower case letters, digits and hyphens</source>
+        <translation>tunniste &quot;%1&quot; ei koostu pienistä kirjaimista, numeroista ja yhdysmerkeistä</translation>
+    </message>
+    <message>
+        <source>image A%1 is listed more than once</source>
+        <translation>kuva A%1 on luettelossa useammin kuin kerran</translation>
+    </message>
+    <message>
         <source>in any direction</source>
         <translation>mihin tahansa suuntaan</translation>
+    </message>
+    <message>
+        <source>it is on a comment the design does not have</source>
+        <translation>se kuuluu kommenttiin, jota suunnitelmassa ei ole</translation>
+    </message>
+    <message>
+        <source>it is on a reply the comment does not have</source>
+        <translation>se kuuluu vastaukseen, jota kommentilla ei ole</translation>
+    </message>
+    <message>
+        <source>its author is empty</source>
+        <translation>sen kirjoittaja puuttuu</translation>
+    </message>
+    <message>
+        <source>its number cannot be read</source>
+        <translation>sen numeroa ei voi lukea</translation>
+    </message>
+    <message>
+        <source>its resolution is empty</source>
+        <translation>sen ratkaisu puuttuu</translation>
+    </message>
+    <message>
+        <source>its text is empty</source>
+        <translation>sen teksti puuttuu</translation>
+    </message>
+    <message>
+        <source>no image ids are left</source>
+        <translation>kuvien tunnisteet ovat loppuneet</translation>
+    </message>
+    <message>
+        <source>index %1 is out of range: %2 has %3 components, so the index is from 0 to %4</source>
+        <translation>indeksi %1 on alueen ulkopuolella: kohteessa %2 on %3 komponenttia, joten indeksi on 0–%4</translation>
+    </message>
+    <message>
+        <source>link_parts needs a linked component or a path, not both</source>
+        <translation>link_parts tarvitsee linkitetyn komponentin tai polun, ei molempia</translation>
+    </message>
+    <message>
+        <source>no block is being edited</source>
+        <translation>mitään lohkoa ei muokata</translation>
+    </message>
+    <message>
+        <source>no curve crosses a curve</source>
+        <translation>mikään käyrä ei leikkaa käyrää</translation>
+    </message>
+    <message>
+        <source>no curve crosses c%1</source>
+        <translation>mikään käyrä ei leikkaa käyrää c%1</translation>
+    </message>
+    <message>
+        <source>no entities selected</source>
+        <translation>kohteita ei ole valittu</translation>
+    </message>
+    <message>
+        <source>no other curve crosses this curve, so there is nowhere to break it</source>
+        <translation>mikään muu käyrä ei leikkaa tätä käyrää, joten sitä ei voi pilkkoa mistään</translation>
     </message>
     <message>
         <source>none of the plates meet: a finger joint needs plates that overlap at their edges or touch end to face</source>
         <translation>levyt eivät kohtaa: sormiliitos tarvitsee levyt, jotka menevät reunoistaan päällekkäin tai koskettavat päädyllä kylkeä</translation>
     </message>
     <message>
+        <source>only PNG and JPEG images can be attached, and this one is %1</source>
+        <translation>vain PNG- ja JPEG-kuvia voi liittää, ja tämä on %1</translation>
+    </message>
+    <message>
+        <source>nothing to make a block of: select sketch points and curves</source>
+        <translation>ei mitään, mistä tehdä lohko: valitse luonnoksen pisteitä ja käyriä</translation>
+    </message>
+    <message>
+        <source>holes with a cut_scope cut no modelled or taper thread; make the thread cosmetic</source>
+        <translation>reiät, joilla on cut_scope, eivät leikkaa mallinnettua tai kartiokierrettä; tee kierteestä kosmeettinen</translation>
+    </message>
+    <message>
+        <source>nothing to scale: the sketch&apos;s origin point and axes stay where they are</source>
+        <translation>ei skaalattavaa: luonnoksen origo ja akselit pysyvät paikallaan</translation>
+    </message>
+    <message>
+        <source>only a linked design takes chosen parts; a copy takes the whole design</source>
+        <translation>vain linkitetty malli ottaa valitut osat; kopio ottaa koko mallin</translation>
+    </message>
+    <message>
+        <source>p%1 is not on c%2</source>
+        <translation>piste p%1 ei ole käyrällä c%2</translation>
+    </message>
+    <message>
+        <source>projected geometry follows its source and is not scaled: leave it out of the selection</source>
+        <translation>projisoitu geometria seuraa lähdettään eikä skaalaudu: jätä se pois valinnasta</translation>
+    </message>
+    <message>
+        <source>projected or intersected geometry cannot go into a block: convert it to sketch geometry first</source>
+        <translation>projisoitua tai leikattua geometriaa ei voi lisätä lohkoon: muunna se ensin luonnosgeometriaksi</translation>
+    </message>
+    <message>
+        <source>t%1 runs along %2: scale the curve with it</source>
+        <translation>t%1 kulkee käyrää %2 pitkin: skaalaa käyrä sen mukana</translation>
+    </message>
+    <message>
+        <source>texts are not block geometry</source>
+        <translation>tekstit eivät ole lohkon geometriaa</translation>
+    </message>
+    <message>
+        <source>the %1&apos;s draft angle must lie between -90 and 90 degrees, got %2 rad</source>
+        <translation>kohteen %1 päästökulman on oltava -90 ja 90 asteen välillä, annettiin %2 rad</translation>
+    </message>
+    <message>
+        <source>the base point must be finite, got %1</source>
+        <translation>peruspisteen on oltava äärellinen, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the blend curve</source>
+        <translation>liitoskäyrä</translation>
+    </message>
+    <message>
+        <source>the block has no geometry</source>
+        <translation>lohkossa ei ole geometriaa</translation>
+    </message>
+    <message>
+        <source>the block instance</source>
+        <translation>lohkon ilmentymä</translation>
+    </message>
+    <message>
+        <source>the block instance is being edited: finish the block first</source>
+        <translation>lohkon ilmentymää muokataan: lopeta lohkon muokkaus ensin</translation>
+    </message>
+    <message>
+        <source>the block instance is not being edited</source>
+        <translation>lohkon ilmentymää ei muokata</translation>
+    </message>
+    <message>
+        <source>the block instance is not in the sketch</source>
+        <translation>lohkon ilmentymä ei ole luonnoksessa</translation>
+    </message>
+    <message>
+        <source>the block needs a name</source>
+        <translation>lohko tarvitsee nimen</translation>
+    </message>
+    <message>
+        <source>the block would have no geometry: delete the instance instead</source>
+        <translation>lohkossa ei olisi geometriaa: poista sen sijaan ilmentymä</translation>
+    </message>
+    <message>
         <source>the box&apos;s options: %1</source>
         <translation>laatikon asetukset: %1</translation>
+    </message>
+    <message>
+        <source>the chosen parts of %1 have no bodies to show</source>
+        <translation>kohteen %1 valituissa osissa ei ole näytettäviä kappaleita</translation>
     </message>
     <message>
         <source>the crease table has no row for a fold of %1 mm board%2 %3 with the front %4 the fold</source>
         <translation>nuuttaustaulukossa ei ole riviä %1 mm:n kartongin taitolle%2 %3, etupuoli %4 taiton</translation>
     </message>
     <message>
+        <source>the crossings of a curve are all at one place</source>
+        <translation>käyrän leikkauskohdat ovat kaikki samassa paikassa</translation>
+    </message>
+    <message>
+        <source>the crossings of c%1 are all at one place</source>
+        <translation>käyrän c%1 leikkauskohdat ovat kaikki samassa paikassa</translation>
+    </message>
+    <message>
+        <source>the curve already ends there</source>
+        <translation>käyrä päättyy jo siihen</translation>
+    </message>
+    <message>
+        <source>the curve has no direction at its end to blend from</source>
+        <translation>käyrällä ei ole päässään suuntaa, josta liittää</translation>
+    </message>
+    <message>
+        <source>the curve is part of a block instance, which keeps the shape of its block: explode it first (Explode Block) or edit the block (Edit Block)</source>
+        <translation>käyrä kuuluu lohkon ilmentymään, joka säilyttää lohkonsa muodon: pura ilmentymä ensin (Pura lohko) tai muokkaa lohkoa (Muokkaa lohkoa)</translation>
+    </message>
+    <message>
+        <source>the curves crossing this closed curve meet it at one place only</source>
+        <translation>tätä suljettua käyrää leikkaavat käyrät kohtaavat sen vain yhdessä paikassa</translation>
+    </message>
+    <message>
         <source>the cycle&apos;s blocks are not where it runs them</source>
         <translation>työkierron lauseet eivät ole siellä, missä se ajaa ne</translation>
     </message>
     <message>
+        <source>the design to link has no occurrence %1</source>
+        <translation>linkitettävässä mallissa ei ole esiintymää %1</translation>
+    </message>
+    <message>
+        <source>the dimensions kept at their values can&apos;t hold on the scaled geometry: scale them with the geometry instead</source>
+        <translation>arvoissaan säilytetyt mitat eivät päde skaalattuun geometriaan: skaalaa ne sen sijaan geometrian mukana</translation>
+    </message>
+    <message>
+        <source>the dimensions kept at their values fix the size of the selection, so it can&apos;t be scaled with them: scale them with the geometry instead</source>
+        <translation>arvoissaan säilytetyt mitat kiinnittävät valinnan koon, joten sitä ei voi skaalata niiden kanssa: skaalaa ne sen sijaan geometrian mukana</translation>
+    </message>
+    <message>
         <source>the end margin must not be negative, got %1</source>
         <translation>päädyn reunavara ei saa olla negatiivinen, saatiin %1</translation>
+    </message>
+    <message>
+        <source>the ends already meet: Blend Curve joins ends with a gap between them</source>
+        <translation>päät kohtaavat jo: Liitoskäyrä yhdistää päät, joiden välissä on rako</translation>
+    </message>
+    <message>
+        <source>the ends of %1 and %2 already meet</source>
+        <translation>kohteiden %1 ja %2 päät kohtaavat jo</translation>
     </message>
     <message>
         <source>the face has no axis</source>
@@ -46042,6 +46942,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the face has no normal</source>
         <translation>tahkolla ei ole normaalia</translation>
+    </message>
+    <message>
+        <source>the face has no normal at the point</source>
+        <translation>tahkolla ei ole normaalia pisteessä</translation>
     </message>
     <message>
         <source>the face has no normal near the point</source>
@@ -47072,6 +47976,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>geometria on %1 ympyrän ulkopuolella tai %2 sen sisäpuolella, ei %3</translation>
     </message>
     <message>
+        <source>the geometry it joins to is in a part of the linked design that is no longer linked; it keeps the place it had there</source>
+        <translation>geometria, johon se liittyy, on linkitetyn mallin osassa, jota ei enää linkitetä; se säilyttää siellä olleen paikkansa</translation>
+    </message>
+    <message>
         <source>the geometry kernel cannot read the result&apos;s faces</source>
         <translation>geometriaydin ei voi lukea tuloksen tahkoja</translation>
     </message>
@@ -47312,6 +48220,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>reikää on muutettava käsin (%1)</translation>
     </message>
     <message>
+        <source>the hole or circle the hole callout points at is not in the model</source>
+        <translation>reikää tai ympyrää, jota reikämerkintä osoittaa, ei ole mallissa</translation>
+    </message>
+    <message>
         <source>the hole positions must be finite points</source>
         <translation>reikien sijaintien on oltava äärellisiä pisteitä</translation>
     </message>
@@ -47380,12 +48292,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tunnistetta %1 käytetään kahdesti</translation>
     </message>
     <message>
+        <source>the image</source>
+        <translation>kuva</translation>
+    </message>
+    <message>
         <source>the image has no pixels</source>
         <translation>kuvassa ei ole pikseleitä</translation>
     </message>
     <message>
+        <source>the image is %1 MB, more than the %2 MB a comment&apos;s image may be</source>
+        <translation>kuva on %1 Mt, enemmän kuin kommentin kuvan sallitut %2 Mt</translation>
+    </message>
+    <message>
         <source>the image is %1 MB, more than the %2 MB a design embeds</source>
         <translation>kuva on %1 MB, enemmän kuin malliin upotettavan kuvan enimmäiskoko %2 MB</translation>
+    </message>
+    <message>
+        <source>the image is %1, not PNG or JPEG</source>
+        <translation>kuva on %1, ei PNG eikä JPEG</translation>
     </message>
     <message>
         <source>the image is a %1 × %2 %3 file, not the %4 × %5 %6 it says</source>
@@ -47478,6 +48402,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the inner race&apos;s bore must be smaller than the bore it runs in</source>
         <translation>sisärenkaan reiän on oltava pienempi kuin reikä, jossa se pyörii</translation>
+    </message>
+    <message>
+        <source>the instance is not of this block</source>
+        <translation>ilmentymä ei ole tämän lohkon</translation>
     </message>
     <message>
         <source>the item bends more tightly than its bend radius allows</source>
@@ -47642,6 +48570,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the kept cage: %1</source>
         <translation>säilytetty häkki: %1</translation>
+    </message>
+    <message>
+        <source>the kept values can&apos;t hold on the scaled geometry: %1</source>
+        <translation>säilytetyt arvot eivät päde skaalattuun geometriaan: %1</translation>
+    </message>
+    <message>
+        <source>the kept values fix every size of the selection, so it can&apos;t be scaled with them: scale them with the geometry instead</source>
+        <translation>säilytetyt arvot kiinnittävät valinnan kaikki koot, joten sitä ei voi skaalata niiden kanssa: skaalaa ne sen sijaan geometrian mukana</translation>
     </message>
     <message>
         <source>the kerf bend&apos;s pitch (%1 mm) must be larger than its slit width (%2 mm)</source>
@@ -47830,6 +48766,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the line&apos;s geometry is missing</source>
         <translation>viivan geometria puuttuu</translation>
+    </message>
+    <message>
+        <source>the line&apos;s length dimension now measures the whole of its pieces, as a driven dimension</source>
+        <translation>viivan pituusmitta mittaa nyt sen osat kokonaisuudessaan ohjattuna mittana</translation>
     </message>
     <message>
         <source>the line&apos;s offset is a number</source>
@@ -48424,6 +49364,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>leikkausten määrän on oltava 1–%1, saatiin %2</translation>
     </message>
     <message>
+        <source>the numbering of the comments is damaged</source>
+        <translation>kommenttien numerointi on vioittunut</translation>
+    </message>
+    <message>
+        <source>the numbering of the comments&apos; images is damaged</source>
+        <translation>kommenttien kuvien numerointi on vioittunut</translation>
+    </message>
+    <message>
         <source>the nut must be wider than the screw</source>
         <translation>mutterin on oltava ruuvia leveämpi</translation>
     </message>
@@ -48590,6 +49538,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the offset plane was not made</source>
         <translation>siirtymätasoa ei tehty</translation>
+    </message>
+    <message>
+        <source>the offset puts %1 beyond its travel on %2: it goes between Min and Max of its travel limits</source>
+        <translation>siirtymä vie kohteen %1 sen liikevaran ulkopuolelle kohteella %2: sen paikka on liikevaran rajojen Min ja Maks välillä</translation>
     </message>
     <message>
         <source>the offset turns the sketch out of its support&apos;s plane</source>
@@ -49180,6 +50132,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohdan on oltava äärellinen, annettiin %1</translation>
     </message>
     <message>
+        <source>the place must be finite, got %1 at %2</source>
+        <translation>kohdan on oltava äärellinen, annettiin %1 kohdassa %2</translation>
+    </message>
+    <message>
         <source>the placement of %1 was distorted and has been straightened to a rotation and a translation</source>
         <translation>esiintymän %1 sijoitus oli vääristynyt, ja se on oikaistu kierroksi ja siirroksi</translation>
     </message>
@@ -49386,6 +50342,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the point is not fixed</source>
         <translation>piste ei ole kiinnitetty</translation>
+    </message>
+    <message>
+        <source>the point is not on the curve</source>
+        <translation>piste ei ole käyrällä</translation>
     </message>
     <message>
         <source>the point is not on the sheet&apos;s material</source>
@@ -50476,6 +51436,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tallennettu tiedosto</translation>
     </message>
     <message>
+        <source>the saved shape of a linked part is missing</source>
+        <translation>linkitetyn osan tallennettu muoto puuttuu</translation>
+    </message>
+    <message>
+        <source>the saved shape of a linked part: %1</source>
+        <translation>linkitetyn osan tallennettu muoto: %1</translation>
+    </message>
+    <message>
         <source>the scale</source>
         <translation>mittakaava</translation>
     </message>
@@ -50668,6 +51636,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>valinnassa ei ole kulmaa, jossa kaksi viivaa tai kaarta päättyy yhteen</translation>
     </message>
     <message>
+        <source>the selection uses the origin point</source>
+        <translation>valinta käyttää origopistettä</translation>
+    </message>
+    <message>
         <source>the server asks for a sign-in. MitCad fetches public libraries over https:// by itself; for a library that needs a sign-in, turn on Use the installed git program (Tools &gt; Libraries...): git signs in with its credential helper.</source>
         <translation>palvelin pyytää kirjautumista. MitCad hakee julkiset kirjastot https://-osoitteista itse; kirjautumista vaativalle kirjastolle ota käyttöön Use the installed git program (Tools &gt; Libraries...): git kirjautuu tunnistetietojen apuohjelmallaan.</translation>
     </message>
@@ -50766,6 +51738,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the sheet lies behind the straight cut&apos;s sketch</source>
         <translation>levy on suoran leikkauksen luonnoksen takana</translation>
+    </message>
+    <message>
+        <source>the sheet&apos;s length unit “%1” is not known</source>
+        <translation>arkin pituusyksikköä ”%1” ei tunneta</translation>
     </message>
     <message>
         <source>the sheet&apos;s rules changed; its domains are stale</source>
@@ -50872,6 +51848,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the sketch has a reference curve of that source already</source>
         <translation>luonnoksella on jo sen lähteen viitekäyrä</translation>
+    </message>
+    <message>
+        <source>the sketch has an open block instance</source>
+        <translation>luonnoksessa on avoin lohkon ilmentymä</translation>
     </message>
     <message>
         <source>the sketch has no closed profile</source>
@@ -50996,6 +51976,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the sketch&apos;s %1 on its plane must be a finite number, got %2</source>
         <translation>luonnoksen arvon %1 tasollaan on oltava äärellinen luku, annettiin %2</translation>
+    </message>
+    <message>
+        <source>the sketch&apos;s axes cannot be split</source>
+        <translation>luonnoksen akseleita ei voi jakaa</translation>
     </message>
     <message>
         <source>the sketch&apos;s axis is not a line</source>
@@ -51188,6 +52172,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the spline&apos;s start is natural: make it free or tangent to drag its tangent</source>
         <translation>splinin alkupää on luonnollinen: tee siitä vapaa tai tangentiaalinen, jotta voit vetää sen tangenttia</translation>
+    </message>
+    <message>
+        <source>the split</source>
+        <translation>jako</translation>
     </message>
     <message>
         <source>the splitting body was not found</source>
@@ -52134,6 +53122,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>profiilia %2 (%1) ei ole (mallin: %3)</translation>
     </message>
     <message>
+        <source>there is no %1: not a tutorials repository</source>
+        <translation>%1 puuttuu: ei tutoriaalirepositorio</translation>
+    </message>
+    <message>
         <source>there is no %1: not an index</source>
         <translation>kohdetta %1 ei ole: ei hakemisto</translation>
     </message>
@@ -52152,6 +53144,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>there is no appearance %1</source>
         <translation>ulkoasua %1 ei ole</translation>
+    </message>
+    <message>
+        <source>there is no block %1</source>
+        <translation>lohkoa %1 ei ole</translation>
     </message>
     <message>
         <source>there is no body</source>
@@ -52408,6 +53404,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>this build of MitCad has no release key, so it cannot verify updates</source>
         <translation>tässä MitCadin käännöksessä ei ole julkaisuavainta, joten se ei voi varmistaa päivityksiä</translation>
+    </message>
+    <message>
+        <source>this closed curve cannot be split</source>
+        <translation>tätä suljettua käyrää ei voi jakaa</translation>
     </message>
     <message>
         <source>this closed curve cannot be trimmed</source>
@@ -52810,6 +53810,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kiertymät, päästöt, loppuskaalaukset ja ohjauskiskot käyrien pintapyyhkäisyssä</translation>
     </message>
     <message>
+        <source>two blocks are named %1</source>
+        <translation>kahden lohkon nimi on %1</translation>
+    </message>
+    <message>
         <source>two columns set the parameter %1</source>
         <translation>kaksi saraketta asettaa parametrin %1</translation>
     </message>
@@ -52840,6 +53844,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>two faces of the cage run the same way along an edge: their corners must go round the same way, counter-clockwise seen from outside</source>
         <translation>häkin kaksi tahkoa kulkee särmää pitkin samaan suuntaan: niiden kulmien on kierrettävä samaan suuntaan, vastapäivään ulkoa katsottuna</translation>
+    </message>
+    <message>
+        <source>two images have the same number</source>
+        <translation>kahdella kuvalla on sama numero</translation>
     </message>
     <message>
         <source>two joined curves of %1 have their ends %2 mm apart</source>
@@ -53600,6 +54608,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>what a node was attached to no longer exists; the node stays where it was</source>
         <translation>kohdetta, johon solmu oli kiinnitetty, ei enää ole; solmu pysyy paikallaan</translation>
+    </message>
+    <message>
+        <source>what it is pinned to cannot be read</source>
+        <translation>sen kiinnityskohtaa ei voi lukea</translation>
     </message>
     <message>
         <source>wide flange</source>

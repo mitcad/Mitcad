@@ -29,7 +29,9 @@
 //!   surface that reaches further. The bends at a rip's ends end square
 //!   where all their material clears the same plane, and the panel before
 //!   such a bend is cut back to its tangent line beside it to the edge's
-//!   end (a corner relief).
+//!   end (a corner relief). Each rip is recorded as a corner gap of the
+//!   sheet ([`crate::sheet::SheetGap`], mitcad#2098), across which a later
+//!   flange on several edges mitres its walls.
 //! - A bend runs along its edge only as far as both its faces reach its
 //!   tangent lines: a face whose ends are not square to its bend (a
 //!   vertical side wall on an inclined base) runs past the bend at one end
@@ -553,6 +555,7 @@ pub(crate) fn convert<K: Kernel>(
         opened: Vec::new(),
         lineage: Vec::new(),
         overlays: Vec::new(),
+        gaps: Vec::new(),
         invalidated: None,
         blockers: Vec::new(),
     };
@@ -812,6 +815,16 @@ pub(crate) fn convert<K: Kernel>(
                 clips += 4;
             }
         }
+        // The gap recorded (mitcad#2098): a later flange on several edges
+        // takes edge ends facing each other across it as one corner.
+        state.gaps.push(crate::sheet::SheetGap {
+            panels: rip.panels.map(|i| PanelId {
+                feature: uid,
+                slot: i as u32,
+            }),
+            line: rip.ends,
+            width: gap,
+        });
     }
     // Each bend's span along its edge, its panels cut back to its tangent
     // lines.

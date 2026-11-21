@@ -48,8 +48,7 @@ geometry.fillet_step_end): test_rounding_ends_at_a_step_back_of_its_wall
 with the body's faces in the reverse order (the shape invalid or the
 fillet failing before), and test_second_rounding_runs_on_across_the_step
 (the cylinder run on to the first rounding's torus, no torus of its own).
-Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

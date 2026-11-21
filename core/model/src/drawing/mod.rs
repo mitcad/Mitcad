@@ -229,6 +229,34 @@ pub enum Projection {
     FirstAngle,
 }
 
+/// The standard a drawing's dimensions are written to (mitcad#2047): ISO
+/// 129-1 (values along their dimension lines, above them, reading from
+/// below or from the right) or ASME Y14.5 (values horizontal, in a break
+/// of the dimension line; inch values without a leading zero or the unit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Standard {
+    #[default]
+    Iso,
+    Asme,
+}
+
+impl Standard {
+    /// `iso`, `asme`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Iso => "iso",
+            Self::Asme => "asme",
+        }
+    }
+
+    /// Whether values are written horizontal (ASME's unidirectional
+    /// dimensioning).
+    pub fn unidirectional(self) -> bool {
+        self == Self::Asme
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewName {
@@ -390,19 +418,35 @@ pub struct Units {
     pub symbol: &'static str,
     /// Millimetres per unit.
     pub mm: f64,
+    /// The drawing's standard (mitcad#2047): under ASME an inch value is
+    /// written without its leading zero.
+    pub standard: Standard,
 }
 
 impl Units {
     pub const MM: Self = Self {
         symbol: "mm",
         mm: 1.0,
+        standard: Standard::Iso,
     };
 
     pub fn of(unit: crate::expr::LengthUnit) -> Self {
         Self {
             symbol: unit.symbol(),
             mm: unit.millimetres(),
+            standard: Standard::Iso,
         }
+    }
+
+    /// The same unit under a drawing's standard.
+    pub fn under(self, standard: Standard) -> Self {
+        Self { standard, ..self }
+    }
+
+    /// Whether its values drop their leading zero (`.44`): inches under
+    /// ASME (Y14.5 decimal inch dimensioning); millimetres keep theirs.
+    pub fn no_leading_zero(&self) -> bool {
+        self.standard == Standard::Asme && self.symbol == "in"
     }
 
     pub fn by_symbol(symbol: &str) -> Option<Self> {
@@ -417,7 +461,26 @@ impl Units {
     /// zeros.
     pub fn length(&self, mm: f64) -> String {
         let decimals = if self.mm < 5.0 { 2 } else { 3 };
-        trim_number(mm / self.mm, decimals)
+        let text = trim_number(mm / self.mm, decimals);
+        if self.no_leading_zero() {
+            without_leading_zero(&text)
+        } else {
+            text
+        }
+    }
+}
+
+/// A number written without the zero before its decimal point (`0.44` is
+/// `.44`, `-0.005` is `-.005`, `+0.1` is `+.1`), as ASME writes inch
+/// values; other numbers as they are.
+pub fn without_leading_zero(text: &str) -> String {
+    let (sign, rest) = match text.chars().next() {
+        Some(c @ ('-' | '+' | '±')) => (&text[..c.len_utf8()], &text[c.len_utf8()..]),
+        _ => ("", text),
+    };
+    match rest.strip_prefix("0.") {
+        Some(decimals) => format!("{sign}.{decimals}"),
+        None => text.to_owned(),
     }
 }
 

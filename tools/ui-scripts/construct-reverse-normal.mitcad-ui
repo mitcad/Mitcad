@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Offset Plane's Reverse Normal and signed Distance (mitcad#2048, GitHub
+# mitcad/Mitcad#443), on construct-reverse-normal.json (a 40 x 20 x 30 box
+# on the XY plane, its top face at z = 30):
+#   1. Offset Plane on the top face: the Distance input's tooltip says how
+#      to reach the other side, the plane's flip input is Reverse Normal
+#      with its tooltip, and the preview's normal marker points up.
+#   2. Reverse Normal on: the marker turns over (points down); the plane
+#      stays where it is.
+#   3. Distance -10 mm and OK: the plane lies on the other side of the face,
+#      10 mm below it (z = 20), its normal down.
+# Run by tools/ui-construct-reverse-normal-test.sh (Linux),
+# tools/ui-windows-construct-reverse-normal-test.ps1 (Windows) and
+# tools/ui-macos-construct-reverse-normal-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The top face: the inputs say what they do, the marker points up.
+mark
+command construct.offset_plane
+wait-log '^Command Offset Plane started' 30
+wait-idle
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Offset Plane Plane: 1 face'
+wait-log '^Preview Offset Plane: ok' 30
+wait-log '^Preview datum in the design: origin [(][-0-9.e]+, [-0-9.e]+, 40[)], normal [(]0, 0, 1[)]$' 30
+wait-log '^Preview marker direction Offset Plane normal: 0[.]000,0[.]000,1[.]000$' 30
+wait-idle
+expect-widget-property input_distance toolTip "Along the reference's normal; negative puts the plane on the other side"
+expect-widget-property input_flip toolTip "Turn the plane's normal round. The plane stays where it is."
+
+# 2. Reverse Normal: the marker turns over, the plane stays.
+mark
+click-logged '^Panel Offset Plane input flip at '
+wait-log '^Offset Plane: Reverse Normal = on$'
+wait-log '^Preview Offset Plane: ok' 30
+wait-log '^Preview datum in the design: origin [(][-0-9.e]+, [-0-9.e]+, 40[)], normal [(]0, 0, -1[)]$' 30
+wait-log '^Preview marker direction Offset Plane normal: 0[.]000,0[.]000,-1[.]000$' 30
+wait-idle
+
+# 3. Distance -10 mm: the other side of the face.
+mark
+type-in '^Panel Offset Plane input distance at ' '-10'
+wait-log '^Preview datum in the design: origin [(][-0-9.e]+, [-0-9.e]+, 20[)], normal [(]0, 0, -1[)]$' 30
+wait-log '^Preview Offset Plane: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added plane Plane[0-9]+: origin [(][-0-9.e]+, [-0-9.e]+, 20[)], normal [(]0, 0, -1[)]' 30
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

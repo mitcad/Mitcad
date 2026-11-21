@@ -28,8 +28,9 @@ geometry.suite.fillet_corners): a valley's floor rounded with 1 up to the
 vertex where its sides come tangent, the sides' curves exact and shifted by
 2e-4 (the end then within the vertex's tolerance, not at it): both built
 with a point at the vertex, the shifted one's volume within 2e-3 of the
-exact one's. Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+exact one's. Its failure without the patch is still to be shown: the patch
+does not revert at the port's tip without the more than 40 later patches
+that change the same lines (tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 977ced2..b56eb98 100644

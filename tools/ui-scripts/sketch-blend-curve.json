@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Blend Curve (mitcad#2107): two fixed points that frame the view's fit at (-40, -30) and (40, 30); a line from (-30, 15) to (-20, 15) and one from (-10, 5) down to (-10, -5), to blend with Tangent from the first's end to the second's start; an arc of r 5 about (0, -20) from (0, -25) counter-clockwise to (5, -20) and one of r 5 about (20, -5) from (20, -10) to (25, -5), to blend with Curvature from the first's end to the second's start."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30],"fixed":true},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30],"fixed":true},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-30,15],"end":[-20,15]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-10,5],"end":[-10,-5]},
+  {"cmd":"sketch.arc","sketch":"F1","mode":"three_point","start":[0,-25],"through":[3.5355339,-23.5355339],"end":[5,-20]},
+  {"cmd":"sketch.arc","sketch":"F1","mode":"three_point","start":[20,-10],"through":[23.5355339,-8.5355339],"end":[25,-5]}
+]

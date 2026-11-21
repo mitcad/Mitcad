@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/drawing-hole-callout.mitcad-ui (mitcad#2054): a 40 x 30 x 20 block (F2.b0) with a counterbored hole through it at (20, 15) (F3: its drill the parameter drill, 6.6 mm; its counterbore 11 mm across, 6.8 deep). Drawing1 (D1, A3) has its top view at 1:1 with the block's box in the middle at (150, 150): the model's (x, y) on the sheet at (130 + x, 135 + y), the hole's centre at (150, 150). All geometry is synthetic."},
+  {"cmd": "add_parameter", "name": "drill", "value": "6.6 mm"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}], "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "hole", "diameter": "drill",
+    "placement": {"type": "face", "body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})", "points": [[20, 15, 20]]},
+    "extent": {"type": "through_all"}, "kind": {"type": "counterbore", "diameter": 11, "depth": 6.8}}},
+  {"expect": {"feature": "F3", "status": "ok"}},
+  {"cmd": "add_drawing", "size": "A3"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "top", "at": [150, 150], "scale": "1:1"}
+]

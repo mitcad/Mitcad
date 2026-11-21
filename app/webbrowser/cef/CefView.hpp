@@ -32,6 +32,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <set>
 
 #include <QImage>
@@ -44,6 +45,7 @@
 #include <QWidget>
 
 #include "include/cef_browser.h"
+#include "include/wrapper/cef_message_router.h"
 
 class QEvent;
 class QFocusEvent;
@@ -61,6 +63,7 @@ namespace mitcad {
 
 namespace cef {
 class BrowserClient;
+class BridgeHandler;
 }
 
 class CefView : public QWidget {
@@ -71,7 +74,17 @@ public:
   enum class DownloadState { InProgress, Complete, Canceled, Failed };
 
   explicit CefView(QWidget* parent = nullptr);
+  // A tutorial's page (mitcad#2012, CefBridgeConfig.hpp): window.mitcad is
+  // given to the pages of `bridgeFolder` (an installed tutorial package's
+  // local files) and to no other page; its calls go to bridgeCall, and
+  // sendBridgeEvent reaches its listeners.
+  CefView(QWidget* parent, const QString& bridgeFolder);
   ~CefView() override;
+
+  // A call of window.mitcad ({"call", "args"}): the answer's JSON, or false
+  // with the reason. Run from the event loop.
+  std::function<bool(const QString& request, QString* answer, QString* error)> bridgeCall;
+  void sendBridgeEvent(const QString& json);
 
   void load(const QUrl& url);
   // A page of its own (a data: address).
@@ -137,6 +150,8 @@ protected:
 private slots:
   // The window's scale or screen changed (mitcad#1654): CEF asks for the
   // screen's information again (GetScreenInfo). Invokable by the tests.
+  // Never throws (mitcad#2125): a failure is logged once
+  // (screenChangeFailed).
   void screenChanged();
 
 private:
@@ -165,6 +180,10 @@ private:
   // navigation's commit (Chromium keeps a zoom per site in the browsing
   // profile, which would otherwise apply) and every change of the scale.
   void applyZoom();
+  // A screen change that threw (mitcad#2125): logged once
+  // ("Component browser: a screen change failed: <reason>").
+  void screenChangeFailed(const QString& reason);
+  bool m_screenChangeFailureLogged = false;
   // A point of the view in CEF's pixels, and a rectangle of CEF's in the view's.
   CefMouseEvent mouseEventAt(const QPointF& position, Qt::KeyboardModifiers modifiers,
                              Qt::MouseButtons buttons) const;
@@ -207,6 +226,11 @@ private:
   const ViewRequest* requestOf(const QSize& pixels) const;
 
   CefRefPtr<cef::BrowserClient> m_client;
+  // The tutorials' bridge (mitcad#2012): its folder, the router and the
+  // handler of this view's browser; none for other views.
+  QString m_bridgeFolder;
+  CefRefPtr<CefMessageRouterBrowserSide> m_router;
+  std::unique_ptr<cef::BridgeHandler> m_bridge;
   CefRefPtr<CefBrowser> m_browser;
   bool m_creating = false;
   QUrl m_pending; // loaded once the browser exists

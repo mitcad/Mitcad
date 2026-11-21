@@ -43,7 +43,9 @@ top edge into the side.
 Test: geometry/tests/test_fillet_overflow.cpp (ctest
 geometry.suite.fillet_overflow),
 test_rounding_at_a_groove_end_is_cut_by_the_top: Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+patch is still to be shown: the patch does not revert at the port's tip
+without the more than 40 later patches that change the same lines (tried
+2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 00c95c2..91b41b1 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

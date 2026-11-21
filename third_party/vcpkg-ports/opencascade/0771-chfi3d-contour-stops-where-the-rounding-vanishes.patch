@@ -65,9 +65,10 @@ outline rounded with 1 through the points where the foot's rounding
 vanishes: valid, the two points kept, its quarters alike. Another caller:
 geometry/tests/test_fillet_occt_cases.cpp,
 test_crossing_cylinders_rounded_through_their_near_tangent_points (ctest
-geometry.fillet_occt_cases). Its failure without the patch, stated in its
-documentation, is still to be shown in the port's before/after run
-(mitcad#1986).
+geometry.fillet_occt_cases). Its failure without the patch is still to be
+shown: with it and the 16 later patches that change the same lines
+reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 index 93ed3625..1904a2d4 100644

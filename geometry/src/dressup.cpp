@@ -9,6 +9,7 @@
 #include <exception>
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -16,8 +17,11 @@
 #include <utility>
 #include <vector>
 
+#include <BOPAlgo_GlueEnum.hxx>
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAlgoAPI_BooleanOperation.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -31,9 +35,11 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_History.hxx>
 #include <BRep_Builder.hxx>
@@ -73,10 +79,14 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Mat.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
+#include <gp_XYZ.hxx>
 
 #include "blend.hpp"
 #include "canonical.hpp"
@@ -85,6 +95,7 @@
 #include "cutouts.hpp"
 #include "dressup_check.hpp"
 #include "dressup_strips.hpp"
+#include "emboss_projection.hpp"
 #include "face_join.hpp"
 #include "face_select.hpp"
 #include "history.hpp"
@@ -4841,6 +4852,401 @@ std::string input_face_of(const std::string& name, const std::set<std::string>& 
   }
 }
 
+// The plane of a planar face of `solid` with its normal out of it: the
+// surface's normal, reversed where the face is reversed in the solid (as
+// the solid's own shells hold it: the orientation of a face in a result's
+// face list is not to be trusted for it). None where the face is not
+// planar or not in the solid.
+std::optional<gp_Pln> outward_plane(const TopoDS_Face& face, const TopoDS_Shape& solid) {
+  const BRepAdaptor_Surface surface(face, false);
+  if (surface.GetType() != GeomAbs_Plane) {
+    return std::nullopt;
+  }
+  for (TopExp_Explorer ex(solid, TopAbs_FACE); ex.More(); ex.Next()) {
+    if (!ex.Current().IsSame(face)) {
+      continue;
+    }
+    const gp_Pln plane = surface.Plane();
+    gp_Dir normal = plane.Position().XDirection().Crossed(plane.Position().YDirection());
+    if (ex.Current().Orientation() == TopAbs_REVERSED) {
+      normal.Reverse();
+    }
+    return gp_Pln(plane.Location(), normal);
+  }
+  return std::nullopt;
+}
+
+// The half-space on one side of a plane: out of the solid its normal
+// points out of (`out`), or into it.
+TopoDS_Shape half_space(const gp_Pln& plane, bool out) {
+  const gp_Pnt reference = plane.Location().Translated(gp_Vec(plane.Axis().Direction()) * (out ? 1.0 : -1.0));
+  return BRepPrimAPI_MakeHalfSpace(BRepBuilderAPI_MakeFace(plane).Face(), reference).Solid();
+}
+
+// `shape` cut down to the half-spaces (a plane, and true for the side out
+// of its solid); null where a boolean fails.
+std::optional<TopoDS_Shape> clipped(TopoDS_Shape shape, const std::vector<std::pair<gp_Pln, bool>>& sides) {
+  for (const auto& [plane, out] : sides) {
+    BRepAlgoAPI_Common common(shape, half_space(plane, out));
+    common.SetRunParallel(false);
+    detail::build(common);
+    if (!common.IsDone() || common.HasErrors()) {
+      return std::nullopt;
+    }
+    shape = common.Shape();
+  }
+  return shape;
+}
+
+// One boolean of OCCT (fuse, cut or common) of two shapes, its history
+// merged into `history`; none where it fails.
+std::optional<TopoDS_Shape> boolean(BRepAlgoAPI_BooleanOperation&& operation, const TopoDS_Shape& argument,
+                                    const TopoDS_Shape& tool, BRepTools_History* history,
+                                    BOPAlgo_GlueEnum glue = BOPAlgo_GlueOff) {
+  NCollection_List<TopoDS_Shape> arguments;
+  NCollection_List<TopoDS_Shape> tools;
+  arguments.Append(argument);
+  tools.Append(tool);
+  operation.SetArguments(arguments);
+  operation.SetTools(tools);
+  // (On all cores, as the model's booleans; the shapes left as they are.)
+  operation.SetRunParallel(true);
+  operation.SetNonDestructive(true);
+  operation.SetGlue(glue);
+  operation.SetToFillHistory(history != nullptr);
+  detail::build(operation);
+  if (!operation.IsDone() || operation.HasErrors()) {
+    return std::nullopt;
+  }
+  if (history != nullptr) {
+    history->Merge(operation.History());
+  }
+  return operation.Shape();
+}
+
+// The pieces of a cut face a chamfer of concave edges leaves where its
+// chain turns round a corner rounded more tightly than it reaches
+// (mitcad#1821), closed by mitring the bevels of the corner's two straight
+// neighbours. There the kernel sweeps the bevel round the corner's arc on a
+// cone whose contact on the cut face would run on a negative radius: the
+// cone folds over through the arc's axis, leaving a groove between the two
+// bevels down to the cut face (a flat piece of it at the bottom, 0.05 mm2
+// on a nut's end chamfered 2.55 round an octagonal rim rounded 1, the cut
+// face dented under it) and a sliver of the cut face past the point where
+// the bevels' contact lines cross (0.003 mm2 there, 0.03 short of a bore).
+// The folded face defeats the booleans and the defeaturing near it, so the
+// whole corner is rebuilt: a zone round it (between two planes parallel to
+// the walls' bisector, past the corner's dressup faces and the pieces on
+// either side by a tenth of the reach, within their bounding box grown by
+// as much) is cut out of the result and refilled with the input's
+// material there and the two bevels as planes meeting at their mitre
+// (under either bevel's plane, over the cut face, in front of both walls),
+// less what lies under the cut face and over both bevels' planes past the
+// crossing (the bevels continued down to the faces beyond, so that the
+// sliver goes). The arc's wall shows down to the mitre (the cone stood a
+// little higher at the wall: by r (1 - cos(a/2)) at the arc's middle, an
+// arc of radius r turning by a). Pieces of a plane only, each beside two
+// planar bevels named after edges of the input between the cut face and a
+// planar wall. All corners in one set of booleans (their zones apart). A
+// face the refill gives on the surface of a face of the result that it
+// continues (a bevel's plane, a face beyond grown out over the cut face)
+// takes that face's name; the input's faces in the zone keep theirs. The
+// new body where it is one valid closed solid, each of its faces named,
+// none of the pieces left, and its volume within the reach cubed per
+// corner of `result`'s; null otherwise.
+ShapePtr remnants_mitred(const Shape& result, const Shape& input, const std::vector<int>& pieces,
+                         const std::vector<char>& made, const std::string& feature, double contact) {
+  const detail::EdgeFaces edge_faces(result);
+  const TopoDS_Shape& solid = result.occt();
+  // The pieces by their pair of bevels, with the dressup's other faces
+  // beside them (the corner's folded face).
+  std::map<std::pair<int, int>, std::vector<int>> pairs;
+  std::map<std::pair<int, int>, std::set<int>> corner_faces;
+  for (const int f : pieces) {
+    if (BRepAdaptor_Surface(result.face(f), false).GetType() != GeomAbs_Plane) {
+      return nullptr;
+    }
+    std::vector<int> bevels;
+    std::set<int> others;
+    for (TopExp_Explorer ex(result.face(f), TopAbs_EDGE); ex.More(); ex.Next()) {
+      const int e = result.edge_index(TopoDS::Edge(ex.Current()));
+      if (e < 0) {
+        continue;
+      }
+      for (const int g : edge_faces.at(e)) {
+        if (g == f || made[static_cast<std::size_t>(g)] == 0) {
+          continue;
+        }
+        if (BRepAdaptor_Surface(result.face(g), false).GetType() == GeomAbs_Plane) {
+          if (std::find(bevels.begin(), bevels.end(), g) == bevels.end()) {
+            bevels.push_back(g);
+          }
+        } else {
+          others.insert(g);
+        }
+      }
+    }
+    if (bevels.size() != 2) {
+      return nullptr;
+    }
+    const std::pair<int, int> key{std::min(bevels[0], bevels[1]), std::max(bevels[0], bevels[1])};
+    pairs[key].push_back(f);
+    corner_faces[key].insert(others.begin(), others.end());
+  }
+  BRepTools_History history;
+  BRep_Builder builder;
+  TopoDS_Compound zones;
+  TopoDS_Compound fills;
+  TopoDS_Compound slivers;
+  builder.MakeCompound(zones);
+  builder.MakeCompound(fills);
+  builder.MakeCompound(slivers);
+  bool any_sliver = false;
+  std::vector<Bnd_Box> zone_boxes;
+  for (const auto& [bevel_pair, place] : pairs) {
+    // The bevels' planes; the walls' and the cut face's from the bevels'
+    // edges in the input.
+    std::optional<gp_Pln> cut;
+    int cut_index = -1;
+    std::vector<gp_Pln> bevel_planes;
+    std::vector<gp_Pln> walls;
+    const std::string piece = result.face_names(place.front()).front();
+    for (const int bevel : {bevel_pair.first, bevel_pair.second}) {
+      const std::optional<gp_Pln> plane = outward_plane(result.face(bevel), solid);
+      const std::string edge = detail::own_edge(result.face_names(bevel).front(), feature, "chamfer");
+      const std::vector<int> found = edge.empty() ? std::vector<int>() : input.find_edges(edge);
+      if (!plane || found.size() != 1) {
+        return nullptr;
+      }
+      bevel_planes.push_back(*plane);
+      int wall = -1;
+      int cut_face = -1;
+      for (const int g : input.edge_faces(found.front())) {
+        if (g < 0) {
+          return nullptr;
+        }
+        const std::string& name = input.face_names(g).front();
+        (piece.rfind(name + "#", 0) == 0 ? cut_face : wall) = g;
+      }
+      if (wall < 0 || cut_face < 0) {
+        return nullptr;
+      }
+      const std::optional<gp_Pln> wall_plane = outward_plane(input.face(wall), input.occt());
+      const std::optional<gp_Pln> cut_plane = outward_plane(input.face(cut_face), input.occt());
+      if (!wall_plane || !cut_plane) {
+        return nullptr;
+      }
+      walls.push_back(*wall_plane);
+      cut = cut_plane;
+      cut_index = cut_face;
+    }
+    // A chamfer of concave edges: each bevel faces away from the cut face
+    // and from its wall; the walls not parallel.
+    const gp_Dir& up = cut->Axis().Direction();
+    const gp_Dir& wall_a = walls[0].Axis().Direction();
+    const gp_Dir& wall_b = walls[1].Axis().Direction();
+    for (std::size_t k = 0; k < 2; ++k) {
+      const gp_Dir& n = bevel_planes[k].Axis().Direction();
+      if (!(n.Dot(up) > 1.0e-3) || !(n.Dot(walls[k].Axis().Direction()) > 1.0e-3)) {
+        return nullptr;
+      }
+    }
+    if (wall_a.IsParallel(wall_b, 1.0e-3)) {
+      return nullptr;
+    }
+    // The walls' bisector: through their line, its normal between theirs.
+    const gp_Dir across(gp_Vec(wall_a) - gp_Vec(wall_b));
+    const gp_Dir along = wall_a.Crossed(wall_b);
+    // (A point on both walls' planes: rows of the walls' normals and the
+    // line's direction.)
+    gp_Mat rows(wall_a.XYZ(), wall_b.XYZ(), along.XYZ());
+    rows.Transpose();
+    const gp_XYZ rhs(wall_a.XYZ().Dot(walls[0].Location().XYZ()), wall_b.XYZ().Dot(walls[1].Location().XYZ()), 0.0);
+    if (std::abs(rows.Determinant()) < 1.0e-9) {
+      return nullptr;
+    }
+    const gp_Pnt on_both(rows.Inverted() * rhs);
+    // The zone: past the corner's faces and the pieces on either side of the
+    // bisector, within their bounding box grown by as much (not reaching
+    // the faces beyond the corner's, a thin wall's outside).
+    Bnd_Box box;
+    double half = 0.0;
+    std::vector<int> round = place;
+    round.insert(round.end(), corner_faces[bevel_pair].begin(), corner_faces[bevel_pair].end());
+    for (const int f : round) {
+      BRepBndLib::Add(result.face(f), box);
+      for (TopExp_Explorer ex(result.face(f), TopAbs_VERTEX); ex.More(); ex.Next()) {
+        const gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        half = std::max(half, std::abs(gp_Vec(on_both, point).Dot(gp_Vec(across))));
+      }
+      // (A curved face bulges between its vertices.)
+      Bnd_Box face_box;
+      BRepBndLib::Add(result.face(f), face_box);
+      double x0, y0, z0, x1, y1, z1;
+      face_box.Get(x0, y0, z0, x1, y1, z1);
+      for (const double x : {x0, x1}) {
+        for (const double y : {y0, y1}) {
+          for (const double z : {z0, z1}) {
+            half = std::max(half, std::abs(gp_Vec(on_both, gp_Pnt(x, y, z)).Dot(gp_Vec(across))));
+          }
+        }
+      }
+    }
+    half += 0.1 * contact;
+    box.Enlarge(0.1 * contact);
+    double x0, y0, z0, x1, y1, z1;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    const gp_Pln side_a(on_both.Translated(gp_Vec(across) * half), across);
+    const gp_Pln side_b(on_both.Translated(gp_Vec(across) * -half), across.Reversed());
+    const std::optional<TopoDS_Shape> zone =
+        clipped(BRepPrimAPI_MakeBox(gp_Pnt(x0, y0, z0), gp_Pnt(x1, y1, z1)).Shape(), {{side_a, false}, {side_b, false}});
+    if (!zone) {
+      return nullptr;
+    }
+    // The bevels as planes meeting at their mitre, over the cut face (not
+    // over a bore through it, where the bevels end on the bore's wall).
+    const std::optional<TopoDS_Shape> over_cut = boolean(
+        BRepAlgoAPI_Common(), *zone,
+        BRepPrimAPI_MakePrism(input.face(cut_index), gp_Vec(up) * (2.0 * contact)).Shape(), nullptr);
+    if (!over_cut) {
+      return nullptr;
+    }
+    std::optional<TopoDS_Shape> fill;
+    for (std::size_t k = 0; k < 2; ++k) {
+      const std::optional<TopoDS_Shape> under =
+          clipped(*over_cut, {{*cut, true}, {walls[0], true}, {walls[1], true}, {bevel_planes[k], false}});
+      if (!under) {
+        return nullptr;
+      }
+      fill = fill ? boolean(BRepAlgoAPI_Fuse(), *fill, *under, nullptr) : under;
+      if (!fill) {
+        return nullptr;
+      }
+    }
+    // (The zones apart: one boolean takes them all.)
+    Bnd_Box zone_box;
+    BRepBndLib::Add(*zone, zone_box);
+    for (const Bnd_Box& other : zone_boxes) {
+      if (!zone_box.IsOut(other)) {
+        return nullptr;
+      }
+    }
+    zone_boxes.push_back(zone_box);
+    builder.Add(zones, *zone);
+    builder.Add(fills, *fill);
+    // Under each piece past the bevels' crossing (over both bevels): the
+    // column under it over both bevels' planes, cut from the input's
+    // material.
+    for (const int f : place) {
+      bool past = true;
+      for (TopExp_Explorer ex(result.face(f), TopAbs_VERTEX); ex.More() && past; ex.Next()) {
+        const gp_Pnt point = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+        for (const gp_Pln& plane : bevel_planes) {
+          if (gp_Vec(plane.Location(), point).Dot(gp_Vec(plane.Axis().Direction())) < -Precision::Confusion()) {
+            past = false;
+          }
+        }
+      }
+      if (!past) {
+        continue;
+      }
+      const std::optional<TopoDS_Shape> below = clipped(
+          BRepPrimAPI_MakePrism(result.face(f), gp_Vec(up) * -contact).Shape(),
+          {{bevel_planes[0], true}, {bevel_planes[1], true}});
+      if (!below) {
+        return nullptr;
+      }
+      builder.Add(slivers, *below);
+      any_sliver = true;
+    }
+  }
+  // All corners at once (their zones apart): the input's material in the
+  // zones less the slivers' columns, with the mitred bevels, in place of
+  // the result's.
+  std::optional<TopoDS_Shape> kept = boolean(BRepAlgoAPI_Common(), input.occt(), zones, &history);
+  if (kept && any_sliver) {
+    kept = boolean(BRepAlgoAPI_Cut(), *kept, slivers, &history);
+  }
+  const std::optional<TopoDS_Shape> refill = kept ? boolean(BRepAlgoAPI_Fuse(), *kept, fills, &history) : std::nullopt;
+  const std::optional<TopoDS_Shape> rest = refill ? boolean(BRepAlgoAPI_Cut(), solid, zones, &history) : std::nullopt;
+  // (Glued: the two touch only on the zones' faces.)
+  const std::optional<TopoDS_Shape> joined =
+      rest ? boolean(BRepAlgoAPI_Fuse(), *rest, *refill, &history, BOPAlgo_GlueShift) : std::nullopt;
+  if (!joined) {
+    return nullptr;
+  }
+  const TopoDS_Shape whole = *joined;
+  int solids = 0;
+  for (TopExp_Explorer ex(whole, TopAbs_SOLID); ex.More(); ex.Next()) {
+    ++solids;
+  }
+  const double before = detail::volume_of(solid);
+  if (solids != 1 || !closed_solids(whole) || !BRepCheck_Analyzer(whole, true, true).IsValid() ||
+      std::abs(detail::volume_of(whole) - before) > contact * contact * contact * static_cast<double>(pairs.size())) {
+    return nullptr;
+  }
+  detail::FaceNamer namer(whole);
+  namer.carry(history, result);
+  // A face the regions gave (a bevel continued as its plane, a face beyond
+  // grown out over the cut face): the name of the face of `result` on its
+  // surface that it continues (touches).
+  std::set<std::string> taken;
+  for (int f = 0; f < result.face_count(); ++f) {
+    for (const std::string& name : result.face_names(f)) {
+      taken.insert(name);
+    }
+  }
+  for (TopExp_Explorer ex(whole, TopAbs_FACE); ex.More(); ex.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(ex.Current());
+    if (namer.named(face)) {
+      continue;
+    }
+    for (int f = 0; f < result.face_count(); ++f) {
+      if (result.face_names(f).empty() || !on_one_surface(result.face(f), face)) {
+        continue;
+      }
+      BRepExtrema_DistShapeShape distance(face, result.face(f));
+      if (!distance.IsDone() || distance.Value() > Precision::Confusion() * 10.0) {
+        continue;
+      }
+      const std::string& name = result.face_names(f).front();
+      int k = 0;
+      std::string next;
+      do {
+        next = name + "#" + std::to_string(k++);
+      } while (!taken.insert(next).second);
+      namer.add(face, next);
+      break;
+    }
+  }
+  // The input's faces in the zone (a wall the cone covered).
+  namer.carry(history, input);
+  namer.carry_by_containment(input, Precision::Confusion() * 10.0);
+  namer.finish();
+  ShapePtr out = namer.shape();
+  out->copy_notes(result);
+  for (int f = 0; f < out->face_count(); ++f) {
+    if (out->face_names(f).empty()) {
+      return nullptr;
+    }
+  }
+  // None of the pieces left: a point inside each now inside the solid or
+  // out of it, not on its boundary.
+  BRepClass3d_SolidClassifier classifier(whole);
+  for (const int p : pieces) {
+    gp_Pnt point;
+    gp_Vec normal;
+    if (!detail::inner_point(result.face(p), point, normal)) {
+      return nullptr;
+    }
+    classifier.Perform(point, Precision::Confusion());
+    if (classifier.State() == TopAbs_ON) {
+      return nullptr;
+    }
+  }
+  return detail::join_same_surfaces(out);
+}
+
 // The pieces of a face the dressup takes away that its result still has
 // (mitcad#1821): a chamfer along a chain over a corner's rounding left, at
 // each corner, a triangle of the old end face between the two neighbouring
@@ -4859,14 +5265,25 @@ std::string input_face_of(const std::string& name, const std::set<std::string>& 
 // the band (its vertices and its edges' points all nearer the chain's
 // edges, `chain` with the tangent chains the sets follow, than `contact`,
 // how far the dressup reaches along its faces): nothing of the old surface
-// stays there at the dressup's exact size. The pieces are removed by the
-// geometry kernel's defeaturing, the faces round them extended to meet (the
-// bevels' faces closing between them), where those faces are planes,
+// stays there at the dressup's exact size. Within the band means up to its
+// edge (to 1e-4 of the reach), and a sliver under 0.01 mm2 may reach past
+// it by less than its own size (the square root of its area): at a corner
+// rounded more tightly than the dressup reaches, the neighbouring bevels'
+// contact lines cross on the band's edge and the kernel leaves pieces of
+// the face bounded by them (mitcad#1821: a nut's end chamfered 2.55 inside
+// an octagonal rim rounded 1, at each corner a piece of 0.05 mm2 on the
+// band's edge and a sliver of 0.003 mm2 reaching 0.03 past it, which a
+// strict test within the band let through silently). The pieces are
+// removed by the geometry kernel's defeaturing, the faces round them
+// extended to meet (the bevels' faces closing between them), where those
+// faces are planes,
 // cylinders, cones, spheres or tori and that gives one valid solid of
 // nearly the same volume. Elsewhere (beside a blend's faces, which meet the
 // faces they round and each other tangentially, so that extending them to
 // meet ran for minutes and failed, mitcad#1858), or where the defeaturing
-// fails, each place is closed by a patch tangent to the dressup's faces
+// fails: a chamfer's pieces at corners rounded more tightly than it reaches
+// are closed by mitring its bevels there (remnants_mitred), and otherwise
+// each place is closed by a patch tangent to the dressup's faces
 // round it, those cut back a setback from it (patch_remnants,
 // remnant_patch.hpp). Where neither gives one valid solid the result keeps
 // the pieces with a warning that says so, the pieces as its places. The
@@ -4949,14 +5366,18 @@ ShapePtr without_remnants(const ShapePtr& result, const Shape& input, std::vecto
     if (candidates.empty()) {
       return result;
     }
-    const double within = contact * (1.0 - 1.0e-3);
-    const auto near_chain = [&](const gp_Pnt& p) {
-      BRepExtrema_DistShapeShape measured(BRepBuilderAPI_MakeVertex(p).Vertex(), edges);
-      return measured.IsDone() && measured.Value() < within;
-    };
+    const double sliver = 0.01;
     const detail::EdgeFaces edge_faces(*result);
     std::vector<int> remnants;
     for (const int f : candidates) {
+      GProp_GProps area;
+      BRepGProp::SurfaceProperties(result->face(f), area);
+      const double within =
+          contact * (1.0 + 1.0e-4) + (area.Mass() < sliver ? std::sqrt(std::max(area.Mass(), 0.0)) : 0.0);
+      const auto near_chain = [&](const gp_Pnt& p) {
+        BRepExtrema_DistShapeShape measured(BRepBuilderAPI_MakeVertex(p).Vertex(), edges);
+        return measured.IsDone() && measured.Value() <= within;
+      };
       std::set<int> made_beside;
       bool inside = true;
       for (TopExp_Explorer ex(result->face(f), TopAbs_EDGE); ex.More() && inside; ex.Next()) {
@@ -5050,6 +5471,17 @@ ShapePtr without_remnants(const ShapePtr& result, const Shape& input, std::vecto
         ShapePtr out = namer.shape();
         out->copy_notes(*result);
         return out;
+      }
+    }
+    // At a corner rounded more tightly than a chamfer reaches: the bevels
+    // mitred.
+    if (std::strcmp(role, "chamfer") == 0) {
+      try {
+        OCC_CATCH_SIGNALS
+        if (ShapePtr mitred = remnants_mitred(*result, input, remnants, made, feature, contact)) {
+          return mitred;
+        }
+      } catch (const Standard_Failure&) {
       }
     }
     // A patch at each place, tangent to the dressup's faces round it (cut
@@ -5228,6 +5660,61 @@ std::string millimetres(double value) {
   return text;
 }
 
+// The narrowest place of face `face` between its straight edges `a` and
+// `b`, which are not parallel and share no vertex: of nine points along the
+// stretch where they run beside each other (a's points whose feet on b fall
+// within b), the one nearest to b, the face lying between them there. The
+// width is the straight distance across: on a cylinder or a cone it is
+// shorter than the way over the surface by less than a thousandth where
+// the edges are within 10 degrees of each other about the axis. None where
+// they share a vertex (a corner of the face, where roundings meet as usual)
+// or do not run beside each other.
+struct Narrowest {
+  double width = 0.0;
+};
+std::optional<Narrowest> narrowest_between(const Shape& body, const TopoDS_Face& face, int a, int b) {
+  const TopoDS_Edge& ea = body.edge(a);
+  const TopoDS_Edge& eb = body.edge(b);
+  TopoDS_Vertex a0, a1, b0, b1;
+  TopExp::Vertices(ea, a0, a1);
+  TopExp::Vertices(eb, b0, b1);
+  if (a0.IsSame(b0) || a0.IsSame(b1) || a1.IsSame(b0) || a1.IsSame(b1)) {
+    return std::nullopt;
+  }
+  const BRepAdaptor_Curve ca(ea);
+  const BRepAdaptor_Curve cb(eb);
+  const gp_Pnt b_start = cb.Value(cb.FirstParameter());
+  const gp_Pnt b_end = cb.Value(cb.LastParameter());
+  const double b_length = b_start.Distance(b_end);
+  if (!(b_length > Precision::Confusion())) {
+    return std::nullopt;
+  }
+  const gp_Vec b_along(b_start, b_end);
+  std::optional<Narrowest> found;
+  constexpr int kSamples = 9;
+  for (int k = 0; k < kSamples; ++k) {
+    // (Just inside the ends: at an end the point between them lies on the
+    // face's boundary.)
+    const double t = 0.001 + 0.998 * k / (kSamples - 1);
+    const gp_Pnt on_a = ca.Value(ca.FirstParameter() + t * (ca.LastParameter() - ca.FirstParameter()));
+    const double along = gp_Vec(b_start, on_a).Dot(b_along) / (b_length * b_length);
+    if (along < 0.0 || along > 1.0) {
+      continue;
+    }
+    const gp_Pnt on_b = b_start.Translated(b_along * along);
+    const double width = on_a.Distance(on_b);
+    if (!(width > Precision::Confusion()) || (found && width >= found->width)) {
+      continue;
+    }
+    const gp_Pnt between((on_a.XYZ() + on_b.XYZ()) * 0.5);
+    if (BRepClass_FaceClassifier(face, between, Precision::Confusion()).State() != TopAbs_IN) {
+      continue;
+    }
+    found = Narrowest{width};
+  }
+  return found;
+}
+
 // Why a fillet that the geometry kernel cannot build fails, where a planar
 // face lies between two selected straight edges parallel to each other
 // whose roundings together reach farther across it than it is wide
@@ -5246,7 +5733,9 @@ std::string millimetres(double value) {
 // two edges, how far each reaches and the face's width there, and how many
 // more faces are like it; empty where no face is (or the body cannot be
 // measured). Asymmetric sets, whose distances are not radii, are left
-// out; so are curved faces and edges.
+// out; so are curved edges, and curved faces but for cylinders and cones
+// between straight edges that close in on each other (narrowest_between,
+// mitcad#2038).
 std::string narrow_face_cause(const Shape& body, const std::vector<FilletSet>& sets, const std::vector<int>& owner) {
   try {
     OCC_CATCH_SIGNALS
@@ -5293,7 +5782,8 @@ std::string narrow_face_cause(const Shape& body, const std::vector<FilletSet>& s
     int faces_found = 0;
     for (int f = 0; f < body.face_count(); ++f) {
       const TopoDS_Face& face = body.face(f);
-      if (BRepAdaptor_Surface(face, false).GetType() != GeomAbs_Plane) {
+      const GeomAbs_SurfaceType surface = BRepAdaptor_Surface(face, false).GetType();
+      if (surface != GeomAbs_Plane && surface != GeomAbs_Cone && surface != GeomAbs_Cylinder) {
         continue;
       }
       std::vector<Line> lines;
@@ -5320,7 +5810,27 @@ std::string narrow_face_cause(const Shape& body, const std::vector<FilletSet>& s
         for (std::size_t j = i + 1; j < lines.size(); ++j) {
           const Line& a = lines[i];
           const Line& b = lines[j];
+          const double reach =
+              contact[static_cast<std::size_t>(a.edge)] + contact[static_cast<std::size_t>(b.edge)];
           if (!a.direction.IsParallel(b.direction, 1.0e-6)) {
+            // Two straight edges that close in on each other across the
+            // face without meeting (a rib's side, a cone, between its start
+            // and end faces a few degrees apart, mitcad#2038): the width at
+            // the narrowest of nine points along their common stretch.
+            const std::optional<Narrowest> narrowest = narrowest_between(body, face, a.edge, b.edge);
+            if (!narrowest || !(reach > narrowest->width * (1.0 + 1.0e-6))) {
+              continue;
+            }
+            if (!counted) {
+              counted = true;
+              ++faces_found;
+            }
+            if (reach / narrowest->width > worst.ratio) {
+              worst = {f, a.edge, b.edge, narrowest->width, reach / narrowest->width};
+            }
+            continue;
+          }
+          if (surface != GeomAbs_Plane) {
             continue;
           }
           // Where the two run beside each other, along a.
@@ -5341,8 +5851,6 @@ std::string narrow_face_cause(const Shape& body, const std::vector<FilletSet>& s
           const gp_Vec to_b(a.start, b.start);
           const gp_Pnt on_b = on_a.Translated(to_b - along * to_b.Dot(along));
           const double width = on_a.Distance(on_b);
-          const double reach =
-              contact[static_cast<std::size_t>(a.edge)] + contact[static_cast<std::size_t>(b.edge)];
           if (!(width > Precision::Confusion()) || !(reach > width * (1.0 + 1.0e-6))) {
             continue;
           }

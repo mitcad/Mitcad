@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Orientation, P2, Projection, SheetSize};
+use super::{Orientation, P2, Projection, SheetSize, Standard};
 use crate::appearance::ImageData;
 
 /// The `format` of a template's file.
@@ -51,6 +51,10 @@ pub struct SheetTemplate {
     /// angle, ANSI: third angle; mitcad#725).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projection: Option<Projection>,
+    /// The dimensioning standard a drawing made with it starts with (ISO:
+    /// `iso`, ANSI: `asme`; mitcad#2047).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard: Option<Standard>,
     /// The frame's distances from the sheet's edges: left, bottom, right,
     /// top, mm (ISO 5457: 20 on the left for filing, 10 elsewhere).
     #[serde(default = "default_margins")]

@@ -200,7 +200,7 @@ private:
 
   void layoutCards();
   // "Floating cards: window 1280x800, top bar bottom 21, view top 21, floating
-  // rows bottom 160; titleRow 0,21 1280x36; titleHistory 120,22 64x34; ...;
+  // rows bottom 160; titleRow 0,21 1280x36; titleQuickAccess 8,22 330x34; ...;
   // ribbon 12,65 1256x118; ribbonWorkspace 12,65 84x118; ribbonTabs
   // 110,69 270x26; ribbonSearch ...; ribbonGroup_SOLID/CREATE 108,99 200x83; ...;
   // browserDock 12,168 260x300; ..." in the window's coordinates, the rows

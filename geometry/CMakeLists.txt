@@ -1380,10 +1380,11 @@ if(BUILD_TESTING)
   # together; each one valid closed solid whose volume is the reference's
   # built in the owner's order (the dressup on the picked edge with the
   # narrow face continued, then the face beyond grown out), exactly where
-  # the face is planar along a straight chain. Three parts, one ctest each.
+  # the face is planar along a straight chain. Three parts, one ctest each,
+  # and a ring's floor chamfered inside a rounded octagon (mitcad#1821, `ring`).
   add_executable(test_dressup_consumes_face tests/test_dressup_consumes_face.cpp)
   target_link_libraries(test_dressup_consumes_face PRIVATE mitcad_geometry mitcad_geometry_analysis mitcad_warnings)
-  foreach(part IN ITEMS core kinds chains)
+  foreach(part IN ITEMS core kinds chains ring)
     add_test(NAME geometry.dressup_consumes_face.${part} COMMAND test_dressup_consumes_face --part ${part})
     set_tests_properties(geometry.dressup_consumes_face.${part} PROPERTIES TIMEOUT 300)
   endforeach()
@@ -1526,4 +1527,19 @@ if(BUILD_TESTING)
   target_link_libraries(test_fillet_unequal_torus_corner PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_unequal_torus_corner COMMAND test_fillet_unequal_torus_corner)
   set_tests_properties(geometry.fillet_unequal_torus_corner PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # A STEP file whose face bound the reader cannot resolve (port patch 1820,
+  # mitcad#2028): geometry.port.1820 reads it through OCCT's document reader
+  # with sub-shape names.
+  target_link_libraries(test_port_patches PRIVATE TKXSBase TKDE TKDESTEP TKLCAF TKCAF TKXCAF)
+  # The STEP read is one of the geometry's operations (mitcad#2028): a crash
+  # inside OCCT's reader is the error "the STEP file could not be read",
+  # twice in a row (the exchange lock released), not a crash.
+  add_executable(test_step_read_crash tests/test_step_read_crash.cpp)
+  target_link_libraries(test_step_read_crash PRIVATE mitcad_geometry mitcad_geometry_io mitcad_warnings)
+  add_test(NAME geometry.step_read_crash
+    COMMAND test_step_read_crash "${CMAKE_CURRENT_BINARY_DIR}/step-read-crash")
+  set_tests_properties(geometry.step_read_crash PROPERTIES ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=step" TIMEOUT 120)
 endif()

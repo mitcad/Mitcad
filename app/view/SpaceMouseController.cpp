@@ -150,6 +150,9 @@ void SpaceMouseController::reportRotationLock() {
 void SpaceMouseController::motion(const SpaceMouseAxes& axes, bool device) {
   m_axes = axes;
   m_fromDevice = device;
+  if (m_hooks.deflected) {
+    m_hooks.deflected(spaceMouseDeflected(axes));
+  }
   apply();
 }
 

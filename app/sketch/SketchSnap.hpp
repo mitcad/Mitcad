@@ -6,17 +6,21 @@
 // curves and optionally to a grid; with a tool's switch on, also to body
 // vertices and the midpoints of body edges in the sketch plane (mitcad#258),
 // which the sketch's own geometry wins ties against; onto the sketch's x
-// and y axes (mitcad#948). Tolerances are in screen pixels, so snapping
-// feels the same at any zoom.
+// and y axes (mitcad#948); onto the extensions of the lines the pointer
+// rested on and where they meet (mitcad#2035). Tolerances are in screen
+// pixels, so snapping feels the same at any zoom.
 
 #include <functional>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include <QJsonObject>
 
 #include <QPointF>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include "BodyGeometry.hpp"
 #include "SketchModel.hpp"
@@ -55,6 +59,16 @@ struct Snap {
   QString axis;
   QPointF screen; // where the cursor was
   BodyItem bodyItem; // BodyVertex, BodyMidpoint, BodyOnEdge: the vertex or the edge
+  // On an acquired line's extension, beyond its ends (mitcad#2035):
+  // OnCurve onto the endless line of `curve` (a line); Intersection where
+  // the endless line of `curve` (`extended`) meets that of `curve2`
+  // (`extended2`) or crosses `curve2` itself. When only one of them is
+  // extended, it is `curve`.
+  bool extended = false;
+  bool extended2 = false;
+  // The keys held at a press a tool gets (mitcad#2090: Shift at the click
+  // that adds a constraint replaces what blocks it); none otherwise.
+  Qt::KeyboardModifiers modifiers = Qt::NoModifier;
 
   // On existing geometry (a new point there gets a constraint).
   bool onGeometry() const { return kind != Kind::None && kind != Kind::Grid; }
@@ -64,6 +78,8 @@ struct Snap {
   bool onBody() const { return kind == Kind::BodyVertex || kind == Kind::BodyMidpoint || kind == Kind::BodyOnEdge; }
   // At an existing point, which a new curve can share.
   bool atPoint() const { return kind == Kind::Point || kind == Kind::Center; }
+  // On a line's extension, or where one meets another curve (mitcad#2035).
+  bool onExtension() const { return extended || extended2; }
   QString describe() const;
 };
 
@@ -82,11 +98,26 @@ struct SnapSettings {
   // (mitcad#948), with the curves' tolerance; the sketch's own geometry and
   // the origin win ties. On for every tool that snaps.
   bool axes = false;
+  // The lines acquired by resting the pointer on them (mitcad#2035), at
+  // most two (the first two that are lines of the model are taken): their
+  // endless lines beyond their ends as curves to snap onto, with the
+  // curves' tolerance; where two of them meet, and where one crosses
+  // another curve near the cursor, as intersections. The sketch's own
+  // points, curves, midpoints and intersections win ties. Only with
+  // `extensions` on (the palette's Snap to line extensions; off while
+  // Shift or Alt is held).
+  QStringList acquired;
+  bool extensions = false;
 };
 
 // The snapped position for the cursor at `screen`, where `raw` is the
 // cursor's point on the sketch plane.
 Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen);
+
+// The dashed guides of a snap onto a line's extension (mitcad#2035): for
+// each extended line of `snap`, from that line's end nearer the snapped
+// point to the point. Empty for any other snap.
+std::vector<std::pair<V2, V2>> extensionGuides(const SketchModel& model, const Snap& snap);
 
 // The sketch axes a point placed where `snap` went lies on (mitcad#948):
 // "x" or "y" onto that axis; "xy" at the origin (its snap, or the point the

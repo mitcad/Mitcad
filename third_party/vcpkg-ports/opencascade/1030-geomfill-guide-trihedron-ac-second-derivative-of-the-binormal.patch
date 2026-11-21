@@ -25,8 +25,8 @@ quarter turn by an auxiliary spine, with curvilinear equivalence
 (GuideTrihedronAC, this patch) and without it (the plane rule,
 GuideTrihedronPlan, the other caller, unchanged): the volume 800 within
 1e-7 and the end cap's extents the turned bar's. Without the patch the
-curvilinear sweep held 784.9. Its failure without the patch is still to be
-shown in the port's before/after run (mitcad#1986).
+curvilinear sweep held 784.9. It fails without the patch (shown 2026-11-20
+by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_GuideTrihedronAC.cxx b/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_GuideTrihedronAC.cxx
 --- a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_GuideTrihedronAC.cxx

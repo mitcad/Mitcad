@@ -86,9 +86,10 @@ and on the cylinder the same volume removed. Other callers:
 geometry/tests/test_fillet_occt_cases.cpp,
 test_meridian_edge_rounded_to_the_pole_of_a_partial_revolve and
 test_throat_chamfer_ends_along_a_circle_keep_their_tolerance (ctest
-geometry.fillet_occt_cases). Its failure without the patch, stated in its
-documentation, is still to be shown in the port's before/after run
-(mitcad#1986).
+geometry.fillet_occt_cases). It fails with this patch and 17 later patches
+that change the same lines reverted together, so the test does not single
+this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the patches
+are listed in third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 4299602d..bc14a062 100644

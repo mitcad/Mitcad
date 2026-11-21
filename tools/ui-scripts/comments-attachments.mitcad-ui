@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: MIT
+# Images on comments and replies (mitcad#2011, GitHub mitcad/Mitcad#402),
+# on a block (comments-attachments.json); ${MITCAD_TEST_WORK}/photo.png is a
+# 128 x 128 PNG file the wrapper puts there:
+#   1. Add Comment with Whole Design: Capture and Annotate… from the panel,
+#      a rectangle dragged over the view; a line, an arc and a rectangle
+#      drawn, the rectangle undone; Attach: C1 with one image, capture.png.
+#   2. The Comments panel: Reply… on C1 with Attach Image… (photo.png): the
+#      reply with its image.
+#   3. The details pane shows both as thumbnails; a click on one opens the
+#      viewer, which zooms and closes.
+#   4. Saved; comments-attachments-reopen.mitcad-ui reads them again from
+#      the saved design.
+# Run by tools/ui-comments-attachments-test.sh (Linux),
+# tools/ui-windows-comments-attachments-test.ps1 (Windows) and
+# tools/ui-macos-comments-attachments-test.sh (macOS).
+wait-idle
+expect-ever '^Comments: none$' 30
+
+# 1. Add Comment with Whole Design, its image captured and marked up.
+mark
+command comment.add
+wait-log '^Command Add Comment started'
+wait-log '^Panel Add Comment input whole_design at '
+click-logged '^Panel Add Comment input whole_design at '
+wait-log '^Panel Add Comment input target at .*[(]hidden[)]$'
+wait-log '^Panel Add Comment action images[.]1 at '
+mark
+click-logged '^Panel Add Comment action images[.]1 at '
+focus-dialog '^Capture and Annotate$'
+wait-log '^Capture and Annotate: the view [0-9]+ x [0-9]+$'
+wait-log '^Markup stage: capture$'
+wait-log '^Markup picture at '
+mark
+dialog-drag-logged '^Markup picture at ' -150 -100 150 100
+wait-log '^Markup stage: markup [0-9]+ x [0-9]+$'
+wait-log '^Markup picture at '
+button '^Line$' markupTool_line
+wait-log '^Markup tool: line$'
+dialog-drag-logged '^Markup picture at ' -100 -60 100 -60
+wait-log '^Markup shapes: line$'
+button '^Arc$' markupTool_arc
+wait-log '^Markup tool: arc$'
+dialog-drag-logged '^Markup picture at ' -60 30 60 30
+wait-log '^Markup shapes: line, arc$'
+button '^Rectangle$' markupTool_rectangle
+wait-log '^Markup tool: rectangle$'
+dialog-drag-logged '^Markup picture at ' -40 -20 40 20
+wait-log '^Markup shapes: line, arc, rectangle$'
+mark
+button '^Undo$' markupUndo
+wait-log '^Markup undo$'
+wait-log '^Markup shapes: line, arc$'
+button '^Attach$' markupAttach
+wait-log '^Markup attached: capture[.]png [0-9]+ x [0-9]+, 2 shapes: line, arc$'
+focus-main
+wait-log '^Add Comment image: capture[.]png, [0-9]+ x [0-9]+$'
+wait-log '^Panel Add Comment note images: 1 image.*: capture[.]png'
+mark
+type-in '^Panel Add Comment input text at ' 'Round these corners as drawn'
+key Return
+wait-log '^Done Add Comment$'
+wait-log '^Comment added on the whole design with 1 image[(]s[)]$'
+wait-log '^Comment C1: open, user, Design: Round these corners as drawn$'
+wait-log '^Comment C1 image A1: capture[.]png, image/png, [0-9]+ x [0-9]+$'
+
+# 2. Reply… with an image file.
+mark
+command view.comments
+focus-dialog '^Comments$'
+wait-log '^Comments row C1 at '
+dialog-click-logged '^Comments row C1 at '
+wait-log '^Comments selected: C1$'
+wait-log '^Comments details images: C1: A1 capture[.]png$'
+mark
+dialog-click-logged '^Comments Reply at '
+focus-dialog '^Reply to Comment 1$'
+button '^Attach Image' commentAttachImage
+focus-dialog '^Attach Image$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/photo.png"
+key Return
+wait-log '^Comment image chosen: photo[.]png, 128 x 128$'
+focus-dialog '^Reply to Comment 1$'
+wait-log '^Comment dialog image: photo[.]png, 128 x 128$'
+focus-widget commentText
+type 'The corners as in this photo'
+key Return
+wait-log '^Comment C1 reply 1: user: The corners as in this photo$'
+wait-log '^Comment C1 reply 1 image A2: photo[.]png, image/png, 128 x 128$'
+
+# 3. The thumbnails, and the viewer.
+focus-dialog '^Comments$'
+wait-log '^Comments details images: C1: A1 capture[.]png, A2 photo[.]png$'
+wait-log '^Comments image C1 A1 at '
+mark
+dialog-click-logged '^Comments image C1 A1 at '
+wait-log '^Comments image clicked: C1 A1$'
+focus-dialog '^Comment 1: capture[.]png$'
+wait-log '^Comment image viewer opened: Comment 1: capture[.]png: [0-9]+ x [0-9]+$'
+wait-log '^Comment image viewer zoom: fit '
+button '^Zoom In$' commentImageZoomIn
+wait-log '^Comment image viewer zoom: [0-9]+[.][0-9]+$'
+button '^Close$' commentImageClose
+wait-log '^Comment image viewer closed: Comment 1: capture[.]png$'
+focus-dialog '^Comments$'
+button '^Close$' commentsClose
+focus-main
+
+# 4. Saved, for the second part.
+mark
+command file.save
+wait-log '^Saved .*comments-attachments[.]mitcad$'
+expect-never 'TestDriver: FAIL'

@@ -111,6 +111,24 @@ pub enum SheetOverlayKind {
     },
 }
 
+/// A corner gap of the sheet (mitcad#2098): two panels cut apart where
+/// they would meet, the gap between them. Convert to Sheet Metal records
+/// one at each rip, a flange on several edges one at each corner between
+/// its walls. A later flange on several edges treats two edge ends that
+/// face each other across a recorded gap as one corner; a gap is never
+/// guessed from distances.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SheetGap {
+    /// The two panels on either side of the gap.
+    pub panels: [PanelId; 2],
+    /// The corner's line in the folded sheet: the rip's edge, or the line
+    /// in the flange's bisecting plane along its walls from where their
+    /// roots meet.
+    pub line: [[f64; 3]; 2],
+    /// The corner gap (mm) the panels were cut apart by.
+    pub width: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SheetState {
     pub schema: u32,
@@ -135,6 +153,10 @@ pub struct SheetState {
     /// Straight cuts the domains cannot hold (mitcad#242), in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlays: Vec<SheetOverlay>,
+    /// The corner gaps between panels (mitcad#2098); a sheet saved before
+    /// them has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<SheetGap>,
     pub invalidated: Option<SheetDiagnostic>,
     pub blockers: Vec<SheetDiagnostic>,
 }
@@ -182,6 +204,9 @@ impl SheetState {
             {
                 bend.folded_embedding = cylinder;
             }
+        }
+        for gap in &mut next.gaps {
+            gap.line = gap.line.map(|p| transform.apply_point(p));
         }
         for overlay in &mut next.overlays {
             match &mut overlay.kind {
@@ -812,7 +837,7 @@ pub(crate) fn footprint<K: crate::kernel::Kernel>(
             bodies.extend(&d.replaces);
             None
         }
-        F::Hole(d) => {
+        F::Hole(d) if d.cut_scope.is_none() => {
             all = d.participants.is_empty();
             bodies.extend(&d.participants);
             None
@@ -860,9 +885,9 @@ pub(crate) fn footprint<K: crate::kernel::Kernel>(
             Some(&d.objects)
         }
         F::PatternAtPoints(d) => Some(&d.objects),
-        F::Extrude(d) if d.active_cut_scope().is_some() => {
+        _ if def.active_cut_scope().is_some() => {
             all = false;
-            let scope = d.active_cut_scope().expect("checked");
+            let scope = def.active_cut_scope().expect("checked");
             ctx.reads.push(crate::recompute::Read::Assembly(
                 crate::features::extrude_scope::assembly_key(&ctx.env),
             ));

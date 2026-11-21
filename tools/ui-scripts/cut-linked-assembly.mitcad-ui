@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# Extrude Cut in an assembly on a linked part (mitcad#2131), on
+# holder.mitcad of cut-linked-assembly-holder.json: plate.mitcad (a block of
+# 20 x 20 x 10 mm, 4000 mm3) linked as plate:1, and in the root Sketch1 with
+# a 12 x 4 mm square inside the block.
+#   1. Extrude with the square, 50 mm, Cut: Affected components lists
+#      plate:1, left out of the automatic scope as a linked component but
+#      checkable; the block is not cut.
+#   2. plate:1 checked (a click on its check box): the scope turns explicit
+#      with it, the row says it is machined in this assembly only, and the
+#      preview is ok.
+#   3. OK adds the cut: plate:1 is machined (its Browser row says so), the
+#      linked block itself keeps its 4000 mm3; Undo and Redo take the one
+#      step back and forth.
+#   4. Saved: the wrapper checks the file with cut-linked-assembly-check.json
+#      (3520 mm3 shown) and the part's file as it was written.
+# Run by tools/ui-cut-linked-assembly-test.sh (Linux),
+# tools/ui-windows-cut-linked-assembly-test.ps1 (Windows) and
+# tools/ui-macos-cut-linked-assembly-test.sh (macOS).
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+expect-model-bodies 1 4000
+expect-ever '^Browser Root/plate:1 at '
+capture-undo-depth start
+
+# 1. The cut through the linked block: listed, left out, checkable.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile' 20
+mark
+type-in '^Panel Extrude input distance at ' '50'
+wait-log '^Preview Extrude: ' 30
+mark
+click-logged '^Panel Extrude input operation at '
+key Home Down Down Return
+expect-ever 'Extrude: (automatic )?Operation = Cut'
+wait-log '^Cut target C1@O1: machinable here, unchecked, intersects' 30
+# Nothing else to cut yet: the automatic scope leaves the linked block out,
+# so the preview says so until it is checked.
+expect-log '^Preview Extrude: failed: No eligible components intersect the cut'
+wait-log '^Cut target check C1@O1 at '
+expect-never '^Browser machined '
+
+# 2. Checked (a click on its check box): machined in this assembly only.
+mark
+click-logged '^Cut target check C1@O1 at '
+wait-log '^Cut target C1@O1 checked: explicit scope with it$'
+wait-log '^Cut target C1@O1: eligible, checked, intersects, machined here$' 30
+wait-log '^Preview Extrude: ok' 30
+expect-no-log '^Preview Extrude: failed'
+wait-idle
+
+# 3. Committed: one undo step, the occurrence machined, the link as it was.
+mark
+button '^OK$'
+wait-log '^Added extrude \(Cut\)' 30
+wait-idle
+wait-log '^Browser machined Root/plate:1$' 20
+expect-model-bodies 1 4000
+expect-undo-depth ${start} 1
+mark
+command edit.undo
+wait-log '^Undo: Add Extrude'
+wait-idle
+mark
+command edit.redo
+wait-log '^Browser machined Root/plate:1$' 20
+wait-idle
+
+# 4. Saved for the wrapper's checks.
+mark
+command file.save
+wait-log '^Saved .*holder[.]mitcad$'
+expect-never 'TestDriver: FAIL'

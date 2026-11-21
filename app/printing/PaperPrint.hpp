@@ -11,7 +11,8 @@
 //   it needs with an overlap, alignment marks and each page's row and column
 //   (planActual), or fitted to one page (planFit).
 // - The Cut List and Bill of Materials print as their PDF lays them out
-//   (build/BuildLists.hpp, paintListPages).
+//   (build/ListPages.hpp, paintListPages), and so does the Keyboard and
+//   Mouse Overview's cheat sheet (mitcad#2095) on the paper of listPaper.
 //
 // The pages are painted in the printable area's millimetres (the paint
 // rectangle of the printer's page layout), y down; paintPage scales them to
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include <QLineF>
+#include <QLocale>
 #include <QPageLayout>
 #include <QPointF>
 #include <QRectF>
@@ -118,6 +120,14 @@ QString paperSetting(QPageSize::PageSizeId paper);
 // none matches.
 QPageSize::PageSizeId paperFromSetting(const QString& setting, const std::vector<QPageSize::PageSizeId>& papers,
                                        QPageSize::PageSizeId fallback);
+// The paper of a list printed in portrait (the Keyboard and Mouse
+// Overview's cheat sheet, mitcad#2095): the paper File › Print remembers
+// (`saved`, the setting `print/paper`) when it is A4 or Letter, else Letter
+// under the US measurement system and A4 under the others, as the Print
+// panel chooses.
+QPageSize::PageSizeId listPaper(const QString& saved, QLocale::MeasurementSystem system);
+// The setting File › Print remembers its paper in.
+QString savedPrintPaper();
 
 // Paints one page: `painter` has its origin at the printable area's top left
 // in device pixels, `pixelsPerMm` of them a millimetre.

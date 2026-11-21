@@ -36,6 +36,7 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRep_Builder.hxx>
@@ -62,6 +63,7 @@
 #include <TopoDS_Solid.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
@@ -1542,6 +1544,77 @@ void test_chamfer_of_a_groove_end_wall(double along, double down) {
   CHECK(with_top == 1);
 }
 
+// A half-round boss of radius 5 (x <= 0) on a plate, its top a plane
+// sloping down from z = 9.5 at x = 0 by `slope` per unit of -x; its foot
+// chamfered `foot` up its round side and 1 on the plate, its top's arc
+// chamfered by `distance`. The top's chamfer is walked, and patch 0531
+// computes it again over the round side unbounded. With the body moved by a
+// location (as an assembly's component is), the side's surface is a
+// cylinder held with that location: the unbounded copy took a copy of the
+// cylinder moved by it, on which the spine's edge has no p-curve, and the
+// try evaluated a null p-curve (a signal, mitcad#1986). The chamfer of the
+// moved body is that of the body as made: valid, the same volume taken
+// away.
+void test_chamfer_of_a_sloped_boss_top_moved(double foot, double distance, double slope) {
+  const double radius = 5.0, top = 9.5;
+  TopoDS_Shape boss =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -1), gp_Dir(0, 0, 1), gp_Dir(0, 1, 0)), radius, top + 5.0, kPi)
+          .Shape();
+  const TopoDS_Face slope_face =
+      BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0, 0, top), gp_Dir(-slope, 0, 1))).Face();
+  boss = cut(boss, BRepPrimAPI_MakeHalfSpace(slope_face, gp_Pnt(0, 0, 100)).Solid());
+  TopoDS_Shape body = fuse(BRepPrimAPI_MakeBox(gp_Pnt(-10, -10, -5), gp_Pnt(10, 10, 0)).Shape(), boss);
+  CHECK(BRepCheck_Analyzer(body).IsValid());
+  const std::vector<TopoDS_Edge> foot_arc = edges_where(body, [&](const gp_Pnt& p) {
+    return std::abs(p.Z()) < 1e-6 && std::abs(std::hypot(p.X(), p.Y()) - radius) < 1e-6;
+  });
+  TopoDS_Face side;
+  for (TopExp_Explorer ex(body, TopAbs_FACE); ex.More(); ex.Next()) {
+    if (BRepAdaptor_Surface(TopoDS::Face(ex.Current())).GetType() == GeomAbs_Cylinder) {
+      side = TopoDS::Face(ex.Current());
+    }
+  }
+  CHECK(foot_arc.size() == 1u);
+  CHECK(!side.IsNull());
+  if (foot_arc.size() != 1u || side.IsNull()) {
+    return;
+  }
+  BRepFilletAPI_MakeChamfer foot_chamfer(body);
+  foot_chamfer.Add(foot, 1.0, foot_arc.front(), side);
+  foot_chamfer.Build();
+  CHECK(foot_chamfer.IsDone());
+  if (!foot_chamfer.IsDone()) {
+    return;
+  }
+  body = foot_chamfer.Shape();
+  gp_Trsf shift, turn;
+  shift.SetTranslation(gp_Vec(3, -2, 1));
+  turn.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 1, 1)), 0.3);
+  const gp_Trsf move = turn * shift;
+  double removed[2] = {0.0, 0.0};
+  for (const bool moved : {false, true}) {
+    const TopoDS_Shape shape = moved ? body.Moved(TopLoc_Location(move)) : body;
+    const gp_Trsf back = moved ? move.Inverted() : gp_Trsf();
+    const std::vector<TopoDS_Edge> arc = edges_where(shape, [&](const gp_Pnt& q) {
+      const gp_Pnt p = q.Transformed(back);
+      return p.Z() > top - slope * radius - 1e-3 && std::abs(std::hypot(p.X(), p.Y()) - radius) < 1e-6;
+    });
+    CHECK(arc.size() == 1u);
+    if (arc.size() != 1u) {
+      return;
+    }
+    const TopoDS_Shape result = chamfered(shape, arc, distance);
+    CHECK(!result.IsNull());
+    if (result.IsNull()) {
+      return;
+    }
+    CHECK(BRepCheck_Analyzer(result).IsValid());
+    removed[moved ? 1 : 0] = volume_of(shape) - volume_of(result);
+  }
+  CHECK(removed[0] > 0.0);
+  CHECK_NEAR(removed[1], removed[0]);
+}
+
 void chamfer_overflow_tests() {
   guarded("test_chamfer_as_wide_as_a_step_ring", test_chamfer_as_wide_as_a_step_ring);
   // (The lug's ends away from the bore's seam, its end and its start on it.)
@@ -1645,6 +1718,13 @@ void chamfer_overflow_tests() {
       guarded("test_chamfer_of_a_boss_beyond_a_slanted_plate_corner",
               [&] { test_chamfer_of_a_boss_beyond_a_slanted_plate_corner(seam, length); });
     }
+  }
+  // (the foot's height up the boss's side, the top's chamfer, the top's slope)
+  for (const auto& [foot, distance, slope] :
+       {std::tuple<double, double, double>{6.0, 1.5, 0.3}, {3.0, 0.8, 0.1}}) {
+    guarded("test_chamfer_of_a_sloped_boss_top_moved", [&, foot = foot, distance = distance, slope = slope] {
+      test_chamfer_of_a_sloped_boss_top_moved(foot, distance, slope);
+    });
   }
 }
 

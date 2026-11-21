@@ -56,6 +56,8 @@ namespace {
 // component it came from.
 struct LoadedModule {
   CreateComponentBrowserFunction create = nullptr;
+  // The tutorial pane's page (mitcad#2012).
+  CreateTutorialPageFunction createTutorial = nullptr;
   QString folder;
   QString version;
 };
@@ -80,7 +82,9 @@ CreateComponentBrowserFunction loadBrowserModule(const BrowserComponentInfo& com
   const auto abi = reinterpret_cast<ComponentBrowserAbiFunction>(library->resolve(kComponentBrowserAbiSymbol));
   const auto create =
       reinterpret_cast<CreateComponentBrowserFunction>(library->resolve(kCreateComponentBrowserSymbol));
-  if (abi == nullptr || create == nullptr) {
+  const auto createTutorial =
+      reinterpret_cast<CreateTutorialPageFunction>(library->resolve(kCreateTutorialPageSymbol));
+  if (abi == nullptr || create == nullptr || createTutorial == nullptr) {
     *error = library->errorString();
     qWarning().noquote() << QStringLiteral("Component from Web: the browser module did not load: %1").arg(*error);
     return nullptr;
@@ -94,19 +98,12 @@ CreateComponentBrowserFunction loadBrowserModule(const BrowserComponentInfo& com
     return nullptr;
   }
   loaded.create = create;
+  loaded.createTutorial = createTutorial;
   loaded.folder = component.folder;
   loaded.version = component.version;
   qInfo().noquote() << QStringLiteral("Component from Web: loaded %1 (component %2, CEF %3)")
                            .arg(QDir::toNativeSeparators(path), component.version, component.cef);
   return create;
-}
-
-// The browsing profile's folder: cookies, sign-ins, cache.
-QString browserProfileFolder() {
-  const QString given = qEnvironmentVariable("MITCAD_WEB_PROFILE_DIR");
-  return given.isEmpty()
-             ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).filePath(QStringLiteral("web"))
-             : QDir::cleanPath(given);
 }
 
 // What the module's window asks of MitCad: the import, the bridge's zip
@@ -191,6 +188,22 @@ QString occurrencePath(const QJsonArray& level, const QString& uid, const QStrin
 
 } // namespace
 
+QString browserProfileFolder() {
+  const QString given = qEnvironmentVariable("MITCAD_WEB_PROFILE_DIR");
+  return given.isEmpty()
+             ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).filePath(QStringLiteral("web"))
+             : QDir::cleanPath(given);
+}
+
+CreateTutorialPageFunction loadTutorialPageModule(const BrowserComponentInfo& component, QString* folder,
+                                                  QString* error) {
+  if (loadBrowserModule(component, error) == nullptr) {
+    return nullptr;
+  }
+  *folder = loadedModule().folder;
+  return loadedModule().createTutorial;
+}
+
 void MainWindow::registerComponentWebCommand() {
   // Always offered: the first use downloads the web browser component.
   CommandDef web;
@@ -242,6 +255,14 @@ void MainWindow::openComponentBrowser() {
     m_componentBrowser->activateWindow();
     return;
   }
+  withBrowserComponent(tr("Component from Web"),
+                       tr("Component from Web needs MitCad's web browser component (the Chromium Embedded "
+                          "Framework %1), a download of %2. Download it now?"),
+                       [this](const BrowserComponentInfo& component) { return showComponentBrowser(component); });
+}
+
+void MainWindow::withBrowserComponent(const QString& title, const QString& question,
+                                      const std::function<bool(const BrowserComponentInfo&)>& then) {
   if (!m_browserDownload.isNull()) {
     return; // the first download is under way
   }
@@ -249,14 +270,14 @@ void MainWindow::openComponentBrowser() {
   QString problem;
   const std::optional<BrowserComponentInfo> installed = installedBrowserComponent(root, &problem);
   if (installed && installed->abi == kComponentBrowserAbi) {
-    if (showComponentBrowser(*installed) && !installed->fromBuild) {
+    if (then(*installed) && !installed->fromBuild) {
       updateBrowserComponent(*installed);
     }
     return;
   }
   if (installed && installed->fromBuild) {
     // A build's component (the tests'): never replaced by a download.
-    sheetWarning(this, tr("Component from Web"), browserInterfaceMessage(kComponentBrowserAbi, installed->abi));
+    sheetWarning(this, title, browserInterfaceMessage(kComponentBrowserAbi, installed->abi));
     return;
   }
   if (installed) {
@@ -264,11 +285,11 @@ void MainWindow::openComponentBrowser() {
                              .arg(installed->version)
                              .arg(installed->abi)
                              .arg(kComponentBrowserAbi);
-    downloadBrowserComponent(browserInterfaceMessage(kComponentBrowserAbi, installed->abi));
+    downloadBrowserComponent(browserInterfaceMessage(kComponentBrowserAbi, installed->abi), title, question, then);
     return;
   }
   qInfo().noquote() << QStringLiteral("Component from Web: %1").arg(problem);
-  downloadBrowserComponent(QString());
+  downloadBrowserComponent(QString(), title, question, then);
 }
 
 bool MainWindow::showComponentBrowser(const BrowserComponentInfo& component) {
@@ -298,39 +319,39 @@ bool MainWindow::showComponentBrowser(const BrowserComponentInfo& component) {
   return true;
 }
 
-void MainWindow::downloadBrowserComponent(const QString& why) {
+void MainWindow::downloadBrowserComponent(const QString& why, const QString& title, const QString& question,
+                                          const std::function<bool(const BrowserComponentInfo&)>& then) {
   const UpdateSource source = UpdateSource::fromEnvironment();
   if (source.platform.isEmpty()) {
-    sheetInformation(this, tr("Component from Web"),
-                     tr("No web browser component is published for this kind of computer."));
+    sheetInformation(this, title, tr("No web browser component is published for this kind of computer."));
     return;
   }
   auto* download = new BrowserComponentDownload(this);
   m_browserDownload = download;
-  connect(download, &BrowserComponentDownload::failed, this, [this, download](const QString& message) {
+  connect(download, &BrowserComponentDownload::failed, this, [this, download, title](const QString& message) {
     download->deleteLater();
-    sheetWarning(this, tr("Component from Web"), message);
+    sheetWarning(this, title, message);
   });
   connect(download, &BrowserComponentDownload::manifestFetched, this,
-          [this, download, source, why](const QByteArray& manifest) {
+          [this, download, source, why, title, question, then](const QByteArray& manifest) {
     QString error;
     const BrowserOffer offer =
         checkBrowserManifest(manifest, source.keys, source.platform, kComponentBrowserAbi, QString(), &error);
     switch (offer.status) {
     case BrowserOffer::Status::Invalid:
       download->deleteLater();
-      sheetWarning(this, tr("Component from Web"),
+      sheetWarning(this, title,
                    tr("The web browser component could not be checked: %1")
                        .arg(error.isEmpty() ? tr("the update manifest is not valid") : error));
       return;
     case BrowserOffer::Status::None:
       download->deleteLater();
-      sheetInformation(this, tr("Component from Web"),
+      sheetInformation(this, title,
                        tr("No web browser component is published for this kind of computer."));
       return;
     case BrowserOffer::Status::OtherInterface:
       download->deleteLater();
-      sheetWarning(this, tr("Component from Web"),
+      sheetWarning(this, title,
                    browserPublishedInterfaceMessage(kComponentBrowserAbi, offer.abis));
       return;
     case BrowserOffer::Status::Available:
@@ -338,13 +359,11 @@ void MainWindow::downloadBrowserComponent(const QString& why) {
       break;
     }
     // Asked once, with what it is and its size.
-    QString question = tr("Component from Web needs MitCad's web browser component (the Chromium Embedded "
-                          "Framework %1), a download of %2. Download it now?")
-                           .arg(offer.cef, browserDownloadSize(offer.size));
+    QString asked = question.arg(offer.cef, browserDownloadSize(offer.size));
     if (!why.isEmpty()) {
-      question = why + QStringLiteral("\n\n") + question;
+      asked = why + QStringLiteral("\n\n") + asked;
     }
-    if (sheetQuestion(this, tr("Component from Web"), question) != QMessageBox::Yes) {
+    if (sheetQuestion(this, title, asked) != QMessageBox::Yes) {
       qInfo().noquote() << QStringLiteral("Component from Web: the download of the web browser component was declined");
       download->deleteLater();
       return;
@@ -353,7 +372,7 @@ void MainWindow::downloadBrowserComponent(const QString& why) {
     QDir().mkpath(root);
     const QString zip = QDir(root).filePath(offer.version + QStringLiteral(".download.zip"));
     auto* progress = new QProgressDialog(tr("Downloading the web browser component…"), tr("Cancel"), 0, 1000, this);
-    progress->setWindowTitle(tr("Component from Web"));
+    progress->setWindowTitle(title);
     progress->setMinimumDuration(0);
     prepareProgressDialog(progress);
     progress->setValue(0);
@@ -370,7 +389,7 @@ void MainWindow::downloadBrowserComponent(const QString& why) {
       }
     });
     connect(download, &BrowserComponentDownload::downloaded, this,
-            [this, download, progress, manifest, source, offer, root](const QString& path) {
+            [this, download, progress, manifest, source, offer, root, title, then](const QString& path) {
       progress->deleteLater();
       download->deleteLater();
       QString installError;
@@ -379,16 +398,16 @@ void MainWindow::downloadBrowserComponent(const QString& why) {
       QFile::remove(path);
       if (!installed) {
         qWarning().noquote() << QStringLiteral("Component from Web: %1").arg(installError);
-        sheetWarning(this, tr("Component from Web"), installError);
+        sheetWarning(this, title, installError);
         return;
       }
       QString problem;
       const std::optional<BrowserComponentInfo> component = installedBrowserComponent(root, &problem);
       if (!component) {
-        sheetWarning(this, tr("Component from Web"), problem);
+        sheetWarning(this, title, problem);
         return;
       }
-      showComponentBrowser(*component);
+      then(*component);
     });
     download->download(offer.url, zip, offer.size);
   });

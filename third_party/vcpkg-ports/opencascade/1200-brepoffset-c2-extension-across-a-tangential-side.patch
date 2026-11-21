@@ -44,8 +44,8 @@ test_octagon_to_a_circle_of_radius_24_5_seam_on_a_side at 1 and 2 mm
 (ctest geometry.offset_loft_circle_seam): edges within 0.001 mm, the
 volume that of the seam-on-a-corner loft's offset within 1e-5 (3e-5 for
 the octagon); the port's notes record the square at 3 mm failing without
-the patch on the edges. Its failure without the patch is still to be shown
-in the port's before/after run (mitcad#1986).
+the patch on the edges. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
 index 8606ce2b..e667b52c 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx

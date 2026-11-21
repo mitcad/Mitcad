@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: MIT
+# Sketch blocks (mitcad#2110) on sketch-blocks.json (Sketch1: a slot
+# between (0, 0) and (20, 0), 6 wide):
+#   1. A double-click selects the slot's outline; Create Block with the
+#      name Slot typed and the base point typed at (10, 0) makes the block
+#      and the outline its instance k6 in place (the slot's constraints
+#      were k1..k5; its base point p13 and direction line c14 follow the
+#      slot's ids and the new tip p12).
+#   2. Insert Block twice, at (60, 0) and at (60, 30) typed: instances k7
+#      (p15..p24, base p25, direction c27) and k8 (p28..p37, base p38,
+#      direction c40).
+#   3. k6 held (its base point fixed, its direction horizontal); k8
+#      placed by a coincident of its base point p38 with the slot's
+#      centre p6 and an angle of 90 deg between its direction c40 and k6's
+#      c14.
+#   4. A click on k6 selects the whole instance; Edit Block opens it in
+#      place; the centres 30 apart (the slot longer); Finish Block: every
+#      instance of Slot reaches 30 mm along its direction.
+#   5. A click on k7 and Explode Block: plain geometry with the block's
+#      constraints.
+# Run by tools/ui-sketch-blocks-test.sh (Linux),
+# tools/ui-windows-sketch-blocks-test.ps1 (Windows) and
+# tools/ui-macos-sketch-blocks-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+command view.fit
+wait-idle
+capture-undo-depth baseline
+
+# 1. Create Block of the slot's outline, base point at its middle.
+mark
+sketch-dblclick 10 3
+wait-idle
+command sketch.create_block
+type Slot
+key Tab
+type 10
+key Tab
+type 0
+key Return
+wait-log '^Created block Slot of .* in Sketch1 as instance k6, base point at \(10, 0\)$'
+wait-log '^Browser Sketch Blocks: Slot \(1\)$'
+expect-undo-depth ${baseline} 1
+
+# 2. Two instances, placed by typed X and Y.
+mark
+command sketch.insert_block
+type 60
+key Tab
+type 0
+key Return
+wait-log '^Inserted block Slot into Sketch1 as instance k7 at \(60, 0\), turned 0°$'
+mark
+command sketch.insert_block
+type 60
+key Tab
+type 30
+key Return
+wait-log '^Inserted block Slot into Sketch1 as instance k8 at \(60, 30\), turned 0°$'
+wait-log '^Browser Sketch Blocks: Slot \(3\)$'
+expect-undo-depth ${baseline} 3
+
+# 3. k8 placed: its base point on the slot's right centre, turned 90 deg
+# from k6, which is held where it is: its base point fixed, its direction
+# horizontal.
+model-command '{"cmd": "sketch.set_fixed", "sketch": "F1", "entities": ["p13"]}'
+model-command '{"cmd": "sketch.add_constraint", "sketch": "F1", "constraint": {"type": "horizontal", "line": "c14"}}'
+wait-idle
+model-command '{"cmd": "sketch.add_constraint", "sketch": "F1", "constraint": {"type": "coincident", "point": "p38", "entity": "p6"}}'
+model-command '{"cmd": "sketch.add_dimension", "sketch": "F1", "value": "90 deg", "dimension": {"type": "angle", "a": "c14", "b": "c40"}}'
+wait-idle
+command view.fit
+wait-idle
+
+# 4. Edit Block in place from k6, the slot 30 long, Finish Block.
+mark
+sketch-click 10 3
+wait-idle
+command sketch.edit_block
+wait-log '^Editing block Slot in place at instance k6 of Sketch1$'
+model-command '{"cmd": "sketch.add_dimension", "sketch": "F1", "value": 30, "dimension": {"type": "horizontal_distance", "a": "p5", "b": "p6"}}'
+wait-idle
+mark
+command sketch.finish_block
+wait-log '^Finished block Slot$'
+wait-log '^Block instance k6 of Slot: 30.000 mm along its direction$'
+wait-log '^Block instance k7 of Slot: 30.000 mm along its direction$'
+wait-log '^Block instance k8 of Slot: 30.000 mm along its direction$'
+screenshot '${MITCAD_TEST_WORK}/sketch-blocks.png'
+
+# 5. Explode k7.
+command view.fit
+wait-idle
+mark
+sketch-click 60 3
+wait-idle
+command sketch.explode_block
+wait-log '^Exploded instance k7 of block Slot in Sketch1$'
+wait-log '^Browser Sketch Blocks: Slot \(2\)$'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

@@ -2676,6 +2676,25 @@ impl TryThread {
             ABANDONED_RUNNING.fetch_sub(1, Ordering::SeqCst);
         }
     }
+
+    /// Waits up to `limit` for the try's thread to end (its document and
+    /// shapes dropped), true when it did (mitcad#2085): a try given up
+    /// stops at its next check once its kernel call returns, and the next
+    /// try starts only then, so that two imports do not hold their memory
+    /// at once. A call that does not return in that time is taken to hang
+    /// for good and the next try starts beside it, as before.
+    pub(crate) fn wait_ended(&self, limit: Duration) -> bool {
+        let start = Instant::now();
+        loop {
+            if self.0.load(Ordering::SeqCst) == TRY_FINISHED {
+                return true;
+            }
+            if start.elapsed() >= limit {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 /// Held by a try's thread to its very end (dropped last): no longer counted.
@@ -3264,7 +3283,7 @@ impl Document {
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         guard.check(&progress);
-                        let now = progress.step.load(Ordering::Relaxed);
+                        let now = progress.steps();
                         if now != step {
                             step = now;
                             moved = Instant::now();
@@ -3275,6 +3294,9 @@ impl Document {
                             // so it does not compete with the next one.
                             progress.abandon();
                             thread.abandon();
+                            // (Its memory freed before the next try, where
+                            // its kernel call returns within the limit.)
+                            thread.wait_ended(Duration::from_secs_f64(limit));
                             break item;
                         }
                     }

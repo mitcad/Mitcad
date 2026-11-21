@@ -212,7 +212,7 @@ fn stationary_panel(
     let parents = reach(state, SheetDomainRef::Bend(first));
     let route = path(&parents, SheetDomainRef::Bend(second)).ok_or_else(|| {
         format!(
-            "{} and {} are not connected through registered seams",
+            "{} and {} are not connected through the sheet's bends and seams",
             label(first),
             label(second)
         )
@@ -308,7 +308,7 @@ pub(crate) fn corner_relief<K: Kernel>(
     for bend in [first, second] {
         let route = path(&parents, SheetDomainRef::Bend(bend)).ok_or_else(|| {
             format!(
-                "{} is not connected to {} through registered seams",
+                "{} is not connected to {} through the sheet's bends and seams",
                 domain_label(SheetDomainRef::Bend(bend)),
                 domain_label(SheetDomainRef::Panel(panel))
             )
@@ -566,6 +566,7 @@ mod tests {
             opened: Vec::new(),
             lineage: Vec::new(),
             overlays: Vec::new(),
+            gaps: Vec::new(),
             invalidated: None,
             blockers: Vec::new(),
         };

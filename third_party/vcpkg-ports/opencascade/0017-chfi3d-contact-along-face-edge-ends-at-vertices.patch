@@ -21,10 +21,12 @@ too.
 
 Test: geometry/tests/test_fillet_overflow.cpp (ctest
 geometry.suite.fillet_overflow),
-test_two_distance_chamfer_on_a_face_as_high_as_it_ends_on_slanted_faces: a
-boss's top front edge chamfered as high as the front, ending on its
-slanted sides. Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+test_corner_rounding_beside_a_rounded_top_edge_is_cut_by_the_top: a
+corner's rounding whose contact runs along an edge of the face it rolls
+on, ending at that edge's vertices. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py, reverted together with 0050, which
+changes the same lines). (The boss chamfered as high as its front, named
+before, succeeds without the patch.)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 index f258c5a..b80b06d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx

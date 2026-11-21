@@ -12,3 +12,5 @@ mod link_tests;
 mod component_options_tests;
 // The materials of inserted components (mitcad#1921).
 mod inserted_materials_tests;
+// Linked parts of a design (mitcad#2130).
+mod link_parts_tests;

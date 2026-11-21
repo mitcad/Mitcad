@@ -18,13 +18,13 @@
 #include <QStringList>
 #include <QVector>
 
+#include "ListPages.hpp"
 #include "ListTables.hpp"
 
 class QCheckBox;
 class QComboBox;
 class QLabel;
 class QDoubleSpinBox;
-class QPagedPaintDevice;
 class QLineEdit;
 class QShowEvent;
 class QTabWidget;
@@ -35,16 +35,6 @@ namespace mitcad {
 class CommandContext;
 
 namespace build {
-
-// Writes the tables to a PDF (A4) under a title and a line with the
-// design's name and the date; false with the reason when it cannot.
-bool writeListPdf(const QString& path, const QString& title, const QString& subtitle,
-                  const QVector<ListTable>& tables, QString& error);
-// The PDF's pages on any paged device (the PDF writer, a printer: File ›
-// Print, mitcad#1089), in its paint rectangle: the number of pages; -1
-// when the device cannot be painted on, -2 when it could not be finished.
-int paintListPages(QPagedPaintDevice& device, const QString& title, const QString& subtitle,
-                   const QVector<ListTable>& tables);
 
 // The cut list's tables from `build_cut_list`'s answer: the rows, the
 // stock, the other parts. A design with timber (the answer's `timber`,

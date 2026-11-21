@@ -47,8 +47,15 @@ see 0011) or for an overlapping stripe, whose start is found as an overflow
 without StartSol (the flag anOverflowOnly, set before the try: the throw
 that skips StartSol is this patch's own, not a failure); other failures are
 rethrown.
-Test: pending (mitcad#2003): the port test written for this patch does not
-reach its case yet.
+Test: geometry/tests/port/p0013-overflow-across-faces.cpp (ctest
+geometry.port.0013): a block bevelled 2 along its top front edge, both
+bevel edges rounded with 5 (each fits on the bevel, the two overlap on it):
+one rounding tangent to the top and the front, the bevel gone (without the
+overlapping stripes computed again: not built); bevelled 1 the same; a
+block's corner cut off by two strips narrower than the rounding (the second
+0.75 wide or a sliver of 0.001), the first strip's top edge or the edge
+between the strips rounded with 5 over both: the block's corner rounded.
+The boundary: the bevel 4 wide rounded with 1, two blends as stock.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 886899ca..3a60958b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

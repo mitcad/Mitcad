@@ -780,8 +780,12 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
                 "angle": signed("angle", !back)?,
                 "length": {"mode": mode, "value": signed("length", false)?},
                 "position": position,
-                "radius": signed("radius", false)?,
             });
+            // A flat, open or rolled hem sets its bend's radius itself
+            // (mitcad#2112): the flange then has none.
+            if sheet.contains_key("radius") || sheet.get("hem_model").is_none() {
+                def["radius"] = signed("radius", false)?;
+            }
             // A hem whose bends follow from its sizes (mitcad#1378).
             if let Some(hem) = sheet.get("hem_model") {
                 def["hem"] = hem.clone();
@@ -2045,14 +2049,17 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
 /// length datum `tangent`, MitCad's `outer_tangent`):
 ///
 /// - an open or flat hem folds its wall back over the panel in one bend of
-///   180 degrees: a flange of 180 degrees whose inside radius is half the
-///   gap *(verified: the volumes of the open hem of gap 2 mm and the flat
-///   hem of gap 0.02 mm of the reference models; the flat hem's gap is its
-///   inside diameter too)*;
+///   180 degrees whose inside radius is half the gap: the flange's `open`
+///   or `flat` hem of that gap (mitcad#2112; before it, the flange of 180
+///   degrees of that radius, which gives the same bends) *(verified: the
+///   volumes of the open hem of gap 2 mm and the flat hem of gap 0.02 mm of
+///   the reference models; the flat hem's gap is its inside diameter too)*;
 /// - a rolled hem is one bend of its angle and inside radius with no wall:
-///   a flange of that angle, its length 0 from the bend's tangent line
-///   (`straight`, MitCad's `tangent`) *(verified: the reference model's
-///   rolled hem of 270 degrees and radius 3 mm, its volume)*;
+///   the flange's `rolled` hem of that angle and radius (mitcad#2112; the
+///   flange of that angle with a length of 0 from the bend's tangent line,
+///   `straight`, MitCad's `tangent`, where the angle is no more than 180
+///   degrees, which the form does not take) *(verified: the reference
+///   model's rolled hem of 270 degrees and radius 3 mm, its volume)*;
 /// - a teardrop or rope hem is the flange's hem of that form with the
 ///   hem's gap, its radius the hem's radius *(verified: the volumes of the
 ///   reference models' teardrop and rope hems of radius 2 mm, gap 1 mm and
@@ -2090,22 +2097,39 @@ fn hem_as_flange(
     flange.insert("length_mode".to_owned(), json!("tangent"));
     let note = match form {
         "open" | "flat" => {
-            let radius = half(needed("gap", "gap")?)?;
-            flange.insert("radius".to_owned(), json!({"model": radius}));
+            let gap = needed("gap", "gap")?;
+            flange.insert("hem_model".to_owned(), json!({"form": form, "gap": gap}));
             format!(
-                "{} hem: a flange of 180 degrees whose inside radius is half its gap, its length \
-                 measured from the bend's outer surface",
+                "{} hem: the flange's {form} hem of its gap and length, one bend of 180 degrees                  whose inside radius is half its gap",
                 if form == "open" { "an open" } else { "a flat" }
             )
         }
         "rolled" => {
             let angle = needed("hem_angle", "angle")?;
             let radius = needed("hem_radius", "radius")?;
-            flange.insert("angle".to_owned(), json!({"model": angle}));
-            flange.insert("radius".to_owned(), json!({"model": radius}));
             flange.insert("length".to_owned(), json!({"model": 0.0}));
-            flange.insert("length_mode".to_owned(), json!("straight"));
-            "a rolled hem: a flange of its angle and radius with no wall".to_owned()
+            // The rolled form turns past 180 degrees; a rolled hem of no
+            // more stays the plain flange of its angle with no wall.
+            let past = sheet
+                .get("hem_angle")
+                .and_then(|p| p.get("value"))
+                .and_then(Value::as_f64)
+                .is_none_or(|v| v.abs() > std::f64::consts::PI + 1e-9);
+            if !past {
+                flange.insert("angle".to_owned(), json!({"model": angle}));
+                flange.insert("radius".to_owned(), json!({"model": radius}));
+                flange.insert("length_mode".to_owned(), json!("straight"));
+                return Ok((
+                    flange,
+                    "a rolled hem of up to 180 degrees: a flange of its angle and radius with no                      wall"
+                        .to_owned(),
+                ));
+            }
+            flange.insert(
+                "hem_model".to_owned(),
+                json!({"form": "rolled", "angle": angle, "radius": radius}),
+            );
+            "a rolled hem: the flange's rolled hem of its angle and radius, with no wall".to_owned()
         }
         "teardrop" | "rope" => {
             let radius = needed("hem_radius", "radius")?;
@@ -2247,24 +2271,26 @@ mod tests {
         Some(json!(name))
     }
 
-    /// An open or flat hem is a 180-degree flange of half its gap, its
-    /// length from the bend's outer surface, on its edge at its position.
+    /// An open or flat hem is the flange's hem of that form (mitcad#2112):
+    /// one bend of 180 degrees of half its gap, its length from the bend's
+    /// outer surface, on its edge at its position, the flange with no
+    /// radius of its own.
     #[test]
-    fn an_open_hem_is_a_flange_of_half_its_gap() {
+    fn an_open_hem_is_the_flanges_open_hem() {
         let (f, note) = hem_as_flange(&hem("open"), &names).expect("a flange");
         assert_eq!(f["kind"], "flange");
         assert_eq!(f["angle"], json!({"model": std::f64::consts::PI}));
-        assert_eq!(f["radius"], json!({"model": "d2 / 2"}));
+        assert!(f.get("radius").is_none());
         assert_eq!(f["length_mode"], "tangent");
         assert_eq!(f["position"], "tangent");
         assert_eq!(f["length"]["name"], "d3");
         assert_eq!(f["edge_list"].as_array().map(Vec::len), Some(1));
-        assert!(f.get("hem_model").is_none());
+        assert_eq!(f["hem_model"], json!({"form": "open", "gap": "d2"}));
         assert!(
-            note.starts_with("an open hem: a flange of 180 degrees"),
+            note.starts_with("an open hem: the flange's open hem"),
             "{note}"
         );
-        // A gap that is no imported parameter: half its mm.
+        // A gap that is no imported parameter: its mm.
         let mm = |key: &str| {
             if key == "gap" {
                 Some(json!(0.02))
@@ -2272,8 +2298,9 @@ mod tests {
                 None
             }
         };
-        let (f, _) = hem_as_flange(&hem("flat"), &mm).expect("a flange");
-        assert_eq!(f["radius"], json!({"model": 0.01}));
+        let (f, note) = hem_as_flange(&hem("flat"), &mm).expect("a flange");
+        assert_eq!(f["hem_model"], json!({"form": "flat", "gap": 0.02}));
+        assert!(note.starts_with("a flat hem"), "{note}");
         assert!(hem_as_flange(&hem("open"), &|_: &str| -> Option<Value> { None }).is_err());
     }
 
@@ -2283,13 +2310,27 @@ mod tests {
     /// surface (a double hem's every bend of half its gap).
     #[test]
     fn hems_past_half_a_turn_are_flanges_with_their_form() {
+        // A rolled hem: the flange's rolled hem of its angle and radius
+        // (mitcad#2112); one of no more than 180 degrees the plain flange
+        // of its angle with no wall.
         let (f, note) = hem_as_flange(&hem("rolled"), &names).expect("a rolled flange");
+        assert_eq!(f["angle"], json!({"model": std::f64::consts::PI}));
+        assert!(f.get("radius").is_none());
+        assert_eq!(f["length"], json!({"model": 0.0}));
+        assert_eq!(f["length_mode"], "tangent");
+        assert_eq!(
+            f["hem_model"],
+            json!({"form": "rolled", "angle": "d5", "radius": "d4"})
+        );
+        assert!(note.starts_with("a rolled hem"), "{note}");
+        let mut quarter = hem("rolled");
+        quarter["hem_angle"]["value"] = json!(std::f64::consts::FRAC_PI_2);
+        let (f, note) = hem_as_flange(&quarter, &names).expect("a plain rolled flange");
         assert_eq!(f["angle"], json!({"model": "d5"}));
         assert_eq!(f["radius"], json!({"model": "d4"}));
-        assert_eq!(f["length"], json!({"model": 0.0}));
         assert_eq!(f["length_mode"], "straight");
         assert!(f.get("hem_model").is_none());
-        assert!(note.starts_with("a rolled hem"), "{note}");
+        assert!(note.contains("up to 180 degrees"), "{note}");
         for form in ["teardrop", "rope"] {
             let (f, note) = hem_as_flange(&hem(form), &names).expect("a hem flange");
             assert_eq!(f["angle"], json!({"model": std::f64::consts::PI}));
@@ -2314,7 +2355,7 @@ mod tests {
             }
         };
         let (f, _) = hem_as_flange(&hem("rolled"), &raw).expect("a rolled flange");
-        assert_eq!(f["angle"], json!({"model": 4.5}));
+        assert_eq!(f["hem_model"]["angle"], json!(4.5));
         let none = |key: &str| if key == "setback" { None } else { names(key) };
         assert!(
             hem_as_flange(&hem("double"), &none)

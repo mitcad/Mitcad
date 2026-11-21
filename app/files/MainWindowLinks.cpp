@@ -9,7 +9,9 @@
 // in the band as "<file> changed" with Update. Nothing updates on its own.
 #include "../MainWindow.hpp"
 
+#include <algorithm>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <utility>
 
@@ -30,6 +32,7 @@
 #include "../framework/GlassCard.hpp"
 #include "../framework/Json.hpp"
 #include "../framework/MessageBand.hpp"
+#include "FileDialogs.hpp"
 #include "LinkWatcher.hpp"
 #include "LinkedFiles.hpp"
 
@@ -48,9 +51,11 @@ bool linkProblem(const QString& line) {
 } // namespace
 
 void MainWindow::showActionStatus(const QString& message, NoticeLevel level, const QString& action,
-                                  std::function<void()> run) {
+                                  std::function<void()> run, const QString& source, const QString& tooltip) {
   m_statusActionLabel = action;
+  m_statusActionTooltip = tooltip;
   m_statusActionRun = std::move(run);
+  m_nextStatusSource = source; // showFeatureStatus takes it (mitcad#2090)
   showFeatureStatus(message, level, QString());
 }
 
@@ -88,8 +93,21 @@ void MainWindow::showLinkedNotice(const QString& component, const QString& path)
 }
 
 void MainWindow::openLinkedDesign(const QString& component) {
+  // An occurrence of it machined by cuts made in this assembly
+  // (mitcad#2131): its own design opens without them.
+  std::function<bool(const QVector<DocumentSnapshot::Occurrence>&)> machined =
+      [&](const QVector<DocumentSnapshot::Occurrence>& occurrences) {
+        return std::any_of(occurrences.cbegin(), occurrences.cend(), [&](const DocumentSnapshot::Occurrence& o) {
+          return (o.component == component && !o.machinedNote.isEmpty()) || machined(o.children);
+        });
+      };
   for (const DocumentSnapshot::Component& c : std::as_const(m_snapshot.components)) {
     if (c.uid == component && !c.link.isEmpty()) {
+      if (machined(m_snapshot.occurrences)) {
+        qInfo().noquote() << QStringLiteral("Open Linked Design of machined %1").arg(component);
+        showHint(tr("%1 opens as its own design, without the cuts this assembly machines it with.")
+                     .arg(m_snapshot.componentName(component)));
+      }
       openLinkedFile(c.link);
       return;
     }
@@ -191,6 +209,56 @@ void MainWindow::updateLink(const QString& component) {
                            .arg(updated)
                            .arg(lines.join(QStringLiteral(" | ")));
   showStatus(lines.join(QStringLiteral("; ")), problem ? NoticeLevel::Warning : NoticeLevel::Information);
+}
+
+void MainWindow::chooseLinkedParts(const QString& component) {
+  // Choose Linked Parts… (mitcad#2130): the parts of its design a linked
+  // component holds, chosen again in the list Insert Component's Choose
+  // Parts… shows, as one undo step (`set_link_parts`).
+  if (!canChangeModel()) {
+    showError(changeBlockedReason());
+    return;
+  }
+  const QString base = m_filePath.isEmpty() ? QString() : QFileInfo(m_filePath).absolutePath();
+  QJsonObject request{{QStringLiteral("query"), QStringLiteral("link_parts")},
+                      {QStringLiteral("component"), component}};
+  if (!base.isEmpty()) {
+    request.insert(QStringLiteral("base"), base);
+  }
+  QJsonObject tree;
+  try {
+    tree = queryObject(request);
+  } catch (const std::exception& e) {
+    showError(tr("Could not read the linked design: %1").arg(errorText(e)));
+    return;
+  }
+  const std::optional<LinkPartsChoice> choice = chooseLinkParts(this, tr("Choose Linked Parts"), tree, true);
+  if (!choice) {
+    return;
+  }
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("set_link_parts")},
+                      {QStringLiteral("component"), component}};
+  command.insert(QStringLiteral("parts"), choice->whole ? QJsonValue() : QJsonValue(choice->parts));
+  if (!base.isEmpty()) {
+    command.insert(QStringLiteral("base"), base);
+  }
+  QJsonObject result;
+  if (!runModelCommand(command, &result)) {
+    return; // the model's refusal is shown
+  }
+  QStringList names;
+  const QJsonValue parts = result.value(QStringLiteral("parts"));
+  for (const QJsonValue& value : parts.toObject().value(QStringLiteral("names")).toArray()) {
+    names << value.toString();
+  }
+  qInfo().noquote() << QStringLiteral("Choose Linked Parts of %1: %2; %3 bodies")
+                           .arg(component,
+                                parts.isObject() ? names.join(QStringLiteral(", ")) : QStringLiteral("the whole design"),
+                                QString::number(result.value(QStringLiteral("bodies")).toArray().size()));
+  if (!result.value(QStringLiteral("changed")).toBool()) {
+    return;
+  }
+  showLinkMessages(result.value(QStringLiteral("messages")).toArray());
 }
 
 void MainWindow::showLinkMessages(const QJsonArray& messages) {

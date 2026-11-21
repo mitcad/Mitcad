@@ -336,6 +336,9 @@ pub struct SketchDef<P = ParamId> {
     /// differ only in it are equal.
     #[serde(skip_serializing_if = "SketchSteps::is_empty")]
     pub steps: SketchSteps,
+    /// Instances of the design's sketch blocks (mitcad#2110, `block.rs`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<crate::block::BlockInstance>,
 }
 
 impl<P> Default for SketchDef<P> {
@@ -354,6 +357,7 @@ impl<P> Default for SketchDef<P> {
             text_values: Vec::new(),
             placement: None,
             steps: SketchSteps::default(),
+            blocks: Vec::new(),
         }
     }
 }
@@ -397,6 +401,8 @@ struct SketchDefIn<P> {
     /// None in designs saved before mitcad#1750.
     #[serde(default)]
     steps: SketchSteps,
+    #[serde(default)]
+    blocks: Vec<crate::block::BlockInstance>,
 }
 
 impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchDef<P> {
@@ -417,6 +423,7 @@ impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchDef<P> {
             // An empty placement is none (mitcad#787).
             placement: def.placement.filter(|p| !p.is_empty()),
             steps: def.steps,
+            blocks: def.blocks,
         };
         if !def.shapes.is_empty() {
             if !sketch.entities.is_empty() || !sketch.dimensions.is_empty() {
@@ -719,6 +726,7 @@ impl<P> SketchDef<P> {
                 None => None,
             },
             steps: self.steps.clone(),
+            blocks: self.blocks.clone(),
         })
     }
 
@@ -750,7 +758,8 @@ impl<P> SketchDef<P> {
             .map(|c| c.id.0)
             .chain(self.dimensions.iter().map(|d| d.id.0))
             .chain(self.patterns.iter().map(|p| p.id.0))
-            .chain(self.offsets.iter().map(|o| o.id.0));
+            .chain(self.offsets.iter().map(|o| o.id.0))
+            .chain(self.blocks.iter().map(|b| b.id.0));
         ConstraintUid(used.max().map_or(1, |n| n + 1))
     }
 
@@ -859,6 +868,8 @@ impl SketchDef {
             }
             out.extend(pattern.bindings(&values, &index));
         }
+        // Block instances keep their block's shape (mitcad#2110).
+        out.extend(self.block_bindings());
         Ok(out)
     }
 
@@ -1282,6 +1293,51 @@ fn check_kinds(index: &EntityIndex<'_>, what: &str, refs: &[(Ref, &[&str])]) -> 
     Ok(())
 }
 
+/// Why a curve of `kind` takes no Perpendicular (mitcad#2114), a whole
+/// message for each kind (mitcad#1626); None for a line, a circle or an
+/// arc.
+fn not_perpendicular(kind: &EntityKind) -> Option<&'static str> {
+    Some(match kind {
+        EntityKind::Line { .. } | EntityKind::Circle { .. } | EntityKind::Arc { .. } => {
+            return None;
+        }
+        EntityKind::Point { .. } => "Perpendicular takes lines, circles and arcs, not a point",
+        EntityKind::Ellipse { .. } => "Perpendicular takes lines, circles and arcs, not an ellipse",
+        EntityKind::EllipticalArc { .. } => {
+            "Perpendicular takes lines, circles and arcs, not an elliptical arc"
+        }
+        EntityKind::Spline { .. } => "Perpendicular takes lines, circles and arcs, not a spline",
+        EntityKind::FittedSpline { .. } => {
+            "Perpendicular takes lines, circles and arcs, not a fitted spline"
+        }
+    })
+}
+
+/// A Perpendicular of `a` and `b` refused in words when either is a curve
+/// it does not take (mitcad#2114), the ids in the detail.
+fn perpendicular_kinds(
+    index: &EntityIndex<'_>,
+    what: &str,
+    a: EntityUid,
+    b: EntityUid,
+) -> Result<(), String> {
+    for r in [a, b] {
+        if let Some(e) = index.get(r)
+            && let Some(why) = not_perpendicular(&e.kind)
+        {
+            return Err(crate::said(
+                why,
+                format!(
+                    "{what}: {} is a {}, expected line, circle or arc",
+                    Ref::Curve(r),
+                    e.kind.type_name()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 const LINE: &[&str] = &["line"];
 const ROUND: &[&str] = &["circle", "arc"];
 const ANY: &[&str] = &[];
@@ -1334,6 +1390,23 @@ impl<P> SketchDef<P> {
             }
         }
         Ok(())
+    }
+
+    /// A new constraint's curves of a kind it does not take, refused in
+    /// words before the sketch is solved with it (mitcad#2114): the
+    /// solver's own refusal names its internal entity numbers.
+    /// [`SketchDef::check_definition`] checks the rest when the edit ends.
+    pub fn check_new_constraint(&self, id: ConstraintUid) -> Result<(), String> {
+        let Some(c) = self.constraints.iter().find(|c| c.id == id) else {
+            return Ok(());
+        };
+        let index = EntityIndex::new(&self.entities);
+        match &c.kind {
+            ConstraintKind::Perpendicular { a, b } => {
+                perpendicular_kinds(&index, &id.to_string(), *a, *b)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// The consistency of entities, constraints and dimensions.
@@ -1501,8 +1574,14 @@ impl<P> SketchDef<P> {
                 K::HorizontalPoints { a, b } | K::VerticalPoints { a, b } => {
                     check_kinds(&index, &what, &[(p(*a), ANY), (p(*b), ANY)])?;
                 }
-                K::Parallel { a, b } | K::Perpendicular { a, b } | K::Collinear { a, b } => {
+                K::Parallel { a, b } | K::Collinear { a, b } => {
                     check_kinds(&index, &what, &[(cv(*a), LINE), (cv(*b), ANY)])?;
+                }
+                // Two lines, a line and a circle or arc, or two circles or
+                // arcs (mitcad#2114); another kind is refused in words.
+                K::Perpendicular { a, b } => {
+                    perpendicular_kinds(&index, &what, *a, *b)?;
+                    check_kinds(&index, &what, &[(cv(*a), ANY), (cv(*b), ANY)])?;
                 }
                 K::Equal { a, b } => {
                     check_kinds(&index, &what, &[(cv(*a), ANY), (cv(*b), ANY)])?;
@@ -1649,6 +1728,15 @@ impl<P> SketchDef<P> {
             }
             o.check(&index)?;
         }
+        for b in &self.blocks {
+            if b.id.0 == 0 || !constraint_ids.insert(b.id) {
+                return Err(format!(
+                    "block instance {} is used more than once or is k0",
+                    b.id
+                ));
+            }
+        }
+        self.check_instances()?;
         self.check_derived(&derived_entities(&self.offsets, &index))?;
         if let Some(frame) = &self.frame {
             frame.check()?;

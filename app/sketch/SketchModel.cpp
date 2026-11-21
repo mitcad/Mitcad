@@ -419,6 +419,25 @@ bool SketchModel::load(const QJsonObject& sketch) {
     patterns.push_back(p);
   }
 
+  // Instances of the design's sketch blocks (mitcad#2110).
+  blocks.clear();
+  for (const QJsonValue& value : sketch.value(QStringLiteral("blocks")).toArray()) {
+    const QJsonObject k = value.toObject();
+    BlockInstanceData b;
+    b.id = k.value(QStringLiteral("id")).toString();
+    b.block = k.value(QStringLiteral("block")).toInt();
+    b.name = k.value(QStringLiteral("name")).toString();
+    b.base = k.value(QStringLiteral("base")).toString();
+    b.direction = k.value(QStringLiteral("direction")).toString();
+    for (const QJsonValue& e : k.value(QStringLiteral("entities")).toArray()) {
+      b.entities << e.toString();
+    }
+    b.open = k.value(QStringLiteral("open")).toBool();
+    b.temporary = k.value(QStringLiteral("temporary")).toBool();
+    b.since = k.value(QStringLiteral("since")).toInt();
+    b.lost = k.value(QStringLiteral("lost")).toInt();
+    blocks.push_back(b);
+  }
   offsets.clear();
   for (const QJsonValue& value : sketch.value(QStringLiteral("offsets")).toArray()) {
     const QJsonObject k = value.toObject();
@@ -489,6 +508,15 @@ const PatternData* SketchModel::patternOf(const QString& entity) const {
   for (const PatternData& p : patterns) {
     if (p.entities.contains(entity) || p.copies.contains(entity)) {
       return &p;
+    }
+  }
+  return nullptr;
+}
+
+const BlockInstanceData* SketchModel::instanceOf(const QString& entity) const {
+  for (const BlockInstanceData& b : blocks) {
+    if (b.entities.contains(entity)) {
+      return &b;
     }
   }
   return nullptr;

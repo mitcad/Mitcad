@@ -57,6 +57,7 @@
 #include <gp_Vec.hxx>
 #include <gp_XYZ.hxx>
 
+#include "tutorials/TutorialGuide.hpp"
 #include "framework/ChromeStyle.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/ResultCache.hpp"
@@ -1436,6 +1437,13 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
     }
     if (!isAvailable(*def)) {
       refuse(QStringLiteral("%1 is not available now (mode %2).").arg(def->name, modeName(m_mode)));
+    }
+    // A guide step shown to the user holds back the commands it does not
+    // allow (mitcad#2012): an agent's too, said and logged as the user's.
+    if (m_guide != nullptr && !m_guide->allowsCommand(id)) {
+      m_guide->refuseCommand(id, def->name);
+      refuse(QStringLiteral("The guide step %1 shown to the user holds back %2 (ui_guide with action end ends it).")
+                 .arg(mcp::echoed(m_guide->step().id), def->name));
     }
     result.insert(QStringLiteral("command"), id);
     if (def->kind == CommandDef::Kind::Feature) {

@@ -37,6 +37,8 @@ QStringList MainWindow::dockArrangementLeftOut() const {
   for (const QDockWidget* dock : m_renderDocks) {
     names << dock->objectName();
   }
+  // So does a tutorial's pane, while its tutorial is open (mitcad#2012).
+  names << QStringLiteral("tutorialDock");
   return names;
 }
 

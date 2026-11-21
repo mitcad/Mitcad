@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: MIT
+# Folders in the Browser (mitcad#2103), on the design of
+# browser-folders.json: the root's bodies Pane and Sash, and the
+# components Rail:1, Post:1 and Panel:1 placed in the root.
+#   1. Rail:1 and Panel:1 selected, Move to Folder › New Folder: one undo
+#      step, the folder's row renamed in place (Folder1 typed over: Frame),
+#      closed, before Post:1.
+#   2. The folder's eye hides both (one undo step, the row grayed); Undo.
+#   3. Rename (Frame to Rails) and Undo; Ungroup (both out of it, nothing
+#      deleted) and Undo.
+#   4. Post:1 dragged onto the folder's row goes into it; Undo. Dragged onto
+#      the root's Bodies folder: refused, nothing changes.
+#   5. Pane and Sash into a New Folder (Glass), then dragged out of it onto
+#      the Bodies folder; Undo of each step.
+#   6. Saved: Rail:1 and Panel:1 in Frame, the bodies in no folder (the
+#      wrapper checks the file with browser-folders-check.json).
+# Run by tools/ui-browser-folders-test.sh (Linux),
+# tools/ui-windows-browser-folders-test.ps1 (Windows) and
+# tools/ui-macos-browser-folders-test.sh (macOS).
+wait-idle
+command view.fit
+wait-idle
+expect-ever '^Browser Root/Rail:1 at '
+expect-ever '^Browser Root/Panel:1 at '
+capture-undo-depth start
+
+# 1. Rail:1 and Panel:1 into a New Folder, renamed Frame in place.
+mark
+click-logged '^Browser Root/Rail:1 at '
+click-logged '^Browser Root/Panel:1 at ' left ctrl
+wait-idle
+context-menu-logged '^Browser Root/Rail:1 at ' 'Move to Folder/New Folder'
+wait-log '^Moved 2 components to Folder1$'
+wait-log '^Renaming Root/Folder1$'
+wait-idle
+key Ctrl+a
+type 'Frame'
+key Return
+wait-log '^Renamed Folder1 to Frame$'
+wait-log '^Browser Root/Frame at '
+wait-log '^Browser Root/Post:1 at '
+expect-undo-depth ${start} 2
+# Closed when it first shows: its components are not in sight.
+expect-no-log '^Browser Root/Frame/Rail:1 at '
+expect-no-log '^Browser Root/Frame/Panel:1 at '
+# The undo steps: the rename, then the move.
+mark
+command edit.undo
+wait-log '^Undo: Rename Folder1 to Frame$'
+wait-log '^Browser Root/Folder1 at '
+mark
+command edit.undo
+wait-log '^Undo: Move 2 Component'
+wait-log '^Browser Root/Rail:1 at '
+mark
+command edit.redo
+wait-log '^Browser Root/Folder1 at '
+mark
+command edit.redo
+wait-log '^Browser Root/Frame at '
+expect-undo-depth ${start} 2
+
+# 2. The folder's eye hides both components; Undo shows them.
+mark
+click-logged '^Browser eye Root/Frame at '
+wait-log '^Visibility Root/Frame: hidden$'
+wait-log '^Browser row colours: [^,]+, (.*; )?hidden #[0-9a-f]{6}: [^;]*Root/Frame'
+mark
+command edit.undo
+wait-log '^Undo: Hide Frame$'
+wait-log '^Browser row colours: (?!.*Root/Frame(,|;|$))'
+
+# 3. Rename and Ungroup from the folder's menu, each undone.
+mark
+context-menu-logged '^Browser Root/Frame at ' 'Rename'
+wait-log '^Renaming Root/Frame$'
+wait-idle
+key Ctrl+a
+type 'Rails'
+key Return
+wait-log '^Renamed Frame to Rails$'
+wait-log '^Browser Root/Rails at '
+mark
+command edit.undo
+wait-log '^Undo: Rename Frame to Rails$'
+wait-log '^Browser Root/Frame at '
+mark
+context-menu-logged '^Browser Root/Frame at ' 'Ungroup'
+wait-log '^Ungrouped Frame$'
+wait-log '^Browser Root/Rail:1 at '
+wait-log '^Browser Root/Panel:1 at '
+wait-log '^Browser Root/Frame out of sight$'
+mark
+command edit.undo
+wait-log '^Undo: Ungroup Frame$'
+wait-log '^Browser Root/Frame at '
+expect-undo-depth ${start} 2
+
+# 4. Post:1 dragged onto the folder's row: into it; Undo. Onto the root's
+# Bodies folder: refused.
+mark
+drag-logged '^Browser Root/Post:1 at ' '^Browser Root/Frame at '
+wait-log '^Browser drop: Post:1 onto Root/Frame$'
+wait-log '^Moved 1 component to Frame$'
+wait-log '^Browser Root/Post:1 out of sight$'
+mark
+command edit.undo
+wait-log '^Undo: Move Post:1 to Frame$'
+wait-log '^Browser Root/Post:1 at '
+mark
+drag-logged '^Browser Root/Post:1 at ' '^Browser Root/Bodies at '
+wait-log '^Browser drop aim onto Root/Bodies: refused$'
+wait-log '^Browser drop refused: Post:1 onto Root/Bodies$'
+wait-idle
+expect-no-log '^Moved |^Took '
+expect-undo-depth ${start} 2
+
+# 5. Pane and Sash into a New Folder, Glass; out of it again by a drag onto
+# the Bodies folder; each step undone.
+mark
+click-logged '^Browser Root/Bodies/Pane at '
+click-logged '^Browser Root/Bodies/Sash at ' left ctrl
+wait-idle
+context-menu-logged '^Browser Root/Bodies/Pane at ' 'Move to Folder/New Folder'
+wait-log '^Moved 2 bodies to Folder1$'
+wait-log '^Renaming Root/Bodies/Folder1$'
+wait-idle
+key Ctrl+a
+type 'Glass'
+key Return
+wait-log '^Renamed Folder1 to Glass$'
+wait-log '^Browser Root/Bodies/Glass at '
+expect-no-log '^Browser Root/Bodies/Glass/Pane at '
+# Opened by its arrow, both selected, dragged out onto the Bodies folder.
+mark
+click-logged '^Browser arrow Root/Bodies/Glass at '
+wait-log '^Browser Root/Bodies/Glass/Pane at '
+wait-log '^Browser Root/Bodies/Glass/Sash at '
+click-logged '^Browser Root/Bodies/Glass/Pane at '
+click-logged '^Browser Root/Bodies/Glass/Sash at ' left ctrl
+wait-idle
+mark
+drag-logged '^Browser Root/Bodies/Glass/Pane at ' '^Browser Root/Bodies at '
+wait-log '^Browser drop aim onto Root/Bodies: allowed$'
+wait-log '^Browser drop: Pane, Sash onto Root/Bodies$'
+wait-log '^Took 2 bodies out of their folder$'
+wait-log '^Browser Root/Bodies/Pane at '
+wait-log '^Browser Root/Bodies/Glass out of sight$'
+expect-undo-depth ${start} 5
+mark
+command edit.undo
+wait-log '^Undo: Take 2 Bod'
+wait-log '^Browser Root/Bodies/Glass at '
+mark
+command edit.undo
+wait-log '^Undo: Rename Folder1 to Glass$'
+mark
+command edit.undo
+wait-log '^Undo: Move 2 Bod'
+wait-log '^Browser Root/Bodies/Pane at '
+expect-undo-depth ${start} 2
+
+# 6. Saved.
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

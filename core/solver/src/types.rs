@@ -126,16 +126,23 @@ pub enum Constraint {
     /// Two points on a vertical line.
     VerticalPoints(PointId, PointId),
     Parallel(EntityId, EntityId),
+    /// Two lines at right angles; a line and a circle or arc (either
+    /// order) with the center on the infinite line; or two circles or arcs
+    /// whose circles cross at right angles, `|c1 c2|^2 = r1^2 + r2^2`
+    /// (mitcad#2114). Circles with a common center (coincident centers or a
+    /// concentric constraint) conflict with it.
     Perpendicular(EntityId, EntityId),
     /// Tangency between a line, circle, arc or spline and a circle, arc or
     /// spline (or a line and a spline). When the curves share a point (a
     /// common end point, a coincident constraint, or a point held on a curve
     /// by point-on-curve, midpoint or collinear constraints, mitcad#2006),
-    /// the tangency is at that point (a G1 join).
+    /// the tangency is at that point (a G1 join). An elliptical arc is
+    /// tangent to a spline only where their ends meet (mitcad#2107).
     Tangent(EntityId, EntityId),
-    /// Curvature continuity (G2) where a spline joins a line, an arc or
-    /// another spline at a shared end point: tangent there and with equal
-    /// curvature (zero for a line). The splines need clamped knots.
+    /// Curvature continuity (G2) where a spline joins a line, an arc, an
+    /// elliptical arc or another spline at a shared end point: tangent there
+    /// and with equal curvature (zero for a line). The splines need clamped
+    /// knots.
     Smooth(EntityId, EntityId),
     /// Equal length (lines), equal radius (circles and arcs) or equal minor
     /// radius (ellipses and elliptical arcs).

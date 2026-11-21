@@ -390,6 +390,75 @@ std::vector<V2> intersections(const Curve2& a, const Curve2& b) {
   return hits;
 }
 
+V2 lineFoot(const Curve2& line, const V2& p, double* t) {
+  const V2 d = line.b - line.a;
+  const double len2 = dot(d, d);
+  const double s = len2 > 0.0 ? dot(p - line.a, d) / len2 : 0.0;
+  if (t != nullptr) {
+    *t = s;
+  }
+  return line.a + d * s;
+}
+
+std::optional<V2> lineMeet(const Curve2& a, const Curve2& b) {
+  const V2 r = a.b - a.a;
+  const V2 s = b.b - b.a;
+  const double d = cross(r, s);
+  // Parallel when the sine of the angle between them is this small.
+  if (std::abs(d) <= 1e-9 * norm(r) * norm(s) || std::abs(d) < kTiny) {
+    return std::nullopt;
+  }
+  return a.a + r * (cross(b.a - a.a, s) / d);
+}
+
+std::vector<V2> lineCrossings(const Curve2& line, const Curve2& curve) {
+  std::vector<V2> hits;
+  const V2 r = line.b - line.a;
+  if (dot(r, r) < kTiny) {
+    return hits;
+  }
+  // The endless line across the piece q1-q2, within the piece.
+  const auto crossPiece = [&line, &r](const V2& q1, const V2& q2) -> std::optional<V2> {
+    const V2 s = q2 - q1;
+    const double d = cross(r, s);
+    if (std::abs(d) <= 1e-12 * norm(r) * norm(s) || std::abs(d) < kTiny) {
+      return std::nullopt;
+    }
+    const double u = cross(q1 - line.a, r) / d;
+    constexpr double e = 1e-9;
+    if (u < -e || u > 1.0 + e) {
+      return std::nullopt;
+    }
+    return q1 + s * u;
+  };
+  if (curve.type == Curve2::Type::Line) {
+    if (const auto hit = crossPiece(curve.a, curve.b)) {
+      hits.push_back(*hit);
+    }
+    return hits;
+  }
+  if (isCircular(curve)) {
+    for (const V2& p : lineCircle(line.a, line.b, curve.center, curve.radius)) {
+      if (onCurve(curve, p)) {
+        hits.push_back(p);
+      }
+    }
+    return hits;
+  }
+  // Ellipses and splines: their polylines, fine enough for snapping.
+  const std::vector<V2> pieces = curve.sample(0.5);
+  for (std::size_t i = 1; i < pieces.size(); ++i) {
+    if (const auto hit = crossPiece(pieces[i - 1], pieces[i])) {
+      const bool known =
+          std::any_of(hits.begin(), hits.end(), [&](const V2& h) { return dist(h, *hit) < 1e-6; });
+      if (!known) {
+        hits.push_back(*hit);
+      }
+    }
+  }
+  return hits;
+}
+
 std::optional<V2> circumcenter(const V2& a, const V2& b, const V2& c) {
   const V2 ab = b - a;
   const V2 ac = c - a;

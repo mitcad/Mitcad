@@ -17,12 +17,17 @@ structure, and the topological build either throws
 of bounds. The vertex now fails with an exception, as other corners that
 cannot be computed do, and the fillet fails cleanly.
 
-Test: pending (mitcad#1986): no test reaches this corner yet. It needs a
-stripe whose last two surface data both meet the face at the end, one with
-a side reduced to a point where its contact leaves its face near the
-spine's end; the case came from a stored model and no synthetic body for
-it is known. Wanted: such a body, the fillet failing (not done) with the
-patch and corrupting the data structure without it.
+Test: none, because no synthetic body reaches the case (mitcad#1986). Its
+corner needs a stripe whose last two surface data both meet the face at the
+end, one with a side reduced to a point where its contact leaves its face
+near the spine's end. With a probe at each of PerformMoreSurfdata's early
+returns, none returned without its corner in the geometry tests, in OCCT's
+blend and chamfer DRAW groups, or in 170 sizes of the pipe and rod cut by
+an inclined end plane (test_fillet_overflow's body, which reaches
+PerformMoreSurfdata: slopes 0.2 to 1.5, rounding radii 2 to 4, the rod's
+split from 3 to 9, close to the plane too): each built its corner. The case
+is verified on the stored model only.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 85f5818..00c95c2 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

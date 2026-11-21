@@ -1,0 +1,5 @@
+[
+  {"comment": "The reported nut design's Chamfer8 (mitcad#1821), opened by chamfer-remnants-reported-test.cmake: its edge's tangent chain runs round an octagonal rim rounded 1 on the nut's end, chamfered 2.55, wider than the end face along the octagon's sides. At each of the 8 corners the kernel's bevel round the corner's arc folded over, leaving two pieces of the old end face between the straight bevels (0.0517 mm2 at the bottom of a groove, and a sliver of 0.0028 mm2 past the bevels' contact lines' crossing, 0.03 short of the bore), kept silently. The bevels now meet at a mitre there: Chamfer8 is ok without a warning, and the body's faces under 0.1 mm2 are only the two thread ends it had before (a piece of each thread's run-out)."},
+  {"expect": {"feature": "F224", "status": "ok"}},
+  {"expect": {"query": {"query": "faces", "body": "F184.b0", "max_area": 0.1}, "result": {"total": 2}}}
+]

@@ -34,9 +34,8 @@ the faces face: only the angle between them along the edge counts.
 Test: geometry/tests/test_fillet_overflow.cpp (ctest
 geometry.suite.fillet_overflow),
 test_box_roundings_keep_their_tangent_edges_and_take_a_draft,
-test_boss_top_rounded_after_its_foot_rounded_as_high_as_it: Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+test_boss_top_rounded_after_its_foot_rounded_as_high_as_it: It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx

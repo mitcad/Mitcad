@@ -109,9 +109,16 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
                                  {QStringLiteral("first_angle"), QObject::tr("First Angle")}});
   projection->setObjectName(QStringLiteral("drawingProjection"));
   form->addRow(QObject::tr("Projection"), projection);
-  // A template chosen brings its sheet size and its projection method
-  // (ISO: A3, first angle; ANSI: B, third angle; mitcad#725).
-  const auto templateSheet = [templateBox, &sizeRows, projection, &templates] {
+  // How its dimensions are written (mitcad#2047): ISO 129-1 or ASME Y14.5.
+  QComboBox* standard =
+      combo({{QStringLiteral("iso"), QObject::tr("ISO")}, {QStringLiteral("asme"), QObject::tr("ASME")}});
+  standard->setObjectName(QStringLiteral("drawingStandard"));
+  standard->setToolTip(QObject::tr("ISO: values along the line. ASME: horizontal in a break, inches without leading zero"));
+  form->addRow(QObject::tr("Standard"), standard);
+  // A template chosen brings its sheet size, its projection method and its
+  // standard (ISO: A3, first angle, ISO; ANSI: B, third angle, ASME;
+  // mitcad#725, mitcad#2047).
+  const auto templateSheet = [templateBox, &sizeRows, projection, standard, &templates] {
     const int at = drawings::templateIndex(templates, templateBox->currentData().toString());
     if (at >= 0) {
       sizeRows.set(templates.at(at).size);
@@ -119,6 +126,10 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
     const int method = at < 0 ? -1 : projection->findData(templates.at(at).projection);
     if (method >= 0) {
       projection->setCurrentIndex(method);
+    }
+    const int rule = at < 0 ? -1 : standard->findData(templates.at(at).standard);
+    if (rule >= 0) {
+      standard->setCurrentIndex(rule);
     }
   };
   QObject::connect(templateBox, &QComboBox::currentIndexChanged, sizes, templateSheet);
@@ -129,7 +140,8 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   // not have stays as the template brought it.
   sizeRows.set(start.choice.size);
   for (const auto& [box, value] : {std::pair<QComboBox*, QString>{orientation, start.choice.orientation},
-                                   std::pair<QComboBox*, QString>{projection, start.choice.projection}}) {
+                                   std::pair<QComboBox*, QString>{projection, start.choice.projection},
+                                   std::pair<QComboBox*, QString>{standard, start.choice.standard}}) {
     const int at = value.isEmpty() ? -1 : box->findData(value);
     if (at >= 0) {
       box->setCurrentIndex(at);
@@ -141,10 +153,10 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   if (!start.note.isEmpty()) {
     qDebug().noquote() << start.note;
   }
-  qDebug().noquote() << QStringLiteral("Create Drawing dialog starts with template %1, %2, %3, %4 (%5)")
+  qDebug().noquote() << QStringLiteral("Create Drawing dialog starts with template %1, %2, %3, %4 (%5), standard %6")
                             .arg(choiceName(templateBox->currentData().toString()), sizeRows.text(),
                                  orientation->currentData().toString(), projection->currentData().toString(),
-                                 drawings::startSourceName(start.source));
+                                 drawings::startSourceName(start.source), standard->currentData().toString());
   // A cut sheet's material, 600 x 300 mm unless typed.
   const auto length = [](double value, const char* name) {
     auto* box = new QDoubleSpinBox;
@@ -159,10 +171,10 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   QDoubleSpinBox* height = length(300.0, "drawingCutHeight");
   form->addRow(QObject::tr("&Width"), width);
   form->addRow(QObject::tr("&Height"), height);
-  const auto showKind = [form, kind, templateBox, orientation, projection, width, height, &sizeRows] {
+  const auto showKind = [form, kind, templateBox, orientation, projection, standard, width, height, &sizeRows] {
     const bool cut = kind->currentData().toString() == QStringLiteral("cut_sheet");
     for (QWidget* field : {static_cast<QWidget*>(templateBox), static_cast<QWidget*>(orientation),
-                           static_cast<QWidget*>(projection)}) {
+                           static_cast<QWidget*>(projection), static_cast<QWidget*>(standard)}) {
       form->setRowVisible(field, !cut);
     }
     // The sheet's size, and its own width and height while Custom is
@@ -193,15 +205,17 @@ std::optional<QJsonObject> askNewDrawing(QWidget* parent, const QList<drawings::
   QJsonObject out{{QStringLiteral("size"), sizeRows.value()},
                   {QStringLiteral("orientation"), orientation->currentData().toString()},
                   {QStringLiteral("projection"), projection->currentData().toString()},
+                  {QStringLiteral("standard"), standard->currentData().toString()},
                   {QStringLiteral("template_choice"), templateBox->currentData().toString()}};
   const int chosen = drawings::templateIndex(templates, templateBox->currentData().toString());
   if (chosen >= 0) {
     out.insert(QStringLiteral("template"), templates.at(chosen).value);
   }
-  qDebug().noquote() << QStringLiteral("Create Drawing dialog: template %1, %2, %3")
+  qDebug().noquote() << QStringLiteral("Create Drawing dialog: template %1, %2, %3, standard %4")
                             .arg(chosen >= 0 && !templates.at(chosen).choice.isEmpty() ? templates.at(chosen).choice
                                                                                        : QStringLiteral("simple"),
-                                 sizeRows.text(), projection->currentData().toString());
+                                 sizeRows.text(), projection->currentData().toString(),
+                                 standard->currentData().toString());
   return out;
 }
 
@@ -505,10 +519,11 @@ void MainWindow::createDrawing(const QString& component) {
     kept.size = drawings::sheetSizeText(command.value(QStringLiteral("size")));
     kept.orientation = command.value(QStringLiteral("orientation")).toString();
     kept.projection = command.value(QStringLiteral("projection")).toString();
+    kept.standard = command.value(QStringLiteral("standard")).toString();
     kept.save(settings);
-    qDebug().noquote() << QStringLiteral("Create Drawing choice kept: template %1, %2, %3, %4")
+    qDebug().noquote() << QStringLiteral("Create Drawing choice kept: template %1, %2, %3, %4, standard %5")
                               .arg(kept.choice.isEmpty() ? QStringLiteral("simple") : kept.choice, kept.size,
-                                   kept.orientation, kept.projection);
+                                   kept.orientation, kept.projection, kept.standard);
   }
   openDrawing(uid);
   // A new drawing's first view comes next (mitcad#725): Base View is on.

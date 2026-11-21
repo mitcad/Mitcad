@@ -1,0 +1,21 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#2114: Sketch1 on XY holds the line c3 from the fixed point p1 (-25, -10) to p2 (-5, -15), p2 held on the fixed construction line c6 at x = -5, and the arc c10 round the fixed center p7 (20, 5) from p8 (28, 5) to p9 (20, 13): 4 degrees of freedom. Perpendicular of the line and the arc turns the line through the center, which puts p2 at (-5, -10/3). Two fixed points frame the view as the other sketch UI tests' do."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [-25, -10], "fixed": true},
+      {"id": "p2", "type": "point", "at": [-5, -15]},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
+      {"id": "p4", "type": "point", "at": [-5, -28], "fixed": true},
+      {"id": "p5", "type": "point", "at": [-5, 28], "fixed": true},
+      {"id": "c6", "type": "line", "start": "p4", "end": "p5", "construction": true},
+      {"id": "p7", "type": "point", "at": [20, 5], "fixed": true},
+      {"id": "p8", "type": "point", "at": [28, 5]},
+      {"id": "p9", "type": "point", "at": [20, 13]},
+      {"id": "c10", "type": "arc", "center": "p7", "start": "p8", "end": "p9"},
+      {"id": "p11", "type": "point", "at": [-40, -30], "fixed": true},
+      {"id": "p12", "type": "point", "at": [40, 30], "fixed": true}],
+    "constraints": [
+      {"id": "k13", "type": "coincident", "point": "p2", "entity": "c6"}]}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"solved": true, "conflicts": [], "dof": 4}}}
+]

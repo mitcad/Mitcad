@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+# Pattern on Path along a body's edges with Tangent Chain (mitcad#2105,
+# GitHub mitcad/Mitcad#322), on path-pattern-edges.json (a block with two
+# vertical edges rounded and a small cube F4.b0 at the origin):
+#   1. Pattern on Path of the cube; Path is the block's top edge along c1
+#      alone. Its hover shows the whole tangent chain (the edge, the two
+#      arcs and the edges along c2 and c3: five), Tangent Chain is on by
+#      default and shown once the path holds an edge; 77.854 mm apart the
+#      copies follow the chain round the rounded corners. Tangent Chain off
+#      and on again, each previewed; OK.
+#   2. The pattern edited: its edge and Tangent Chain loaded; Escape.
+#   3. Saved; the shell checks the copies' places with mitcad-cli
+#      (path-pattern-edges-check.json).
+# Run by tools/ui-path-pattern-edges-test.sh (Linux),
+# tools/ui-windows-path-pattern-edges-test.ps1 (Windows) and
+# tools/ui-macos-path-pattern-edges-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The cube along the block's top edges.
+mark
+command solid.path_pattern
+expect-log '^Command Pattern on Path started'
+wait-idle 30
+click-logged '^Body F4[.]b0 at '
+wait-log '^Pattern on Path Objects: 1 bod' 30
+wait-idle 30
+mark
+click-logged '^Panel Pattern on Path input path at '
+wait-log '^Pick places:' 30
+wait-idle 30
+hover-logged '^Pick edge F2[.]b0/E[{]F2:end[^|]*[|]F2:side[(]c1[[]c4,c2[]][)][}] '
+wait-log '^Hover chain: 5 edge[(]s[)] of F2[.]b0$' 30
+mark
+click-pick 'edge F2[.]b0/E[{]F2:end[^|]*[|]F2:side[(]c1[[]c4,c2[]][)][}] '
+wait-log '^Pattern on Path Path: ' 30
+wait-log '^Panel Pattern on Path input tangent_chain at ' 30
+wait-idle 30
+mark
+type-in '^Panel Pattern on Path input distance at ' '77.85398163397448 mm'
+wait-log '^Preview Pattern on Path: ok' 120
+wait-idle 120
+screenshot '${MITCAD_TEST_WORK}/path-pattern-edges-chain.png'
+
+# Tangent Chain off (the edge alone: the copies go on straight past its
+# end) and on again, each previewed.
+mark
+click-logged '^Panel Pattern on Path input tangent_chain at '
+wait-log '^Preview Pattern on Path: ok' 120
+wait-idle 120
+mark
+click-logged '^Panel Pattern on Path input tangent_chain at '
+wait-log '^Preview Pattern on Path: ok' 120
+wait-idle 120
+mark
+button '^OK$'
+wait-log '^Added Pattern on Path' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/path-pattern-edges.png'
+
+# 2. Edited: the edge and Tangent Chain loaded.
+mark
+dblclick-logged '^Timeline PathPattern1 at '
+expect-log 'Editing F6 with Pattern on Path'
+wait-log '^Panel Pattern on Path checks: .*tangent_chain=on' 30
+wait-log '^Pattern on Path Path: ' 30
+wait-idle 30
+key Escape
+wait-idle 30
+
+# 3. Saved for the check.
+command file.save
+wait-log '^Saved '
+expect-never 'Preview Pattern on Path: failed|TestDriver: FAIL'

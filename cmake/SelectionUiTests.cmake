@@ -272,3 +272,40 @@ if(BUILD_TESTING AND TARGET mitcad AND Python3_Interpreter_FOUND
     set_property(TEST "${webgl_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()
+
+# In-app tutorials (mitcad#2012, docs/tutorials.md): a two-step tutorial of
+# a repository of the test's own listed and opened from Help > Tutorials...
+# in the real CEF view of the web browser component the build made; its
+# bridge's guide steps, a command refused, the steps completed with their
+# events, no bridge for a page outside the tutorial, Leave Tutorial; then, in
+# a run of its own, the example tutorials repository's tutorial
+# (docs/examples/tutorials, mitcad#2078) with each of its steps done, so that
+# a UI change that breaks the example fails here (the example's folder is in
+# the command, so that a change of it reruns the test). The same script on
+# Linux and Windows, run by a wrapper on macOS; only where the web browser
+# component is built.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser)
+  set(tutorials_ui_test "app.ui-${selection_ui_platform}-tutorials")
+  if(APPLE)
+    add_test(NAME "${tutorials_ui_test}"
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-tutorials-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-tutorials" "${selection_ui_web_browser}"
+              "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
+  else()
+    selection_ui_command_prefix(440)
+    add_test(NAME "${tutorials_ui_test}"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-tutorials-test.py"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-tutorials"
+              "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}"
+              "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
+  endif()
+  set_tests_properties("${tutorials_ui_test}" PROPERTIES TIMEOUT 720 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${tutorials_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()

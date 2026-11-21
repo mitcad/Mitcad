@@ -108,7 +108,9 @@ impl<K: Kernel> SketchClipboardOps<K> for Document<K> {
             .map(|i| i.parse::<Item>())
             .collect::<Result<Vec<_>, _>>()
             .map_err(ApiError)?;
-        let fragment = copy(def, self.parameters(), uid, &items).map_err(ApiError)?;
+        let mut fragment = copy(def, self.parameters(), uid, &items).map_err(ApiError)?;
+        // The blocks of its instances, for another design (mitcad#2110).
+        super::sketch_blocks::add_fragment_blocks(self, &mut fragment);
         // What the paste's preview draws: the curves as the sketch shows
         // them, the texts by their glyph outlines.
         let output = self.sketch_output(uid);
@@ -184,14 +186,61 @@ impl<K: Kernel> SketchClipboardOps<K> for Document<K> {
                     .to_owned(),
             ));
         }
-        let fragment: Fragment =
+        let mut fragment: Fragment =
             serde_json::from_value(fragment).map_err(|e| ApiError(format!("fragment: {e}")))?;
         let base = fragment.base;
         let at = at.unwrap_or(base);
         let by = [at[0] - base[0], at[1] - base[1]];
-        let (pasted, report) = self.edit_sketch(sketch, "Paste into {sketch}", |edit| {
+        // Block instances (mitcad#2110): of this design's blocks, those
+        // another design's copy brings added (renamed where a block of the
+        // name differs); one of a block neither has pastes as geometry.
+        let depth = self.undo_depth();
+        let mut added_blocks = false;
+        if !fragment.instances.is_empty() {
+            let (numbers, added) = super::sketch_blocks::resolve_fragment_blocks(self, &fragment);
+            let known = |b: u32| -> Option<u32> {
+                numbers.get(&b).copied().or_else(|| {
+                    self.sketch_blocks()
+                        .iter()
+                        .any(|o| o.id == b && fragment.blocks.is_empty())
+                        .then_some(b)
+                })
+            };
+            let renumbered: Vec<_> = fragment
+                .instances
+                .iter()
+                .filter_map(|i| {
+                    let mut i = i.clone();
+                    i.block = known(i.block)?;
+                    Some(i)
+                })
+                .collect();
+            fragment.instances = renumbered;
+            if !added.is_empty() {
+                self.add_pasted_sketch_blocks(added)
+                    .map_err(|e| ApiError(e.to_string()))?;
+                added_blocks = true;
+            }
+        }
+        let pasted = self.edit_sketch(sketch, "Paste into {sketch}", |edit| {
             edit.paste(&fragment, by)
-        })?;
+        });
+        let (pasted, report) = match pasted {
+            Ok(done) => done,
+            Err(error) => {
+                if added_blocks {
+                    self.undo();
+                }
+                return Err(error.into());
+            }
+        };
+        if added_blocks {
+            let name = self
+                .feature(sketch)
+                .map(|f| f.name.clone())
+                .unwrap_or_default();
+            self.merge_undo(depth, &format!("Paste into {name}"));
+        }
         let def = match self.feature(sketch).map(|f| &f.def) {
             Some(FeatureDef::Sketch(def)) => Some(def),
             _ => None,

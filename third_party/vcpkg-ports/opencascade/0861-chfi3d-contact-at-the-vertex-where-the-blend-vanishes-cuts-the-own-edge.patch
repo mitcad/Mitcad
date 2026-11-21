@@ -27,9 +27,10 @@ Test: geometry/tests/test_fillet_near_tangent_contour.cpp,
 test_blend_thinner_than_the_vertex_tolerance (ctest
 geometry.fillet_near_tangent_contour): the same block with the vertex
 between the first two edges at a tolerance of 0.02, above the blend's half
-width there: valid, no part of the second edge left. Its failure without the
-patch, stated in its documentation, is still to be shown in the port's
-before/after run (mitcad#1986).
+width there: valid, no part of the second edge left. Its failure without
+the patch is still to be shown: the patch does not revert at the port's
+tip without the more than 40 later patches that change the same lines
+(tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index cb905b3e..11ed2ab9 100644

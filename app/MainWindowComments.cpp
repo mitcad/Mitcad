@@ -11,7 +11,11 @@
 // view (view/CommentPinOverlay) and the rows of the Comments panel
 // (view/CommentsWindow), whose Resolve, Reopen, Reply…, Delete and
 // Retarget run the model's comment commands, each one undo step outside a
-// panel's undo range as an annotation's (runVisibilityCommands).
+// panel's undo range as an annotation's (runVisibilityCommands). Add
+// Comment's panel, Add Comment… and Reply… attach images (mitcad#2011): a
+// file, or a capture of the view marked up (view/CommentImages); the
+// panel's details show them as thumbnails, read with the
+// `comment_attachment` query.
 #include "MainWindow.hpp"
 #include "framework/ModelMessages.hpp"
 
@@ -27,6 +31,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QKeySequence>
+#include <QPainter>
 #include <QtLogging>
 
 #include "OcctViewer.hpp"
@@ -35,9 +40,11 @@
 #include "framework/Dialogs.hpp"
 #include "framework/IdleCall.hpp"
 #include "platform/NativeDialogs.hpp"
+#include "view/CommentImages.hpp"
 #include "view/CommentPinOverlay.hpp"
 #include "view/Comments.hpp"
 #include "view/CommentsWindow.hpp"
+#include "view/VersionWatermark.hpp"
 #include "view/ViewReveal.hpp"
 
 namespace mitcad {
@@ -57,6 +64,31 @@ bool onBody(const SelectionItem& item) {
 
 QString compactJson(const QJsonObject& object) {
   return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+}
+
+// A command as the log shows it: an image's data as its size, not its
+// bytes (mitcad#2011).
+QString loggedCommand(QJsonObject command) {
+  QJsonArray attachments = command.value(QStringLiteral("attachments")).toArray();
+  if (attachments.isEmpty()) {
+    return compactJson(command);
+  }
+  for (qsizetype i = 0; i < attachments.size(); ++i) {
+    QJsonObject image = attachments.at(i).toObject();
+    image.insert(QStringLiteral("data"),
+                 QStringLiteral("<%1 base64 characters>").arg(image.value(QStringLiteral("data")).toString().size()));
+    attachments.replace(i, image);
+  }
+  command.insert(QStringLiteral("attachments"), attachments);
+  return compactJson(command);
+}
+
+// The command with its images, when it has any.
+QJsonObject withImages(QJsonObject command, const QVector<CommentImageFile>& images) {
+  if (!images.isEmpty()) {
+    command.insert(QStringLiteral("attachments"), commentAttachmentsJson(images));
+  }
+  return command;
 }
 
 QJsonObject clickedItem(const SelectionItem& item) {
@@ -120,6 +152,48 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
                            .withTooltip(tr("A comment on the design as a whole, with nothing to pick")));
     def.inputs.append(textInput(QStringLiteral("text"), tr("Comment"))
                           .withTooltip(tr("What should change there, for the agent to read")));
+    // Its images (mitcad#2011): a file, or a capture of the view marked
+    // up; listed by name.
+    def.inputs.append(noteInput(
+        QStringLiteral("images"),
+        [this](const CommandState&) {
+          InputNote note;
+          QStringList names;
+          for (const CommentImageFile& image : std::as_const(m_commentImages)) {
+            names << image.name;
+          }
+          if (!names.isEmpty()) {
+            note.text = tr("%n image(s): %1", nullptr, static_cast<int>(names.size()))
+                            .arg(names.join(QStringLiteral(", ")));
+          }
+          note.actions = {tr("Attach Image…"), tr("Capture and Annotate…")};
+          if (!names.isEmpty()) {
+            note.actions << tr("Remove Images");
+          }
+          return note;
+        },
+        [this](int action, const CommandState&, const CommandContext&) {
+          afterEventWhenIdle(*this, this, [this, action] {
+            if (action == 2) {
+              m_commentImages.clear();
+              qDebug().noquote() << QStringLiteral("Add Comment images: none");
+            } else {
+              const std::optional<CommentImageFile> image =
+                  action == 0 ? chooseCommentImage(this) : captureCommentImage(this);
+              if (!image) {
+                return;
+              }
+              m_commentImages.append(*image);
+              qDebug().noquote() << QStringLiteral("Add Comment image: %1, %2 x %3")
+                                        .arg(image->name)
+                                        .arg(image->width)
+                                        .arg(image->height);
+            }
+            commandInputsChanged();
+          });
+        },
+        tr("Images")));
+    def.init = [this](CommandState&, const CommandContext&) { m_commentImages.clear(); };
   }
   def.build = [this, retarget](const CommandState& state, const CommandContext&) -> Built {
     if (!retarget && state.checked(QStringLiteral("whole_design"))) {
@@ -128,10 +202,11 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
         return Built::failure(tr("Write the comment: what should change in the design."), QStringLiteral("text"));
       }
       QJsonArray commands;
-      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("add_comment")},
+      commands.append(withImages({{QStringLiteral("cmd"), QStringLiteral("add_comment")},
                                   {QStringLiteral("text"), text},
                                   {QStringLiteral("target"), QJsonObject{{QStringLiteral("design"), true}}},
-                                  {QStringLiteral("author"), QStringLiteral("user")}});
+                                  {QStringLiteral("author"), QStringLiteral("user")}},
+                                 m_commentImages));
       return Built::of({{QStringLiteral("commands"), commands}});
     }
     const Selection& picks = state.items(QStringLiteral("target"));
@@ -170,24 +245,27 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
       if (text.isEmpty()) {
         return Built::failure(tr("Write the comment: what should change there."), QStringLiteral("text"));
       }
-      command = {{QStringLiteral("cmd"), QStringLiteral("add_comment")},
-                 {QStringLiteral("text"), text},
-                 {QStringLiteral("target"), *target},
-                 {QStringLiteral("author"), QStringLiteral("user")}};
+      command = withImages({{QStringLiteral("cmd"), QStringLiteral("add_comment")},
+                            {QStringLiteral("text"), text},
+                            {QStringLiteral("target"), *target},
+                            {QStringLiteral("author"), QStringLiteral("user")}},
+                           m_commentImages);
     }
     QJsonArray commands;
     commands.append(command);
     return Built::of({{QStringLiteral("commands"), commands}});
   };
-  def.describe = [retarget](const CommandState& state, const CommandContext&) {
+  def.describe = [this, retarget](const CommandState& state, const CommandContext&) {
+    const QString images =
+        retarget || m_commentImages.isEmpty() ? QString() : QStringLiteral(" with %1 image(s)").arg(m_commentImages.size());
     if (!retarget && state.checked(QStringLiteral("whole_design"))) {
-      return QStringLiteral("Comment added on the whole design");
+      return QStringLiteral("Comment added on the whole design%1").arg(images);
     }
     const Selection& picks = state.items(QStringLiteral("target"));
-    return QStringLiteral("Comment %1 on %2%3")
+    return QStringLiteral("Comment %1 on %2%3%4")
         .arg(retarget ? QStringLiteral("retargeted") : QStringLiteral("added"),
              picks.isEmpty() ? QStringLiteral("nothing") : picks.first().logDescription(),
-             state.checked(QStringLiteral("at_point")) ? QStringLiteral(" at the point clicked") : QString());
+             state.checked(QStringLiteral("at_point")) ? QStringLiteral(" at the point clicked") : QString(), images);
   };
   return def;
 }
@@ -315,7 +393,7 @@ bool MainWindow::runCommentCommand(const QJsonObject& command, const QString& wh
     qDebug().noquote() << QStringLiteral("Comment command refused: %1").arg(why);
     return false;
   }
-  qDebug().noquote() << QStringLiteral("Comment command: %1").arg(compactJson(command));
+  qDebug().noquote() << QStringLiteral("Comment command: %1").arg(loggedCommand(command));
   QJsonArray commands;
   commands.append(command);
   if (!runVisibilityCommands(commands, what)) {
@@ -325,17 +403,66 @@ bool MainWindow::runCommentCommand(const QJsonObject& command, const QString& wh
   return true;
 }
 
+std::optional<CommentImageFile> MainWindow::captureCommentImage(QWidget* parent) {
+  // The view as the user sees it: its frame with the widgets over it (the
+  // pins, the sketch overlay), at its resolution; no version watermark.
+  QImage frame = m_viewer->grabFramebuffer();
+  if (!frame.isNull()) {
+    QPainter painter(&frame);
+    for (QWidget* overlay : m_viewer->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+      if (overlay->isVisibleTo(m_viewer) && qobject_cast<VersionWatermark*>(overlay) == nullptr) {
+        overlay->render(&painter, overlay->pos(), QRegion(), QWidget::DrawChildren);
+      }
+    }
+  }
+  qDebug().noquote() << QStringLiteral("Capture and Annotate: the view %1 x %2").arg(frame.width()).arg(frame.height());
+  return captureAndAnnotate(parent, m_viewer, frame);
+}
+
+QByteArray MainWindow::commentImageBytes(const QString& comment, const QString& image) {
+  const CommentsShown shown = commentsOf(m_commentsAnswer);
+  const CommentShown* found = commentById(shown.comments, comment);
+  const CommentImage* listed = found != nullptr ? commentImageById(*found, image) : nullptr;
+  if (listed == nullptr) {
+    return QByteArray();
+  }
+  // The same file, wherever it is attached, is read once.
+  const auto cached = m_commentImageBytes.constFind(listed->sha256);
+  if (!listed->sha256.isEmpty() && cached != m_commentImageBytes.constEnd()) {
+    return cached.value();
+  }
+  QByteArray bytes;
+  try {
+    const QJsonObject answer = queryObject({{QStringLiteral("query"), QStringLiteral("comment_attachment")},
+                                            {QStringLiteral("comment"), comment},
+                                            {QStringLiteral("id"), image}});
+    bytes = QByteArray::fromBase64(answer.value(QStringLiteral("data")).toString().toLatin1());
+  } catch (const std::exception& error) {
+    qDebug().noquote() << QStringLiteral("Comment image not read: %1 %2: %3")
+                              .arg(comment, image, mitcad::modelMessage(error.what()));
+    return QByteArray();
+  }
+  if (!listed->sha256.isEmpty() && !bytes.isEmpty()) {
+    m_commentImageBytes.insert(listed->sha256, bytes);
+  }
+  return bytes;
+}
+
 void MainWindow::addCommentOn(const QJsonObject& target, const QString& label) {
   QWidget* parent = m_commentsWindow && m_commentsWindow->isVisible() ? m_commentsWindow.data()
                                                                       : static_cast<QWidget*>(this);
-  const std::optional<QString> text = askCommentText(parent, tr("Add Comment"), label);
+  CommentImageChoice images;
+  images.attachFile = [](QWidget* from) { return chooseCommentImage(from); };
+  images.capture = [this](QWidget* from) { return captureCommentImage(from); };
+  const std::optional<QString> text = askCommentText(parent, tr("Add Comment"), label, false, CommentEntry(), &images);
   if (!text) {
     return;
   }
-  if (runCommentCommand({{QStringLiteral("cmd"), QStringLiteral("add_comment")},
-                         {QStringLiteral("text"), *text},
-                         {QStringLiteral("target"), target},
-                         {QStringLiteral("author"), QStringLiteral("user")}},
+  if (runCommentCommand(withImages({{QStringLiteral("cmd"), QStringLiteral("add_comment")},
+                                    {QStringLiteral("text"), *text},
+                                    {QStringLiteral("target"), target},
+                                    {QStringLiteral("author"), QStringLiteral("user")}},
+                                   images.chosen),
                         tr("Add Comment"))) {
     qDebug().noquote() << QStringLiteral("Comment added on %1").arg(label);
   }
@@ -375,13 +502,20 @@ void MainWindow::openComments() {
       const int reply = selectedReply();
       afterEventWhenIdle(*this, this, [this, id, reply, answered] {
         const auto [label, answers] = answered(id, reply);
-        const std::optional<QString> text = askCommentText(
-            m_commentsWindow.data(), tr("Reply to Comment %1").arg(commentNumber(id)), label, false, answers);
+        // Images too (mitcad#2011): a file, or the view captured and
+        // marked up.
+        CommentImageChoice images;
+        images.attachFile = [](QWidget* from) { return chooseCommentImage(from); };
+        images.capture = [this](QWidget* from) { return captureCommentImage(from); };
+        const std::optional<QString> text =
+            askCommentText(m_commentsWindow.data(), tr("Reply to Comment %1").arg(commentNumber(id)), label, false,
+                           answers, &images);
         if (text) {
-          runCommentCommand({{QStringLiteral("cmd"), QStringLiteral("reply_comment")},
-                             {QStringLiteral("id"), id},
-                             {QStringLiteral("text"), *text},
-                             {QStringLiteral("author"), QStringLiteral("user")}},
+          runCommentCommand(withImages({{QStringLiteral("cmd"), QStringLiteral("reply_comment")},
+                                        {QStringLiteral("id"), id},
+                                        {QStringLiteral("text"), *text},
+                                        {QStringLiteral("author"), QStringLiteral("user")}},
+                                       images.chosen),
                             tr("Reply to %1").arg(id));
         }
       });
@@ -405,6 +539,9 @@ void MainWindow::openComments() {
       });
     };
     actions.retarget = [this](const QString& id) { afterEventWhenIdle(*this, this, [this, id] { retargetComment(id); }); };
+    actions.imageBytes = [this](const QString& comment, const QString& image) {
+      return commentImageBytes(comment, image);
+    };
     window->setActions(std::move(actions));
     // No pin ringed once it closes.
     connect(window, &QDialog::finished, this, [this] {

@@ -26,3 +26,7 @@ mod fillet_radius_tests;
 // Dimensions to a curved face's outline and its extreme points, and a
 // section's label dragged (mitcad#1909).
 mod silhouette_tests;
+// A drawing's dimensioning standard, ISO or ASME (mitcad#2047).
+mod standard_tests;
+// A drawing's own hole callouts (mitcad#2054).
+mod hole_callout_tests;

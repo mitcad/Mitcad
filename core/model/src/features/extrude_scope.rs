@@ -4,7 +4,9 @@
 //! silently converted to independent geometry or shared-definition edits.
 //! The extrusion's own component is the exception (mitcad#769): it is cut
 //! in its own definition, as its other features are, and every occurrence
-//! shows the result.
+//! shows the result. Another component that is linked or placed more than
+//! once is machined occurrence by occurrence when the scope includes it
+//! (mitcad#2131, `crate::assembly_cut`): its definition stays as it is.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -69,7 +71,7 @@ pub enum TargetScope {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CutScope {
     pub context: ComponentTarget,
@@ -78,6 +80,25 @@ pub struct CutScope {
     /// visibility on conversion instead of freezing it at boss creation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub initialize_on_cut: bool,
+    /// Where the cut lies against each occurrence it machines
+    /// (mitcad#2131), kept from when it was made or edited: the removed
+    /// material stays where it is on the part whatever moves the part
+    /// afterwards (joints and Drive Joint, drags, motion studies). Left out
+    /// when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<MachinedFrame>,
+}
+
+/// Where an assembly cut lies against an occurrence it machines
+/// (mitcad#2131).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachinedFrame {
+    pub component: ComponentUid,
+    pub occurrence: OccurrencePath,
+    /// From the cut's coordinates (its component's, at its context
+    /// occurrence) into the machined component's.
+    pub transform: Transform,
 }
 
 /// What a stored place of a [`CutScope`] is.
@@ -149,6 +170,12 @@ pub struct CutTargetRow {
     /// (mitcad#1789). Left out when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub joint_motion: bool,
+    /// An occurrence of a linked component or of one placed more than once
+    /// that an automatic scope leaves out (mitcad#2131): checking it turns
+    /// the scope explicit with it, and the cut machines that occurrence in
+    /// this assembly only. Left out when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub assembly_cut: bool,
     pub bodies: Vec<CutBody>,
 }
 
@@ -225,6 +252,74 @@ impl CutScope {
             return Err("no eligible local bodies selected for cut feature replay".to_owned());
         }
         Ok(bodies)
+    }
+
+    /// The kept frame of an occurrence the cut machines (mitcad#2131).
+    pub(crate) fn frame_of(&self, target: &ComponentTarget) -> Option<Transform> {
+        self.frames
+            .iter()
+            .find(|f| f.component == target.component && f.occurrence == target.occurrence)
+            .map(|f| f.transform)
+    }
+
+    /// Whether the cut machines `target` when it includes it: another
+    /// component's occurrence that is linked, inside a linked component, or
+    /// of a component placed more than once (mitcad#2131).
+    pub(crate) fn machines(&self, assembly: &Assembly, target: &ComponentTarget) -> bool {
+        if target.component == self.context.component {
+            return false;
+        }
+        let linked = |component: ComponentUid| {
+            assembly
+                .component(component)
+                .is_some_and(|c| c.link.is_some())
+        };
+        linked(target.component)
+            || target
+                .occurrence
+                .0
+                .iter()
+                .filter_map(|uid| assembly.occurrence(*uid))
+                .any(|o| linked(o.component))
+            || assembly.paths_to(target.component).len() > 1
+    }
+
+    /// Keeps where the cut lies against each included occurrence it
+    /// machines and has no frame for yet, from `placement` (the
+    /// occurrences' placements where the cut is in the timeline), and drops
+    /// the frames of occurrences no longer included (mitcad#2131). True
+    /// when anything changed.
+    pub(crate) fn keep_frames(
+        &mut self,
+        assembly: &Assembly,
+        placement: &dyn Fn(OccurrenceUid) -> Transform,
+    ) -> bool {
+        let world = |path: &OccurrencePath| {
+            path.0
+                .iter()
+                .fold(Transform::IDENTITY, |t, uid| t.after(&placement(*uid)))
+        };
+        let included: Vec<ComponentTarget> = self.included().to_vec();
+        let before = self.frames.len();
+        self.frames.retain(|f| {
+            included
+                .iter()
+                .any(|t| t.component == f.component && t.occurrence == f.occurrence)
+        });
+        let mut changed = self.frames.len() != before;
+        let source = world(&self.context.occurrence);
+        for target in included {
+            if self.frame_of(&target).is_some() || !self.machines(assembly, &target) {
+                continue;
+            }
+            self.frames.push(MachinedFrame {
+                component: target.component,
+                occurrence: target.occurrence.clone(),
+                transform: inverse(&world(&target.occurrence)).after(&source),
+            });
+            changed = true;
+        }
+        changed
     }
 
     pub fn stored_targets(&self) -> &[ComponentTarget] {
@@ -493,6 +588,18 @@ impl CutScope {
     }
 }
 
+/// What an automatic scope leaves out of a linked component's occurrence
+/// (mitcad#2131), as its row's reason.
+pub(crate) const MACHINE_LINKED: &str = "Linked component, so it is left out; check it to machine this occurrence in this assembly only. Its design stays as it is.";
+
+/// What an automatic scope leaves out of an occurrence of a component
+/// placed more than once (mitcad#2131), as its row's reason.
+pub(crate) const MACHINE_SHARED: &str = "Placed more than once, so it is left out; check it to machine this occurrence only. The other occurrences stay as they are.";
+
+/// The warning of a cut that no longer reaches an occurrence it machines
+/// (mitcad#2131: after Update Link brought other geometry, or a move).
+pub(crate) const MACHINED_MISSED: &str = "The cut no longer reaches a component it machines in this assembly; that component is left as it is.";
+
 /// What an automatic scope leaves alone that moves against the cut's own
 /// occurrence through joints (mitcad#1667), as its row's reason.
 pub(crate) const MOVES_THROUGH_JOINTS: &str =
@@ -667,6 +774,8 @@ pub(crate) fn assembly_key<S>(env: &Env<'_, S>) -> u128 {
     }
     // What moves against what through joints (mitcad#1667).
     JointMotion::of(env.features, a).fingerprint(&mut key);
+    // Which occurrences earlier assembly cuts machined (mitcad#2131).
+    env.machined.fingerprint(&mut key);
     key.finish()
 }
 
@@ -709,13 +818,19 @@ fn unplaced<K: Kernel>(ctx: &EvalContext<'_, K>, target: &ComponentTarget) -> bo
 
 struct Candidate<S> {
     target: ComponentTarget,
-    world: Transform,
+    /// From the cut's coordinates into the candidate's: by the placements
+    /// at this point, or a machined occurrence's kept frame (mitcad#2131).
+    to_local: Transform,
+    /// The bodies the occurrence shows: a machined one's pieces in place
+    /// of the definition bodies they stand for (mitcad#2131).
     shapes: Vec<(BodyUid, S)>,
     row: CutTargetRow,
+    /// An occurrence of a linked component or of one placed more than
+    /// once: cut, it is machined in this assembly only (mitcad#2131).
+    machined: bool,
 }
 
 pub(crate) struct Discovery<S> {
-    source_world: Transform,
     candidates: Vec<Candidate<S>>,
 }
 
@@ -726,10 +841,9 @@ impl<S: Clone> Discovery<S> {
         &self,
         ctx: &EvalContext<'_, K>,
     ) -> Result<Vec<(BodyUid, S)>, String> {
-        let local = inverse(&self.source_world);
         let mut bodies = Vec::new();
         for c in &self.candidates {
-            let transform = local.after(&c.world);
+            let transform = inverse(&c.to_local);
             for (uid, shape) in &c.shapes {
                 bodies.push((
                     *uid,
@@ -764,6 +878,7 @@ fn row(assembly: &Assembly, target: &ComponentTarget, reason: Option<String>) ->
         reason,
         note: None,
         joint_motion: false,
+        assembly_cut: false,
         bodies: Vec::new(),
     }
 }
@@ -828,12 +943,21 @@ impl CutScope {
                                 .component(o.component)
                                 .is_some_and(|c| c.link.is_some())
                         });
-                let reason = if readonly {
-                    Some(
-                        "Linked component is read-only; edit the source design instead.".to_owned(),
-                    )
-                } else if paths.len() != 1 {
-                    Some("Shared component definition has multiple occurrences; occurrence-specific cuts are not supported.".to_owned())
+                // Another component's occurrence whose definition the cut
+                // may not change, being linked or shared, is machined
+                // instead (mitcad#2131): in this assembly only, when the
+                // scope includes it by name. An automatic scope leaves it
+                // out until it is checked, so that a cut through linked
+                // hardware stays as it was.
+                let machined = !own && (readonly || paths.len() != 1);
+                let reason = if machined {
+                    automatic.then(|| {
+                        if readonly {
+                            MACHINE_LINKED.to_owned()
+                        } else {
+                            MACHINE_SHARED.to_owned()
+                        }
+                    })
                 } else if !own
                     && motion
                         .as_ref()
@@ -844,19 +968,37 @@ impl CutScope {
                     None
                 };
                 let world = resolve(ctx, &target)?;
+                // A machined occurrence keeps the frame the cut was made
+                // in (mitcad#2131): what moves the part later does not
+                // move the removed material on it.
+                let to_local = match self.frame_of(&target) {
+                    Some(frame) if machined => frame,
+                    _ => inverse(&world).after(&source_world),
+                };
                 let joint_motion = reason.as_deref() == Some(MOVES_THROUGH_JOINTS);
                 let mut target_row = row(&effective, &target, reason);
                 target_row.joint_motion = joint_motion;
+                target_row.assembly_cut = machined && automatic;
+                if machined && !automatic {
+                    target_row.note = Some(crate::assembly_cut::MACHINED_NOTE.to_owned());
+                }
                 if own && occurrences > 1 {
                     target_row.note = Some(format!(
                         "Component being edited; the cut changes all {occurrences} occurrences."
                     ));
                 }
+                // A machined occurrence is what its pieces are.
+                let shapes = if machined {
+                    ctx.bodies_at(component, path)
+                } else {
+                    shapes.clone()
+                };
                 candidates.push(Candidate {
                     row: target_row,
                     target,
-                    world,
-                    shapes: shapes.clone(),
+                    to_local,
+                    shapes,
+                    machined,
                 });
             }
         }
@@ -931,10 +1073,7 @@ impl CutScope {
             ctx.cut_targets = Some(report);
             return Err(message);
         }
-        Ok(Discovery {
-            source_world,
-            candidates,
-        })
+        Ok(Discovery { candidates })
     }
 
     pub(crate) fn apply<K: Kernel>(
@@ -949,6 +1088,12 @@ impl CutScope {
             ..FeatureOutput::default()
         };
         let mut failed = None;
+        // The machined pieces' ids given so far (mitcad#2131).
+        let mut taken: Vec<BodyUid> = Vec::new();
+        // Included occurrences to machine that the cut does not reach.
+        let mut missed = 0usize;
+        // An included occurrence the cut changes in its definition.
+        let mut plain_included = false;
         for mut candidate in discovery.candidates {
             if matches!(&self.targets, TargetScope::Explicit { included, .. } if included.contains(&candidate.target))
                 && let Some(reason) = &candidate.row.reason
@@ -957,11 +1102,7 @@ impl CutScope {
             }
             let local_tool = ctx
                 .kernel
-                .transform_shape(
-                    &tool,
-                    &inverse(&candidate.world).after(&discovery.source_world),
-                    None,
-                )
+                .transform_shape(&tool, &candidate.to_local, None)
                 .map_err(|e| e.to_string())?;
             let tool_bounds = ctx
                 .kernel
@@ -1018,6 +1159,16 @@ impl CutScope {
             }
             candidate.row.intersects = !touched.is_empty();
             let selected = self.checked(&candidate.target) && candidate.row.eligible;
+            if candidate.machined && selected && touched.is_empty() && !boolean_failed {
+                missed += 1;
+            }
+            if !candidate.machined && self.included().contains(&candidate.target) {
+                plain_included = true;
+            }
+            // A machined occurrence's new pieces by the definition body they
+            // stand for, and its earlier pieces cut again (mitcad#2131).
+            let mut machined_now: BTreeMap<BodyUid, Vec<BodyUid>> = BTreeMap::new();
+            let mut machined_cut: Vec<BodyUid> = Vec::new();
             for (body, result) in touched {
                 let excluded = self
                     .excluded_bodies()
@@ -1039,6 +1190,34 @@ impl CutScope {
                     .filter(|p| p.sources.contains(&0))
                     .map(|p| p.shape)
                     .collect();
+                if candidate.machined {
+                    // An assembly cut (mitcad#2131): the occurrence shows
+                    // pieces of its own; the definition stays.
+                    let machined = ctx.env.machined;
+                    let replaces = machined.replaced_by(body).unwrap_or(body);
+                    if machined.component_of(body).is_some() {
+                        // A piece of an earlier cut, cut again.
+                        output.changes.push(BodyChange::Remove(body));
+                        machined_cut.push(body);
+                    }
+                    let ids = machined_now.entry(replaces).or_default();
+                    for piece in pieces {
+                        let uid = crate::assembly_cut::piece_uid(
+                            ctx.uid,
+                            &candidate.target.occurrence.0,
+                            replaces,
+                            ids.len(),
+                            &taken,
+                        );
+                        taken.push(uid);
+                        ids.push(uid);
+                        output.changes.push(BodyChange::Set(uid, piece));
+                        output
+                            .owners
+                            .insert(uid, crate::assembly_cut::MACHINED_HOLDER);
+                    }
+                    continue;
+                }
                 // The pieces' ids (mitcad#408); none left for the body
                 // removes it.
                 let named = ctx.piece_ids(body, pieces);
@@ -1049,6 +1228,28 @@ impl CutScope {
                     output.changes.push(BodyChange::Set(uid, piece));
                     output.owners.insert(uid, candidate.target.component);
                 }
+            }
+            // What the occurrence shows of each body it machined: the
+            // earlier pieces this cut did not reach, then its own.
+            for (replaces, new) in machined_now {
+                let earlier = ctx
+                    .env
+                    .machined
+                    .at(&candidate.target.occurrence.0)
+                    .and_then(|m| m.replaced.get(&replaces))
+                    .cloned()
+                    .unwrap_or_default();
+                let pieces = earlier
+                    .into_iter()
+                    .filter(|piece| !machined_cut.contains(piece))
+                    .chain(new)
+                    .collect();
+                output.machined.push(crate::assembly_cut::MachinedChange {
+                    occurrence: candidate.target.occurrence.clone(),
+                    component: candidate.target.component,
+                    replaces,
+                    pieces,
+                });
             }
             let checked_count = candidate.row.bodies.iter().filter(|b| b.checked).count();
             candidate.row.bodies.sort_by_key(|b| b.body);
@@ -1068,6 +1269,18 @@ impl CutScope {
             {
                 report.rows.push(candidate.row);
             }
+        }
+        // An occurrence it machines that the cut no longer reaches (after
+        // Update Link brought the part's new geometry, mitcad#2131) is left
+        // as it is, with a warning; so is the whole cut when it machines
+        // nothing else and reaches nothing.
+        if missed > 0 {
+            ctx.warn(MACHINED_MISSED);
+        }
+        if report.selected_bodies == 0 && missed > 0 && !plain_included && failed.is_none() {
+            report.can_commit = true;
+            ctx.cut_targets = Some(report);
+            return Ok(output);
         }
         if report.selected_bodies == 0 {
             failed.get_or_insert_with(|| if matches!(&self.targets, TargetScope::Explicit { included, .. } if included.is_empty()) {
@@ -1098,11 +1311,7 @@ impl CutScope {
             }
             let local_tool = ctx
                 .kernel
-                .transform_shape(
-                    tool,
-                    &inverse(&candidate.world).after(&discovery.source_world),
-                    None,
-                )
+                .transform_shape(tool, &candidate.to_local, None)
                 .map_err(|e| e.to_string())?;
             let tool_bounds = ctx
                 .kernel

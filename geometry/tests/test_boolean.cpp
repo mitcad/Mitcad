@@ -54,6 +54,7 @@
 #include "../src/face_join.hpp"
 #include "../src/history.hpp"
 #include "check.hpp"
+#include "mitcad/geometry/hole.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/path_sweep.hpp"
 
@@ -1048,6 +1049,50 @@ void test_join_leaves_no_internal_edge_on_a_face() {
   CHECK(internal_edges(bored) == 0 && internal_edges(wedge) == 0);
 }
 
+// A flat-bottomed hole of 12.7 along `along` from `at`, `depth` deep.
+ShapePtr drilled(const char* feature, const gp_Pnt& at, const gp_Dir& along, double depth) {
+  HoleSpec spec;
+  spec.feature = feature;
+  spec.positions.emplace_back(at, along);
+  spec.diameter = 12.7;
+  spec.flat = true;
+  spec.extent = HoleExtent::Distance;
+  spec.depth = depth;
+  return hole_tool(spec);
+}
+
+void test_cut_of_a_hole_ending_on_a_passage_of_its_diameter() {
+  // A block with a passage of 12.7 along -y, and a hole of the same
+  // diameter drilled up into it from the bottom face, its axis 0.0097 mm
+  // beside the passage's and its flat end 0.000015 mm short of the
+  // passage's axis (a design's cooling passage and the hole that reaches
+  // it, mitcad#2094). OCCT's exact cut left the section's pieces as
+  // internal edges and cut the whole hole as if the passage were not
+  // there: 683 mm3 too much, a valid solid. Within the import's tolerance
+  // the cut is retried with a fuzzy value and removes what the hole drilled
+  // on the passage's axis removes.
+  const double x = 70.97828148963335;
+  const double z = 505.03671505820057;
+  const Shape block(BRepPrimAPI_MakeBox(gp_Pnt(40, -675, 473.4687), gp_Pnt(100, 125, 530)).Shape());
+  const ShapePtr passage = drilled("F1", gp_Pnt(x, 125, z), gp_Dir(0, -1, 0), 800);
+  const BooleanResult bored = boolean(BooleanOp::Cut, {&block}, *passage, 0.01);
+  CHECK(bored.pieces.size() == 1);
+  if (bored.pieces.size() != 1) {
+    return;
+  }
+  const Shape& body = *bored.pieces[0].shape;
+  const auto removed = [&](double hole_x) {
+    const ShapePtr hole = drilled("F2", gp_Pnt(hole_x, 50, 473.4687), gp_Dir(0, 0, 1), 31.568);
+    const BooleanResult cut = boolean(BooleanOp::Cut, {&body}, *hole, 0.01);
+    CHECK(cut.pieces.size() == 1);
+    return cut.pieces.size() == 1 ? volume(body) - volume(*cut.pieces[0].shape) : 0.0;
+  };
+  const double on_axis = removed(x);
+  // Less than the whole hole (3998.9 mm3): the passage takes its end.
+  CHECK(on_axis > 3300.0 && on_axis < 3330.0);
+  CHECK_NEAR_TOL(removed(70.98798001480884), on_axis, 1e-4);
+}
+
 } // namespace
 
 void boolean_tests() {
@@ -1079,6 +1124,9 @@ void boolean_tests() {
   guarded("test_closed_face_joined_with_a_piece_of_its_surface", test_closed_face_joined_with_a_piece_of_its_surface);
   // A join's edge lying on a face of the other body (mitcad#1371).
   guarded("test_join_leaves_no_internal_edge_on_a_face", test_join_leaves_no_internal_edge_on_a_face);
+  // A hole's cut that OCCT left with internal edges, retried (mitcad#2094).
+  guarded("test_cut_of_a_hole_ending_on_a_passage_of_its_diameter",
+          test_cut_of_a_hole_ending_on_a_passage_of_its_diameter);
 }
 
 } // namespace test

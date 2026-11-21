@@ -35,6 +35,9 @@ constexpr int kBodiesRole = Qt::UserRole + 2;
 constexpr int kMovesRole = Qt::UserRole + 3;
 // A row whose reason or note is under its name, wrapped to the list's width.
 constexpr int kWrapRole = Qt::UserRole + 4;
+// The note of a row the cut machines in this assembly only (mitcad#2131,
+// `assembly_cut::MACHINED_NOTE`), told apart in the log.
+constexpr const char* kMachinedNote = "Machined in this assembly; its own design stays as it is.";
 
 // Wraps the rows marked kWrapRole, and gives them the height of their
 // wrapped lines (mitcad#1789): a reason cut off at the list's width hid the
@@ -88,6 +91,19 @@ QJsonArray membership(QJsonArray values, const QJsonObject& item, bool contains)
   }
   if (contains) { result.append(item); }
   return result;
+}
+
+// Whether a point of `widget` is in sight in its window: inside the widget
+// and every widget it is in, as a scroll area clips it (a row scrolled out
+// of the command panel's page is not where a click lands).
+bool shownInWindow(const QWidget* widget, QPoint point) {
+  for (; widget != nullptr && !widget->isWindow(); widget = widget->parentWidget()) {
+    if (!widget->rect().contains(point)) {
+      return false;
+    }
+    point = widget->mapToParent(point);
+  }
+  return true;
 }
 } // namespace
 
@@ -400,10 +416,14 @@ void CutTargetsPanel::rebuild() {
     const bool hidden = row.value(QStringLiteral("hidden")).toBool(); // mitcad#475
     const QJsonObject scope = m_scope.value(QStringLiteral("targets")).toObject();
     const bool automatic = scope.value(QStringLiteral("type")) == QStringLiteral("automatic");
-    // Left out only because it moves through joints (mitcad#1789): enabled,
-    // and checking it turns the scope explicit with it. Rows unavailable
-    // for other reasons (linked, placed more than once) stay disabled.
-    const bool moves = !eligible && automatic && row.value(QStringLiteral("joint_motion")).toBool();
+    // Left out only because it moves through joints (mitcad#1789), or
+    // because it is linked or placed more than once and so is machined in
+    // this assembly only when checked (mitcad#2131): enabled, and checking
+    // it turns the scope explicit with it. Rows unavailable for other
+    // reasons stay disabled.
+    const bool machinable = !eligible && automatic && row.value(QStringLiteral("assembly_cut")).toBool();
+    const bool moves =
+        machinable || (!eligible && automatic && row.value(QStringLiteral("joint_motion")).toBool());
     QString text = name;
     if (hidden) { text += tr(" (hidden)"); }
     if (!intersects) { text += tr(" — outside current cut"); }
@@ -448,11 +468,11 @@ void CutTargetsPanel::rebuild() {
     }
     item->setExpanded(expanded.contains(item->data(0, NativeControlIdentifierRole).toString()));
     qDebug().noquote() << QStringLiteral("Cut target %1@%2: %3, %4, %5%6%7")
-        .arg(component, path, eligible ? QStringLiteral("eligible") : moves ? QStringLiteral("moves through joints")
+        .arg(component, path, eligible ? QStringLiteral("eligible") : machinable ? QStringLiteral("machinable here") : moves ? QStringLiteral("moves through joints")
                                                                             : QStringLiteral("unavailable"),
              item->checkState(0) == Qt::Checked ? QStringLiteral("checked") : item->checkState(0) == Qt::PartiallyChecked
                  ? QStringLiteral("partial") : QStringLiteral("unchecked"), intersects ? QStringLiteral("intersects") : QStringLiteral("outside"),
-             hidden ? QStringLiteral(", hidden") : QString(), note.isEmpty() ? QString() : QStringLiteral(", own definition"));
+             hidden ? QStringLiteral(", hidden") : QString(), note.isEmpty() ? QString() : note == QLatin1String(kMachinedNote) ? QStringLiteral(", machined here") : QStringLiteral(", own definition"));
   }
   m_tree->verticalScrollBar()->setValue(scroll);
   m_all->setEnabled(m_current);
@@ -474,27 +494,53 @@ void CutTargetsPanel::rebuild() {
           ? tr("No eligible components intersect the cut. Try Flip: the other direction cuts a component.")
       : rows.isEmpty() ? tr("No eligible components intersect the cut.") : tr("No components selected."));
   m_refreshing = false;
-  // Where each row is in the window once laid out, for UI tests: "Cut
-  // target row C2@O2 at x,y" (a click there selects it, Space checks it).
+  // Where each row is in the window once laid out, for UI tests (also in
+  // the command panel's places, logged again when its page scrolls).
   QTimer::singleShot(0, this, [this] {
-    if (!m_tree->isVisible()) {
-      return;
-    }
-    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
-      QTreeWidgetItem* item = m_tree->topLevelItem(i);
-      const QRect rect = m_tree->visualItemRect(item);
-      if (!rect.isValid() || !m_tree->viewport()->rect().contains(rect.center())) {
-        continue;
-      }
-      const QPoint at = m_tree->viewport()->mapTo(window(), rect.center());
-      const QJsonObject target = item->data(0, kTargetRole).toJsonObject();
-      qDebug().noquote() << QStringLiteral("Cut target row %1@%2 at %3,%4")
-                                .arg(target.value(QStringLiteral("component")).toString(),
-                                     target.value(QStringLiteral("occurrence")).toString())
-                                .arg(at.x())
-                                .arg(at.y());
+    for (const QString& line : places()) {
+      qDebug().noquote() << line;
     }
   });
+}
+
+QStringList CutTargetsPanel::places() const {
+  QStringList lines;
+  if (!m_tree->isVisible()) {
+    return lines;
+  }
+  const QWidget* viewport = m_tree->viewport();
+  for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+    QTreeWidgetItem* item = m_tree->topLevelItem(i);
+    const QRect rect = m_tree->visualItemRect(item);
+    if (!rect.isValid() || !viewport->rect().contains(rect.center())) {
+      continue;
+    }
+    const QJsonObject target = item->data(0, kTargetRole).toJsonObject();
+    const QString name = target.value(QStringLiteral("component")).toString() + QLatin1Char('@') +
+                         target.value(QStringLiteral("occurrence")).toString();
+    // "Cut target row C2@O2 at x,y" (a click there selects it, Space checks
+    // it); not while the panel's page has it scrolled out of sight
+    // (0.69.0-rc1 on Windows: the place logged before the page scrolled to
+    // its message was clicked, below the page).
+    if (shownInWindow(viewport, rect.center())) {
+      const QPoint at = viewport->mapTo(window(), rect.center());
+      lines << QStringLiteral("Cut target row %1 at %2,%3").arg(name).arg(at.x()).arg(at.y());
+    }
+    // Its check box (mitcad#2131: a click there checks it, also where a
+    // synthesized click gives the list no keyboard focus): "Cut target
+    // check C1@O1 at x,y".
+    QStyleOptionViewItem option;
+    option.initFrom(viewport);
+    option.rect = rect;
+    option.features |= QStyleOptionViewItem::HasCheckIndicator;
+    const QRect box = m_tree->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option, m_tree);
+    const QPoint boxCenter = box.isValid() ? box.center() : rect.center();
+    if (shownInWindow(viewport, boxCenter)) {
+      const QPoint boxAt = viewport->mapTo(window(), boxCenter);
+      lines << QStringLiteral("Cut target check %1 at %2,%3").arg(name).arg(boxAt.x()).arg(boxAt.y());
+    }
+  }
+  return lines;
 }
 
 void CutTargetsPanel::highlight(const QModelIndex& index) {

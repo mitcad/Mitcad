@@ -13,7 +13,7 @@ vcpkg's `opencascade` port for OCCT 8.0.1 as of the baseline in
 
 | Files | Origin | Licence |
 |---|---|---|
-| `portfile.cmake`, `vcpkg.json`, patches 0001 to 0005 | microsoft/vcpkg, `ports/opencascade` at the baseline; unchanged but for `port-version`, the list of patches, the SPDX line and the `Test:` line atop each of the five patches (mitcad#1986) | MIT |
+| `portfile.cmake`, `vcpkg.json`, patches 0001 to 0005 | microsoft/vcpkg, `ports/opencascade` at the baseline; unchanged but for `port-version`, the list of patches, the fixed source folder for the compiler cache (mitcad#2106), the SPDX line and the `Test:` line atop each of the five patches (mitcad#1986) | MIT |
 | patches 0006 and later | MitCad | LGPL-2.1-only WITH OCCT-exception-1.0, as OCCT |
 
 The patches change OCCT, so they are under OCCT's licence (the GNU LGPL
@@ -111,6 +111,9 @@ reports and tests last. The [index](#index) below lists every patch.
 | [mesh-cusp-untangle-1804.md](docs/mesh-cusp-untangle-1804.md) | 1804 | mitcad#2022 | a face's wire whose two consecutive edges leave their common vertex in nearly the same direction (a fillet's corner plate pinching to a point): their polygons, crossing each other near it, untangled before the face is meshed, so that the face is triangulated at the finest settings |
 | [hidden-line-removal-1810.md](docs/hidden-line-removal-1810.md) | 1810 | mitcad#2021 | no result: the polygonal hidden-line removal's hiding pass runs on the kernel's threads and tests each segment only against the faces near it on a grid over the view, its lines the same and in the same order: a drawing view of 884 bodies hid its lines in 0.5 s instead of 7 to 9 s |
 | [fillet-strip-beside-slope-1850.md](docs/fillet-strip-beside-slope-1850.md) | 1850 | mitcad#1987 | a rounding of a wall's outer top edge wider than the wall's top, the top closed off by a sloping face at the edge's end: the ball rolls on the inner wall's top edge and the slope cuts the blend past the edge's end, where OCCT failed or took the whole wall away |
+| [step-reader.md](docs/step-reader.md) | 1820 | mitcad#2028 | the STEP reader's sub-shape name pass walks past a face bound, loop, shell or edge list the file reader left unresolved instead of crashing on it, as the shape transfer does: such a file opens with the names and colours of the rest |
+| [fillet-end-past-tangent-face-1830.md](docs/fillet-end-past-tangent-face-1830.md) | 1830 | mitcad#2039 | the end of a fillet or chamfer at a vertex of more than three edges, past a face tangent to the faces beside it that the blend does not reach, cut on those two faces, which meet along the intersection of their surfaces from the vertex; the shortcut that cuts the end on one face alone taken only where its premise holds: a concave edge ending where a flat side runs on into two curved faces no longer gives an invalid shape |
+| [view-lines-1840.md](docs/view-lines-1840.md) | 1840 | mitcad#2063 | lines wider than 1 pixel in an OpenGL core profile (the macOS view) drawn as screen-space quads of their width, with their depth, stipple pattern and colours: selected edges, the hover and sketch curves no longer 1 device pixel wide |
 
 ## Adding a patch
 
@@ -130,7 +133,13 @@ A patch to OCCT is the last resort: only when nothing else works
    applies the patches in that order.
 4. Give it a test with OCCT alone in `geometry/tests/` that fails without
    it, where a synthetic body can reproduce the case, and a report with the
-   reproduction and the measurements in its ticket.
+   reproduction and the measurements in its ticket. Show that it fails
+   without the patch with `tools/occt-port-proof.py <number>` (Linux): it
+   reverts the patch at the port's tip, runs the header's named ctests,
+   adds the result to
+   [opencascade-before-after.md](docs/opencascade-before-after.md) and,
+   with `--update-headers`, to the header. Where it does not revert at the
+   tip, `--in-chain` shows it at its own place in the chain instead.
 5. Describe it here: a section headed by the patch's name in the file of
    its topic under [`docs/`](docs/) (or a new file for a new topic, listed
    in the table above), its test in that file's *Reports and tests*, and a
@@ -505,3 +514,6 @@ mitcad#77 and mitcad#79; their column names each one's report.
 | [1810](docs/hidden-line-removal-1810.md#1810-hlr-polygonal-hiding-pass-in-parallel-through-a-grid-of-the-hiding-faces) | mitcad#2021 | drawings: HLRBRep_PolyHLRToShape::Update hides the segments in blocks of 64 on the default pool's threads (HLRAlgo_PolyAlgo::HideSegment, one HidingWork per thread), the blocks' lines joined in order; HLRAlgo_PolyAlgo::Update keeps a grid of 128 x 128 cells of the hiding faces' boxes, and a segment is tested only against the faces of its cells, in the walk's order: the lines of stock OCCT, in its order |
 | [1850](docs/fillet-strip-beside-slope-1850.md#1850-chfi3d-rounding-wider-than-a-walls-top-rolls-on-its-inner-edge-cut-by-the-slope-past-its-end) | mitcad#1987 | fillets: StartSolOverflow rolls a side of a convex edge's rounding on an edge where the solid turns away by a right angle or more (turnsAwayAt), past a face at least the radius wide, instead of touching a face beyond; RolledOnProlongedEdgeAtEnd also walks on a piece ending at the spine's end with its other contact inside its face, over the strip of the rolled edge's other face where the ball reaches only into its own face, the curve moved back onto that face; PerformOneCorner takes such an end at an AllSame vertex as ChFi3d_RolledPastEdgeVertex's cap, the cap's side away from the vertex, and refuses a cap leaving the face at the end |
 | [1860](docs/fillet-unequal-torus-corner-1860.md#1860-chfi3d-torus-corner-with-unequal-sides-runs-on-to-where-the-smaller-blend-crosses-it) | mitcad#2091 | fillets: PerformThreeCorner makes a corner in the layout of a torus corner (ToricLayout) whose sides have radii more than tolapp3d apart the torus of the larger radius (ComputeCorner, its section on the smaller side taken on the pivot at the larger radius); unequalTail runs the torus on past that section, cut by the face the smaller rounding shares with the pivot, up to its crossing with the smaller rounding's blend (GeomInt_IntSS in windows round the corner), as a corner stripe of its own, and the smaller rounding ends at the crossing; without the crossing's points beyond the section on the faces the torus is removed and the corner walked as before |
+| [1820](docs/step-reader.md#1820-stepcafcontrol-sub-shape-names-skip-what-the-reader-left-unresolved) | mitcad#2028 | data exchange: STEPCAFControl_Reader's ExpandManifoldSolidBrep, ExpandSBSM and ExpandShell skip a null item, boundary array, shell, face array, face bound, loop and edge list, as StepToTopoDS_TranslateFace skips a null face bound and loop |
+| [1830](docs/fillet-end-past-tangent-face-1830.md#1830-chfi3d-end-cut-across-the-faces-beside-a-tangent-face) | mitcad#2039 | fillets and chamfers: ChFi3d_Builder::PerformIntersectionAtEnd takes the five-edge shortcut (pro15368) only where the end's first point lies on the last face's surface, and a face round the vertex whose two edges there are tangent and not crossed is passed: the faces beside it meet along the intersection of their surfaces through the vertex (GeomInt_IntSS), its curves on them in their periods at the vertex |
+| [1840](docs/view-lines-1840.md#1840-tkopengl-lines-wider-than-a-pixel-in-a-core-profile-drawn-as-quads) | mitcad#2063 | view: Graphic3d_ShaderFlags_WideLine, a geometry stage of the standard line programs that draws each segment as a quad occLineWidth pixels wide (near-plane clipped, ends extended by half the width, the segment's depth); OpenGl_ShaderManager::ToExpandWideLines (no fixed-function pipeline, a geometry stage, width above 1 pixel) chooses it in BindLineProgram, OpenGl_Context::SetLineWidth sets occLineWidth, OpenGl_PrimitiveArray::Render draws it without polygon offset or face culling |

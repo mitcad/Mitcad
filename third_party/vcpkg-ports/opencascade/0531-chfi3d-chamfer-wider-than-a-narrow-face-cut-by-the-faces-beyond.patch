@@ -89,13 +89,43 @@ such a report ("PerformSurf Not Implemented", a walk that fails); any other
 failure of it (a broken invariant, a signal) is rethrown as it is, not
 retried over the narrow face.
 
+Two faults that handler had hidden (mitcad#1986), fixed where they arise;
+OCCT's DRAW chamfer cases dist_angle, dist_dist and equal_dist E4, their
+_complex B1-B4 and C1 and their _sequence A6, A8, B1-B4 and C1 failed by
+them once the handlers were narrowed:
+- NF is made on B's own surface and given B's location, not made on a copy
+  of the surface moved by that location: BRep_Tool::CurveOnSurface finds
+  an edge's p-curve by the surface and the location, so the spine's edges
+  had none on NF where B is located and not a plane (a plane's is computed
+  on the fly), and StartSol evaluated a null p-curve (a signal). Over NF
+  the try now runs; where it cannot be made it fails with OCCT's own
+  reports (StdFail_NotDone) and the chamfer is computed as before.
+- PerformSetOfKPart does not add a guide of no length (its ends within
+  tolesp of each other) from the spine's start to its first analytic
+  piece. Over NF the first piece can start at the spine's (extended) start
+  while not taken as at that start (SplitKPart's intf); such a guide, its
+  ends 2e-16 apart in the wrong order once reparametrised, failed in
+  ChFi3d_PerformElSpine (Geom_BSplineCurve::Segment, Standard_DomainError).
+  The condition is general: a guide of no length has nothing to walk. A
+  guide whose start lies past the piece's (a later edge's first piece) is
+  added as before: a reported design took its first fillet
+  differently without it (ui-fillet-chain-remark), so the condition is the
+  length's magnitude, not "longer than tolesp" as for the guides between
+  pieces.
+
 Test: geometry/tests/test_chamfer_overflow.cpp,
 test_chamfer_wider_than_a_fin_side_strip (ctest
 geometry.suite.chamfer_overflow): the fin's tip edge chamfered wider than
 its side strip, the guide kept to its edges where the foot's chamfer is
 beside it: the volume removed that of the chamfer's sections less the part
 inside the foot's chamfer extended. Its failure without the patch is still
-to be shown in the port's before/after run (mitcad#1986).
+to be shown: the patch does not revert at the port's tip without the more
+than 40 later patches that change the same lines (tried 2026-11-20 by
+tools/occt-port-proof.py). NF on B's location:
+test_chamfer_of_a_sloped_boss_top_moved in the same file, a sloped boss
+top's chamfer on the body moved by a location the same as on the body as
+made (before, the moved body's chamfer failed by the signal). The guide of
+no length: none yet beside OCCT's DRAW cases above.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeChamfer.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeChamfer.hxx
 index 7a900b2d..8fd06755 100644
@@ -271,7 +301,7 @@ index 19324266..b83eeb1c 100644
    FVoi.Nullify();
    TopoDS_Edge E;
    if (Pc.IsVertex())
-@@ -9779,6 +9818,1706 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -9779,6 +9818,1710 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
    return false;
  }
  
@@ -343,18 +373,22 @@ index 19324266..b83eeb1c 100644
 +  {
 +    return false;
 +  }
-+  const occ::handle<Geom_Surface> SB = BRep_Tool::Surface(B);
++  // (B's own surface, not a copy moved by B's location: NF holds it with that
++  // location, so the spine's edges find their p-curves on B on NF too.)
++  TopLoc_Location                  aLocB;
++  const occ::handle<Geom_Surface>& SB = BRep_Tool::Surface(B, aLocB);
 +  if (SB.IsNull())
 +  {
 +    return false;
 +  }
 +  TopoDS_Face BF = B;
 +  BF.Orientation(TopAbs_FORWARD);
-+  const TopoDS_Face NF = BRepLib_MakeFace(SB, Precision::Confusion());
++  TopoDS_Face NF = BRepLib_MakeFace(SB, Precision::Confusion());
 +  if (NF.IsNull())
 +  {
 +    return false;
 +  }
++  NF.Location(aLocB);
 +  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aMap;
 +  aMap.Bind(BF, NF);
 +  Stripe->Reset();
@@ -1978,7 +2012,16 @@ index 19324266..b83eeb1c 100644
  //=======================================================================
  // function : WalkedCutToEnd
  // purpose  : As ChFi3d_KPartCutToEnd for a walked blend: the walk stopped
-@@ -11906,7 +13645,33 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -11733,7 +13476,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+             Spine->SetFirstParameter(WStartPeriodic);
+             Spine->SetLastParameter(WEndPeriodic);
+           }
+-          else if (!intf || (iedge > 1))
++          else if ((!intf || (iedge > 1)) && std::abs(WFirst - CurrentHE->FirstParameter()) > tolesp)
+           {
+             // start section -> first KPart
+             // update of extension.
+@@ -11906,7 +13649,33 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
    NCollection_List<occ::handle<ChFiDS_ElSpine>>::Iterator ILES(ll);
    for (; ILES.More(); ILES.Next())
    {
@@ -2013,7 +2056,7 @@ index 19324266..b83eeb1c 100644
    }
    if (!Simul)
    {
-@@ -11914,6 +13679,22 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -11914,6 +13683,22 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
      occ::handle<NCollection_HSequence<occ::handle<ChFiDS_SurfData>>>& HData =
        Stripe->ChangeSetOfSurfData();
      NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& SeqSurf  = HData->ChangeSequence();
@@ -2036,7 +2079,7 @@ index 19324266..b83eeb1c 100644
      int                                                 len      = SeqSurf.Length();
      int                                                 last     = len, i;
      bool                                                periodic = Spine->IsPeriodic();
-@@ -13131,6 +14912,7 @@ static bool ChFi3d_ChamferEndOnTangentFace(TopOpeBRepDS_DataStructure&       DSt
+@@ -13131,6 +14916,7 @@ static bool ChFi3d_ChamferEndOnTangentFace(TopOpeBRepDS_DataStructure&       DSt
  
  //=================================================================================================
  
@@ -2044,7 +2087,7 @@ index 19324266..b83eeb1c 100644
  void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
  {
    TopOpeBRepDS_DataStructure& DStr = myDS->ChangeDS();
-@@ -13138,23 +14920,110 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -13138,23 +14924,110 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
    const occ::handle<ChFiDS_Spine>& sp = Stripe->Spine();
    int                              SI = ChFi3d_SolidIndex(sp, DStr, myESoMap, myEShMap);
    Stripe->SetSolidIndex(SI);

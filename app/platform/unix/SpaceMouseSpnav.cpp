@@ -233,4 +233,9 @@ std::unique_ptr<SpaceMouseBackend> createSpaceMouseBackend() {
   return std::make_unique<SpnavBackend>();
 }
 
+// No hint about the vendor's driver here (mitcad#1981).
+bool spaceMouseVendorDriverRunning() {
+  return false;
+}
+
 } // namespace mitcad

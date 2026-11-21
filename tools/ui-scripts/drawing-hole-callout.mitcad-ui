@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# A drawing's own hole callout (mitcad#2054, GitHub #438) on
+# drawing-hole-callout.json: a block with a counterbored hole through it
+# (F3, its drill the parameter drill) seen end on in Drawing1's top view at
+# 1:1, the hole's centre at sheet (150, 150).
+#   1. Hole Callout (the Text group): the hole's rim, then where the text
+#      goes: the callout writes the hole's lines, Ø6.6 THRU and the
+#      counterbore's ⌴ Ø11 ↧ 6.8, on a leader.
+#   2. Selected, its panel shows its own texts (none) and the hole's lines;
+#      2 PLACES typed into Text After goes after the last line.
+#   3. The drill made 8: the callout follows, its own text kept.
+# Run by tools/ui-drawing-hole-callout-test.sh (Linux),
+# tools/ui-windows-drawing-hole-callout-test.ps1 (Windows) and
+# tools/ui-macos-drawing-hole-callout-test.sh (macOS).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing view 1 at '
+wait-idle
+
+# 1. The callout on the hole's rim, its text up and right of it.
+mark
+command drawing.hole_callout
+wait-log '^Drawing tool: Hole Callout'
+drawing-sheet-click 153.3 150
+wait-log '^Drawing picked '
+wait-log '^Drawing placing view'
+wait-idle
+drawing-sheet-click 175 175
+wait-log '^Drawing command: (?=.*"cmd":"add_drawing_annotation")(?=.*"type":"hole_callout")'
+wait-log '^Drawing annotations drawn: 1 = .6[.]6 THRU / . .11 . 6[.]8$'
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-log '^Drawing tool: selection'
+wait-idle
+
+# 2. Its panel: no own texts, the hole's lines; Text After typed.
+mark
+click-logged '^Drawing annotation 1 at '
+wait-log '^Drawing annotation 1 selected'
+wait-log '^Drawing panel hole callout: before , after , replace none, measured .6[.]6 THRU / . .11 . 6[.]8$'
+wait-log '^Drawing panel drawingAnnotationAfter at '
+wait-idle
+click-logged '^Drawing panel drawingAnnotationAfter at '
+type '2 PLACES'
+key Tab
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_annotation")(?=.*"after":"2 PLACES")'
+wait-log '^Drawing annotations drawn: 1 = .6[.]6 THRU / . .11 . 6[.]8 2 PLACES$'
+expect-no-log '^Drawing command refused'
+wait-idle
+
+# 3. The drill made 8: the callout follows the hole.
+mark
+model-command '{"cmd":"set_parameter","name":"drill","value":8}'
+wait-log '^Drawing annotations drawn: 1 = .8 THRU / . .11 . 6[.]8 2 PLACES$'
+expect-never 'TestDriver: FAIL'

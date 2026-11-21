@@ -167,6 +167,15 @@ impl<K: Kernel> Document<K> {
         Ok(LinksUpdated { updated, messages })
     }
 
+    /// The bodies of a linked component's base feature now, each with its
+    /// number and first face (mitcad#2130).
+    fn linked_bodies(&self, link: &ExternalLink) -> Vec<crate::features::BaseBody> {
+        match self.state.entry(link.feature).map(|e| &e.def) {
+            Some(FeatureDef::Base(base)) => self.numbered_bodies(link.feature, &base.bodies),
+            _ => Vec::new(),
+        }
+    }
+
     /// The folder relative links are followed from: `base`, else the folder
     /// the design was read from.
     fn link_base(&self, base: Option<&Path>) -> Option<PathBuf> {
@@ -201,7 +210,7 @@ impl<K: Kernel> Document<K> {
             .filter_map(|c| Some((c.uid, c.link.clone()?)))
             .collect();
         let mut updates = Vec::new();
-        for (component, link) in links {
+        for (component, mut link) in links {
             let name = self.state.assembly.name(component);
             let resolved = match followed_link(&link.path, base) {
                 Ok(resolved) => resolved,
@@ -227,16 +236,37 @@ impl<K: Kernel> Document<K> {
             if once && (link.looks || link.envelope.is_some()) {
                 continue;
             }
+            // The lines about chosen parts gone from the design
+            // (mitcad#2130).
+            let mut gone = Vec::new();
             let parts = match crate::file::load_state_at(&text, &resolved) {
                 // A link shown by its envelope takes the file's envelope
-                // again (mitcad#1271).
-                Ok((source, _)) => match link.envelope {
-                    Some(detail) => self
-                        .design_envelope(&source, &link.path, Some(detail))
+                // again (mitcad#1271), of the chosen parts when it has them
+                // (mitcad#2130).
+                Ok((source, _)) => match (link.envelope, link.parts.clone()) {
+                    (Some(detail), parts) => self
+                        .design_envelope_chosen(&source, &link.path, Some(detail), parts.as_deref())
                         .map(|(bodies, mounts, _)| (bodies, mounts, Vec::new())),
+                    // Only the chosen parts (mitcad#2130); a part gone keeps
+                    // its saved bodies.
+                    (None, Some(parts)) => {
+                        let before = self.linked_bodies(&link);
+                        self.chosen_parts(
+                            &source,
+                            &link.path,
+                            &CopySource::Document(resolved.parent()),
+                            &parts,
+                            Some((before.as_slice(), false)),
+                        )
+                        .map(|read| {
+                            gone = read.messages;
+                            link.parts = Some(read.parts);
+                            (read.bodies, read.mounts, read.looks)
+                        })
+                    }
                     // With the materials and appearances the design gives
                     // its bodies (mitcad#1921).
-                    None => self.design_parts_looked(
+                    (None, None) => self.design_parts_looked(
                         &source,
                         &link.path,
                         &CopySource::Document(resolved.parent()),
@@ -251,6 +281,7 @@ impl<K: Kernel> Document<K> {
                     } else if super::linked_looks::gives_any(&looks) {
                         messages.push(format!("{name} takes the materials of {}", link.path));
                     }
+                    messages.append(&mut gone);
                     updates.push((component, link, new_digest, bodies, mounts, looks));
                 }
                 // Cancelled (P7): the document stays as it was.
@@ -276,9 +307,25 @@ pub(super) fn apply_link_updates(
         super::mounts::update_linked_mounts(state, component, &mounts)?;
         let position = state.require(link.feature)?;
         let mut entry = (*state.features[position]).clone();
+        // The saved bodies of chosen parts gone from the design keep what
+        // they have (mitcad#2130).
+        let kept: std::collections::BTreeSet<u32> = link
+            .parts
+            .iter()
+            .flatten()
+            .filter(|p| p.gone)
+            .flat_map(|p| p.bodies.iter().copied())
+            .collect();
         if let FeatureDef::Base(base) = &mut entry.def {
             // Materials and appearances follow the file (mitcad#1921).
-            state.give_linked_looks(link.feature, &base.bodies, &mut bodies, &looks);
+            super::link_parts::give_chosen_looks(
+                state,
+                link.feature,
+                &base.bodies,
+                &mut bodies,
+                &looks,
+                &kept,
+            );
             base.bodies = bodies;
         }
         state.features[position] = Arc::new(entry);
@@ -290,6 +337,19 @@ pub(super) fn apply_link_updates(
             l.digest = digest;
             if l.envelope.is_none() {
                 l.looks = true;
+            }
+            // The chosen parts with their names and body numbers now
+            // (mitcad#2130).
+            if let Some(parts) = &link.parts {
+                l.parts = Some(
+                    parts
+                        .iter()
+                        .map(|p| crate::assembly::LinkPart {
+                            gone: false,
+                            ..p.clone()
+                        })
+                        .collect(),
+                );
             }
         }
     }

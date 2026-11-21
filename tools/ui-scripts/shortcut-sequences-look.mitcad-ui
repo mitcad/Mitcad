@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: MIT
+# Pictures of key sequences (mitcad#2095), run by
+# tools/ui-shortcut-sequences-look.sh in each layout and colour scheme
+# (MITCAD_LOOK names them): Keyboard Shortcuts with G, L given to Keyboard
+# and Mouse Overview, its prefix clash message, the overview, and the cheat
+# sheet saved as PDF; every row of Keyboard Shortcuts at the default and the
+# smallest size (mitcad#2096).
+wait-idle 30
+command view.fit
+wait-idle
+set-setting print/paper A4
+mark
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+focus-widget shortcutSearch
+type Overview
+key Down
+key Return
+wait-log '^Keyboard Shortcuts recording: Keyboard and Mouse Overview \| '
+key g
+key l
+key Return
+wait-log '^Keyboard Shortcuts key: Keyboard and Mouse Overview \| [^|]+ = G, L$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/keyboard-shortcuts-${MITCAD_LOOK}.png'
+focus-widget shortcutSearch
+key Return
+wait-log '^Keyboard Shortcuts saved$'
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+# E, X for the overview: the prefix clash message.
+mark
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+# Every row, at the default and the smallest size (mitcad#2096).
+wait-log '^Keyboard Shortcuts columns: '
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/keyboard-shortcuts-all-${MITCAD_LOOK}.png'
+mark
+dialog-resize 300 200
+wait-log '^Keyboard Shortcuts columns: '
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/keyboard-shortcuts-smallest-${MITCAD_LOOK}.png'
+dialog-resize 600 520
+focus-widget shortcutSearch
+type Extrude
+key Down
+wait-log '^Keyboard Shortcuts row: Extrude \| '
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/keyboard-shortcuts-extrude-${MITCAD_LOOK}.png'
+focus-widget shortcutSearch
+key Ctrl+a
+type Overview
+key Down
+key Return
+wait-log '^Keyboard Shortcuts recording: Keyboard and Mouse Overview \| '
+key e
+key x
+key Return
+focus-widget shortcutSearch
+key Return
+wait-log '^Keyboard Shortcuts conflict: '
+focus-dialog '^Keyboard Shortcuts$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/keyboard-shortcuts-clash-${MITCAD_LOOK}.png'
+button '^OK$'
+wait-idle
+focus-dialog '^Keyboard Shortcuts$'
+key Escape
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+mark
+command help.shortcuts
+wait-log '^Shortcut overview: '
+focus-dialog '^Keyboard and Mouse Overview$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/overview-${MITCAD_LOOK}.png'
+button '.*' shortcutOverviewSavePdf
+focus-dialog '^Save Keyboard and Mouse Overview as PDF$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/cheat-sheet-${MITCAD_LOOK}.pdf"
+key Return
+expect-dialog-gone '^Save Keyboard and Mouse Overview as PDF$'
+focus-dialog '^Keyboard and Mouse Overview$'
+wait-log '^Shortcut overview PDF written: '
+# The search's rows only.
+focus-widget shortcutOverviewFilter
+type Sketch
+wait-idle
+button '.*' shortcutOverviewSavePdf
+focus-dialog '^Save Keyboard and Mouse Overview as PDF$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/cheat-sheet-search-${MITCAD_LOOK}.pdf"
+key Return
+expect-dialog-gone '^Save Keyboard and Mouse Overview as PDF$'
+focus-dialog '^Keyboard and Mouse Overview$'
+key Escape
+expect-dialog-gone '^Keyboard and Mouse Overview$'
+focus-main
+expect-never 'TestDriver: FAIL'

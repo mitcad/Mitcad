@@ -31,9 +31,8 @@ geometry.multi_turn_faces): a cross hole of radius 1 through the threaded
 hole at mid-height: each helix edge crosses it twice where it passes the
 hole, several times within a few turns: the cut checks the helices'
 crossings with the hole (the curve was sampled every two thirds of a turn
-before, and found one crossing of each such pair or none). Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+before, and found one crossing of each such pair or none). It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 --- a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_QuadricCurveExactInterUtils.pxx
 +++ b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_QuadricCurveExactInterUtils.pxx

@@ -782,10 +782,34 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
       }
       return false;
     };
+    // A cut whose result has edges inside its faces that its operands did
+    // not have: OCCT lost the section of a face pair it could not resolve
+    // and left the pieces it had as internal edges (mitcad#2094: a drilled
+    // hole ending on the axis of a passage of its own diameter, the two
+    // cylinders' axes 0.0097 mm apart, cut nothing, or the whole hole as if
+    // the passage were not there, as a valid solid). A join keeps such
+    // edges where an edge of one operand lies on a face of the other
+    // (remove_internal_edges), so only a cut's are counted.
+    const auto internal_edges = [](const TopoDS_Shape& shape) {
+      int count = 0;
+      for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+        for (TopExp_Explorer e(f.Current(), TopAbs_EDGE); e.More(); e.Next()) {
+          count += e.Current().Orientation() == TopAbs_INTERNAL ? 1 : 0;
+        }
+      }
+      return count;
+    };
+    const bool new_internal_edges = op == BooleanOp::Cut && [&] {
+      int edges_before = 0;
+      for (const TopoDS_Shape& input : inputs) {
+        edges_before += internal_edges(input);
+      }
+      return internal_edges(operation->Shape()) > edges_before;
+    }();
     *lost = operation->HasWarning(STANDARD_TYPE(BOPAlgo_AlertSolidBuilderUnusedFaces)) ||
-            internal_faces(operation->Shape()) > before || loose_faces(operation->Shape());
+            internal_faces(operation->Shape()) > before || loose_faces(operation->Shape()) || new_internal_edges;
     if (*lost) {
-      trace.note("unused or internal faces");
+      trace.note(new_internal_edges ? "internal edges of a cut" : "unused or internal faces");
     }
   }
   // Merge the coplanar faces and collinear edges the operation leaves behind.
@@ -1252,7 +1276,8 @@ int tiny_edges(const TopoDS_Shape& shape) {
 // solids could not be built with, which the result then lacks, or pieces
 // of the tool left inside the body: section edges of a stored body's
 // neighbouring faces that end micrometres apart, where the tool lies on a
-// face of the body), it is retried with the smallest fuzzy value up to
+// face of the body, or edges left inside its faces where a section was
+// lost, mitcad#2094), it is retried with the smallest fuzzy value up to
 // `within` (fuzzy_steps) that gives a valid result of all its faces. A
 // cut that works exactly stays exact; where no fuzzy value works, the
 // exact cut's result or error stands. `seen` gets the copy of the target

@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 
 #include <Adaptor3d_TopolTool.hxx>
@@ -15,12 +17,16 @@
 #include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepFill.hxx>
+#include <BRepLib.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
@@ -48,6 +54,8 @@
 #include <TopLoc_Location.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Shell.hxx>
+#include <TopoDS_Solid.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
@@ -57,6 +65,7 @@
 #include <gp_Sphere.hxx>
 
 #include "history.hpp"
+#include "mitcad/geometry/user_error.hpp"
 #include "spine.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -103,6 +112,115 @@ ShapePtr band_prism(const TopoDS_Face& band, const Names& names, const gp_Vec& o
   }
   detail::SweepFace face{TopoDS::Face(moved.Shape()), moved_names, {}};
   return detail::named_prism(face, vector, near, far);
+}
+
+// A drafted wall's faces (mitcad#2102), each with its name.
+using NamedFaces = std::vector<std::pair<TopoDS_Face, std::string>>;
+
+std::runtime_error not_built(const char* what) {
+  return std::runtime_error(std::string("the drafted ") + what + " could not be built");
+}
+
+// The solid the faces bound, each face named: they must close up along
+// their edges, as a drafted wall's faces do.
+ShapePtr sewn_solid(const NamedFaces& faces, const char* what) {
+  BRepBuilderAPI_Sewing sewing(1.0e-6);
+  for (const auto& named : faces) {
+    sewing.Add(named.first);
+  }
+  sewing.Perform();
+  TopoDS_Shell shell;
+  int shells = 0;
+  for (TopExp_Explorer e(sewing.SewedShape(), TopAbs_SHELL); e.More(); e.Next()) {
+    shell = TopoDS::Shell(e.Current());
+    ++shells;
+  }
+  if (shells != 1 || sewing.NbFreeEdges() != 0) {
+    throw not_built(what);
+  }
+  shell.Closed(true);
+  BRep_Builder builder;
+  TopoDS_Solid solid;
+  builder.MakeSolid(solid);
+  builder.Add(solid, shell);
+  if (!BRepLib::OrientClosedSolid(solid)) {
+    throw not_built(what);
+  }
+  detail::FaceNamer namer(solid);
+  for (const auto& [face, name] : faces) {
+    namer.add(sewing.IsModified(face) ? sewing.Modified(face) : face, name);
+  }
+  return namer.shape();
+}
+
+// The edge moved by `by` (a copy).
+TopoDS_Edge moved_edge(const TopoDS_Edge& edge, const gp_Vec& by) {
+  gp_Trsf move;
+  move.SetTranslation(by);
+  return TopoDS::Edge(BRepBuilderAPI_Transform(edge, move, true).Shape());
+}
+
+// The face the edge sweeps along `by`: a plane for a line.
+TopoDS_Face swept_face(const TopoDS_Edge& edge, const gp_Vec& by, const char* what) {
+  BRepPrimAPI_MakePrism prism(edge, by);
+  prism.Build();
+  if (prism.IsDone()) {
+    for (TopExp_Explorer f(prism.Shape(), TopAbs_FACE); f.More(); f.Next()) {
+      return TopoDS::Face(f.Current());
+    }
+  }
+  throw not_built(what);
+}
+
+// The planar face inside the polygon through the points, in order.
+TopoDS_Face polygon_face(const std::vector<gp_Pnt>& points, const char* what) {
+  BRepBuilderAPI_MakePolygon polygon;
+  for (const gp_Pnt& point : points) {
+    polygon.Add(point);
+  }
+  polygon.Close();
+  if (polygon.IsDone()) {
+    BRepBuilderAPI_MakeFace maker(polygon.Wire(), true);
+    if (maker.IsDone()) {
+      return maker.Face();
+    }
+  }
+  throw not_built(what);
+}
+
+// The face between two edges whose curves run the same way, each end joined
+// to the other's end at the same end of its curve: a plane where they are
+// parallel lines, else the ruled face between them (a cone between arcs
+// about one axis). The edges' orientations do not count: an edge taken from
+// a wire may be reversed in it while its moved copy is not, and pairing
+// their ends by orientation then twists the face into a bow tie.
+TopoDS_Face ruled_face(const TopoDS_Edge& from_edge, const TopoDS_Edge& to_edge, const char* what) {
+  const TopoDS_Edge from = TopoDS::Edge(from_edge.Oriented(TopAbs_FORWARD));
+  const TopoDS_Edge to = TopoDS::Edge(to_edge.Oriented(TopAbs_FORWARD));
+  const BRepAdaptor_Curve a(from);
+  const BRepAdaptor_Curve b(to);
+  if (a.GetType() == GeomAbs_Line && b.GetType() == GeomAbs_Line &&
+      a.Line().Direction().IsParallel(b.Line().Direction(), 1.0e-9)) {
+    TopoDS_Vertex a0;
+    TopoDS_Vertex a1;
+    TopoDS_Vertex b0;
+    TopoDS_Vertex b1;
+    TopExp::Vertices(from, a0, a1, true);
+    TopExp::Vertices(to, b0, b1, true);
+    return polygon_face({BRep_Tool::Pnt(a0), BRep_Tool::Pnt(a1), BRep_Tool::Pnt(b1), BRep_Tool::Pnt(b0)}, what);
+  }
+  const TopoDS_Face face = BRepFill::Face(from, to);
+  if (face.IsNull()) {
+    throw not_built(what);
+  }
+  return face;
+}
+
+// A number in an error's detail for agents.
+std::string number_text(double value) {
+  std::ostringstream out;
+  out << std::setprecision(6) << value;
+  return out.str();
 }
 
 // True when a face of the shape has a name matching `name`.
@@ -158,13 +276,17 @@ bool holds_any(const Shape& shape, const std::vector<std::string>& names) {
 
 // Of the pieces of a tool cut by the bodies, those that hold a face named
 // one of `keep`, fused: it must end at the bodies, so no piece may hold
-// `far`.
+// `far` (`unreached`, when given, is the error then: a draft that closed
+// the tool before its far end, mitcad#2102).
 ShapePtr kept_to_bodies(const std::vector<ShapePtr>& pieces, const std::vector<std::string>& keep,
-                        const std::string& far, const char* what) {
+                        const std::string& far, const char* what, const std::string& unreached = {}) {
   std::vector<ShapePtr> kept;
   for (const ShapePtr& piece : pieces) {
     if (holds_any(*piece, keep)) {
       if (detail::has_face_named(*piece, far)) {
+        if (!unreached.empty()) {
+          throw std::invalid_argument(unreached);
+        }
         throw std::invalid_argument(std::string("the ") + what +
                                     " does not end at faces of the bodies; flip it or give it a depth");
       }
@@ -180,11 +302,11 @@ ShapePtr kept_to_bodies(const std::vector<ShapePtr>& pieces, const std::vector<s
 // The tool cut by the bodies, keeping the pieces that hold a face named
 // `keep`: it must end at the bodies, so no piece may hold `far`.
 ShapePtr to_bodies(const ShapePtr& tool, const std::vector<ShapePtr>& bodies, const std::string& keep,
-                   const std::string& far, const char* what) {
+                   const std::string& far, const char* what, const std::string& unreached = {}) {
   if (bodies.empty()) {
     throw std::invalid_argument(std::string("there are no bodies for the ") + what + " to reach");
   }
-  return kept_to_bodies(cut_pieces(tool, shapes_of(bodies), what), {keep}, far, what);
+  return kept_to_bodies(cut_pieces(tool, shapes_of(bodies), what), {keep}, far, what, unreached);
 }
 
 // Long enough to pass every body and the curves.
@@ -783,8 +905,10 @@ bool touching(const Shape& a, const Shape& b) {
 // when no part of the continuation meets a face. A web's free end
 // (mitcad#1968) is continued the same way, its band across the wall's
 // thickness instead of the sketch plane; `what` names the rib or the web.
+// With a draft (mitcad#2102) its sides lean out by `lean` per unit of
+// `depth`, as the wall's do.
 ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, const gp_Vec& depth, double low,
-                   double high, double length, std::vector<std::pair<std::string, gp_Pnt>>& notes,
+                   double high, double lean, double length, std::vector<std::pair<std::string, gp_Pnt>>& notes,
                    const char* what) {
   if (spec.bodies.empty()) {
     stays(end, "has no bodies to be continued to", notes);
@@ -810,13 +934,29 @@ ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, c
     }
     names.emplace_back(outline.Edge(), name);
   };
-  add(p, q, end.along);
-  add(q, q.Translated(depth), reach_name);
-  add(q.Translated(depth), p.Translated(depth), far_side);
-  add(p.Translated(depth), p, end.tip);
-  const TopoDS_Face band = band_face(gp_Pln(p, across), outline.Wire(), what);
-  const ShapePtr slab =
-      band_prism(band, names, gp_Vec(across) * low, gp_Vec(across) * (high - low), {end.near_cap}, {end.far_cap});
+  ShapePtr slab;
+  if (lean == 0.0) {
+    add(p, q, end.along);
+    add(q, q.Translated(depth), reach_name);
+    add(q.Translated(depth), p.Translated(depth), far_side);
+    add(p.Translated(depth), p, end.tip);
+    const TopoDS_Face band = band_face(gp_Pln(p, across), outline.Wire(), what);
+    slab = band_prism(band, names, gp_Vec(across) * low, gp_Vec(across) * (high - low), {end.near_cap}, {end.far_cap});
+  } else {
+    // The end's section, its sides leaning out as the wall's do, swept
+    // along the tangent: the same faces as the band across the thickness.
+    const double out = depth.Magnitude() * lean;
+    const gp_Pnt c0 = p.Translated(gp_Vec(across) * low);
+    const gp_Pnt c1 = p.Translated(gp_Vec(across) * high);
+    const gp_Pnt c2 = p.Translated(depth + gp_Vec(across) * (high + out));
+    const gp_Pnt c3 = p.Translated(depth + gp_Vec(across) * (low - out));
+    add(c0, c1, end.along);
+    add(c1, c2, end.far_cap);
+    add(c2, c3, far_side);
+    add(c3, c0, end.near_cap);
+    const TopoDS_Face section = band_face(gp_Pln(p, gp_Dir(gp_Vec(across).Crossed(depth))), outline.Wire(), what);
+    slab = band_prism(section, names, gp_Vec(0, 0, 0), gp_Vec(end.outward) * length, {end.tip}, {reach_name});
+  }
   // The faces it stops at, moved along the tangent by the offset (copies:
   // the bodies stay as they are).
   std::vector<TopoDS_Shape> stops = shapes_of(spec.bodies);
@@ -939,9 +1079,10 @@ double probe_step(const RibSpec& spec) {
 // that holds `middle` (a point just inside the curves' middle) is the rest
 // and stays; with two such ends and no piece there nothing is cut back.
 // `cut` tells which of `ends` were cut back so; they are not continued.
+// `unreached`, when given, is the error for a tool that holds `far`.
 ShapePtr drawn_part(const RibSpec& spec, const ShapePtr& tool, const std::vector<std::string>& keep,
                     const std::string& far, const std::vector<RibEnd>& ends, const gp_Pnt& middle, double length,
-                    const char* what, std::vector<bool>& cut) {
+                    const char* what, std::vector<bool>& cut, const std::string& unreached) {
   cut.assign(ends.size(), false);
   const auto plain = [&]() -> ShapePtr {
     if (spec.depth) {
@@ -950,7 +1091,7 @@ ShapePtr drawn_part(const RibSpec& spec, const ShapePtr& tool, const std::vector
     if (spec.bodies.empty()) {
       throw std::invalid_argument(std::string("there are no bodies for the ") + what + " to reach");
     }
-    return kept_to_bodies(cut_pieces(tool, shapes_of(spec.bodies), what), {keep.front()}, far, what);
+    return kept_to_bodies(cut_pieces(tool, shapes_of(spec.bodies), what), {keep.front()}, far, what, unreached);
   };
   if (!spec.extend_ends || spec.bodies.empty() || ends.empty()) {
     return plain();
@@ -991,12 +1132,81 @@ ShapePtr drawn_part(const RibSpec& spec, const ShapePtr& tool, const std::vector
     return plain();
   }
   if (!spec.depth) {
-    return kept_to_bodies(kept, keep, far, what);
+    return kept_to_bodies(kept, keep, far, what, unreached);
   }
   if (kept.empty()) {
     throw std::invalid_argument(std::string("the ") + what + " lies outside the bodies");
   }
   return detail::fused(kept, what);
+}
+
+// How far a drafted wall runs (mitcad#2102) from its curves the way it
+// grows, `along` from `from` (a point between its sides at the curves):
+// `run`, its depth, or with none far enough to pass the bodies. Where the
+// draft narrows it (`lean` < 0), a depth that reaches the line where its
+// sides meet fails; with none it runs no further than where they come a
+// tenth of the thickness apart, and `unreached` is then the error for a
+// wall that no face of the bodies closes off by there.
+double drafted_run(const RibSpec& spec, double lean, double run, const gp_Pnt& from, const gp_Dir& along,
+                   const char* what, std::string& unreached) {
+  unreached.clear();
+  if (lean >= 0.0) {
+    return run;
+  }
+  const double closes = spec.thickness / (2.0 * -lean);
+  const std::vector<ErrorPlace> place{point_place(from.Translated(gp_Vec(along) * closes))};
+  const std::string said = std::string("the draft angle closes the ") + what;
+  const std::string named = said + " " + number_text(closes) + " mm from its curves (a draft angle of " +
+                            number_text(spec.draft_angle * 180.0 / kPi) + " degrees, a thickness of " +
+                            number_text(spec.thickness) + " mm)";
+  if (spec.depth) {
+    if (run < closes * (1.0 - 1.0e-6)) {
+      return run;
+    }
+    throw std::invalid_argument(
+        placed_error(said + " before its depth", named + ", before its depth of " + number_text(run) + " mm", place));
+  }
+  const double most = 0.9 * closes;
+  if (run <= most) {
+    return run;
+  }
+  unreached = placed_error(said + " before it reaches the faces of the bodies",
+                           named + ", before a face of the bodies closes it off", place);
+  return most;
+}
+
+// A rib with its draft (mitcad#2102): the curves' edges swept the way the
+// rib grows (`depth`), its sides at `low` and `high` along the sketch
+// normal at the curves leaning out by `lean` per unit: side(<curve>)
+// across the curves, wall2 and wall1 the curves swept along the leaned
+// directions (planes for lines), end across the curves moved by the depth,
+// tip0 and tip1 the trapezoids at the chain's start `a` and end `b`.
+ShapePtr drafted_rib(const RibSpec& spec, const Path& chain, const std::vector<TopoDS_Edge>& edges, const gp_Pnt& a,
+                     const gp_Pnt& b, const gp_Vec& depth, double low, double high, double lean) {
+  const gp_Vec n(spec.frame.normal());
+  const double out = depth.Magnitude() * lean;
+  const double far_low = low - out;
+  const double far_high = high + out;
+  const std::string wall1 = face_name(spec.feature, "wall1");
+  const std::string wall2 = face_name(spec.feature, "wall2");
+  const std::string end = face_name(spec.feature, "end");
+  NamedFaces faces;
+  for (std::size_t i = 0; i < edges.size() && i < chain.size(); ++i) {
+    const TopoDS_Edge at_low = moved_edge(edges[i], n * low);
+    const TopoDS_Edge at_high = moved_edge(edges[i], n * high);
+    faces.emplace_back(swept_face(at_low, n * (high - low), "rib"), face_name(spec.feature, "side", chain[i].name));
+    faces.emplace_back(swept_face(at_low, depth - n * out, "rib"), wall2);
+    faces.emplace_back(swept_face(at_high, depth + n * out, "rib"), wall1);
+    faces.emplace_back(swept_face(moved_edge(edges[i], depth + n * far_low), n * (far_high - far_low), "rib"), end);
+  }
+  const auto tip = [&](const gp_Pnt& p) {
+    return polygon_face({p.Translated(n * low), p.Translated(n * high), p.Translated(depth + n * far_high),
+                         p.Translated(depth + n * far_low)},
+                        "rib");
+  };
+  faces.emplace_back(tip(a), face_name(spec.feature, "tip0"));
+  faces.emplace_back(tip(b), face_name(spec.feature, "tip1"));
+  return sewn_solid(faces, "rib");
 }
 
 ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
@@ -1026,7 +1236,15 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   if (spec.flip) {
     across.Reverse();
   }
-  const double length = spec.depth ? *spec.depth : reach(spec, {wire});
+  const auto [low, high] = sides(spec.location, spec.thickness);
+  const double middle = (low + high) / 2.0;
+  // A draft (mitcad#2102): the sides lean out by `lean` per unit the rib
+  // grows, so that it widens from its curves to the faces it reaches.
+  const double lean = std::tan(spec.draft_angle);
+  std::string unreached;
+  const double length =
+      drafted_run(spec, lean, spec.depth ? *spec.depth : reach(spec, {wire}),
+                  spine.point(spine.length() / 2.0).Translated(gp_Vec(normal) * middle), across, "rib", unreached);
   const gp_Vec depth = gp_Vec(across) * length;
   // The band in the sketch plane: the curves in path order, the end at
   // their start, the far side back, and the end at their start.
@@ -1052,13 +1270,13 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   }
   add(BRepBuilderAPI_MakeEdge(a.Translated(depth), a).Edge(), face_name(spec.feature, "tip0"));
   const TopoDS_Face band = band_face(gp_Pln(a, normal), outline.Wire(), "rib");
-  const auto [low, high] = sides(spec.location, spec.thickness);
-  const ShapePtr tool = band_prism(band, names, gp_Vec(normal) * low, gp_Vec(normal) * (high - low),
-                                   {face_name(spec.feature, "wall2")}, {face_name(spec.feature, "wall1")});
+  const ShapePtr tool = lean == 0.0
+                            ? band_prism(band, names, gp_Vec(normal) * low, gp_Vec(normal) * (high - low),
+                                         {face_name(spec.feature, "wall2")}, {face_name(spec.feature, "wall1")})
+                            : drafted_rib(spec, chain, edges, a, b, depth, low, high, lean);
   // Extend Ends (mitcad#1746): each end continued along its tangent, far
   // enough to leave the bodies' bounds (and the offset's more); an end past
   // the walls the curves cross is cut back to them instead (mitcad#1968).
-  const double middle = (low + high) / 2.0;
   const auto end_of = [&](const gp_Pnt& point, const gp_Dir& outward, const char* which, const char* n,
                           const char* other) {
     RibEnd end;
@@ -1092,7 +1310,7 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
                                                                           gp_Vec(normal) * middle);
   std::vector<bool> cut;
   const ShapePtr drawn =
-      drawn_part(spec, tool, keep, face_name(spec.feature, "end"), ends, middle_point, run_out, "rib", cut);
+      drawn_part(spec, tool, keep, face_name(spec.feature, "end"), ends, middle_point, run_out, "rib", cut, unreached);
   if (!spec.extend_ends) {
     return drawn;
   }
@@ -1101,7 +1319,7 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     if (cut[i]) {
       continue;
     }
-    if (const ShapePtr more = extension(spec, *drawn, ends[i], depth, low, high, run_out, notes, "rib")) {
+    if (const ShapePtr more = extension(spec, *drawn, ends[i], depth, low, high, lean, run_out, notes, "rib")) {
       parts.push_back(more);
     }
   }
@@ -1281,9 +1499,14 @@ WallEnd square_end(const WebCurve& w, int k, const gp_Dir& normal) {
 // On the corner's outside a mitre that would reach more than `limit` from
 // the corner is cut off square to the corner's bisector there, rather than
 // run to a spike. Where the curves run on in one line, or an arc's sides do
-// not cross near the corner, the ends stay square.
+// not cross near the corner, the ends stay square. `outer`, when given, is
+// set to how far the mitre's outer point lies past the corner along the
+// bisector, before any cut (0 where the ends stay square).
 void mitre(const WebCurve& a, int ka, const WebCurve& b, int kb, const gp_Dir& normal, double limit, WallEnd& end_a,
-           WallEnd& end_b) {
+           WallEnd& end_b, double* outer = nullptr) {
+  if (outer) {
+    *outer = 0.0;
+  }
   const gp_Pnt corner = a.ends[ka];
   // From the corner into each wall.
   const gp_Vec into_a = gp_Vec(a.travel[ka]) * (ka == 0 ? 1.0 : -1.0);
@@ -1313,6 +1536,9 @@ void mitre(const WebCurve& a, int ka, const WebCurve& b, int kb, const gp_Dir& n
   }
   const auto depth = [&](const gp_Pnt& p) { return gp_Vec(corner, p).Dot(gp_Vec(inside)); };
   const int out = depth(meet[0]) < depth(meet[1]) ? 0 : 1;
+  if (outer) {
+    *outer = -depth(meet[out]);
+  }
   gp_Pnt side_a[2] = {meet[0], meet[1]};
   gp_Pnt side_b[2] = {meet[0], meet[1]};
   std::optional<gp_Pnt> cut_corner;
@@ -1393,17 +1619,18 @@ TopoDS_Face web_band(const RibSpec& spec, const WebCurve& w, const WallEnd& star
   return band_face(gp_Pln(w.ends[0], normal), outline.Wire(), "web");
 }
 
-// The convex hull of points in the sketch plane, in order rim it.
-std::vector<gp_Pnt> hull(const std::vector<gp_Pnt>& points, const Frame& frame) {
+// The convex hull of points in the sketch plane, in order round it: the
+// indices of its corners among the points.
+std::vector<std::size_t> hull(const std::vector<gp_Pnt>& points, const Frame& frame) {
   struct Flat {
     double x;
     double y;
-    gp_Pnt point;
+    std::size_t index;
   };
   std::vector<Flat> flat;
-  for (const gp_Pnt& point : points) {
-    const gp_Vec v(frame.origin, point);
-    flat.push_back({v.Dot(gp_Vec(frame.x_axis)), v.Dot(gp_Vec(frame.y_axis)), point});
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    const gp_Vec v(frame.origin, points[i]);
+    flat.push_back({v.Dot(gp_Vec(frame.x_axis)), v.Dot(gp_Vec(frame.y_axis)), i});
   }
   std::sort(flat.begin(), flat.end(), [](const Flat& p, const Flat& q) { return p.x < q.x || (p.x == q.x && p.y < q.y); });
   const auto turn = [](const Flat& o, const Flat& p, const Flat& q) {
@@ -1422,13 +1649,13 @@ std::vector<gp_Pnt> hull(const std::vector<gp_Pnt>& points, const Frame& frame) 
     }
     rim.pop_back();
   }
-  std::vector<gp_Pnt> corners;
+  std::vector<std::size_t> corners;
   for (const Flat& p : rim) {
-    if (corners.empty() || p.point.Distance(corners.back()) > Precision::Confusion()) {
-      corners.push_back(p.point);
+    if (corners.empty() || points[p.index].Distance(points[corners.back()]) > Precision::Confusion()) {
+      corners.push_back(p.index);
     }
   }
-  while (corners.size() > 1 && corners.front().Distance(corners.back()) <= Precision::Confusion()) {
+  while (corners.size() > 1 && points[corners.front()].Distance(points[corners.back()]) <= Precision::Confusion()) {
     corners.pop_back();
   }
   return corners;
@@ -1438,12 +1665,34 @@ std::vector<gp_Pnt> hull(const std::vector<gp_Pnt>& points, const Frame& frame) 
 // the convex hull of the node and the corners of the walls' square ends
 // there, as tall as the walls, so that their union closes the gaps between
 // them. Its faces are named after `curve`'s end there (`tip`), its caps
-// `start` and `end` after it. Null when the hull has no area.
+// `start` and `end` after it. Null when the hull has no area. With a draft
+// (mitcad#2102), `top` holds the same points at the walls' far end (their
+// sides moved out): the hull's corners there, moved by `height`, are joined
+// to those in the sketch plane by ruled faces.
 ShapePtr node_piece(const RibSpec& spec, const std::vector<gp_Pnt>& points, const std::string& curve,
-                    const char* tip, const gp_Vec& height) {
-  const std::vector<gp_Pnt> corners = hull(points, spec.frame);
-  if (corners.size() < 3) {
+                    const char* tip, const gp_Vec& height, const std::vector<gp_Pnt>& top) {
+  const std::vector<std::size_t> order = hull(points, spec.frame);
+  if (order.size() < 3) {
     return nullptr;
+  }
+  std::vector<gp_Pnt> corners;
+  for (const std::size_t i : order) {
+    corners.push_back(points[i]);
+  }
+  if (top.size() == points.size()) {
+    std::vector<gp_Pnt> far;
+    for (const std::size_t i : order) {
+      far.push_back(top[i].Translated(height));
+    }
+    NamedFaces faces{{polygon_face(corners, "web"), face_name(spec.feature, "start", curve)},
+                     {polygon_face(far, "web"), face_name(spec.feature, "end", curve)}};
+    for (std::size_t i = 0; i < corners.size(); ++i) {
+      const std::size_t next = (i + 1) % corners.size();
+      faces.emplace_back(ruled_face(BRepBuilderAPI_MakeEdge(corners[i], corners[next]).Edge(),
+                                    BRepBuilderAPI_MakeEdge(far[i], far[next]).Edge(), "web"),
+                         face_name(spec.feature, tip, curve));
+    }
+    return sewn_solid(faces, "web");
   }
   BRepBuilderAPI_MakeWire outline;
   Names names;
@@ -1459,6 +1708,48 @@ ShapePtr node_piece(const RibSpec& spec, const std::vector<gp_Pnt>& points, cons
                     {face_name(spec.feature, "end", curve)});
 }
 
+// Whether a web's curves lie on a face of the bodies (mitcad#2102): the
+// material just behind the sketch plane, against the way the web grows
+// (`up`), at the middle of one of them.
+bool stands_on(const RibSpec& spec, const std::vector<TopoDS_Edge>& edges, const gp_Dir& up) {
+  for (const TopoDS_Edge& edge : edges) {
+    const BRepAdaptor_Curve curve(edge);
+    const gp_Pnt behind = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0)
+                              .Translated(gp_Vec(up) * -probe_step(spec));
+    for (const ShapePtr& body : spec.bodies) {
+      BRepClass3d_SolidClassifier classifier(body->occt(), behind, Precision::Confusion());
+      if (classifier.State() == TopAbs_IN) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// A web's wall with its draft (mitcad#2102): its band in the sketch plane
+// (`band`, its edges' names `names`) and the band of the wall at its far
+// end (the curve `top` with its sides moved out by the draft, its ends
+// `top_ends`) moved by `height`, joined edge to edge by ruled faces named
+// after the band's edges: planes between lines, cones between arcs.
+ShapePtr drafted_wall(const RibSpec& spec, const TopoDS_Face& band, const Names& names, const WebCurve& top,
+                      const std::array<WallEnd, 2>& top_ends, const gp_Vec& height, const std::string& start,
+                      const std::string& end) {
+  Names top_names;
+  const TopoDS_Face top_band = web_band(spec, top, top_ends[0], top_ends[1], top_names);
+  if (top_names.size() != names.size()) {
+    throw not_built("web");
+  }
+  gp_Trsf move;
+  move.SetTranslation(height);
+  BRepBuilderAPI_Transform moved(top_band, move, true);
+  NamedFaces faces{{band, start}, {TopoDS::Face(moved.Shape()), end}};
+  for (std::size_t k = 0; k < names.size(); ++k) {
+    faces.emplace_back(ruled_face(names[k].first, TopoDS::Edge(moved.ModifiedShape(top_names[k].first)), "web"),
+                       names[k].second);
+  }
+  return sewn_solid(faces, "web");
+}
+
 // A web (mitcad#1968): one wall per curve, the curves joined where their
 // ends meet. At a node of two curves their walls meet in a mitre; a run of
 // curves joined so end to end keeps its walls on one side, the side its
@@ -1466,7 +1757,9 @@ ShapePtr node_piece(const RibSpec& spec, const std::vector<gp_Pnt>& points, cons
 // Side turned). At a node of three or more the walls end square and a node
 // piece joins them. An end that touches no other curve is free: with
 // Extend Ends it is continued along its curve to the bodies, or cut back to
-// the wall it crosses when it lies past it.
+// the wall it crosses when it lies past it. With a draft (mitcad#2102) each
+// wall, mitre and node piece is built between its outline in the sketch
+// plane and its outline at the far end, its sides moved out there.
 ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
   const gp_Dir normal = spec.frame.normal();
   gp_Dir up = normal;
@@ -1477,8 +1770,6 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   for (const Path& chain : spec.chains) {
     wires.push_back(detail::path_wire(chain));
   }
-  const double length = spec.depth ? *spec.depth : reach(spec, wires);
-  const gp_Vec height = gp_Vec(up) * length;
   const auto [low, high] = sides(spec.location, spec.thickness);
   std::vector<WebCurve> curves;
   std::vector<TopoDS_Edge> edges;
@@ -1491,6 +1782,25 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     }
   }
   const double tolerance = 1.0e-6 * std::max(1.0, std::sqrt(box.SquareExtent()));
+  // A draft (mitcad#2102), thicker where the web meets the bodies: the
+  // sides lean out by `lean` per unit the web grows, narrowing it the way
+  // it grows when its curves lie on a face of the bodies, else widening it.
+  double lean = std::tan(spec.draft_angle);
+  if (lean != 0.0 && stands_on(spec, edges, up)) {
+    lean = -lean;
+  }
+  std::string unreached;
+  double length = spec.depth ? *spec.depth : reach(spec, wires);
+  if (lean != 0.0) {
+    // Between the sides at the middle of the first curve.
+    const BRepAdaptor_Curve first(edges.front());
+    gp_Pnt mid;
+    gp_Vec tangent;
+    first.D1((first.FirstParameter() + first.LastParameter()) / 2.0, mid, tangent);
+    length = drafted_run(spec, lean, length, mid.Translated(left_of(normal, gp_Dir(tangent)) * ((low + high) / 2.0)),
+                         up, "web", unreached);
+  }
+  const gp_Vec height = gp_Vec(up) * length;
   // The nodes where the curves' ends meet, and the ends at each.
   std::vector<gp_Pnt> nodes;
   std::vector<std::vector<std::pair<std::size_t, int>>> at_node;
@@ -1563,14 +1873,51 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
       ends[i][static_cast<std::size_t>(k)] = square_end(curves[i], k, normal);
     }
   }
+  // With a draft, the walls at their far end: their sides moved out.
+  const double out = length * lean;
+  std::vector<WebCurve> tops = curves;
+  std::vector<std::array<WallEnd, 2>> top_ends(curves.size());
+  for (std::size_t i = 0; i < curves.size(); ++i) {
+    tops[i].low -= out;
+    tops[i].high += out;
+    for (int k = 0; k < 2; ++k) {
+      top_ends[i][static_cast<std::size_t>(k)] = square_end(tops[i], k, normal);
+    }
+  }
   // A mitre reaches at most a thickness past the wall's outer side.
   const double limit = std::max(std::abs(low), std::abs(high)) + spec.thickness;
+  const double top_limit = std::max(std::abs(low - out), std::abs(high + out)) + spec.thickness + 2.0 * out;
   for (const auto& meeting : at_node) {
     if (meeting.size() == 2 && meeting[0].first != meeting[1].first) {
-      const auto [i, ki] = meeting[0];
-      const auto [j, kj] = meeting[1];
-      mitre(curves[i], ki, curves[j], kj, normal, limit, ends[i][static_cast<std::size_t>(ki)],
-            ends[j][static_cast<std::size_t>(kj)]);
+      const std::size_t i = meeting[0].first;
+      const std::size_t j = meeting[1].first;
+      const int ki = meeting[0].second;
+      const int kj = meeting[1].second;
+      WallEnd& end_i = ends[i][static_cast<std::size_t>(ki)];
+      WallEnd& end_j = ends[j][static_cast<std::size_t>(kj)];
+      double outer = 0.0;
+      mitre(curves[i], ki, curves[j], kj, normal, limit, end_i, end_j, &outer);
+      if (lean == 0.0) {
+        continue;
+      }
+      WallEnd& top_i = top_ends[i][static_cast<std::size_t>(ki)];
+      WallEnd& top_j = top_ends[j][static_cast<std::size_t>(kj)];
+      double top_outer = 0.0;
+      mitre(tops[i], ki, tops[j], kj, normal, top_limit, top_i, top_j, &top_outer);
+      // A mitre cut off at one end of the wall and not at the other is cut
+      // at both, at the same share of its length, so that its corner runs
+      // from the sketch plane to the far end.
+      if (end_i.corner.has_value() != top_i.corner.has_value() && outer > 0.0 && top_outer > 0.0) {
+        if (end_i.corner) {
+          top_i = square_end(tops[i], ki, normal);
+          top_j = square_end(tops[j], kj, normal);
+          mitre(tops[i], ki, tops[j], kj, normal, top_outer * limit / outer, top_i, top_j);
+        } else {
+          end_i = square_end(curves[i], ki, normal);
+          end_j = square_end(curves[j], kj, normal);
+          mitre(curves[i], ki, curves[j], kj, normal, outer * top_limit / top_outer, end_i, end_j);
+        }
+      }
     }
   }
   const double run_out = reach(spec, wires) + std::abs(spec.end_offset);
@@ -1582,7 +1929,8 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     const TopoDS_Face band = web_band(spec, w, ends[i][0], ends[i][1], names);
     const std::string start = face_name(spec.feature, "start", key);
     const std::string end = face_name(spec.feature, "end", key);
-    const ShapePtr tool = band_prism(band, names, gp_Vec(0, 0, 0), height, {start}, {end});
+    const ShapePtr tool = lean == 0.0 ? band_prism(band, names, gp_Vec(0, 0, 0), height, {start}, {end})
+                                      : drafted_wall(spec, band, names, tops[i], top_ends[i], height, start, end);
     // Its free ends (with Extend Ends).
     std::vector<RibEnd> loose;
     for (int k = 0; spec.extend_ends && k < 2; ++k) {
@@ -1614,13 +1962,14 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     const gp_Pnt middle = mid.Translated(gp_Vec(up) * probe_step(spec) +
                                          left_of(normal, gp_Dir(tangent)) * ((w.low + w.high) / 2.0));
     std::vector<bool> cut;
-    const ShapePtr drawn = drawn_part(spec, tool, {start}, end, loose, middle, run_out, "web", cut);
+    const ShapePtr drawn = drawn_part(spec, tool, {start}, end, loose, middle, run_out, "web", cut, unreached);
     parts.push_back(drawn);
     for (std::size_t f = 0; f < loose.size(); ++f) {
       if (cut[f]) {
         continue;
       }
-      if (const ShapePtr more = extension(spec, *drawn, loose[f], height, w.low, w.high, run_out, notes, "web")) {
+      if (const ShapePtr more =
+              extension(spec, *drawn, loose[f], height, w.low, w.high, lean, run_out, notes, "web")) {
         parts.push_back(more);
       }
     }
@@ -1631,15 +1980,23 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
       continue;
     }
     std::vector<gp_Pnt> points{nodes[n]};
+    std::vector<gp_Pnt> top;
+    if (lean != 0.0) {
+      top.push_back(nodes[n]);
+    }
     for (const auto& [i, k] : at_node[n]) {
       points.push_back(ends[i][static_cast<std::size_t>(k)].low);
       points.push_back(ends[i][static_cast<std::size_t>(k)].high);
+      if (lean != 0.0) {
+        top.push_back(top_ends[i][static_cast<std::size_t>(k)].low);
+        top.push_back(top_ends[i][static_cast<std::size_t>(k)].high);
+      }
     }
     const auto [i, k] = at_node[n].front();
-    ShapePtr piece = node_piece(spec, points, curves[i].curve->name, k == 0 ? "tip0" : "tip1", height);
+    ShapePtr piece = node_piece(spec, points, curves[i].curve->name, k == 0 ? "tip0" : "tip1", height, top);
     if (piece && !spec.depth) {
       piece = to_bodies(piece, spec.bodies, face_name(spec.feature, "start", curves[i].curve->name),
-                        face_name(spec.feature, "end", curves[i].curve->name), "web");
+                        face_name(spec.feature, "end", curves[i].curve->name), "web", unreached);
     }
     if (piece) {
       parts.push_back(piece);
@@ -1664,6 +2021,9 @@ ShapePtr rib(const RibSpec& spec) {
   }
   if (spec.web && spec.direction) {
     throw std::invalid_argument("a web grows along the sketch normal");
+  }
+  if (!std::isfinite(spec.draft_angle) || std::abs(spec.draft_angle) >= kPi / 2.0) {
+    throw std::invalid_argument(std::string("the ") + what + "'s draft angle must lie between -90 and 90 degrees");
   }
   return detail::run(what, [&] {
     std::vector<std::pair<std::string, gp_Pnt>> notes;

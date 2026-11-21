@@ -83,8 +83,8 @@ rounded with 3, 4 and 6, each way round: valid, one torus of area rk phi
 (rho pi / 2 + rk), the material taken at the top corner the formula's
 within 1e-4; the block with only its top rounded, rounded with 3; MitCad's
 fillet names every face and edge. The port's notes record each part
-failing without the patch. Its failure without the patch is still to be
-shown in the port's before/after run (mitcad#1986).
+failing without the patch. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 1291013c..f04c5e9d 100644

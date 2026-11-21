@@ -9,8 +9,13 @@
 // empty sketch prints nothing; the page range of the panel's paper mapped
 // onto another paper's pages; the paper remembered by its key whatever the
 // language's name for it. mitcad#1308: a sketch fitted to its page keeps
-// its constraint symbols whole inside the page's area.
+// its constraint symbols whole inside the page's area. mitcad#2095: lists
+// as pages with shared columns and continued captions (the Keyboard and
+// Mouse Overview's cheat sheet) on a paged device that records the texts
+// and pages, the BUILD lists' pages as before, the list PDF's paper (A4,
+// Letter), and the cheat sheet's paper from File › Print's.
 #include "UnitTests.hpp"
+#include "build/ListPages.hpp"
 #include "printing/PaperPrint.hpp"
 #include "printing/SketchPicture.hpp"
 
@@ -22,18 +27,24 @@
 #include <cstring>
 #include <initializer_list>
 #include <memory>
+#include <tuple>
 #include <vector>
 
 #include <QColor>
 #include <QCoreApplication>
 #include <QFile>
+#include <QFont>
+#include <QFontMetricsF>
 #include <QImage>
 #include <QLineF>
+#include <QLocale>
 #include <QPageRanges>
 #include <QPaintDevice>
 #include <QPaintEngine>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPdfWriter>
+#include <QTextItem>
 #include <QPixmap>
 #include <QPointF>
 #include <QPrinter>
@@ -49,6 +60,9 @@
 #include <QTimer>
 #include <QTranslator>
 #include <QVector>
+#include <QPageLayout>
+#include <QPageSize>
+#include <QMarginsF>
 #include <QTransform>
 
 #include "sketch/SketchModel.hpp"
@@ -174,6 +188,91 @@ private:
   int m_dpi;
   QSizeF m_mm;
   mutable RecordingEngine m_engine;
+};
+
+// A text painted: the page (from 1), where its baseline starts in the
+// device's pixels, and the text.
+struct PaintedText {
+  int page = 1;
+  QPointF at;
+  QString text;
+};
+
+// A paint engine that records the texts painted and the pages begun.
+class TextRecordingEngine : public QPaintEngine {
+public:
+  TextRecordingEngine() : QPaintEngine(QPaintEngine::AllFeatures) {}
+  bool begin(QPaintDevice*) override { return true; }
+  bool end() override { return true; }
+  void updateState(const QPaintEngineState& changed) override {
+    if (changed.state() & QPaintEngine::DirtyTransform) {
+      m_transform = changed.transform();
+    }
+  }
+  using QPaintEngine::drawLines;
+  void drawLines(const QLineF*, int) override {}
+  using QPaintEngine::drawPolygon;
+  void drawPolygon(const QPointF*, int, PolygonDrawMode) override {}
+  void drawPath(const QPainterPath&) override {}
+  void drawPixmap(const QRectF&, const QPixmap&, const QRectF&) override {}
+  void drawTextItem(const QPointF& p, const QTextItem& item) override {
+    texts.push_back({page, m_transform.map(p), item.text()});
+  }
+  Type type() const override { return QPaintEngine::User; }
+
+  std::vector<PaintedText> texts;
+  int page = 1;
+
+private:
+  QTransform m_transform;
+};
+
+// A paged device (a PDF writer that writes nothing) of `mm` size at `dpi`
+// whose painting and pages are recorded.
+class RecordingPagedDevice : public QPdfWriter {
+public:
+  RecordingPagedDevice(const QString& path, int dpi, const QSizeF& mm) : QPdfWriter(path), m_dpi(dpi), m_mm(mm) {}
+  QPaintEngine* paintEngine() const override { return &m_engine; }
+  bool newPage() override {
+    ++m_engine.page;
+    return true;
+  }
+  const std::vector<PaintedText>& texts() const { return m_engine.texts; }
+  int pages() const { return m_engine.page; }
+
+protected:
+  int metric(PaintDeviceMetric which) const override {
+    switch (which) {
+    case PdmWidth:
+      return static_cast<int>(std::floor(m_mm.width() * m_dpi / 25.4));
+    case PdmHeight:
+      return static_cast<int>(std::floor(m_mm.height() * m_dpi / 25.4));
+    case PdmWidthMM:
+      return static_cast<int>(m_mm.width());
+    case PdmHeightMM:
+      return static_cast<int>(m_mm.height());
+    case PdmDpiX:
+    case PdmDpiY:
+    case PdmPhysicalDpiX:
+    case PdmPhysicalDpiY:
+      return m_dpi;
+    case PdmDepth:
+      return 32;
+    case PdmNumColors:
+      return INT_MAX;
+    case PdmDevicePixelRatio:
+      return 1;
+    case PdmDevicePixelRatioScaled:
+      return static_cast<int>(QPaintDevice::devicePixelRatioFScale());
+    default:
+      return QPaintDevice::metric(which);
+    }
+  }
+
+private:
+  int m_dpi;
+  QSizeF m_mm;
+  mutable TextRecordingEngine m_engine;
 };
 
 // A sketch of a 300 x 200 mm rectangle from the origin and a 100 mm line
@@ -637,6 +736,439 @@ void paperSettingTests() {
   CHECK(paperFromSetting(QStringLiteral("B5"), papers, QPageSize::Letter) == QPageSize::Letter);
 }
 
+// Three groups of 50 rows each, keys of different widths per group, as the
+// cheat sheet's tables (mitcad#2095).
+QVector<mitcad::build::ListTable> cheatTables() {
+  QVector<mitcad::build::ListTable> tables;
+  const QStringList columns{QStringLiteral("Keys"), QStringLiteral("Does")};
+  for (int t = 0; t < 3; ++t) {
+    mitcad::build::ListTable table{QStringLiteral("Group%1").arg(t), columns, {}};
+    for (int i = 0; i < 50; ++i) {
+      const QString keys = t == 1 ? QStringLiteral("Ctrl+Alt+Shift+K%1,N").arg(i) : QStringLiteral("K%1_%2").arg(t).arg(i);
+      table.rows.append({keys, QStringLiteral("Does_%1_%2").arg(t).arg(i)});
+    }
+    tables.append(table);
+  }
+  return tables;
+}
+
+int countOf(const std::vector<PaintedText>& texts, const QString& text) {
+  return static_cast<int>(std::count_if(texts.cbegin(), texts.cend(), [&text](const PaintedText& t) { return t.text == text; }));
+}
+
+// Shared columns and continued captions: every row once, the columns at
+// the same place on every page, the header at the top of each page, a group
+// cut by a page break continued under its caption; the default options as
+// the BUILD lists have them.
+void listPagesTests() {
+  using mitcad::build::ListPageOptions;
+  QTemporaryDir folder;
+  CHECK(folder.isValid());
+  const QVector<mitcad::build::ListTable> tables = cheatTables();
+  {
+    RecordingPagedDevice device(folder.filePath(QStringLiteral("unused.pdf")), 100, QSizeF(186.0, 273.0));
+    const int pages = mitcad::build::paintListPages(device, QStringLiteral("Title"), QStringLiteral("Subtitle"), tables,
+                                                    ListPageOptions{true, true});
+    CHECK(pages >= 2);
+    CHECK(pages == device.pages());
+    const std::vector<PaintedText>& texts = device.texts();
+    double doesX = -1.0;
+    bool sameX = true;
+    std::vector<int> pagesOfGroup(3, 0);
+    std::vector<int> firstPageOf(3, 0);
+    for (int t = 0; t < 3; ++t) {
+      for (int i = 0; i < 50; ++i) {
+        const QString does = QStringLiteral("Does_%1_%2").arg(t).arg(i);
+        CHECK(countOf(texts, does) == 1);
+        CHECK(countOf(texts, tables[t].rows[i][0]) == 1);
+        for (const PaintedText& text : texts) {
+          if (text.text == does) {
+            if (doesX < 0.0) {
+              doesX = text.at.x();
+            }
+            sameX = sameX && near(text.at.x(), doesX, 0.5);
+            if (firstPageOf[t] == 0) {
+              firstPageOf[t] = text.page;
+            }
+            pagesOfGroup[t] = std::max(pagesOfGroup[t], text.page);
+          }
+          if (text.text == tables[t].rows[i][0]) {
+            sameX = sameX && near(text.at.x(), 0.0, 0.5);
+          }
+        }
+      }
+    }
+    CHECK(sameX);
+    // The header at the top of each page (on the first under the title).
+    CHECK(countOf(texts, QStringLiteral("Keys")) == pages);
+    for (int page = 2; page <= pages; ++page) {
+      const PaintedText* top = nullptr;
+      for (const PaintedText& text : texts) {
+        if (text.page == page && (top == nullptr || text.at.y() < top->at.y())) {
+          top = &text;
+        }
+      }
+      CHECK(top != nullptr && (top->text == QStringLiteral("Keys") || top->text == QStringLiteral("Does")));
+    }
+    // A group cut by a page break: its caption with "(continued)" right
+    // under the next page's header, above its rows there.
+    int cut = -1;
+    for (int t = 0; t < 3; ++t) {
+      if (pagesOfGroup[t] > firstPageOf[t]) {
+        cut = t;
+      }
+    }
+    CHECK(cut >= 0);
+    if (cut >= 0) {
+      const int next = firstPageOf[cut] + 1;
+      const QString caption = QStringLiteral("Group%1 (continued)").arg(cut);
+      CHECK(countOf(texts, caption) == 1);
+      double captionY = -1.0;
+      double headerY = -1.0;
+      double rowY = 1e9;
+      for (const PaintedText& text : texts) {
+        if (text.page != next) {
+          continue;
+        }
+        if (text.text == caption) {
+          captionY = text.at.y();
+        } else if (text.text == QStringLiteral("Keys")) {
+          headerY = text.at.y();
+        } else if (text.text.startsWith(QStringLiteral("Does_%1_").arg(cut))) {
+          rowY = std::min(rowY, text.at.y());
+        }
+      }
+      CHECK(captionY > headerY && headerY >= 0.0);
+      CHECK(captionY < rowY);
+    }
+    // At most one continued caption a page, none on the first.
+    int continued = 0;
+    for (const PaintedText& text : texts) {
+      if (text.text.contains(QStringLiteral("(continued)"))) {
+        ++continued;
+        CHECK(text.page > 1);
+      }
+    }
+    CHECK(continued >= 1 && continued <= pages - 1);
+  }
+  {
+    // The default options (the BUILD lists'): a header under each caption,
+    // each table's columns its own; a table cut by a page break goes on
+    // under its caption with "(continued)" and its own header (mitcad#2116).
+    RecordingPagedDevice device(folder.filePath(QStringLiteral("unused-2.pdf")), 100, QSizeF(186.0, 273.0));
+    const int pages = mitcad::build::paintListPages(device, QStringLiteral("Cut List"), QStringLiteral("frame, 2026-11-19"),
+                                                    tables);
+    CHECK(pages >= 2);
+    const std::vector<PaintedText>& texts = device.texts();
+    for (int t = 0; t < 3; ++t) {
+      CHECK(countOf(texts, QStringLiteral("Group%1").arg(t)) == 1);
+    }
+    // Each page after the first: its top line the continued table's
+    // caption, then the header, then that table's rows (or a table that
+    // starts there).
+    int continued = 0;
+    for (int page = 2; page <= pages; ++page) {
+      const PaintedText* caption = nullptr;
+      double headerY = -1.0;
+      double rowY = 1e9;
+      double topY = 1e9;
+      for (const PaintedText& text : texts) {
+        if (text.page != page) {
+          continue;
+        }
+        topY = std::min(topY, text.at.y());
+        if (text.text.endsWith(QStringLiteral(" (continued)"))) {
+          CHECK(caption == nullptr);
+          caption = &text;
+        } else if (text.text == QStringLiteral("Keys") && headerY < 0.0) {
+          headerY = text.at.y();
+        } else if (text.text.startsWith(QStringLiteral("Does_")) && rowY > 1e8) {
+          rowY = text.at.y();
+        }
+      }
+      if (caption == nullptr) {
+        // A page that starts a table: its caption at the top.
+        bool starts = false;
+        for (const PaintedText& text : texts) {
+          starts = starts || (text.page == page && near(text.at.y(), topY, 0.5) && text.text.startsWith(QStringLiteral("Group")));
+        }
+        CHECK(starts);
+        continue;
+      }
+      ++continued;
+      const QString group = caption->text.left(caption->text.indexOf(QLatin1Char(' ')));
+      CHECK(near(caption->at.y(), topY, 0.5));
+      CHECK(headerY > caption->at.y() && headerY < rowY);
+      // The first row under the header is the continued table's.
+      for (const PaintedText& text : texts) {
+        if (text.page == page && near(text.at.y(), rowY, 0.5) && text.text.startsWith(QStringLiteral("Does_"))) {
+          CHECK(text.text.startsWith(QStringLiteral("Does_%1_").arg(group.mid(5))));
+        }
+      }
+    }
+    CHECK(continued >= 1);
+    CHECK(countOf(texts, QStringLiteral("Keys")) == 3 + continued);
+    // The header right under its caption.
+    const PaintedText* caption = nullptr;
+    for (const PaintedText& text : texts) {
+      if (text.text == QStringLiteral("Group1")) {
+        caption = &text;
+      }
+    }
+    const PaintedText* header = nullptr;
+    for (const PaintedText& text : texts) {
+      if (caption != nullptr && text.text == QStringLiteral("Keys") && text.page == caption->page &&
+          text.at.y() > caption->at.y() && (header == nullptr || text.at.y() < header->at.y())) {
+        header = &text;
+      }
+    }
+    CHECK(header != nullptr && header->at.y() - caption->at.y() < 40.0);
+    // Group1's wider keys move its Does column, unlike shared columns.
+    double first = -1.0;
+    double second = -1.0;
+    for (const PaintedText& text : texts) {
+      if (text.text == QStringLiteral("Does_0_0")) {
+        first = text.at.x();
+      } else if (text.text == QStringLiteral("Does_1_0")) {
+        second = text.at.x();
+      }
+    }
+    CHECK(second > first + 1.0);
+  }
+  // The PDF's paper: A4 and Letter in portrait.
+  for (const auto& [paper, width, height] : {std::tuple<QPageSize::PageSizeId, double, double>{QPageSize::A4, 595.0, 842.0},
+                                             std::tuple<QPageSize::PageSizeId, double, double>{QPageSize::Letter, 612.0, 792.0}}) {
+    const QString path = folder.filePath(QStringLiteral("sheet-%1.pdf").arg(QPageSize::key(paper)));
+    QString error;
+    int pages = 0;
+    const QPageLayout layout(QPageSize(paper), QPageLayout::Portrait, QMarginsF(12, 12, 12, 12), QPageLayout::Millimeter);
+    CHECK(mitcad::build::writeListPdf(path, QStringLiteral("Keyboard and Mouse Overview"), QStringLiteral("Mouse: MitCad"),
+                                      tables, error, layout, ListPageOptions{true, true}, &pages));
+    const PdfPages written = pdfPages(path);
+    CHECK(pages >= 2 && written.count == pages);
+    CHECK(!written.boxes.empty());
+    for (const QSizeF& box : written.boxes) {
+      CHECK(near(box.width(), width, 1.0) && near(box.height(), height, 1.0));
+    }
+  }
+  // The cheat sheet's paper: File › Print's when A4 or Letter, else by the
+  // measurement system.
+  CHECK(listPaper(paperSetting(QPageSize::Letter), QLocale::MetricSystem) == QPageSize::Letter);
+  CHECK(listPaper(QString(), QLocale::MetricSystem) == QPageSize::A4);
+  CHECK(listPaper(QString(), QLocale::ImperialUSSystem) == QPageSize::Letter);
+  CHECK(listPaper(paperSetting(QPageSize::A3), QLocale::MetricSystem) == QPageSize::A4);
+  CHECK(listPaper(paperSetting(QPageSize::A4), QLocale::ImperialUSSystem) == QPageSize::A4);
+}
+
+// The same pages at every resolution (mitcad#2096: the PDF at 300 dpi and
+// the print broke one row apart), and the space under the header's rule.
+void listPageBreakTests() {
+  using mitcad::build::ListPageOptions;
+  QTemporaryDir folder;
+  CHECK(folder.isValid());
+  QVector<mitcad::build::ListTable> tables = cheatTables();
+  // Rows of their own count, so that a break lands at every place of a page.
+  tables[2].rows.resize(37);
+  // 254 mm: whole pixels at every resolution here, as a printer's page.
+  const QSizeF paper(186.0, 254.0);
+  std::vector<std::vector<int>> pagesOf;
+  for (const int dpi : {100, 300, 600, 1200}) {
+    RecordingPagedDevice device(folder.filePath(QStringLiteral("unused-%1.pdf").arg(dpi)), dpi, paper);
+    const int pages = mitcad::build::paintListPages(device, QStringLiteral("Title"), QStringLiteral("Subtitle"), tables,
+                                                    ListPageOptions{true, true});
+    CHECK(pages >= 2);
+    std::vector<int> rowPages;
+    for (int t = 0; t < tables.size(); ++t) {
+      for (const QStringList& row : tables[t].rows) {
+        int page = 0;
+        for (const PaintedText& text : device.texts()) {
+          if (text.text == row[1]) {
+            page = text.page;
+          }
+        }
+        rowPages.push_back(page);
+      }
+    }
+    pagesOf.push_back(rowPages);
+    // The first caption one header line and the conventions' 4 pt under the
+    // header: the rule between them does not touch it.
+    double headerY = -1.0;
+    double captionY = -1.0;
+    for (const PaintedText& text : device.texts()) {
+      if (text.page == 1 && text.text == QStringLiteral("Keys")) {
+        headerY = text.at.y();
+      } else if (text.page == 1 && text.text == QStringLiteral("Group0")) {
+        captionY = text.at.y();
+      }
+    }
+    QFont bold(QStringLiteral("Helvetica"));
+    bold.setPointSizeF(8.5);
+    bold.setBold(true);
+    QImage reference(1, 1, QImage::Format_Mono);
+    reference.setDotsPerMeterX(qRound(1200 / 0.0254));
+    reference.setDotsPerMeterY(qRound(1200 / 0.0254));
+    const double line = QFontMetricsF(bold, &reference).height() * 72.0 / 1200.0;
+    CHECK(headerY >= 0.0 && captionY > headerY);
+    CHECK(near((captionY - headerY) * 72.0 / dpi, line + 4.0, 1.5 * 72.0 / dpi));
+  }
+  for (std::size_t d = 1; d < pagesOf.size(); ++d) {
+    CHECK(pagesOf[d] == pagesOf[0]);
+  }
+}
+
+// A long name of `repeats` parts.
+QString longName(int i, int repeats) {
+  return QStringLiteral("Component %1 ").arg(i) + QString(QStringLiteral("with a very long name ")).repeated(repeats).trimmed();
+}
+
+// Whether `text` was cut: it ends in the ellipsis Qt's elidedText puts
+// there, or in three dots when the font has no ellipsis (on Windows the
+// offscreen platform's font database holds only the app's ISO lettering
+// font, which has none: mitcad#2158).
+bool cutText(const QString& text) {
+  return text.endsWith(QChar(0x2026)) || text.endsWith(QStringLiteral("..."));
+}
+
+// Whether `name` is painted whole on two lines: a text that starts it and,
+// at the same x a line lower, the rest.
+bool paintedOnTwoLines(const std::vector<PaintedText>& texts, const QString& name) {
+  for (const PaintedText& first : texts) {
+    if (first.text.isEmpty() || !name.startsWith(first.text) || first.text == name) {
+      continue;
+    }
+    for (const PaintedText& second : texts) {
+      if (second.page == first.page && near(second.at.x(), first.at.x(), 0.5) && second.at.y() > first.at.y() &&
+          first.text + QLatin1Char(' ') + second.text == name) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The same columns and cells at every resolution (mitcad#2116: the PDF at
+// 300 dpi made its font 8.4 pt and a 1200 dpi printer 8.52 pt, so their
+// columns and cut cells differed): each text at the same place in points,
+// the rows on the same pages, the header repeated on each continuation
+// page. The name keeps its room on paper too (docs/ui-conventions.md,
+// "Columns: the name keeps its room"): a name too long for the line wraps
+// whole onto a second line while the other columns can give room, and only
+// a name longer than two lines is cut, at the end of its second line; the
+// other columns and the headers stay whole.
+void listPageColumnsTests() {
+  QTemporaryDir folder;
+  CHECK(folder.isValid());
+  QVector<mitcad::build::ListTable> tables;
+  const QStringList columns{QStringLiteral("Quantity"), QStringLiteral("Component"), QStringLiteral("Supplier")};
+  mitcad::build::ListTable stock{QStringLiteral("Stock"), columns, {}};
+  stock.nameColumn = 1;
+  for (int i = 0; i < 70; ++i) {
+    const QString name = i == 27 ? longName(i, 30) : i % 9 == 0 ? longName(i, 8) : QStringLiteral("Component %1").arg(i);
+    stock.rows.append({QString::number(i % 4 + 1), name, QStringLiteral("Supplier %1").arg(i)});
+  }
+  tables.append(stock);
+  tables.append({QStringLiteral("Other Components"), {QStringLiteral("Quantity"), QStringLiteral("Part")},
+                 {{QStringLiteral("1"), QStringLiteral("Bracket")}, {QStringLiteral("2"), QStringLiteral("Plate")}}});
+  // 254 x 177.8 mm: whole pixels at every resolution here, as a printer's
+  // page.
+  const QSizeF paper(254.0, 177.8);
+  struct Seen {
+    int page;
+    double x;
+    double y;
+  };
+  std::vector<std::vector<std::pair<QString, Seen>>> runs;
+  for (const int dpi : {100, 300, 600, 1200}) {
+    RecordingPagedDevice device(folder.filePath(QStringLiteral("columns-%1.pdf").arg(dpi)), dpi, paper);
+    const int pages = mitcad::build::paintListPages(device, QStringLiteral("Cut List"), QStringLiteral("frame"), tables);
+    CHECK(pages >= 2);
+    std::vector<std::pair<QString, Seen>> run;
+    for (const PaintedText& text : device.texts()) {
+      run.push_back({text.text, {text.page, text.at.x() * 72.0 / dpi, text.at.y() * 72.0 / dpi}});
+    }
+    // The long names whole on two lines; only the name longer than two
+    // lines cut, on its second; the other columns and the headers whole.
+    for (int i = 0; i < 70; i += 9) {
+      CHECK(i == 27 || paintedOnTwoLines(device.texts(), longName(i, 8)));
+    }
+    int cut = 0;
+    for (const PaintedText& text : device.texts()) {
+      if (cutText(text.text)) {
+        ++cut;
+        // On the second line, under the first.
+        CHECK(!text.text.startsWith(QStringLiteral("Component")));
+      }
+    }
+    CHECK(cut == 1);
+    bool firstLine = false;
+    for (const PaintedText& text : device.texts()) {
+      firstLine = firstLine || (text.text.startsWith(QStringLiteral("Component 27 with")) && longName(27, 30).startsWith(text.text));
+    }
+    CHECK(firstLine);
+    for (int i = 0; i < 70; ++i) {
+      CHECK(countOf(device.texts(), QStringLiteral("Supplier %1").arg(i)) == 1);
+    }
+    CHECK(countOf(device.texts(), QStringLiteral("Quantity")) >= pages);
+    // The Stock header on every page that has its rows.
+    for (int page = 1; page <= pages; ++page) {
+      bool rows = false;
+      bool header = false;
+      for (const PaintedText& text : device.texts()) {
+        rows = rows || (text.page == page && text.text.startsWith(QStringLiteral("Supplier ")));
+        header = header || (text.page == page && text.text == QStringLiteral("Supplier"));
+      }
+      CHECK(!rows || header);
+    }
+    runs.push_back(run);
+  }
+  for (std::size_t d = 1; d < runs.size(); ++d) {
+    CHECK(runs[d].size() == runs[0].size());
+    for (std::size_t i = 0; i < runs[d].size() && i < runs[0].size(); ++i) {
+      CHECK(runs[d][i].first == runs[0][i].first);
+      CHECK(runs[d][i].second.page == runs[0][i].second.page);
+      // Within one device pixel at 100 dpi.
+      CHECK(near(runs[d][i].second.x, runs[0][i].second.x, 0.75));
+      CHECK(near(runs[d][i].second.y, runs[0][i].second.y, 0.75));
+    }
+  }
+  // Other columns too wide to fit beside the name: the name keeps a third
+  // of the page, the others are cut.
+  {
+    QStringList wide{QStringLiteral("Quantity"), QStringLiteral("Component")};
+    QStringList cells{QStringLiteral("1"), longName(0, 3)};
+    for (int c = 0; c < 6; ++c) {
+      wide.append(QStringLiteral("Column %1").arg(c));
+      cells.append(QStringLiteral("A long note of column %1 that takes much of the page").arg(c));
+    }
+    // A name with spaces at its end: no empty second line.
+    mitcad::build::ListTable table{QStringLiteral("Wide"), wide, {cells, {QStringLiteral("2"), QStringLiteral("Short   "), QStringLiteral("x")}}};
+    table.nameColumn = 1;
+    RecordingPagedDevice device(folder.filePath(QStringLiteral("wide.pdf")), 300, paper);
+    CHECK(mitcad::build::paintListPages(device, QStringLiteral("Cut List"), QStringLiteral("frame"), {table}) == 1);
+    double componentX = -1.0;
+    double nextX = -1.0;
+    for (const PaintedText& text : device.texts()) {
+      if (text.text == QStringLiteral("Component")) {
+        componentX = text.at.x();
+      } else if (text.text == QStringLiteral("Column 0")) {
+        nextX = text.at.x();
+      }
+    }
+    // A third of the paint rectangle's width: the recording device's whole
+    // page, in its pixels.
+    CHECK(componentX >= 0.0 && nextX - componentX >= device.width() / 3.0 - 1.0);
+    CHECK(paintedOnTwoLines(device.texts(), longName(0, 3)));
+    int cut = 0;
+    for (const PaintedText& text : device.texts()) {
+      cut += text.text.startsWith(QStringLiteral("A long note")) && cutText(text.text) ? 1 : 0;
+    }
+    CHECK(cut == 6);
+    for (const PaintedText& text : device.texts()) {
+      CHECK(!text.text.trimmed().isEmpty());
+    }
+  }
+}
+
 // A sheet as the model writes it: millimetres in its view box.
 bool writeSheet(const QString& path, double width, double height) {
   QFile file(path);
@@ -747,6 +1279,9 @@ int paperPrintTests() {
   emptySketchTests();
   pageRangeMapTests();
   paperSettingTests();
+  listPagesTests();
+  listPageBreakTests();
+  listPageColumnsTests();
   drawingPdfTests();
   waitForWorkTests();
   return failures;

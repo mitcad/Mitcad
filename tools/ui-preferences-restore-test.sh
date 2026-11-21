@@ -32,6 +32,9 @@ for _ in $(seq 1 900); do
 done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'preferences restore driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
+# The orientation cube's size (mitcad#2071): 150 % at once, back on Cancel.
+ui_expect_log 'Orientation cube size 100 %' 'Cancel put the orientation cube size back'
+grep -q '^Preferences: orientation cube size ' "$UI_LOG" && ui_fail 'the cancelled cube size was saved'
 ui_expect_log 'Preferences: small circles full' 'preferences changed on Display'
 ui_expect_log 'Preferences: click adds to the selection in sketches on' 'and on Sketch'
 ui_expect_log 'Preferences restore defaults asked: Restore the defaults of the Display settings?' \

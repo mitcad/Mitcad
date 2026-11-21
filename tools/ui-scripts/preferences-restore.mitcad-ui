@@ -2,6 +2,9 @@
 # Preferences › Restore Defaults (mitcad#1887, GitHub mitcad/Mitcad#357) on
 # a new design, in the Preferences dialog (OK and Cancel) and in macOS's
 # Settings window, whose changes apply as they are made:
+#   0. Display's orientation cube Size 150 % applies to the view at once;
+#      Escape cancels the dialog and puts it back (mitcad#2071; the
+#      wrappers check the log: in macOS's Settings window it stays, saved).
 #   1. A few preferences changed on three pages: Display (Orientation cube
 #      Perspective, Small circles Full Detail, Ghost inactive components
 #      off), General (Open in the current window on) and Sketch (Click adds
@@ -21,6 +24,16 @@ expect-ever 'View area'
 wait-idle
 set-setting recentFiles kept-recent.mitcad
 set-setting libraries/sources kept-library-sources
+
+# 0. The orientation cube's size, at once; Cancel puts it back.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice preferencesCubeSize '150 %'
+wait-log '^Orientation cube size 150 %$'
+key Escape
+focus-main
+wait-idle
 
 # 1. Changes on Display, General and Sketch.
 mark
@@ -69,11 +82,13 @@ wait-log '^Preferences: restore defaults, current group: display$'
 focus-dialog '^(Preferences|Settings)$'
 wait-idle
 expect-widget-property preferencesCubeProjection currentIndex 0
+expect-widget-property preferencesCubeSize currentIndex 1
 expect-widget-property preferencesSmallCircles currentIndex 0
 expect-widget-property ghostInactive checked true
 expect-widget-property openInCurrentWindow checked true
 expect-widget-property clickAddsToSelection checked true
 expect-setting view/cubeProjection follow-view
+expect-setting view/cubeSize 100
 expect-setting view/smallCircles adaptive
 expect-setting view/ghostInactive true
 expect-setting documents/openInCurrentWindow true

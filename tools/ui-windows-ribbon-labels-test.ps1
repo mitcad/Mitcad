@@ -9,7 +9,8 @@
 # icons makes the rows higher and puts Sketch, Extrude, Revolve and Hole
 # under the SOLID tab's Create buttons, Create and Modify stay whole in a
 # wide window and the groups fold from the right in a narrow one; Icons
-# only again.
+# only again. The toolbar is lower with Icons only than with
+# labels, also after another tab and the Render workspace (mitcad#2092).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-ribbon-labels-test.ps1 -App build\dev\mitcad.exe [-Out dir] [-QtBin dir]
 param(

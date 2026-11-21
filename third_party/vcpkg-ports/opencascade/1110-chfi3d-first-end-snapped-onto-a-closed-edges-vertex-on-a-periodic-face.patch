@@ -48,8 +48,9 @@ test_hole_rim_with_occt_alone (ctest geometry.suite.dressup_takes_face): a
 blind hole's rim chamfered and rounded with 2 by OCCT alone, valid and
 with the exact volume, failing without the patch (the port's notes); and
 test_hole_rim_at_its_size through MitCad's dressups: at their size, no
-info, the volumes within 1e-6. Its failure without the patch is still to
-be shown in the port's before/after run (mitcad#1986).
+info, the volumes within 1e-6. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py, reverted together with 1560, 1730,
+which change the same lines).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx

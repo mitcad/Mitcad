@@ -54,8 +54,15 @@ public:
   // pressed or another message takes its place (it does not fade); the
   // button turns it into the stub and runs `run`. Logged `Message band
   // action: <label>` with the message, and `Message band action <label>
-  // pressed: <text>`.
-  void postAction(const QString& text, NoticeLevel level, const QString& action, std::function<void()> run);
+  // pressed: <text>`. `source`: what raised it (mitcad#2090: a sketch
+  // tool's refusal with Replace), which closing takes the message and its
+  // button away as it does a source's error (closeSource); `tooltip`: the
+  // button's, one line.
+  void postAction(const QString& text, NoticeLevel level, const QString& action, std::function<void()> run,
+                  const QString& source = QString(), const QString& tooltip = QString());
+  // The tooltip of the button of the message with this text, posted by
+  // postAction; empty for none.
+  QString actionTooltip(const QString& text) const { return text == m_actionText ? m_actionTooltip : QString(); }
   // The button of the message shown in full was pressed.
   void runAction();
   // The user closed the message shown in full (the band's ×).
@@ -90,6 +97,7 @@ private:
   // The button of the latest message posted with one: its text and what
   // the button does (mitcad#1416).
   QString m_actionText;
+  QString m_actionTooltip;
   std::function<void()> m_actionRun;
 };
 

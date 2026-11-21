@@ -61,8 +61,16 @@ std::optional<ColorRole> iconStatusRole(const QColor& source);
 // gradient stop gets its role's colour, and its opacity as fill-opacity,
 // stroke-opacity or stop-opacity (the SVG renderer has no rgba()). Disabled:
 // every role in the outline colour (white stays white); the whole icon is
-// then painted at kDisabledIconOpacity.
-QByteArray themedIconSvg(const QByteArray& source, bool dark, bool disabled = false);
+// then painted at kDisabledIconOpacity. With an outline weight other than 1
+// (mitcad#2092): every stroke of the Outline role, its own or inherited, at
+// its width times the weight; the other roles' strokes keep their width (one
+// that took the root's width gets that width as its own).
+QByteArray themedIconSvg(const QByteArray& source, bool dark, bool disabled = false, double outlineWeight = 1.0);
+
+// The outline weight of the toolbar panel's buttons and the timeline's icons
+// (mitcad#2092): the sources' 1.3 drawn at 0.65. Everywhere else the icons
+// keep the sources' outline.
+constexpr double kThinOutlineWeight = 0.5;
 
 // The opacity of a disabled icon, painted over the disabled colours.
 constexpr qreal kDisabledIconOpacity = 0.34;
@@ -72,8 +80,13 @@ constexpr qreal kDisabledIconOpacity = 0.34;
 // drawing at the size and the device pixel ratio it is asked for (sharp on
 // HiDPI screens) and when it is asked, so that it follows the palette. The
 // disabled mode is the disabled colours at kDisabledIconOpacity on every
-// platform; the selected mode is the style's.
-QIcon themeIcon(const QString& name, IconBackdrop backdrop = IconBackdrop::Palette);
+// platform; the selected mode is the style's. The outline weight as
+// themedIconSvg's.
+QIcon themeIcon(const QString& name, IconBackdrop backdrop = IconBackdrop::Palette, double outlineWeight = 1.0);
+
+// An icon of themeIcon (or a copy of it, an action's) made again with an
+// outline weight; any other icon as it is.
+QIcon withOutlineWeight(const QIcon& icon, double outlineWeight);
 
 // A small square of a colour, for the selection inputs of command panels.
 QIcon swatchIcon(const QColor& color);

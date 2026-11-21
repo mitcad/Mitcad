@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+# The UI test driver's own key sequences (mitcad#2096), after
+# shortcut-sequences.mitcad-ui saved G, L for Keyboard and Mouse Overview:
+#   1. G, then a `type` step: the started sequence is dropped, as typed
+#      text is no rest of it.
+#   2. G, then a key in another window (Keyboard Shortcuts): dropped there.
+# The driver's own lines are not in the log the script reads: the Linux test
+# checks them ("TestDriver: key sequence dropped: G (typed text)").
+# Qt's own keys only, so Linux alone (macOS sends native keys, which keep
+# no sequence in the driver): run by tools/ui-shortcut-sequences-test.sh.
+wait-idle 30
+command view.fit
+wait-idle
+
+# 1. G, then typed text.
+focus-widget modelView
+mark
+key g
+wait-idle
+type "~"
+wait-idle
+expect-no-log '^Shortcut overview: '
+
+# 2. G, then a key in another window.
+focus-widget modelView
+mark
+key g
+wait-idle
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+focus-widget shortcutTree
+key q
+wait-idle
+key Escape
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+expect-no-log '^Shortcut overview: '
+expect-never 'TestDriver: FAIL'

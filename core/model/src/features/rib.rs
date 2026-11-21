@@ -31,6 +31,12 @@
 //! as a rib's ends are cut back. Both rebuild their tool at each copy of a
 //! pattern ([`Evaluate::placed_tool`]), so that To Next and Extend Ends are
 //! solved again where the copy lands.
+//!
+//! A Draft Angle (`draft_angle`, mitcad#2102) leans both sides of the wall
+//! so that it is thicker where it meets the body, for moulded parts: the
+//! kernel builds it into the tool ([`RibSpec::draft_angle`]), so To Next,
+//! Extend Ends and End Offset are solved on the drafted wall. Absent, the
+//! sides are parallel, as ribs and webs made before it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -255,6 +261,10 @@ macro_rules! thin_feature {
             /// absent: at right angles to its chain's chord.
             #[serde(default, skip_serializing_if = "RibDirection::is_perpendicular")]
             pub direction: RibDirection,
+            /// Leans the sides so that the wall is thicker where it meets
+            /// the body (mitcad#2102), radians; absent: 0, no draft.
+            #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+            pub draft_angle: Option<P>,
         }
 
         impl<P> $name<P> {
@@ -285,6 +295,11 @@ macro_rules! thin_feature {
                         .map(|v| f("end_offset", v))
                         .transpose()?,
                     direction: self.direction.clone(),
+                    draft_angle: self
+                        .draft_angle
+                        .as_ref()
+                        .map(|v| f("draft_angle", v))
+                        .transpose()?,
                 })
             }
 
@@ -300,6 +315,7 @@ macro_rules! thin_feature {
                     extend_ends: self.extend_ends,
                     end_offset: self.end_offset.as_ref(),
                     direction: &self.direction,
+                    draft_angle: self.draft_angle.as_ref(),
                 }
             }
         }
@@ -382,6 +398,7 @@ struct Thin<'a, P> {
     extend_ends: bool,
     end_offset: Option<&'a P>,
     direction: &'a RibDirection,
+    draft_angle: Option<&'a P>,
 }
 
 impl Thin<'_, ParamId> {
@@ -435,6 +452,17 @@ impl Thin<'_, ParamId> {
             if !v.is_finite() {
                 return Err(format!(
                     "the {}'s end offset must be a number, got {v}",
+                    self.what()
+                ));
+            }
+        }
+        if let Some(angle) = self.draft_angle {
+            let v = value(*angle);
+            // Less than a right angle either way: at 90 degrees the sides
+            // would lie along the way the wall grows.
+            if !(v.is_finite() && v.abs() < std::f64::consts::FRAC_PI_2) {
+                return Err(format!(
+                    "the {}'s draft angle must lie between -90 and 90 degrees, got {v} rad",
                     self.what()
                 ));
             }
@@ -513,11 +541,17 @@ impl Thin<'_, ParamId> {
             Some(id) => ctx.param(*id)?,
             None => 0.0,
         };
+        let draft_angle = match self.draft_angle {
+            Some(id) => ctx.param(*id)?,
+            None => 0.0,
+        };
         self.check_values(&|id| {
             if id == *self.thickness {
                 thickness
             } else if self.end_offset == Some(&id) {
                 end_offset
+            } else if self.draft_angle == Some(&id) {
+                draft_angle
             } else {
                 depth.unwrap_or(f64::NAN)
             }
@@ -526,6 +560,7 @@ impl Thin<'_, ParamId> {
             thickness,
             depth,
             end_offset,
+            draft_angle,
         })
     }
 
@@ -584,6 +619,7 @@ impl Thin<'_, ParamId> {
             extend_ends: self.extend_ends,
             end_offset: values.end_offset,
             direction,
+            draft_angle: values.draft_angle,
         };
         ctx.kernel.rib(&spec).map_err(|e| e.to_string())
     }
@@ -594,6 +630,7 @@ struct Values {
     thickness: f64,
     depth: Option<f64>,
     end_offset: f64,
+    draft_angle: f64,
 }
 
 /// A curve moved by a rigid motion.

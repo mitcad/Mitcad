@@ -24,8 +24,8 @@ segment's normal projection onto a bounded plane, its parameters offset by
 1 and by 1e6 so that no representable parameter lies at either crossing of
 the plane's edges: the bracket ends at adjacent parameters and the
 projected points lie on the plane. Without the patch the projection's
-constructor does not return (DichExactBound). Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+constructor does not return (DichExactBound). It fails without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx b/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx
 --- a/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx
 +++ b/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx

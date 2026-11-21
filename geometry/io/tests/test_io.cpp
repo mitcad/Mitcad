@@ -7,6 +7,8 @@
 #include "mitcad/io/mesh_compare.hpp"
 #include "mitcad/io/mesh_store.hpp"
 
+#include "../../tests/step_null_face_bound.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -697,6 +699,24 @@ void test_step_name_code_pages(const std::string& dir) {
   if (cp1252.size() == 2) {
     CHECK(cp1252[0] == "\xC3\x98" "20 Rohr");
     CHECK(cp1252[1] == "Gr\xC3\xB6\xC3\x9F" "e");
+  }
+}
+
+void test_step_null_face_bound(const std::string& dir) {
+  // A box whose face has a bound the reader cannot resolve (mitcad#2028,
+  // port patch 1820): it opens with its product's name instead of crashing
+  // in OCCT's sub-shape name pass.
+  const std::string path = dir + "/null-face-bound.step";
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << mitcad::test::kStepNullFaceBound;
+  }
+  const mitcad::io::StepRead read = mitcad::io::read_step_structured(path, false);
+  CHECK(!read.assembly);
+  CHECK(read.bodies.size() == 1);
+  if (read.bodies.size() == 1) {
+    CHECK(read.bodies[0].name == "Null bound box");
+    CHECK(near(volume(read.bodies[0].shape), 1000.0, 1e-6));
   }
 }
 
@@ -3136,6 +3156,7 @@ int main(int argc, char** argv) {
     test_step_units(dir);
     test_step_multi_solid_part();
     test_step_name_code_pages(dir);
+    test_step_null_face_bound(dir);
     test_step_assembly_structure(dir);
     test_step_tree(dir);
     test_iges(dir);

@@ -38,9 +38,8 @@ solid (OUT without the patch), points inside it OUT, and the checker
 accepts the block (BRepCheck_SubshapeNotInShape without the patch); and
 test_point_in_the_plane_of_a_flat_shell and test_cut_by_a_flat_shell, the
 boundary of the fixed-line rule: points in a flat shell's plane outside it
-classify OUT, and a pocketed block cut by it keeps its volume. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+classify OUT, and a pocketed block cut by it keeps its volume. It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx

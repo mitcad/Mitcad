@@ -15,11 +15,16 @@ use super::geometry::{Curve2, P2, add, cross, dist, dot, norm, perp, scale, sub,
 use super::intersect::intersections;
 use super::solve::{Goal, Solved, measure_in};
 use super::{
-    Constraint, ConstraintKind, ConstraintUid, DimensionKind, Entity, EntityKind, Ref, SpacingMode,
+    Constraint, ConstraintKind, ConstraintUid, DimensionKind, Entity, EntityIndex, EntityKind, Ref,
+    SpacingMode,
 };
 use crate::expr::ParamKind;
 use crate::ids::EntityUid;
 use crate::values::ValueInput;
+
+// Break and Split at Point (mitcad#2108).
+mod breaks;
+pub use breaks::{BreakAt, BreakMode};
 
 /// Something of a sketch a command names: `p3`, `c4`, `t5` or `k6`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -92,6 +97,24 @@ impl Map2 {
             self.m[0][0] * p[0] + self.m[0][1] * p[1] + self.t[0],
             self.m[1][0] * p[0] + self.m[1][1] * p[1] + self.t[1],
         ]
+    }
+
+    /// A map that scales by `factor` about `center` (Sketch Scale's Create
+    /// Copy, mitcad#2109).
+    pub fn scaling(center: P2, factor: f64) -> Self {
+        Self {
+            m: [[factor, 0.0], [0.0, factor]],
+            t: [center[0] * (1.0 - factor), center[1] * (1.0 - factor)],
+        }
+    }
+
+    /// Whether the map keeps every direction: a translation, or a scale by
+    /// a positive factor.
+    pub fn keeps_directions(&self) -> bool {
+        self.m[0][1] == 0.0
+            && self.m[1][0] == 0.0
+            && self.m[0][0] == self.m[1][1]
+            && self.m[0][0] > 0.0
     }
 
     fn reverses(&self) -> bool {
@@ -168,6 +191,12 @@ impl SketchEdit<'_> {
                     texts.insert(*t);
                 }
                 Item::Constraint(k) => {
+                    // A block instance by its id goes whole (mitcad#2110).
+                    if let Some(b) = self.def.blocks.iter().find(|b| b.id == *k) {
+                        let index = EntityIndex::new(&self.def.entities);
+                        entities.extend(b.members(&index));
+                        continue;
+                    }
                     let exists = self.def.constraints.iter().any(|c| c.id == *k)
                         || self.def.dimensions.iter().any(|d| d.id == *k)
                         || self.def.patterns.iter().any(|p| p.id == *k)
@@ -179,6 +208,8 @@ impl SketchEdit<'_> {
                 }
             }
         }
+        // A block instance goes whole (mitcad#2110).
+        self.whole_instances(&mut entities);
         // Curves on deleted points, then points only deleted curves used.
         for e in &self.def.entities {
             if e.kind.points().iter().any(|p| entities.contains(p)) {
@@ -264,6 +295,8 @@ impl SketchEdit<'_> {
             }
         }
         self.def.entities.retain(|e| !entities.contains(&e.id));
+        // Block instances forget them (mitcad#2110).
+        self.forget_in_blocks(entities);
         // Equal spacings (mitcad#221) lose the removed anchors; one too
         // short or without its direction goes.
         let spacings = self.spacings_without(entities);
@@ -1069,19 +1102,25 @@ impl SketchEdit<'_> {
                     _ => {}
                 }
             }
-            if let EntityKind::Circle { radius, .. } = &mut kind {
-                let scale = (map.m[0][0] * map.m[1][1] - map.m[0][1] * map.m[1][0])
-                    .abs()
-                    .sqrt();
-                *radius *= scale;
+            // A scaling map (Sketch Scale's Create Copy, mitcad#2109) sizes
+            // the radii with it; a turn or a mirror keeps them.
+            let scale = (map.m[0][0] * map.m[1][1] - map.m[0][1] * map.m[1][0])
+                .abs()
+                .sqrt();
+            match &mut kind {
+                EntityKind::Circle { radius, .. } => *radius *= scale,
+                EntityKind::Ellipse { minor_radius, .. }
+                | EntityKind::EllipticalArc { minor_radius, .. } => *minor_radius *= scale,
+                _ => {}
             }
             let mut copy = Entity::new(id, kind);
             copy.construction = e.construction;
             self.push(copy);
         }
         if constraints {
-            // Turned copies are no longer horizontal or vertical.
-            let turned = map.m != [[1.0, 0.0], [0.0, 1.0]];
+            // Turned copies are no longer horizontal or vertical; scaled
+            // ones are (mitcad#2109).
+            let turned = !map.keeps_directions();
             let all: Vec<Constraint> = self.def.constraints.clone();
             for c in all {
                 let refs = c.kind.refs();

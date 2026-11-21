@@ -9,11 +9,24 @@
 
 #include <QString>
 
+#include "ComponentBrowserHost.hpp"
+
 class QLibrary;
 
 namespace mitcad {
 
+struct BrowserComponentInfo;
+
 // The loaded module, never unloaded; null with the reason in `error`.
 QLibrary* loadBrowserModuleFile(const QString& path, QString* error);
+
+// The browsing profile's folder: cookies, sign-ins, cache
+// (MITCAD_WEB_PROFILE_DIR for tests; MainWindowComponentWeb.cpp).
+QString browserProfileFolder();
+// The tutorial pane's entry of the component's module (mitcad#2012), loaded
+// once as Component from Web loads it, and the folder of the component it
+// came from; null with the reason in `error`.
+CreateTutorialPageFunction loadTutorialPageModule(const BrowserComponentInfo& component, QString* folder,
+                                                  QString* error);
 
 } // namespace mitcad

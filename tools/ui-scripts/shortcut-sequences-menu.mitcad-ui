@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# A menu-bar command with a key sequence on macOS (mitcad#2095), on
+# shortcut-sequences.json: G, L given to Help › Keyboard and Mouse Overview
+# in Keyboard Shortcuts; its AppKit menu item then shows the sequence in its
+# title (Qt's " (G, L)") and has no key equivalent, so the menu bar never
+# runs it on G alone; G alone in the 3D view opens nothing, G then L opens
+# the overview. Run by tools/ui-macos-shortcut-sequences-test.sh after the
+# shared tools/ui-scripts/shortcut-sequences.mitcad-ui.
+wait-idle 30
+mark
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+focus-widget shortcutSearch
+type Overview
+key Down
+wait-log '^Keyboard Shortcuts row: Keyboard and Mouse Overview \| '
+key Return
+wait-log '^Keyboard Shortcuts recording: Keyboard and Mouse Overview \| '
+key g
+key l
+key Return
+wait-log '^Keyboard Shortcuts key: Keyboard and Mouse Overview \| [^|]+ = G, L$'
+focus-widget shortcutSearch
+key Return
+wait-log '^Keyboard Shortcuts saved$'
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+expect-system-menu-item '^Keyboard and Mouse Overview \(G, L\)$'
+focus-widget modelView
+mark
+key g
+sleep 1500
+wait-idle
+expect-no-log '^Shortcut overview: '
+key Escape
+wait-idle
+focus-widget modelView
+mark
+key g
+key l
+wait-log '^Shortcut overview: [0-9]+ command shortcuts$'
+focus-dialog '^Keyboard and Mouse Overview$'
+key Escape
+expect-dialog-gone '^Keyboard and Mouse Overview$'
+focus-main
+expect-never 'TestDriver: FAIL'

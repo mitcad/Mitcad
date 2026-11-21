@@ -3,13 +3,14 @@
 # check-all sources: app/commands/SheetCommands.cpp core/model/src/sheet core/model/src/features/sheet_folded.rs
 # check-all sources: tools/ui-scripts/sheet-flange-edges.mitcad-ui tools/ui-scripts/sheet-flange-edges.json tools/cli
 # check-all sources: core/model/src/document/flat_patterns.rs core/model-api/src/lib.rs app/MainWindowNoticeHover.cpp
+# check-all sources: app/framework/CommandPanel.cpp app/framework/Command.hpp
 # A Flange on several edges with mitred corners (mitcad#1872, GitHub
 # mitcad/Mitcad#337) through the real UI, the shared input script
 # tools/ui-scripts/sheet-flange-edges.mitcad-ui (also run by
 # tools/ui-windows-sheet-flange-edges-test.ps1) on a design that mitcad-cli
 # makes (tools/ui-scripts/sheet-flange-edges.json): three side faces of a
 # 40 x 30 sheet picked into one Flange show Miter, Own Corner Gap and
-# Corners, Corner Gap 1 mm and Position Inside; one corner's own Miter
+# Corners and leave the keyboard in Length (mitcad#2098), Corner Gap 1 mm and Position Inside; one corner's own Miter
 # (mitcad#1877: a Corners row, its corner picked, Earlier Edge Runs Past);
 # Corner Gap 0 refused in words, the pointer over the message painting the
 # two walls and the corner; OK at 1 mm adds one flange whose body has the
@@ -39,6 +40,7 @@ for _ in $(seq 1 1200); do
 done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'sheet flange edges driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
+ui_expect_log 'Panel field length: 12' 'the keyboard in Length after the picks'
 ui_expect_log 'Added flange on 3 edges' 'the three edges made one flange'
 ui_expect_log 'Added Flange as F4' 'the flange was added'
 ui_expect_log 'Notice hover highlighted: panel: face F3:sheet_side' "the refusal's places are painted on hover"

@@ -203,6 +203,14 @@ impl Context<'_> {
     fn owner(&self, id: ConstraintUid) -> Option<String> {
         let mut bindings = self.bindings.iter().filter(|b| b.owner == id).peekable();
         bindings.peek()?;
+        // A block instance's (mitcad#2110): its distance from base to tip.
+        if self
+            .bindings
+            .iter()
+            .any(|b| b.owner == id && matches!(b.kind, BindingKind::Distance { .. }))
+        {
+            return Some("the block instance".to_owned());
+        }
         let pattern = bindings.any(|b| {
             matches!(
                 b.kind,

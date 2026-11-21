@@ -17,6 +17,9 @@ apt-get install -y -qq \
 # test starts its own on free ports, so the system service is not needed.
 apt-get install -y -qq mosquitto mosquitto-clients
 systemctl disable --now mosquitto 2> /dev/null || true
+# pdftotext (poppler), a test tool: tools/ui-shortcut-sequences-test.sh reads
+# the shortcut overview's PDFs with it (mitcad#2096).
+apt-get install -y -qq --no-install-recommends poppler-utils
 # The live updates' keychain (mitcad#89, cmake/Keychain.cmake): libsecret's
 # headers for building QtKeychain (the library itself is loaded at run time,
 # when the system has it); GNOME's keyring as a Secret Service for

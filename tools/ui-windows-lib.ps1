@@ -437,7 +437,10 @@ function Ui-Init([string]$App, [string]$Out, [string]$QtBin = '', [hashtable]$Sh
 # them fold. Call it before Ui-StartApp. As ui_icons_only in
 # tools/ui-test-lib.sh.
 function Ui-IconsOnly {
-  Add-Content -Encoding ascii (Join-Path $script:UiSettings 'Mitcad\Mitcad.ini') @('[appearance]', 'ribbonLabels=icons')
+  # The settings folder may not be there yet (the installer test's own).
+  $ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
+  New-Item -ItemType Directory -Force -Path (Split-Path $ini) | Out-Null
+  Add-Content -Encoding ascii $ini @('[appearance]', 'ribbonLabels=icons')
 }
 
 # Ui-StartApp name arguments... [-Recovery] [-Updates] [-DefaultChrome]:
@@ -734,6 +737,32 @@ function Ui-LastMatch([string]$Pattern) {
     if ($match.Success) { return $match.Groups[1].Value }
   }
   return $null
+}
+
+# Ui-MenuSkipped index: how many of the first `index` entries of the context
+# menu logged last ("Context menu: a | b | c") cannot be chosen, as the
+# Browser's menus log them just before it ("Context menu disabled: b").
+# Windows' menus pass over them with the arrow keys, so a test that
+# chooses an entry by its place presses Down that many times fewer.
+function Ui-MenuSkipped([int]$Index) {
+  $lines = @(Ui-LogLines)
+  for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    if (-not $lines[$i].StartsWith('Context menu: ')) { continue }
+    $entries = @($lines[$i].Substring(14) -split ' \| ')
+    $disabled = @()
+    for ($j = $i - 1; $j -ge 0 -and $lines[$j].StartsWith('Context menu '); $j--) {
+      if ($lines[$j].StartsWith('Context menu disabled: ')) {
+        $disabled = @($lines[$j].Substring(23) -split ' \| ')
+        break
+      }
+    }
+    $skipped = 0
+    for ($k = 0; $k -lt [Math]::Min($Index, $entries.Count); $k++) {
+      if ($disabled -contains $entries[$k]) { $skipped++ }
+    }
+    return $skipped
+  }
+  return 0
 }
 
 # Keys by name, as xdotool names them in the Linux tests.
@@ -1409,16 +1438,15 @@ function Ui-PlaceOnXy([string]$Command) {
   Ui-ExpectNew "Preview ${Command}: ok" 'previewed at the origin' 30
 }
 
-# Ui-QuickAccessPlace "description" "line": in a "Floating cards: " line,
-# the title row has no title box (mitcad#1989: the window's title and the
-# document tabs show the design's name), and its quick-access group, when it
-# is there, sits where the box was: right of the document tabs (titleTabs,
-# mitcad#1990), its right end just left of the next part (the project,
-# agent or chat indicator, or Preferences and Help), the row's spacing (6)
-# apart, folded or not. With -None the group must not be there: the
-# Floating top bar's group has no commands by default and is hidden while
-# empty (mitcad#1990). As ui_quick_access_place in tools/ui-test-lib.sh.
-function Ui-QuickAccessPlace([string]$Description, [string]$Line, [switch]$None) {
+# Ui-QuickAccessPlace "description" "line": in a "Floating cards: " or
+# "Docked top bar: " line, the title row has no title box (mitcad#1989: the
+# window's title and the document tabs show the design's name), and its one
+# left group (titleQuickAccess, mitcad#2129) is there at the row's left
+# end, before every other part of the row, with the menu button (titleMenu) inside it
+# at its start; the document tabs (titleTabs), when they are there, follow
+# it, the row's spacing (6) apart, folded or not. As ui_quick_access_place
+# in tools/ui-test-lib.sh.
+function Ui-QuickAccessPlace([string]$Description, [string]$Line) {
   $entries = @{}
   foreach ($entry in (($Line -replace '^[^;]*;', '') -split ';')) {
     if ($entry.Trim() -match '^(\S+) (-?\d+),(-?\d+) (\d+)x(\d+)$') {
@@ -1426,32 +1454,33 @@ function Ui-QuickAccessPlace([string]$Description, [string]$Line, [switch]$None)
     }
   }
   if ($entries.ContainsKey('titleBox')) { Ui-Fail "${Description}: a title box in the title row: '$Line'" }
-  if ($None -and $entries.ContainsKey('titleQuickAccess')) {
-    Ui-Fail "${Description}: a quick-access group in the title row, which has no commands by default: '$Line'"
-  }
   if (-not $entries.ContainsKey('titleQuickAccess')) {
-    Write-Host "ok   ${Description}: no title box, no quick-access group in the row"
-    return
+    Ui-Fail "${Description}: no left group (titleQuickAccess) in the title row: '$Line'"
   }
   $group = $entries['titleQuickAccess']
   $groupEnd = $group[0] + $group[2]
-  if (-not $entries.ContainsKey('titleTabs')) { Ui-Fail "${Description}: no title row tabs: '$Line'" }
-  $tabs = $entries['titleTabs']
-  if ($group[0] -lt $tabs[0] + $tabs[2]) {
-    Ui-Fail "${Description}: the quick-access group ($($group[0])) is not right of the tabs (end $($tabs[0] + $tabs[2])): '$Line'"
+  if (-not $entries.ContainsKey('titleRow') -or $group[0] - $entries['titleRow'][0] -gt 12) {
+    Ui-Fail "${Description}: the left group ($($group[0])) is not at the title row's left end: '$Line'"
   }
-  $next = $null
-  foreach ($name in @('titleBoost', 'titleIndicator', 'titleAgent', 'titleChat', 'titleSearch', 'titleSettings')) {
-    if (-not $entries.ContainsKey($name)) { continue }
-    $x = $entries[$name][0]
-    if ($x -ge $groupEnd -and ($null -eq $next -or $x -lt $next)) { $next = $x }
+  foreach ($name in @($entries.Keys | Where-Object { $_.StartsWith('title') })) {
+    if ($name -eq 'titleRow' -or $name -eq 'titleQuickAccess' -or $name -eq 'titleMenu') { continue }
+    if ($entries[$name][0] -lt $groupEnd) {
+      Ui-Fail "${Description}: $name is not right of the left group (end $groupEnd): '$Line'"
+    }
   }
-  if ($null -eq $next) { Ui-Fail "${Description}: nothing right of the quick-access group: '$Line'" }
-  $gap = $next - $groupEnd
-  if ($gap -gt 24) {
-    Ui-Fail "${Description}: the quick-access group ends $gap px before the indicators or Preferences: '$Line'"
+  $menu = $entries['titleMenu']
+  if ($null -eq $menu -or $menu[0] -lt $group[0] -or $menu[0] + $menu[2] -gt $groupEnd -or $menu[0] - $group[0] -gt 8) {
+    Ui-Fail "${Description}: the menu button (titleMenu) is not first inside the left group: '$Line'"
   }
-  Write-Host "ok   ${Description}: no title box; the quick-access group at the free part's right end, $gap px before the next part"
+  if ($entries.ContainsKey('titleTabs')) {
+    $gap = $entries['titleTabs'][0] - $groupEnd
+    if ($gap -lt 0 -or $gap -gt 24) {
+      Ui-Fail "${Description}: the document tabs ($($entries['titleTabs'][0])) do not follow the left group (end $groupEnd): '$Line'"
+    }
+    Write-Host "ok   ${Description}: no title box; the left group at the row's left end, the menu button first in it, the document tabs $gap px after it"
+  } else {
+    Write-Host "ok   ${Description}: no title box; the left group at the row's left end, the menu button first in it"
+  }
 }
 
 function Ui-Finish([string]$Name) {

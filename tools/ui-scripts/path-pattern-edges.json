@@ -1,0 +1,13 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Pattern on Path along a body's edges (mitcad#2105), tools/ui-path-pattern-edges-test.sh: a 60 x 40 x 20 block (Sketch1 F1, Extrude1 F2.b0; c1 along y = 0, c2 at x = 60, c3 at y = 40, c4 at x = 0) with its two vertical edges at x = 60 rounded 5 mm (Fillet1 F5), and a 4 mm cube about the origin (Sketch2 F3, Extrude2 F4.b0). The top edges along c1, c2 and c3 with the two arcs between them are one tangent chain, open at the sharp corners at x = 0: 55 + 2.5 pi + 30 + 2.5 pi + 55 mm from (0, 0, 20) to (0, 40, 20)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":60,"height":40},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":20},"operation":"new_body"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F3","corner":[-2,-2],"width":4,"height":4},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":4},"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"fillet","body":"F2.b0","edges":["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}","E{F2:side(c2[c1,c3])|F2:side(c3[c2,c4])}"],"radius":5}},
+  {"expect":{"feature":"F5","status":"ok"}},
+  {"expect":{"query":{"query":"tangent_chains","body":"F2.b0","edge":"E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"},"result":{"count":5}}}
+]

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <QDir>
@@ -21,6 +22,7 @@
 #include <QJsonArray>
 #include <QKeySequence>
 #include <QSet>
+#include <gp_Pnt.hxx>
 
 #include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
@@ -944,6 +946,138 @@ void addChamfer(CommandRegistry& registry, SketchController& c) {
   registry.add(def);
 }
 
+// Blend Curve (mitcad#2107): the curves it joins are open lines, arcs,
+// elliptical arcs and splines; a circle, an ellipse or a closed spline has
+// no end it can join.
+bool blendable(const sketch::CurveData& curve) {
+  const bool open = curve.isLine() || curve.isArc() || curve.isSpline() ||
+                    curve.type == QStringLiteral("elliptical_arc");
+  return open && !curve.closed && !curve.start.isEmpty() &&
+         !curve.end.isEmpty() && curve.start != curve.end;
+}
+
+// Where a Blend Curve input's curve was picked, in sketch coordinates: the
+// end nearest it is joined. Where the pointer clicked on the sketch plane;
+// the view's pick place, off by up to its pick tolerance (about a
+// millimetre at 5 px per mm, which near a quarter arc's middle chose the
+// wrong end), only when the click's place is not known. None for a pick
+// without its place (a selection made by an agent).
+std::optional<sketch::V2> blendPick(SketchController& c, const SelectionItem& item) {
+  if (!item.at) {
+    return std::nullopt;
+  }
+  gp_Pnt at((*item.at)[0], (*item.at)[1], (*item.at)[2]);
+  // The pick is in its component's coordinates, the sketch's frame in the
+  // design's (mitcad#505).
+  at.Transform(c.host().sketchPlacement(c.uid()));
+  const sketch::V2 picked = sketch::toSketch(c.model().frame, at);
+  return c.clickPlace(item.name, picked).value_or(picked);
+}
+
+// The end of a Blend Curve input's curve nearest its pick, for the panel's
+// marker; none before both are there.
+std::optional<sketch::V2> blendEnd(SketchController& c, const Selection& items) {
+  if (items.size() != 1) {
+    return std::nullopt;
+  }
+  const sketch::CurveData* curve = c.model().curve(items.first().name);
+  const auto pick = blendPick(c, items.first());
+  if (curve == nullptr || !pick) {
+    return std::nullopt;
+  }
+  const sketch::V2 start = curve->curve.startPoint();
+  const sketch::V2 end = curve->curve.endPoint();
+  return sketch::dist(*pick, end) < sketch::dist(*pick, start) ? end : start;
+}
+
+// Blend Curve: a spline that joins the ends of two curves with Tangent (G1)
+// or Curvature (G2) continuity and stays attached to them. Each curve is
+// picked near the end to join, the end marked in the view; one curve
+// picked twice joins its two ends across the gap.
+void addBlendCurve(CommandRegistry& registry, SketchController& c) {
+  CommandDef def = sketchCommand("sketch.blend_curve", QObject::tr("Blend Curve"), "blend-curve",
+                                 CommandDef::Kind::Feature);
+  def.sketchCommand = true;
+  def.tooltip = QObject::tr("Joins the ends of two curves with a smooth spline that stays attached to them");
+  def.keywords = {QStringLiteral("blend"), QStringLiteral("connect"), QStringLiteral("smooth"),
+                  QStringLiteral("curvature continuous")};
+  const auto curveInput = [&c](const char* id, const QString& label) {
+    return selectionInput(QString::fromLatin1(id), label, SelectKind::SketchCurve, 1, 1)
+        .withAccepts([&c](const SelectionItem& item) {
+          const sketch::CurveData* curve = item.owner == c.uid() ? c.model().curve(item.name) : nullptr;
+          return curve != nullptr && blendable(*curve);
+        })
+        .withRefusedHint([](const SelectionItem&, const CommandState&) {
+          return QObject::tr("A closed curve has no end to join: pick a line, an arc or an open spline.");
+        })
+        .withTooltip(QObject::tr("Pick the curve near the end to join"));
+  };
+  const QVector<QPair<QString, QString>> continuity = {{QStringLiteral("tangent"), QObject::tr("Tangent")},
+                                                       {QStringLiteral("curvature"), QObject::tr("Curvature")}};
+  def.inputs = {
+      curveInput("curve1", QObject::tr("Curve 1")),
+      curveInput("curve2", QObject::tr("Curve 2")),
+      choiceInput(QStringLiteral("continuity"), QObject::tr("Continuity"), continuity, QStringLiteral("tangent"))
+          .withTooltip(QObject::tr("Tangent: the blend leaves each curve in its direction; Curvature: with its "
+                                   "curvature as well")),
+  };
+  def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
+    const Selection& first = s.items(QStringLiteral("curve1"));
+    const Selection& second = s.items(QStringLiteral("curve2"));
+    if (first.size() != 1) {
+      return Built::failure(QObject::tr("Pick the first curve near the end to join."), QStringLiteral("curve1"));
+    }
+    if (second.size() != 1) {
+      return Built::failure(QObject::tr("Pick the second curve near the end to join."), QStringLiteral("curve2"));
+    }
+    const auto at1 = blendPick(c, first.first());
+    const auto at2 = blendPick(c, second.first());
+    if (!at1) {
+      return Built::failure(QObject::tr("Pick the first curve again, near the end to join."), QStringLiteral("curve1"));
+    }
+    if (!at2) {
+      return Built::failure(QObject::tr("Pick the second curve again, near the end to join."), QStringLiteral("curve2"));
+    }
+    QJsonObject cmd = base(c, "sketch.blend_curve");
+    cmd.insert(QStringLiteral("curve1"), first.first().name);
+    cmd.insert(QStringLiteral("at1"), QJsonArray{at1->x, at1->y});
+    cmd.insert(QStringLiteral("curve2"), second.first().name);
+    cmd.insert(QStringLiteral("at2"), QJsonArray{at2->x, at2->y});
+    cmd.insert(QStringLiteral("continuity"), s.choice(QStringLiteral("continuity")));
+    return Built::of(cmd);
+  };
+  // The ends joined, marked while the panel is open.
+  def.previewMarkersIn = [&c](const QJsonObject&, const CommandState& s) {
+    std::vector<PreviewMarker> markers;
+    const std::array<std::pair<const char*, QString>, 2> inputs = {
+        std::pair<const char*, QString>{"curve1", QObject::tr("End 1")},
+        std::pair<const char*, QString>{"curve2", QObject::tr("End 2")}};
+    for (const auto& [id, label] : inputs) {
+      if (const auto end = blendEnd(c, s.items(QString::fromLatin1(id)))) {
+        markers.push_back({label, c.model().place(*end)});
+      }
+    }
+    return markers;
+  };
+  def.describe = [&c](const CommandState& s, const CommandContext&) {
+    QStringList ends;
+    for (const char* id : {"curve1", "curve2"}) {
+      const Selection& items = s.items(QString::fromLatin1(id));
+      const sketch::CurveData* curve = items.size() == 1 ? c.model().curve(items.first().name) : nullptr;
+      const auto end = blendEnd(c, items);
+      if (curve == nullptr || !end) {
+        ends << QStringLiteral("?");
+        continue;
+      }
+      const bool atEnd = sketch::dist(*end, curve->curve.endPoint()) < sketch::dist(*end, curve->curve.startPoint());
+      ends << QStringLiteral("%1 %2").arg(curve->id, atEnd ? QStringLiteral("end") : QStringLiteral("start"));
+    }
+    return QStringLiteral("Blend curve from %1 to %2, %3")
+        .arg(ends.value(0), ends.value(1), s.choice(QStringLiteral("continuity")));
+  };
+  registry.add(def);
+}
+
 // Where the points of sketch entities are, each point once, in the order
 // the entities name them: "p2 (-20.000, 0.000), p3 (20.000, 10.000)"; a
 // text by its anchor, "t5 (10.000, 0.000)" (mitcad#1911); "none" without
@@ -1150,6 +1284,122 @@ void addMove(CommandRegistry& registry, SketchController& c) {
       return;
     }
     qDebug().noquote() << QStringLiteral("Preview %1 positions: %2").arg(commandName, pointPositions(c.model(), *objects));
+  };
+  registry.add(def);
+}
+
+// The sizes of sketch curves for UI tests (mitcad#2109): "c3 radius 7.500,
+// c5 length 15.000, k8 15.000", a circle's or an arc's radius, a line's
+// length, then what the dimensions on them or their points measure.
+QString curveSizes(const sketch::SketchModel& model, const QStringList& ids) {
+  const auto fixed3 = [](double v) { return QString::number(v, 'f', 3); };
+  QStringList shown;
+  QSet<QString> refs;
+  for (const QString& id : ids) {
+    refs.insert(id);
+    const sketch::CurveData* curve = model.curve(id);
+    if (curve == nullptr) {
+      continue;
+    }
+    for (const QString& point : curve->points) {
+      refs.insert(point);
+    }
+    if (curve->isCircular()) {
+      shown << QStringLiteral("%1 radius %2").arg(id, fixed3(curve->curve.radius));
+    } else if (curve->isLine()) {
+      const double length = std::hypot(curve->curve.b.x - curve->curve.a.x, curve->curve.b.y - curve->curve.a.y);
+      shown << QStringLiteral("%1 length %2").arg(id, fixed3(length));
+    }
+  }
+  for (const sketch::DimensionData& dimension : model.dimensions) {
+    const bool on = std::any_of(dimension.refs.begin(), dimension.refs.end(),
+                                [&refs](const QString& ref) { return refs.contains(ref); });
+    if (on) {
+      shown << QStringLiteral("%1 %2").arg(dimension.id, fixed3(dimension.measured));
+    }
+  }
+  return shown.isEmpty() ? QStringLiteral("none") : shown.join(QStringLiteral(", "));
+}
+
+// Sketch Scale (mitcad#2109): the Objects (curves, points and texts, the
+// selection taken when the command starts) grow or shrink by the Scale
+// Factor about the Base Point, a point of the sketch or a place the snaps
+// found, the sketch origin when none is picked. The factor is read once
+// (an expression gives its value now). Dimensions: Scale with Geometry
+// multiplies the driving lengths among the objects, Keep Values keeps them
+// and the model solves the scaled geometry with them. Create Copy scales
+// copies and leaves the objects. The model's `sketch.scale` with
+// `entities`; what tied the objects to the rest and no longer holds is
+// removed, which the preview's notes say.
+void addScale(CommandRegistry& registry, SketchController& c) {
+  CommandDef def = sketchCommand("sketch.scale", QObject::tr("Sketch Scale"), "sketch-scale",
+                                 CommandDef::Kind::Feature);
+  def.sketchCommand = true;
+  def.tooltip = QObject::tr("Scales sketch geometry and texts about a base point");
+  def.keywords = {QStringLiteral("resize"), QStringLiteral("enlarge"), QStringLiteral("shrink")};
+  const QVector<QPair<QString, QString>> dimensionChoices = {
+      {QStringLiteral("scale"), QObject::tr("Scale with Geometry")},
+      {QStringLiteral("keep"), QObject::tr("Keep Values")}};
+  InputDef basePoint = selectionInput(QStringLiteral("center"), QObject::tr("Base Point"), SelectKind::SketchPoint, 0, 1)
+                           .withAccepts([&c](const SelectionItem& item) {
+                             return item.owner == c.uid() &&
+                                    (c.model().point(item.name) != nullptr || sketch::pickedPlace(item.name));
+                           })
+                           .withTooltip(QObject::tr("The point that stays: a point, an end, a middle or a center; "
+                                                    "none: the sketch origin"));
+  basePoint.sketchSnaps = true;
+  def.inputs = {
+      selectionInput(QStringLiteral("entities"), QObject::tr("Objects"),
+                     SelectKind::SketchCurve | SelectKind::SketchPoint, 1, 0)
+          .withAccepts([&c](const SelectionItem& item) { return item.owner == c.uid(); }),
+      basePoint,
+      valueInput(QStringLiteral("factor"), QObject::tr("Scale Factor"), ValueKind::Unitless, QStringLiteral("1"))
+          .withTooltip(QObject::tr("Greater than 1 enlarges, less than 1 shrinks; an expression is read once")),
+      choiceInput(QStringLiteral("dimensions"), QObject::tr("Dimensions"), dimensionChoices, QStringLiteral("scale")),
+      checkInput(QStringLiteral("copy"), QObject::tr("Create Copy"), false),
+  };
+  // The objects of the last definition built, for the preview's log lines.
+  const auto objects = std::make_shared<QStringList>();
+  def.build = [&c, objects](const CommandState& s, const CommandContext&) -> Built {
+    QJsonObject cmd = base(c, "sketch.scale");
+    objects->clear();
+    for (const SelectionItem& item : s.items(QStringLiteral("entities"))) {
+      *objects << item.name;
+    }
+    const double factor = s.value(QStringLiteral("factor"));
+    if (!std::isfinite(factor) || factor <= 0.0) {
+      return Built::failure(QObject::tr("The scale factor must be greater than zero."), QStringLiteral("factor"));
+    }
+    cmd.insert(QStringLiteral("entities"), QJsonArray::fromStringList(*objects));
+    cmd.insert(QStringLiteral("factor"), factor);
+    const Selection& center = s.items(QStringLiteral("center"));
+    if (!center.isEmpty()) {
+      cmd.insert(QStringLiteral("center"), snapPickInput(center.first()));
+    }
+    const QString dimensions = s.choice(QStringLiteral("dimensions"));
+    cmd.insert(QStringLiteral("dimensions"), dimensions.isEmpty() ? QStringLiteral("scale") : dimensions);
+    cmd.insert(QStringLiteral("copy"), s.checked(QStringLiteral("copy")));
+    return Built::of(cmd);
+  };
+  // For UI tests, once a preview is shown: "Preview Sketch Scale
+  // positions: p4 (-10.000, 0.000), ...", "Preview Sketch Scale sizes: c3
+  // radius 7.500, k8 15.000" and, with Create Copy, "Preview Sketch Scale
+  // copies: c12 radius 7.500". The notes of the answer (the ties to the
+  // rest removed) are shown as every sketch command's are.
+  const QString commandName = def.name;
+  def.sketchPreviewShown = [&c, objects, commandName](const QJsonObject& answer) {
+    if (answer.isEmpty()) {
+      return;
+    }
+    qDebug().noquote() << QStringLiteral("Preview %1 positions: %2").arg(commandName, pointPositions(c.model(), *objects));
+    qDebug().noquote() << QStringLiteral("Preview %1 sizes: %2").arg(commandName, curveSizes(c.model(), *objects));
+    QStringList made;
+    for (const QJsonValue& id : answer.value(QStringLiteral("made")).toArray()) {
+      made << id.toString();
+    }
+    if (!made.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Preview %1 copies: %2").arg(commandName, curveSizes(c.model(), made));
+    }
   };
   registry.add(def);
 }
@@ -1892,13 +2142,20 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
 
   // --- MODIFY
   addFillet(registry, c);
+  addBlendCurve(registry, c);
   addChamfer(registry, c);
   add({"sketch.trim", QObject::tr("Trim"), "trim", [&c] { c.startTool(sketch::trimTool(c)); },
        QKeySequence(Qt::Key_T), QObject::tr("Removes the piece of a curve between the curves crossing it")});
   add({"sketch.extend", QObject::tr("Extend"), "extend", [&c] { c.startTool(sketch::extendTool(c)); },
        none, QObject::tr("Extends a line or an arc to the next curve")});
+  // Break and Split at Point (mitcad#2108).
+  add({"sketch.break", QObject::tr("Break"), "sketch-break", [&c] { c.startTool(sketch::breakTool(c)); }, none,
+       QObject::tr("Splits a curve where the curves around the click cross it, keeping every piece")});
+  add({"sketch.split", QObject::tr("Split at Point"), "sketch-split", [&c] { c.startTool(sketch::splitTool(c)); },
+       none, QObject::tr("Splits a curve at a point, keeping both pieces")});
   addOffset(registry, c);
   addMove(registry, c);
+  addScale(registry, c);
   addEditPattern(registry, c);
   addEditOffset(registry, c);
   addEditText(registry, c);
@@ -1940,6 +2197,26 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
        QObject::tr("Places copied sketch geometry where you click, in this or another sketch")},
       CommandDef::Kind::Action);
   c.setToolIcon(QObject::tr("Paste"), QStringLiteral("paste")); // the Paste tool's cursor
+  // Sketch blocks (mitcad#2110, sketch/SketchBlocks.cpp).
+  add({"sketch.create_block", QObject::tr("Create Block"), "create-block", [&c] { c.createBlock(); }, none,
+       QObject::tr("Saves the selected geometry as a named block of the design; the selection becomes an "
+                   "instance of it")});
+  add({"sketch.insert_block", QObject::tr("Insert Block"), "insert-block", [&c] { c.insertBlock(); }, none,
+       QObject::tr("Places an instance of one of the design's blocks, which follows every edit of the block")});
+  add({"sketch.explode_block", QObject::tr("Explode Block"), "explode-block", [&c] { c.explodeBlock(); }, none,
+       QObject::tr("Turns the selected block instance into plain sketch geometry with its block's constraints")},
+      CommandDef::Kind::Action);
+  add({"sketch.edit_block", QObject::tr("Edit Block"), "edit-block", [&c] { c.editBlock(); }, none,
+       QObject::tr("Opens the selected instance's block here to change it; Finish Block updates every instance")},
+      CommandDef::Kind::Action);
+  add({"sketch.finish_block", QObject::tr("Finish Block"), "finish-block", [&c] { c.finishBlock(false); }, none,
+       QObject::tr("Takes the edit of the block: every instance of it follows")},
+      CommandDef::Kind::Action);
+  add({"sketch.cancel_block", QObject::tr("Cancel Block"), "cancel", [&c] { c.finishBlock(true); }, none,
+       QObject::tr("Ends the edit of the block and leaves it as it was")},
+      CommandDef::Kind::Action);
+  c.setToolIcon(QObject::tr("Create Block"), QStringLiteral("create-block"));
+  c.setToolIcon(QObject::tr("Insert Block"), QStringLiteral("insert-block"));
 
   // --- CONSTRAINTS
   for (const QString& id : sketchConstraintCommands()) {
@@ -1980,6 +2257,13 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   registerEqualSpacingCommands(registry, c);
   // Auto Constrain (mitcad#2019).
   registerAutoConstrainCommands(registry, c);
+  // Show Unconstrained (mitcad#2026, GitHub mitcad/Mitcad#413): the curves
+  // and points that are not fully constrained selected; also the Sketch
+  // Palette's button, the sketch's context menu and a click on the degrees
+  // of freedom badge.
+  add({"sketch.show_unconstrained", QObject::tr("Show Unconstrained"), "select", [&c] { c.selectUnconstrained(); },
+       QKeySequence(), QObject::tr("Selects the curves and points that are not fully constrained")},
+      CommandDef::Kind::Action);
 }
 
 } // namespace mitcad

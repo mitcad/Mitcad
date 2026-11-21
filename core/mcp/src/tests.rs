@@ -662,6 +662,7 @@ fn live_catalog_has_only_supported_tools_and_live_handles() {
             "ui_select",
             "ui_command",
             "ui_camera",
+            "ui_guide",
             "document_new"
         ]
     );
@@ -928,6 +929,11 @@ fn live_ui_tools_validate_their_arguments_before_the_application_runs_them() {
         ("ui_screenshot", json!({"max_bytes": 6 * 1024 * 1024})),
         ("ui_screenshot", json!({"max_bytes": "small"})),
         ("ui_camera", json!({"aspect": 0})),
+        ("ui_guide", json!({"action": "go"})),
+        ("ui_guide", json!({"action": "start"})),
+        ("ui_guide", json!({"step": {"text": "x"}})),
+        ("ui_guide", json!({"action": "end", "step": {"text": "x"}})),
+        ("ui_guide", json!({"action": "start", "step": "Extrude"})),
         ("ui_select", json!({"document": "live-1"})),
         (
             "ui_select",
@@ -1976,10 +1982,10 @@ fn live_comments_resource_is_listed_and_read_from_the_application() {
         .iter()
         .map(|resource| resource["uri"].as_str().unwrap())
         .collect();
-    // Then the guides (mitcad#1508).
-    assert_eq!(uris[..2], [COMMANDS_URI, COMMENTS_URI]);
+    // The guide step (mitcad#2012), then the guides (mitcad#1508).
+    assert_eq!(uris[..3], [COMMANDS_URI, COMMENTS_URI, UI_GUIDE_URI]);
     assert!(
-        uris[2..]
+        uris[3..]
             .iter()
             .all(|uri| uri.starts_with("mitcad://guide/"))
     );
@@ -2124,6 +2130,80 @@ fn live_comments_subscription_is_notified_on_add_and_on_address() {
     let mut early = LiveSession::new();
     live_response(early.prepare(initialize()).unwrap()).unwrap();
     assert!(early.set_comments(comments_answer("open", None)).is_none());
+}
+
+#[test]
+fn live_ui_guide_resource_is_listed_read_and_notified() {
+    let mut session = ready_live();
+    let response = live_response(
+        session
+            .prepare(request(json!(3), "resources/list", json!({})))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        response["result"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|resource| resource["uri"] == UI_GUIDE_URI)
+    );
+    // Before the application gives a state: no step shown.
+    let read = |session: &mut LiveSession, id: i64| {
+        let response = live_response(
+            session
+                .prepare(request(
+                    json!(id),
+                    "resources/read",
+                    json!({"uri": UI_GUIDE_URI}),
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+        serde_json::from_str::<Value>(response["result"]["contents"][0]["text"].as_str().unwrap())
+            .unwrap()
+    };
+    assert_eq!(
+        read(&mut session, 4),
+        json!({"active": false, "sequence": 0})
+    );
+    // Not subscribed: a change sends nothing.
+    let started = json!({"active": true, "sequence": 1, "step": {"id": "sketch"}});
+    assert!(session.set_guide_step(started.clone()).is_none());
+    let response = live_response(
+        session
+            .prepare(request(
+                json!(5),
+                "resources/subscribe",
+                json!({"uri": UI_GUIDE_URI}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response, json!({"jsonrpc": "2.0", "id": 5, "result": {}}));
+    // The same state again: no message; the step done: one.
+    assert!(session.set_guide_step(started).is_none());
+    let done = json!({"active": false, "sequence": 1, "step": {"id": "sketch"},
+                      "last_event": {"event": "step_done", "step": "sketch", "sequence": 1,
+                                     "done": {"started": "sketch.create"}}});
+    assert_eq!(
+        session.set_guide_step(done.clone()),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/resources/updated",
+            "params": {"uri": UI_GUIDE_URI}
+        }))
+    );
+    assert_eq!(read(&mut session, 6), done);
+}
+
+#[test]
+fn headless_lists_no_ui_guide() {
+    let names: Vec<String> = crate::catalog::tools()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(!names.iter().any(|name| name == "ui_guide"));
 }
 
 #[test]
@@ -3257,4 +3337,115 @@ fn a_failed_feature_with_long_names_leads_with_its_short_cause() {
     assert!(command_outcome(&mut value));
     assert!(value["error"].as_str().unwrap().contains("fillet failed"));
     assert!(value.get("error_detail").is_none() && value.get("places").is_none());
+}
+
+/// A comment's image (mitcad#2011): `comment_attachment` through
+/// `model_query` answers an image block with its `mimeType` after the text,
+/// which keeps the image's fields; the headless and the live server alike.
+/// Another query, and a refusal, stay text.
+#[test]
+fn a_comment_attachment_answers_an_image_block() {
+    let answer = || {
+        json!({"document": "D1", "result": {
+            "comment": "C1", "id": "A2", "media_type": "image/jpeg", "width": 64, "height": 48,
+            "bytes": 3, "sha256": "ab12", "name": "result.jpg", "data": "/9j/"
+        }})
+    };
+    let arguments = json!({"document": "D1",
+                           "query": {"query": "comment_attachment", "comment": "C1", "id": "A2"}});
+    let check = |result: &Value| {
+        assert_eq!(result["isError"], false, "{result}");
+        assert_eq!(result["content"][1]["type"], "image");
+        assert_eq!(result["content"][1]["data"], "/9j/");
+        assert_eq!(result["content"][1]["mimeType"], "image/jpeg");
+        let fields = &result["structuredContent"]["result"];
+        assert!(fields.get("data").is_none(), "{result}");
+        assert_eq!(fields["id"], "A2");
+        assert_eq!(fields["name"], "result.jpg");
+        let text: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text, result["structuredContent"]);
+    };
+    let mut session = ready();
+    session.backend.result = Some(answer());
+    let response = session
+        .handle(call("model_query", arguments.clone()))
+        .unwrap();
+    check(&response["result"]);
+    // Another query's data stays in its text.
+    let response = session
+        .handle(call(
+            "model_query",
+            json!({"document": "D1", "query": {"query": "image_reference_image", "name": "Image1"}}),
+        ))
+        .unwrap();
+    assert_eq!(
+        response["result"]["content"].as_array().unwrap().len(),
+        1,
+        "{response}"
+    );
+    // A refusal stays text.
+    session.backend.result = Some(json!({"error": "C1 has no image A9"}));
+    session.backend.is_error = true;
+    let response = session
+        .handle(call("model_query", arguments.clone()))
+        .unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(response["result"]["content"].as_array().unwrap().len(), 1);
+
+    // The live server: the application's answer, the same block.
+    let mut live = ready_live();
+    let (name, _) = live_tool(live.prepare(call("model_query", arguments)).unwrap());
+    assert_eq!(name, "model_query");
+    let response = live.finish(answer(), false).unwrap();
+    check(&response["result"]);
+}
+
+/// A new image on a comment (mitcad#2011) changes the comments' answer:
+/// the subscribers of `mitcad://comments` hear of it, and the resource
+/// lists the image's fields, not its bytes.
+#[test]
+fn live_comments_subscribers_hear_of_a_new_image() {
+    let mut session = ready_live();
+    live_response(
+        session
+            .prepare(request(
+                json!(9),
+                "resources/subscribe",
+                json!({"uri": COMMENTS_URI}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    let updated = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": {"uri": COMMENTS_URI}
+    });
+    assert_eq!(
+        session.set_comments(comments_answer("open", None)),
+        Some(updated.clone())
+    );
+    let mut with_image = comments_answer("open", None);
+    with_image["comments"][0]["attachments"] = json!([{
+        "id": "A1", "media_type": "image/png", "width": 640, "height": 400,
+        "bytes": 51234, "sha256": "ab12", "name": "capture.png"
+    }]);
+    with_image["revision"] = json!(2);
+    assert_eq!(session.set_comments(with_image.clone()), Some(updated));
+    let response = live_response(
+        session
+            .prepare(request(
+                json!(10),
+                "resources/read",
+                json!({"uri": COMMENTS_URI}),
+            ))
+            .unwrap(),
+    )
+    .unwrap();
+    let text: Value =
+        serde_json::from_str(response["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text["comments"][0]["attachments"][0]["name"], "capture.png");
+    assert!(text["comments"][0]["attachments"][0].get("data").is_none());
+    assert_eq!(text["revision"], 2);
 }

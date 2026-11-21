@@ -54,19 +54,23 @@ features*), each checked against its own history state as any other item:
   edge, give their states)*.
 - **A hem** (`.f3d`, mitcad#1364): an open or flat hem folds its wall back
   over the panel in one bend of 180 degrees, so it is a `sheet_flange` of
-  angle 180 degrees on its edge (found and turned as an edge flange's),
-  its inside radius half the hem's gap (an expression of the gap's
-  parameter), its length the hem's length measured from the bend's outer
-  surface (`outer_tangent`), at position `side_tangent` (`read`, with a
-  note) *(verified: the bodies' volumes of the reference models' open
+  angle 180 degrees on its edge (found and turned as an edge flange's)
+  whose `hem` is `open` or `flat` with the hem's gap (mitcad#2112; the
+  bend's inside radius half the gap, which the flange held as an
+  expression of the gap's parameter before), its length the hem's length
+  measured from the bend's outer surface (`outer_tangent`), at position
+  `side_tangent` (`read`, with a note) *(verified: the bodies' volumes of the reference models' open
   hem, gap 2 mm, and flat hem, gap 0.02 mm, both on a 2.5 mm sheet: the
   flat hem's gap is its inside diameter too)*. The other forms
   (mitcad#1378) fold over the panel at the same position, their lengths
   from the same plane:
   - a **rolled** hem is one bend of its angle (past 180 degrees) and
-    radius with no wall: a `sheet_flange` of that angle and radius, its
-    length 0 from the bend's tangent line (mode `tangent`) *(verified: the
-    reference model's rolled hem, 270 degrees, radius 3 mm)*;
+    radius with no wall: a `sheet_flange` whose `hem` is `rolled` with
+    that angle and radius (mitcad#2112; before it, and still for an angle
+    of no more than 180 degrees, a `sheet_flange` of that angle and
+    radius, its length 0 from the bend's tangent line, mode `tangent`)
+    *(verified: the reference model's rolled hem, 270 degrees, radius 3
+    mm)*;
   - a **teardrop** or **rope** hem is a `sheet_flange` whose `hem` is that
     form with the hem's gap, its radius the hem's radius, its length the
     hem's: the teardrop's one bend passes 180 degrees and its wall comes

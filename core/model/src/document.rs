@@ -204,9 +204,13 @@ mod feature_names;
 // Comments: notes pinned to features, faces, edges and points for an AI
 // agent, addressed and resolved (mitcad#1119).
 mod comments;
+pub(crate) use comments::{
+    AttachmentIn, AttachmentOut, attachments_in, attachments_out, next_attachment_out,
+};
 pub use comments::{
-    COMMENT_USER, Comment, CommentFound, CommentReply, CommentSketchItem, CommentStatus,
-    CommentTarget, CommentTargetKind, comment_number,
+    AttachmentSource, COMMENT_USER, Comment, CommentAttachment, CommentFound, CommentReply,
+    CommentSketchItem, CommentStatus, CommentTarget, CommentTargetKind, MAX_COMMENT_IMAGE,
+    attachment_number, comment_number,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -389,6 +393,9 @@ pub struct DocState {
     /// The number of the next comment's id: one past the largest ever
     /// used, so that an id is never given again.
     pub(crate) next_comment: u32,
+    /// The number of the next image attached to a comment or a reply
+    /// (mitcad#2011): one past the largest ever used.
+    pub(crate) next_attachment: u32,
     /// The print plates (mitcad#1050), in their order: the first takes
     /// what no plate names.
     pub(crate) print_plates: Vec<crate::print_plates::PrintPlate>,
@@ -400,6 +407,9 @@ pub struct DocState {
     /// CAM setups, their operations and the machines they use
     /// (mitcad#1013), kept with the design and off the timeline.
     pub(crate) cam: crate::cam::CamState,
+    /// The design's sketch blocks (mitcad#2110), in the order they were
+    /// made; sketches hold instances of them.
+    pub sketch_blocks: Vec<crate::sketch::block::SketchBlock>,
 }
 
 impl Default for DocState {
@@ -446,10 +456,12 @@ impl Default for DocState {
             feature_index: Default::default(),
             comments: Vec::new(),
             next_comment: 1,
+            next_attachment: 1,
             print_plates: Vec::new(),
             filament_changes: Vec::new(),
             gravity: None,
             cam: Default::default(),
+            sketch_blocks: Vec::new(),
         }
     }
 }
@@ -516,9 +528,7 @@ impl DocState {
         };
         entry.def.info().check(&ctx)?;
         crate::joints::check_generated_references(&self.assembly, &ctx, &entry.def)?;
-        if let FeatureDef::Extrude(extrude) = &entry.def
-            && let Some(scope) = extrude.active_cut_scope()
-        {
+        if let Some(scope) = entry.def.active_cut_scope() {
             scope.check_components(&self.assembly, &ctx, entry.component)?;
         }
         check_components(&self.assembly, &self.features, &self.feature_index, entry)
@@ -736,9 +746,12 @@ impl DocState {
                             .and_then(|o| o.pattern.as_ref())
                             .is_some_and(|p| affected.contains(&p.feature))
                     })
-                || matches!(&entry.def, FeatureDef::Extrude(extrude) if extrude.active_cut_scope().is_some_and(|scope|
-                    self.features.iter().take_while(|f| f.uid != entry.uid).any(|f| affected.contains(&f.uid)
-                        && scope.depends_on(&self.assembly, f))))
+                || entry.def.active_cut_scope().is_some_and(|scope| {
+                    self.features
+                        .iter()
+                        .take_while(|f| f.uid != entry.uid)
+                        .any(|f| affected.contains(&f.uid) && scope.depends_on(&self.assembly, f))
+                })
             {
                 affected.insert(entry.uid);
                 dependents.push(entry.uid);
@@ -756,9 +769,7 @@ impl DocState {
         let made = |body: BodyUid| features.contains(&body.feature);
         let mut changed = Vec::new();
         for (i, entry) in self.features.iter().enumerate() {
-            if let FeatureDef::Extrude(extrude) = &entry.def
-                && let Some(scope) = &extrude.cut_scope
-            {
+            if let Some(scope) = entry.def.stored_cut_scope() {
                 let mut scope = scope.clone();
                 let dropped = scope.drop_gone_exclusions(&self.assembly, &made);
                 if !dropped.is_empty() {
@@ -767,8 +778,8 @@ impl DocState {
             }
         }
         for (i, scope) in changed {
-            if let FeatureDef::Extrude(extrude) = &mut Arc::make_mut(&mut self.features[i]).def {
-                extrude.cut_scope = Some(scope);
+            if let Some(slot) = Arc::make_mut(&mut self.features[i]).def.cut_scope_mut() {
+                *slot = Some(scope);
             }
         }
     }
@@ -787,13 +798,11 @@ impl DocState {
         };
         let mut notices = Vec::new();
         for entry in &self.features {
-            let FeatureDef::Extrude(now) = &entry.def else {
+            let Some(was) = before.entry(entry.uid).map(|e| &e.def) else {
                 continue;
             };
-            let Some(FeatureDef::Extrude(was)) = before.entry(entry.uid).map(|e| &e.def) else {
-                continue;
-            };
-            let (Some(now), Some(was)) = (&now.cut_scope, &was.cut_scope) else {
+            let (Some(now), Some(was)) = (entry.def.stored_cut_scope(), was.stored_cut_scope())
+            else {
                 continue;
             };
             let kept = now.exclusions();
@@ -2496,10 +2505,10 @@ impl<K: Kernel> Document<K> {
             .bodies
             .iter()
             .filter(|(uid, _)| {
-                self.result
-                    .owners
-                    .get(uid)
-                    .is_none_or(|component| keep(*component))
+                self.result.owners.get(uid).is_none_or(|component| {
+                    // (Machined pieces are no component's bodies, mitcad#2131.)
+                    *component != crate::assembly_cut::MACHINED_HOLDER && keep(*component)
+                })
             })
             .map(|(uid, shape)| BodyView {
                 uid: *uid,
@@ -2587,7 +2596,66 @@ impl<K: Kernel> Document<K> {
 
     /// The component a body at the marker belongs to.
     pub fn body_component(&self, uid: BodyUid) -> Option<ComponentUid> {
-        self.result.owners.get(&uid).copied()
+        match self.result.owners.get(&uid).copied() {
+            // A machined piece: the component it machines (mitcad#2131).
+            Some(crate::assembly_cut::MACHINED_HOLDER) => self
+                .result
+                .machined
+                .component_of(uid)
+                .map(|(_, component)| component),
+            owner => owner,
+        }
+    }
+
+    /// The occurrences assembly cuts machined at the marker (mitcad#2131),
+    /// by their paths from the root.
+    pub fn machined_occurrences(&self) -> &crate::assembly_cut::Machined {
+        &self.result.machined
+    }
+
+    /// `def` with where an assembly cut lies against each occurrence it
+    /// machines kept (mitcad#2131, `CutScope::keep_frames`): by the
+    /// placements the feature `at` read where it is in the timeline, else
+    /// (a new feature, which goes at the marker) those at the marker.
+    fn with_machined_frames<'d>(
+        &self,
+        def: &'d FeatureDef<ValueInput>,
+        at: Option<FeatureUid>,
+    ) -> std::borrow::Cow<'d, FeatureDef<ValueInput>> {
+        let Some(scope) = def.active_cut_scope() else {
+            return std::borrow::Cow::Borrowed(def);
+        };
+        let read: BTreeMap<OccurrenceUid, crate::transform::Transform> = at
+            .and_then(|uid| self.result.result(uid))
+            .and_then(|r| r.output.as_ref())
+            .map(|output| {
+                output
+                    .reads
+                    .iter()
+                    .filter_map(|read| match read {
+                        crate::recompute::Read::Placement(uid, Some(bits)) => {
+                            Some((*uid, crate::recompute::placement_from_bits(bits)))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let placement = |o: OccurrenceUid| {
+            read.get(&o)
+                .copied()
+                .or_else(|| self.placement(o))
+                .unwrap_or(crate::transform::Transform::IDENTITY)
+        };
+        let mut scope = scope.clone();
+        if !scope.keep_frames(&self.state.assembly, &placement) {
+            return std::borrow::Cow::Borrowed(def);
+        }
+        let mut def = def.clone();
+        if let Some(slot) = def.cut_scope_mut() {
+            *slot = Some(scope);
+        }
+        std::borrow::Cow::Owned(def)
     }
 
     pub fn body_shape(&self, uid: BodyUid) -> Option<&K::Shape> {
@@ -2974,6 +3042,9 @@ impl<K: Kernel> Document<K> {
             // changes or it fails (mitcad#1935).
             next.settle_acknowledged_warnings(result);
         }
+        // The joints BUILD placed its parts with are named after them
+        // (mitcad#2088), also through a rename that recomputes nothing.
+        next.follow_build_joint_names(&self.state);
         self.commit(label, next);
         self.configuration_moves = (self.revision, moves);
         if let Some(result) = result {
@@ -3096,6 +3167,9 @@ impl<K: Kernel> Document<K> {
             return self.add_hiding_mesh(def, name, component, None, mesh);
         }
         self.check_profiles(def)?;
+        // Where an assembly cut lies against what it machines (mitcad#2131).
+        let framed = self.with_machined_frames(def, None);
+        let def = framed.as_ref();
         // A new component of a component that takes none goes beside it
         // (mitcad#292).
         let beside = self.component_parent_beside(component);
@@ -3159,6 +3233,9 @@ impl<K: Kernel> Document<K> {
         }
         self.check_profiles(def)?;
         let (made, beside) = self.made_and_beside(uid);
+        // Where an assembly cut lies against what it machines (mitcad#2131).
+        let framed = self.with_machined_frames(def, Some(uid));
+        let def = framed.as_ref();
         self.apply(|state| {
             let edited = state.edit_feature_keeping(uid, def)?;
             state.place_made_beside(uid, made, beside);
@@ -4973,7 +5050,8 @@ impl<K: Kernel> Document<K> {
             });
         let current = &self.result.bodies;
         let assembly = state.assembly.at_placements(&result.placements);
-        let mut preview_instances = assembly.instances_flexed(
+        // A machined occurrence with its pieces (mitcad#2131).
+        let mut preview_instances = assembly.instances_at(
             &|o| {
                 result
                     .placements
@@ -4982,19 +5060,26 @@ impl<K: Kernel> Document<K> {
                     .unwrap_or(crate::transform::Transform::IDENTITY)
             },
             &result.joints.flexed,
-            &|c| {
-                result
-                    .owners
-                    .iter()
-                    .filter(|(_, owner)| **owner == c)
-                    .map(|(b, _)| *b)
-                    .collect()
+            &|path, c| {
+                result.machined.shown(
+                    path,
+                    result
+                        .owners
+                        .iter()
+                        .filter(|(_, owner)| **owner == c)
+                        .map(|(b, _)| *b)
+                        .collect(),
+                )
             },
         );
         for instance in &mut preview_instances {
+            let source = result
+                .machined
+                .replaced_by(instance.body)
+                .unwrap_or(instance.body);
             instance.visible &= state
                 .body_attributes
-                .get(&instance.body)
+                .get(&source)
                 .is_none_or(|a| a.visible)
                 // A Bodies folder hidden by its eye (mitcad#1771).
                 && state
@@ -5281,6 +5366,11 @@ fn display_names<S>(state: &DocState, result: &Recomputed<S>) -> BTreeMap<BodyUi
             if names.contains_key(uid) {
                 continue;
             }
+            // A machined piece goes by the body it stands for
+            // (mitcad#2131): it takes no name of its own.
+            if output.owners.get(uid) == Some(&crate::assembly_cut::MACHINED_HOLDER) {
+                continue;
+            }
             // An Envelope's body is named after its feature (mitcad#1271),
             // which marks it in the browser.
             let envelope = state
@@ -5442,6 +5532,18 @@ mod panelize;
 // Sections of a mesh body into sketches, one or a series (mitcad#1871).
 mod mesh_sections;
 pub use mesh_sections::{MAX_SECTIONS, MeshSectionRequest, MeshSections, SectionTarget};
+// The design's sketch blocks: Create, Insert, Explode and Edit Block
+// (mitcad#2110).
+mod sketch_blocks;
+pub use sketch_blocks::BlockEdit;
+// Folders of a component's occurrences in the browser, and the rename of
+// a folder of a Bodies folder (mitcad#2103).
+mod occurrence_folders;
+// The order of a component's occurrences among their siblings (mitcad#2104).
+mod occurrence_order;
+// Linked parts of a design (mitcad#2130).
+mod link_parts;
+pub use link_parts::{LinkPartNode, LinkPartsInput, LinkPartsSet, LinkPartsTree};
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

@@ -65,6 +65,7 @@ QList<TemplateChoice> templateChoices(const QJsonObject& answer) {
     item.choice = choice;
     item.size = sheetSizeText(data.value(QStringLiteral("size")));
     item.projection = data.value(QStringLiteral("projection")).toString();
+    item.standard = data.value(QStringLiteral("standard")).toString();
     if (library == QStringLiteral("user")) {
       item.label = QCoreApplication::translate("DrawingTemplates", "%1 (User)").arg(name);
     } else if (library == QStringLiteral("project")) {
@@ -117,6 +118,7 @@ std::optional<NewDrawingChoice> NewDrawingChoice::load(QSettings& settings) {
     c.size = settings.value(QStringLiteral("size")).toString();
     c.orientation = settings.value(QStringLiteral("orientation")).toString();
     c.projection = settings.value(QStringLiteral("projection")).toString();
+    c.standard = settings.value(QStringLiteral("standard")).toString();
     out = c;
   }
   settings.endGroup();
@@ -129,6 +131,7 @@ void NewDrawingChoice::save(QSettings& settings) const {
   settings.setValue(QStringLiteral("size"), size);
   settings.setValue(QStringLiteral("orientation"), orientation);
   settings.setValue(QStringLiteral("projection"), projection);
+  settings.setValue(QStringLiteral("standard"), standard);
   settings.endGroup();
 }
 

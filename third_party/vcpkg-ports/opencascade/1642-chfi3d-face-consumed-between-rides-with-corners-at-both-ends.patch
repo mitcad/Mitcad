@@ -17,12 +17,27 @@ invalid, its volume larger than the input's).
   ride is not a part ride, F's other edges not yet cut are cut at their
   vertices as well.
 
-Test: geometry/tests/test_fillet_ride_corners.cpp (ctest
-geometry.fillet_ride_corners): test_plate_end_face_rims_and_corners, the
-plate's end face rims and the vertical edges at both its ends, the end
-face consumed between the rides (two corner cells within 0.002 of their
-volume), and test_plate_all_edges. Its failure without the patch is still
-to be shown in the port's before/after run (mitcad#1986).
+Test: none, because the case the branch is for builds right at the port's
+tip without it, and the branch's condition has no other shape than that
+case. geometry/tests/test_fillet_ride_corners.cpp,
+test_plate_end_face_rims_and_corners and test_plate_all_edges, round the
+plate's end face rims and its vertical edges with OCCT's fillet alone: the
+end face goes and the volume is right without the patch too, as the
+port's before/after run showed (mitcad#1986). The branch needs a strip F
+between two rims whose roundings meet on one line (a ride that is no part
+ride) with a line's end at a corner's point inside F, that is the edge of
+F at that end rounded too. That edge's rounding has its contact on F
+crossing the line ridden on, and the corners at both its ends (with the
+rim below and with the rider above) cut it at that same crossing: a
+trapezoid end face, slanted end edges, other radii or only one end edge
+rounded (the other end then on an arc, which the code before the branch
+cuts) all give that same configuration. Since 1642, later patches treat
+this contact cut to one point and the corners' points there (1652, which
+makes the two points one, 1655 and the corner patches up to 1781), and
+one of them takes F away; which one was not traced. A body that shows the
+branch would need a strip whose end edge's contact on F is not cut to one
+point by the corners at its ends, which this configuration does not
+allow.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 412bd3c6..d90f0284 100644

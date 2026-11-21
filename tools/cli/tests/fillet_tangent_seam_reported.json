@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #449's design (mitcad#2039; opened with --open, never committed; tools/cli/fillet-tangent-seam-reported-test.cmake): a 10 x 10 square split by a line (Sketch1 F1); the front half extruded 5 (Extrude1 F2), the back half 10 (Extrude2 F3, joined). Fillet1 (F14) rounds the front block's two vertical corners with 5, so that its plan is a half disc, and the back wall's two top edges with 5, so that its top is a half cylinder: the wall's flat sides run on tangentially into both. Body1 is 642.699082 before Fillet2."},
+  {"comment": "Fillet2 (F16) rounds with 1 the concave edge where the block's top meets the wall's front (10 long). At each end the blend's end crosses the block's curved side and the wall's curved top, both continued past the vertex, which meet along the intersection of their surfaces (port patch 1830): one valid solid, no note. It adds the quarter-round section, (1 - pi/4) 10 = 2.146018 (2 %: 2.103 to 2.189), less what the two cylinders cut off at the ends: 2.139248."},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F16"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "F2.b0", "volume": 644.83833, "tolerance": 1e-6}},
+  {"comment": "The same edge chamfered with 1 in its place: r^2 L / 2 = 5 (2 %: 4.9 to 5.1), less the ends: 4.970703. Before, the chamfer was refused: 'chamfer produced an invalid shape'."},
+  {"cmd": "delete_feature", "uid": "F16"},
+  {"cmd": "add_feature", "def": {"type": "chamfer", "body": "F2.b0", "edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c11],c4[c11,c1],c11[c2,c4]})|F3:side(c11[c2,c4])}"], "size": {"type": "equal_distance", "distance": 1}}},
+  {"expect": {"feature": "Chamfer1", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F17"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "F2.b0", "volume": 647.669785, "tolerance": 1e-6}}
+]

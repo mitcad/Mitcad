@@ -11,7 +11,8 @@
 # in the view and in sketch mode. Through the real UI, the input script
 # tools/ui-scripts/selection-look.mitcad-ui (also run by
 # tools/ui-windows-selection-look-test.ps1) on a design that mitcad-cli
-# makes (tools/ui-scripts/selection-look.json).
+# makes (tools/ui-scripts/selection-look.json). The script also measures
+# the lines in the view's own frame (view-line-width, mitcad#2063).
 # Runs at device pixel ratio 1 and again at 2 (UI_SCALE, QT_SCALE_FACTOR).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).

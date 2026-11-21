@@ -138,6 +138,7 @@ fn state(charts: Vec<SheetPatch>, bends: Vec<BendDomain>) -> SheetState {
         opened: Vec::new(),
         lineage: Vec::new(),
         overlays: Vec::new(),
+        gaps: Vec::new(),
         invalidated: None,
         blockers: Vec::new(),
     }
@@ -694,4 +695,101 @@ fn a_fillet_on_a_surface_edge_is_refused_by_its_name() {
             .message
             .contains("but Fillet3 repeats a fillet or chamfer on edges")
     );
+}
+
+/// The L whose base has a round hole filled by a second panel of its Face
+/// (a disc region selected with the plate, mitcad#1942): the two meet along
+/// the circle, which no straight seam pairs, and the sheet's construction
+/// fuses them into one material. `apart` puts the disc elsewhere on the
+/// plane, touching nothing.
+fn l_sheet_with_disc(apart: bool) -> SheetState {
+    let mut s = l_sheet();
+    let circle = |center: [f64; 2], reversed: bool| {
+        let mut curve = BoundedCurve2::from_geometry(SegmentGeometry::Circle {
+            center,
+            radius: 4.0,
+            start: 0.0,
+        })
+        .unwrap();
+        if reversed {
+            curve.range = curve.range.reversed();
+        }
+        MaterialLoop {
+            edges: vec![MaterialEdge {
+                piece: generated(FeatureUid(2), 9),
+                curve,
+            }],
+        }
+    };
+    s.charts[0].regions[0]
+        .loops
+        .push(circle([-15.0, 10.0], true));
+    let disc = SheetPatch {
+        domain: SheetDomainRef::Panel(PanelId {
+            feature: FeatureUid(3),
+            slot: 1,
+        }),
+        regions: vec![MaterialRegion {
+            loops: vec![circle(
+                if apart { [-60.0, 10.0] } else { [-15.0, 10.0] },
+                false,
+            )],
+        }],
+        embedding: s.charts[0].embedding.clone(),
+    };
+    s.charts.insert(1, disc);
+    s
+}
+
+fn same_plane(a: &SheetEmbedding, b: &SheetEmbedding) -> bool {
+    match (a, b) {
+        (
+            SheetEmbedding::Plane {
+                front_frame: f,
+                front_to_back_sign: s,
+            },
+            SheetEmbedding::Plane {
+                front_frame: g,
+                front_to_back_sign: t,
+            },
+        ) => {
+            near(f.origin, g.origin)
+                && near(f.x_axis, g.x_axis)
+                && near(f.y_axis, g.y_axis)
+                && s == t
+        }
+        _ => false,
+    }
+}
+
+/// A panel that meets the fixed one along a circle develops with it
+/// (mitcad#1942: a Face with a filled round hole and one Flange refused
+/// Unfold and Flat Pattern as "not connected"), from either side.
+#[test]
+fn a_panel_meeting_another_along_a_curve_develops_with_it() {
+    let disc = SheetDomainRef::Panel(PanelId {
+        feature: FeatureUid(3),
+        slot: 1,
+    });
+    let base = SheetDomainRef::Panel(panel(3));
+    let folded = l_sheet_with_disc(false);
+    // Holding the base: the disc stays where it is.
+    let mut held = folded.clone();
+    reconfigure(&mut held, T, panel(3), &open(&[bend_id(4)], true)).unwrap();
+    assert!(same_plane(embedding(&held, disc), embedding(&folded, disc)));
+    // Holding the flange: the base moves and the disc with it.
+    let mut moved = folded.clone();
+    reconfigure(&mut moved, T, panel(4), &open(&[bend_id(4)], true)).unwrap();
+    assert!(!same_plane(
+        embedding(&moved, base),
+        embedding(&folded, base)
+    ));
+    assert!(same_plane(embedding(&moved, disc), embedding(&moved, base)));
+    // Refolded, every chart is back.
+    reconfigure(&mut moved, T, panel(4), &open(&[bend_id(4)], false)).unwrap();
+    same_embeddings(&moved, &folded);
+    // A disc that touches nothing is still refused, in words.
+    let mut apart = l_sheet_with_disc(true);
+    let raw = reconfigure(&mut apart, T, panel(3), &open(&[bend_id(4)], true)).unwrap_err();
+    assert!(raw.starts_with("panel F3 slot 1 is not connected"), "{raw}");
 }

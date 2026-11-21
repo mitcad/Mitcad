@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Images on comments and replies (mitcad#2011), the second part: the design
+# comments-attachments.mitcad-ui saved, opened again. The comment's capture
+# and the reply's photo are still there, shown as thumbnails in the
+# Comments panel's details pane; a click opens the capture in the viewer.
+# Run by tools/ui-comments-attachments-test.sh (Linux),
+# tools/ui-windows-comments-attachments-test.ps1 (Windows) and
+# tools/ui-macos-comments-attachments-test.sh (macOS).
+wait-idle
+expect-ever '^Comment C1: open, user, Design: Round these corners as drawn$' 30
+expect-ever '^Comment C1 image A1: capture[.]png, image/png, [0-9]+ x [0-9]+$' 30
+expect-ever '^Comment C1 reply 1 image A2: photo[.]png, image/png, 128 x 128$' 30
+
+mark
+command view.comments
+focus-dialog '^Comments$'
+wait-log '^Comments row C1 at '
+dialog-click-logged '^Comments row C1 at '
+wait-log '^Comments selected: C1$'
+wait-log '^Comments details images: C1: A1 capture[.]png, A2 photo[.]png$'
+wait-log '^Comments image C1 A1 at '
+mark
+dialog-click-logged '^Comments image C1 A1 at '
+focus-dialog '^Comment 1: capture[.]png$'
+wait-log '^Comment image viewer opened: Comment 1: capture[.]png: [0-9]+ x [0-9]+$'
+button '^Close$' commentImageClose
+wait-log '^Comment image viewer closed: '
+focus-dialog '^Comments$'
+button '^Close$' commentsClose
+focus-main
+expect-never 'TestDriver: FAIL'

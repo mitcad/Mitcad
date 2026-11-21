@@ -1,19 +1,25 @@
 // SPDX-License-Identifier: MIT
-// Sketch tools that pick geometry: Trim and Extend (a click on a curve),
+// Sketch tools that pick geometry: Trim, Extend, Break and Split at Point
+// (a click on a curve),
 // the sketch dimension (the kind follows what is picked and where the value
 // is placed) and the geometric constraints.
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 #include <QHash>
+#include <QJsonArray>
 #include <QObject>
+#include <QPointer>
 #include <QtLogging>
 
+#include "../framework/ModelMessages.hpp"
 #include "../framework/UserText.hpp"
+#include "SketchConflict.hpp"
 #include "SketchController.hpp"
 #include "SketchOverlay.hpp"
 #include "SketchTool.hpp"
@@ -102,37 +108,112 @@ std::vector<V2> trimPiece(const SketchModel& model, const CurveData& c, const V2
   return piece;
 }
 
+// What a click on a curve does: Trim, Extend, Break (split at the crossings
+// around the click) or Split at Point (mitcad#2108).
+enum class ClickMode { Trim, Extend, Break, Split };
+
+// The constraints and dimensions on any of `pieces` or their ends (the
+// split points among them), as "collinear c3 c9, coincident p10 c4,
+// radius c5", for the log (mitcad#2108).
+QString piecesHeld(const SketchModel& model, const QStringList& pieces) {
+  QStringList held;
+  QStringList items = pieces;
+  for (const QString& piece : pieces) {
+    if (const CurveData* c = model.curve(piece)) {
+      for (const QString& end : {c->start, c->end}) {
+        if (!end.isEmpty() && !items.contains(end)) {
+          items << end;
+        }
+      }
+    }
+  }
+  const auto on = [&items](const QStringList& refs) {
+    return std::any_of(refs.begin(), refs.end(), [&items](const QString& r) { return items.contains(r); });
+  };
+  for (const ConstraintData& k : model.constraints) {
+    if (on(k.refs)) {
+      held << QStringLiteral("%1 %2").arg(k.type, k.refs.join(QLatin1Char(' ')));
+    }
+  }
+  for (const DimensionData& d : model.dimensions) {
+    if (on(d.refs)) {
+      held << QStringLiteral("%1 %2%3").arg(d.type, d.refs.join(QLatin1Char(' ')),
+                                             d.driven ? QStringLiteral(" (driven)") : QString());
+    }
+  }
+  return held.isEmpty() ? QStringLiteral("nothing") : held.join(QStringLiteral(", "));
+}
+
 class TrimTool : public SketchTool {
 public:
-  TrimTool(SketchController& c, bool extend) : SketchTool(c), m_extend(extend) {}
+  TrimTool(SketchController& c, ClickMode mode) : SketchTool(c), m_mode(mode) {}
 
-  QString name() const override { return m_extend ? QObject::tr("Extend") : QObject::tr("Trim"); }
-  bool snaps() const override { return false; }
+  QString name() const override {
+    switch (m_mode) {
+    case ClickMode::Extend:
+      return QObject::tr("Extend");
+    case ClickMode::Break:
+      return QObject::tr("Break");
+    case ClickMode::Split:
+      return QObject::tr("Split at Point");
+    case ClickMode::Trim:
+      break;
+    }
+    return QObject::tr("Trim");
+  }
+  // Split at Point snaps to an existing point, a middle or a crossing.
+  bool snaps() const override { return m_mode == ClickMode::Split; }
+  bool bodySnaps() const override { return false; }
 
   void start() override {
-    m_c.hint(m_extend ? QObject::tr("Extend: click near the end of a line or an arc to extend it.")
-                      : QObject::tr("Trim: click the part of a curve to remove."));
+    switch (m_mode) {
+    case ClickMode::Extend:
+      m_c.hint(QObject::tr("Extend: click near the end of a line or an arc to extend it."));
+      return;
+    case ClickMode::Break:
+      m_c.hint(QObject::tr("Break: click a curve to split it where the curves around the click cross it."));
+      return;
+    case ClickMode::Split:
+      m_c.hint(QObject::tr("Split at Point: click a curve where it is to be split."));
+      return;
+    case ClickMode::Trim:
+      break;
+    }
+    m_c.hint(QObject::tr("Trim: click the part of a curve to remove."));
   }
 
   void move(const Snap& snap) override {
     m_at = snap.at;
-    m_curve = m_c.entityAt(snap.screen, PickCurves);
-    if (m_extend) {
+    m_curve = curveAt(snap);
+    if (m_mode == ClickMode::Extend || m_mode == ClickMode::Split) {
       m_c.setHover(m_curve);
     }
+    m_split = splitAt(snap, m_curve);
   }
 
   void press(const Snap& snap) override {
-    const QString curve = m_c.entityAt(snap.screen, PickCurves);
+    const QString curve = curveAt(snap);
     const CurveData* c = m_c.model().curve(curve);
     if (c == nullptr) {
       return;
     }
-    const V2 on = c->curve.nearest(snap.at);
+    const V2 on = m_mode == ClickMode::Split ? splitAt(snap, curve).first : c->curve.nearest(snap.at);
+    const QString atPoint = m_mode == ClickMode::Split ? splitAt(snap, curve).second : QString();
     SketchOp op(m_c);
-    QJsonObject cmd = op.command(m_extend ? QStringLiteral("sketch.extend") : QStringLiteral("sketch.trim"));
+    const bool splits = m_mode == ClickMode::Break || m_mode == ClickMode::Split;
+    QJsonObject cmd = op.command(m_mode == ClickMode::Extend ? QStringLiteral("sketch.extend")
+                                 : splits                    ? QStringLiteral("sketch.break")
+                                                             : QStringLiteral("sketch.trim"));
     cmd.insert(QStringLiteral("curve"), curve);
-    cmd.insert(QStringLiteral("at"), xy(on));
+    if (atPoint.isEmpty()) {
+      cmd.insert(QStringLiteral("at"), xy(on));
+    } else {
+      cmd.insert(QStringLiteral("at"), atPoint); // an existing point becomes the shared end
+    }
+    if (splits) {
+      cmd.insert(QStringLiteral("mode"),
+                 m_mode == ClickMode::Split ? QStringLiteral("point") : QStringLiteral("crossings"));
+    }
     QJsonObject result;
     if (!op.run(cmd, &result)) {
       const QString reason = op.error();
@@ -142,15 +223,29 @@ public:
     }
     op.commit();
     m_curve.clear();
+    m_split.reset();
     m_c.setHover(QString());
-    // An end that reached an existing point joined it (mitcad#259).
-    const QString joined = result.value(QStringLiteral("joined")).toString();
-    qDebug().noquote() << QStringLiteral("%1 %2 at %3%4")
-                              .arg(m_extend ? QStringLiteral("Extended") : QStringLiteral("Trimmed"), curve,
-                                   text(on),
-                                   joined.isEmpty() ? QString() : QStringLiteral(" (joined %1)").arg(joined));
+    if (splits) {
+      // The pieces and what holds them, for the log (mitcad#2108).
+      QStringList pieces;
+      for (const auto& piece : result.value(QStringLiteral("made")).toArray()) {
+        pieces << piece.toString();
+      }
+      qDebug().noquote() << QStringLiteral("%1 %2 at %3 into %4")
+                                .arg(m_mode == ClickMode::Split ? QStringLiteral("Split") : QStringLiteral("Broke"),
+                                     curve, text(on), pieces.join(QStringLiteral(", ")));
+      qDebug().noquote() << QStringLiteral("Pieces of %1 hold: %2").arg(curve, piecesHeld(m_c.model(), pieces));
+    } else {
+      // An end that reached an existing point joined it (mitcad#259).
+      const QString joined = result.value(QStringLiteral("joined")).toString();
+      qDebug().noquote() << QStringLiteral("%1 %2 at %3%4")
+                                .arg(m_mode == ClickMode::Extend ? QStringLiteral("Extended")
+                                                                 : QStringLiteral("Trimmed"),
+                                     curve, text(on),
+                                     joined.isEmpty() ? QString() : QStringLiteral(" (joined %1)").arg(joined));
+    }
     // What the model says besides, in words: an offset's curve freed from
-    // its source first (mitcad#1755).
+    // its source first (mitcad#1755), what a split dropped (mitcad#2108).
     const QStringList notes = shownTexts(result, QStringLiteral("notes"), QStringLiteral("note_messages"));
     if (!notes.isEmpty()) {
       m_c.notice(QObject::tr("%1: %2").arg(name(), notes.join(QStringLiteral("; "))), NoticeLevel::Information);
@@ -159,16 +254,62 @@ public:
 
   void paint(ToolPreview& preview) const override {
     const CurveData* c = m_c.model().curve(m_curve);
-    if (c == nullptr || m_extend) {
+    if (c == nullptr || m_mode == ClickMode::Extend) {
       return;
     }
-    preview.add(trimPiece(m_c.model(), *c, m_at, 2.0 * m_c.pixel()), Style::Remove);
+    if (m_mode == ClickMode::Split) {
+      if (m_split) {
+        preview.points.push_back(m_split->first); // the split mark
+      }
+      return;
+    }
+    std::vector<V2> piece = trimPiece(m_c.model(), *c, m_at, 2.0 * m_c.pixel());
+    if (m_mode == ClickMode::Break && !piece.empty()) {
+      // The split marks where the piece ends at a crossing, not at an end
+      // of the curve.
+      const bool closed = c->curve.isClosed() || dist(c->curve.startPoint(), c->curve.endPoint()) <= 1e-9;
+      for (const V2& end : {piece.front(), piece.back()}) {
+        const double tol = 1e-6 * std::max(1.0, norm(end));
+        if (closed || (dist(end, c->curve.startPoint()) > tol && dist(end, c->curve.endPoint()) > tol)) {
+          preview.points.push_back(end);
+        }
+      }
+    }
+    preview.add(std::move(piece), m_mode == ClickMode::Break ? Style::Highlight : Style::Remove);
   }
 
 private:
-  bool m_extend;
+  // The curve under the cursor; Split at Point's snap onto a middle or a
+  // crossing also names it.
+  QString curveAt(const Snap& snap) const {
+    QString curve = m_c.entityAt(snap.screen, PickCurves);
+    if (curve.isEmpty() && m_mode == ClickMode::Split && m_c.model().curve(snap.curve) != nullptr) {
+      curve = snap.curve;
+    }
+    return curve;
+  }
+
+  // Where Split at Point splits `curve`: the snapped place when it is on
+  // the curve, else the curve point nearest the cursor; and the existing
+  // point snapped to, which becomes the shared end.
+  std::pair<V2, QString> splitAt(const Snap& snap, const QString& curve) const {
+    const CurveData* c = m_c.model().curve(curve);
+    if (c == nullptr) {
+      return {snap.at, QString()};
+    }
+    const double tol = 1e-6 * std::max(1.0, norm(snap.at));
+    if (snap.onGeometry() && c->curve.distanceTo(snap.at) <= tol) {
+      const bool ownEnd = snap.point == c->start || snap.point == c->end;
+      const bool point = snap.kind == Snap::Kind::Point && !snap.point.isEmpty() && !ownEnd;
+      return {snap.at, point ? snap.point : QString()};
+    }
+    return {c->curve.nearest(snap.at), QString()};
+  }
+
+  ClickMode m_mode;
   QString m_curve;
   V2 m_at;
+  std::optional<std::pair<V2, QString>> m_split;
 };
 
 // ---------------------------------------------------------------------------
@@ -191,6 +332,35 @@ QString bodySelectionPick(SketchController& c, const SelectionItem& item, bool o
            item.occurrence == (candidate.linked ? candidate.occurrence : ownOccurrence);
   });
   return body == bodies.end() ? QString() : BodyGeometry::itemId(static_cast<std::size_t>(body - bodies.begin()));
+}
+
+// Replace pressed on a dimension added driven for a conflict (mitcad#2090):
+// the one item that blocked it and that driven dimension removed, and the
+// dimension added again driving with the value typed (`driving`), as one
+// undo step labelled as the dimension. Refused, all is undone and the
+// refusal shown.
+void replaceByDimension(SketchController& c, const QJsonObject& driving, const QString& driven,
+                        const QString& blocker) {
+  SketchOp op(c);
+  QJsonObject remove = op.command(QStringLiteral("sketch.remove"));
+  remove.insert(QStringLiteral("items"), QJsonArray{blocker, driven});
+  QJsonObject result;
+  if (!op.run(remove) || !op.run(driving, &result)) {
+    const QString reason = op.error();
+    op.rollback();
+    qDebug().noquote() << QStringLiteral("Sketch conflict replace refused: %1").arg(reason);
+    c.error(QObject::tr("Dimension not added: %1").arg(reason));
+    return;
+  }
+  op.setLabel(c.undoLabel());
+  op.commit();
+  const QJsonArray made = result.value(QStringLiteral("dimensions")).toArray();
+  const QString id = made.isEmpty() ? QString() : made.first().toString();
+  qDebug().noquote() << QStringLiteral("Sketch conflict replaced: %1 by %2").arg(blocker, id);
+  if (const DimensionData* d = c.model().dimension(id)) {
+    qDebug().noquote() << QStringLiteral("Added dimension %1 %2 = %3 (driving, in place of %4)")
+                              .arg(id, d->parameter, driving.value(QStringLiteral("value")).toString(), driven);
+  }
 }
 
 class DimensionTool : public SketchTool {
@@ -268,6 +438,9 @@ public:
   }
 
   void press(const Snap& snap) override {
+    // The next pick: the last dimension's blocking item is no longer
+    // painted, and its Replace goes (mitcad#1761, mitcad#2090).
+    m_c.setConflict(QStringLiteral("action"), {});
     m_cursor = snap.at;
     takePick(entityAt(snap.screen));
   }
@@ -544,21 +717,30 @@ private:
   }
 
   void prompt() const {
+    QString text;
     switch (m_state) {
     case State::Pick:
-      m_c.hint(QObject::tr("Sketch Dimension: pick a line, circle, arc or point, of the sketch or a body edge or "
-                           "vertex (projected onto the sketch plane), or a sketch axis or the origin."));
+      // The right-click menu's Driven named (mitcad#2055): it comes after a
+      // pick, before the placing click.
+      text = QObject::tr("Sketch Dimension: pick a line, circle, arc or point, of the sketch or a body edge or "
+                         "vertex (projected onto the sketch plane), or a sketch axis or the origin, then right-click "
+                         "for Driven.");
       break;
     case State::Pick2:
-      m_c.hint(QObject::tr("Sketch Dimension: pick another point or curve."));
+      text = QObject::tr("Sketch Dimension: pick another point or curve. Right-click: Driven.");
       break;
     case State::Place:
-      m_c.hint(QObject::tr("Sketch Dimension: click where the value goes (or pick a second entity)."));
+      text = QObject::tr("Sketch Dimension: click where the value goes (or pick a second entity). Right-click: "
+                         "Driven.");
       break;
     case State::Edit:
-      m_c.hint(QObject::tr("Sketch Dimension: type the value or an expression and press Enter."));
+      text = QObject::tr("Sketch Dimension: type the value or an expression and press Enter.");
       break;
     }
+    // Hints are not logged by the status bar; the prompt is, for UI tests,
+    // without the tool's name it starts with ("Sketch Dimension: ").
+    qDebug().noquote() << QStringLiteral("Sketch Dimension prompt: %1").arg(text.section(QStringLiteral(": "), 1));
+    m_c.hint(text);
   }
 
   // A second entity that makes another kind of dimension with the first.
@@ -839,6 +1021,13 @@ private:
       cmd.insert(QStringLiteral("dimension"), dimension);
       ok = op.run(cmd, &result);
     }
+    // What blocked the value (mitcad#2090): the one item a Replace swaps
+    // out, or Shift+Enter swapped out at once, and its words.
+    QString blocker;
+    QString blockerWords;
+    bool replacedAtOnce = false;
+    // The command that adds the dimension with its value, for Replace.
+    const QJsonObject driving = cmd;
     if (!ok) {
       // Implied by the others, or in conflict with them (mitcad#1566).
       if (chosenDriven || !(op.conflicted() || op.error().contains(QStringLiteral("over-constrain")))) {
@@ -848,18 +1037,45 @@ private:
         reset();
         return;
       }
-      // A driven dimension instead of over-constraining: nothing refused
-      // to paint then.
-      m_c.setConflict(QStringLiteral("action"), {});
-      cmd.remove(QStringLiteral("value"));
-      cmd.insert(QStringLiteral("driven"), true);
-      driven = true;
-      if (!op.run(cmd, &result)) {
-        const QString reason = op.error();
-        op.rollback();
-        m_c.error(QObject::tr("Dimension not added: %1").arg(reason));
-        reset();
-        return;
+      const ConflictText refused = op.conflict();
+      if (shiftReplaces(refused, RefusedBy::DimensionValue, false, m_c.editorAcceptedWithShift())) {
+        // Shift+Enter: the one dimension or constraint that blocks it goes
+        // in the same undo step, and the dimension is added driving.
+        blocker = replaceable(refused);
+        blockerWords = refused.words;
+        QJsonObject remove = op.command(QStringLiteral("sketch.remove"));
+        remove.insert(QStringLiteral("items"), QJsonArray{blocker});
+        if (!op.run(remove) || !op.run(cmd, &result)) {
+          const QString reason = op.error();
+          op.rollback();
+          qDebug().noquote() << QStringLiteral("Sketch conflict replace refused: %1").arg(reason);
+          m_c.error(QObject::tr("Dimension not added: %1").arg(reason));
+          reset();
+          return;
+        }
+        op.setLabel(m_c.undoLabel());
+        replacedAtOnce = true;
+      } else {
+        if (offersReplace(refused, RefusedBy::DimensionValue, false)) {
+          // Its blocking item stays painted, and Replace offers to swap it
+          // out (mitcad#2090).
+          blocker = replaceable(refused);
+          blockerWords = refused.words;
+        } else {
+          // A driven dimension instead of over-constraining: nothing
+          // refused to paint then.
+          m_c.setConflict(QStringLiteral("action"), {});
+        }
+        cmd.remove(QStringLiteral("value"));
+        cmd.insert(QStringLiteral("driven"), true);
+        driven = true;
+        if (!op.run(cmd, &result)) {
+          const QString reason = op.error();
+          op.rollback();
+          m_c.error(QObject::tr("Dimension not added: %1").arg(reason));
+          reset();
+          return;
+        }
       }
     }
     op.commit();
@@ -877,6 +1093,24 @@ private:
                                 .arg(id, kind,
                                      d != nullptr ? QString::number(d->measured / m_c.lengthScale(), 'f', 2)
                                                   : QString());
+    } else if (driven && !blocker.isEmpty()) {
+      // Not what was asked, and one item blocks it (mitcad#2090): the
+      // warning names it, it stays painted, and Replace swaps it out and
+      // makes this one driving with the value typed.
+      const QString message =
+          blockerWords.isEmpty()
+              ? QObject::tr("The dimension would over-constrain the sketch: added as a driven dimension.")
+              : QObject::tr("The dimension would over-constrain the sketch: added as a driven dimension; it can't "
+                            "hold with %1.")
+                    .arg(modelMessage(blockerWords));
+      qDebug().noquote() << QStringLiteral("Added driven dimension %1 %2").arg(id, kind);
+      m_c.setConflict(QStringLiteral("action"), {blocker});
+      QPointer<SketchController> self(&m_c);
+      m_c.offerReplace(message, NoticeLevel::Warning, blocker, [self, driving, id, blocker] {
+        if (self) {
+          replaceByDimension(*self, driving, id, blocker);
+        }
+      });
     } else if (driven) {
       // Not what was asked: a warning (mitcad#1051), kept in front of the
       // next prompt, which reset() shows below.
@@ -884,6 +1118,14 @@ private:
                  NoticeLevel::Warning);
       qDebug().noquote() << QStringLiteral("Added driven dimension %1 %2").arg(id, kind);
     } else {
+      if (replacedAtOnce) {
+        // Shift+Enter (mitcad#2090): what happened, in words.
+        qDebug().noquote() << QStringLiteral("Sketch conflict replaced (Shift): %1 by %2").arg(blocker, id);
+        m_c.notice(blockerWords.isEmpty()
+                       ? QObject::tr("Dimension added; it replaced what blocked it.")
+                       : QObject::tr("Dimension added; it replaced %1.").arg(modelMessage(blockerWords)),
+                   NoticeLevel::Information);
+      }
       qDebug().noquote() << QStringLiteral("Added dimension %1 %2 %3 = %4")
                                 .arg(id, kind, d != nullptr ? d->parameter : QString(), expression);
     }
@@ -1071,9 +1313,14 @@ QString refusal(const QString& type, const QStringList& picks, const QString& en
     }
     return point ? QString() : QObject::tr("pick a second point");
   }
-  if (type == QStringLiteral("parallel") || type == QStringLiteral("perpendicular") ||
-      type == QStringLiteral("collinear")) {
+  if (type == QStringLiteral("parallel") || type == QStringLiteral("collinear")) {
     return curve != nullptr && curve->isLine() ? QString() : QObject::tr("pick a line");
+  }
+  if (type == QStringLiteral("perpendicular")) {
+    // Two lines, a line and a circle or arc, or two circles or arcs
+    // (mitcad#2114).
+    return curve != nullptr && (curve->isLine() || curve->isCircular()) ? QString()
+                                                                        : QObject::tr("pick a line, a circle or an arc");
   }
   if (type == QStringLiteral("tangent") || type == QStringLiteral("smooth")) {
     return curve != nullptr ? QString() : QObject::tr("pick a curve");
@@ -1171,14 +1418,84 @@ QJsonObject build(const QString& type, const QStringList& picks, const SketchMod
   return obj(type, {{"a", picks[0]}, {"b", picks[1]}});
 }
 
+void replaceConstraint(SketchController& c, const QString& type, QStringList picks, const std::vector<V2>& clicks,
+                       const QString& blocker, RefusedBy by);
+
+// A constraint refused (mitcad#1566): its reason as the tool's error; for
+// a conflict whose one blocking item Replace may swap out (mitcad#2090,
+// offersReplace), with that button.
+void showRefusal(SketchController& c, const QString& type, const QStringList& picks, const std::vector<V2>& clicks,
+                 RefusedBy by, bool severalSets, const ConflictText& conflict, const QString& reason) {
+  const QString message = QObject::tr("%1 not added: %2").arg(constraintName(type), reason);
+  if (!offersReplace(conflict, by, severalSets)) {
+    c.error(message);
+    return;
+  }
+  const QString blocker = replaceable(conflict);
+  QPointer<SketchController> self(&c);
+  c.offerReplace(message, NoticeLevel::Error, blocker, [self, type, picks, clicks, blocker, by] {
+    if (self) {
+      replaceConstraint(*self, type, picks, clicks, blocker, by);
+    }
+  });
+}
+
+// Replace pressed (mitcad#2090): the one constraint or dimension that
+// blocked the constraint removed, and the constraint added again on the
+// same picks (its axes and body items made or projected again), as one
+// undo step labelled as the constraint. Refused, all is undone and the new
+// refusal shown as any refusal, with its own Replace when it has one.
+void replaceConstraint(SketchController& c, const QString& type, QStringList picks, const std::vector<V2>& clicks,
+                       const QString& blocker, RefusedBy by) {
+  SketchOp op(c);
+  QJsonObject remove = op.command(QStringLiteral("sketch.remove"));
+  remove.insert(QStringLiteral("items"), QJsonArray{blocker});
+  bool ok = op.run(remove);
+  ok = ok && op.axisInputs(picks) && op.bodyInputs(picks);
+  QJsonObject result;
+  QJsonObject constraint;
+  if (ok) {
+    constraint = build(type, picks, op.model(), clicks);
+    QJsonObject cmd = op.command(QStringLiteral("sketch.add_constraint"));
+    cmd.insert(QStringLiteral("constraint"), constraint);
+    ok = op.run(cmd, &result);
+  }
+  if (!ok) {
+    const QString reason =
+        op.error().isEmpty() ? QObject::tr("the body geometry could not be projected") : op.error();
+    const ConflictText conflict = op.conflict();
+    op.rollback();
+    qDebug().noquote() << QStringLiteral("Sketch conflict replace refused: %1").arg(reason);
+    showRefusal(c, type, picks, clicks, by, false, conflict, reason);
+    return;
+  }
+  op.setLabel(c.undoLabel());
+  op.commit();
+  const QJsonArray made = result.value(QStringLiteral("constraints")).toArray();
+  const QString id = made.isEmpty() ? QString() : made.first().toString();
+  qDebug().noquote() << QStringLiteral("Sketch conflict replaced: %1 by %2").arg(blocker, id);
+  qDebug().noquote() << QStringLiteral("Added constraint %1 %2 on %3")
+                            .arg(constraint.value(QStringLiteral("type")).toString(), id,
+                                 picks.join(QStringLiteral(", ")));
+}
+
 // Adds a constraint for each set of complete picks, as one undo step. A
 // refused one is left out, so entities already constrained do not stop
-// the others; when all are refused nothing changes.
+// the others; when all are refused nothing changes. `by`: where the
+// constraint comes from, and `shift` whether Shift was held at it: a
+// conflict with one blocking item then offers Replace, or Shift held at a
+// tool's click swaps it out at once (mitcad#2090, SketchConflict.hpp).
 bool applyEach(SketchController& c, const QString& type, const QVector<QStringList>& sets,
-               const std::vector<V2>& clicks = {}) {
+               const std::vector<V2>& clicks = {}, RefusedBy by = RefusedBy::Selection, bool shift = false) {
   SketchOp op(c);
   int added = 0;
   QString reason;
+  // The last refusal as read (mitcad#2090), and the item Shift swapped out
+  // with its words.
+  ConflictText refused;
+  QString replaced;
+  QString replacedWords;
+  const bool severalSets = sets.size() > 1;
   // Points a coincident merged away (mitcad#260): removed -> kept, for the
   // later picks and the selection.
   QHash<QString, QString> merged;
@@ -1195,6 +1512,7 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
     // The axes and the origin a pick stands for, made now (mitcad#500).
     if (!op.axisInputs(picks)) {
       reason = op.error();
+      refused = ConflictText();
       continue;
     }
     // The body edges and vertices it names, projected now (linked) or an
@@ -1202,6 +1520,7 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
     // (mitcad#1782): the constraint is on the projected entities.
     if (!op.bodyInputs(picks)) {
       reason = op.error().isEmpty() ? QObject::tr("the body geometry could not be projected") : op.error();
+      refused = ConflictText();
       continue;
     }
     const QJsonObject constraint = build(type, picks, op.model(), clicks);
@@ -1210,11 +1529,34 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
     QJsonObject result;
     if (!op.run(cmd, &result)) {
       reason = op.error();
+      refused = op.conflict();
       qDebug().noquote() << QStringLiteral("Constraint %1 refused: %2")
                                 .arg(constraint.value(QStringLiteral("type")).toString(), reason);
-      continue;
+      if (!shiftReplaces(refused, by, severalSets, shift)) {
+        continue;
+      }
+      // Shift held at the click (mitcad#2090): the one item that blocks it
+      // goes in the same undo step, before anything else can change.
+      const QString blocker = replaceable(refused);
+      QJsonObject remove = op.command(QStringLiteral("sketch.remove"));
+      remove.insert(QStringLiteral("items"), QJsonArray{blocker});
+      if (!op.run(remove) || !op.run(cmd, &result)) {
+        reason = op.error();
+        op.rollback();
+        qDebug().noquote() << QStringLiteral("Sketch conflict replace refused: %1").arg(reason);
+        c.error(QObject::tr("%1 not added: %2").arg(constraintName(type), reason));
+        return false;
+      }
+      op.setLabel(c.undoLabel());
+      replaced = blocker;
+      replacedWords = refused.words;
     }
     ++added;
+    if (!replaced.isEmpty()) {
+      const QJsonArray made = result.value(QStringLiteral("constraints")).toArray();
+      qDebug().noquote() << QStringLiteral("Sketch conflict replaced (Shift): %1 by %2")
+                                .arg(replaced, made.isEmpty() ? QString() : made.first().toString());
+    }
     const QJsonObject merge = result.value(QStringLiteral("merged")).toObject();
     if (!merge.isEmpty()) {
       // Two curve ends became one point.
@@ -1236,7 +1578,9 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
   }
   if (added == 0) {
     op.rollback();
-    c.error(QObject::tr("%1 not added: %2").arg(constraintName(type), reason));
+    // With Replace when one item blocks it (mitcad#2090): the sketch as it
+    // is after the rollback is the one Replace checks against.
+    showRefusal(c, type, sets.isEmpty() ? QStringList() : sets.first(), clicks, by, severalSets, refused, reason);
     return false;
   }
   if (!merged.isEmpty()) {
@@ -1256,6 +1600,13 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
     }
   }
   op.commit();
+  if (!replaced.isEmpty()) {
+    // What Shift did, in words (mitcad#2090): an information notice.
+    c.notice(replacedWords.isEmpty()
+                 ? QObject::tr("%1 added; it replaced what blocked it.").arg(constraintName(type))
+                 : QObject::tr("%1 added; it replaced %2.").arg(constraintName(type), modelMessage(replacedWords)),
+             NoticeLevel::Information);
+  }
   if (added < static_cast<int>(sets.size())) {
     // Some left out: a warning (mitcad#1051).
     c.notice(QObject::tr("%1: %2 of %3 added; the others were refused: %4")
@@ -1269,7 +1620,7 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
 }
 
 bool apply(SketchController& c, const QString& type, const QStringList& picks,
-           const std::vector<V2>& clicks = {}) {
+           const std::vector<V2>& clicks = {}, RefusedBy by = RefusedBy::Selection, bool shift = false) {
   if (type == QStringLiteral("fix")) {
     SketchOp op(c);
     bool fixed = true;
@@ -1292,7 +1643,7 @@ bool apply(SketchController& c, const QString& type, const QStringList& picks,
                                                       picks.join(QStringLiteral(", ")));
     return true;
   }
-  return applyEach(c, type, {picks}, clicks);
+  return applyEach(c, type, {picks}, clicks, by, shift);
 }
 
 // Constraints that a selection of more than they take applies to the
@@ -1436,7 +1787,10 @@ public:
       const std::vector<V2> clicks = m_clicks.size() == static_cast<std::size_t>(m_picks.size())
                                          ? m_clicks
                                          : std::vector<V2>();
-      refused = !apply(m_c, m_type, m_picks, clicks);
+      // Shift held at this click replaces the one item that blocks it
+      // (mitcad#2090).
+      refused = !apply(m_c, m_type, m_picks, clicks, RefusedBy::ToolPick,
+                       snap.modifiers.testFlag(Qt::ShiftModifier));
       m_picks.clear();
       m_clicks.clear();
     }
@@ -1577,6 +1931,8 @@ private:
                          : m_type == QStringLiteral("fix")          ? QObject::tr("an entity")
                          : m_type == QStringLiteral("equal")        ? QObject::tr("two lines, or two circles or arcs")
                          : m_type == QStringLiteral("concentric")   ? QObject::tr("two circles or arcs")
+                         : m_type == QStringLiteral("perpendicular")
+                             ? QObject::tr("two lines, a line and a circle or arc, or two circles or arcs")
                          : m_type == QStringLiteral("tangent") || m_type == QStringLiteral("smooth")
                              ? QObject::tr("two curves; pick each near the end where it should be tangent")
                              : QObject::tr("two lines");
@@ -1672,9 +2028,13 @@ bool constrainSelection(SketchController& c, const QString& type) {
   return true;
 }
 
-std::unique_ptr<SketchTool> trimTool(SketchController& c) { return std::make_unique<TrimTool>(c, false); }
+std::unique_ptr<SketchTool> trimTool(SketchController& c) { return std::make_unique<TrimTool>(c, ClickMode::Trim); }
 
-std::unique_ptr<SketchTool> extendTool(SketchController& c) { return std::make_unique<TrimTool>(c, true); }
+std::unique_ptr<SketchTool> extendTool(SketchController& c) { return std::make_unique<TrimTool>(c, ClickMode::Extend); }
+
+std::unique_ptr<SketchTool> breakTool(SketchController& c) { return std::make_unique<TrimTool>(c, ClickMode::Break); }
+
+std::unique_ptr<SketchTool> splitTool(SketchController& c) { return std::make_unique<TrimTool>(c, ClickMode::Split); }
 
 std::unique_ptr<SketchTool> dimensionTool(SketchController& c) { return std::make_unique<DimensionTool>(c); }
 

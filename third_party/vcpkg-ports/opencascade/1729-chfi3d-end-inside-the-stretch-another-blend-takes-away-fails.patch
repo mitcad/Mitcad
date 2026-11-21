@@ -28,8 +28,8 @@ geometry.fillet_top_chains): on the stored case `fillet-wall-run-on`, one
 inner arm's foot rounded and the other's not, with the top's edges: never
 done and not valid (done but invalid, the plate's wire open, without the
 patch); and geometry.suite.fillet_corners, the two roundings mitred at a
-short edge (0210) still build. Its failure without the patch is still to
-be shown in the port's before/after run (mitcad#1986).
+short edge (0210) still build. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 9dccef06..7d4b755d 100644

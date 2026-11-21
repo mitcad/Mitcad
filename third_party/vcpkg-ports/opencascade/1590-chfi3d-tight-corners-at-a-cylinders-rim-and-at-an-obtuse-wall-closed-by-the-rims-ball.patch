@@ -66,8 +66,8 @@ triangles on the rim's ball),
 test_block_bottom_past_corners_with_an_obtuse_wall (the obtuse wall at 15
 and 30 degrees, its corner faces on the corner's ball) and
 test_reported_body (the stored case `tube-rim-tight-corners`); each
-documented to fail without this patch. Its failure without the patch is
-still to be shown in the port's before/after run (mitcad#1986).
+documented to fail without this patch. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 
 Failures (mitcad#1986): the test of an arc at a contour's end as an
 obtuse tight arc (ChFi3d_TightArc) fails with OCCT's reports of a

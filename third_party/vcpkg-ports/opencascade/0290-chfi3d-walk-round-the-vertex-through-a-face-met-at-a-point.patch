@@ -36,9 +36,9 @@ point, the face beyond growing over it.
 
 Test: geometry/tests/test_fillet_corners.cpp (ctest
 geometry.suite.fillet_corners),
-test_walk_round_the_corner_through_a_face_met_at_a_point: Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+test_walk_round_the_corner_through_a_face_met_at_a_point: It fails without
+the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted together
+with 1580, 1581, which change the same lines).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

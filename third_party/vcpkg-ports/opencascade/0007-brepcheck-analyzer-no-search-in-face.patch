@@ -13,8 +13,8 @@ Test: geometry/tests/port/p0007-checker-no-search-in-face.cpp (ctest
 geometry.port.0007), test_small_face_is_valid and
 test_face_of_forty_thousand_edges_within_eight_seconds: a face of one wire
 of 40 000 edges is valid and checked without geometric controls within 8 s
-(tens of seconds with the search). A new test: its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+(tens of seconds with the search). It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
 @@ -137,7 +137,17 @@

@@ -209,6 +209,7 @@ pub(crate) fn contour<K: Kernel>(
         opened: Vec::new(),
         lineage: Vec::new(),
         overlays: Vec::new(),
+        gaps: Vec::new(),
         invalidated: None,
         blockers: Vec::new(),
     };

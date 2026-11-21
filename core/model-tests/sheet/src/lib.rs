@@ -18,3 +18,5 @@ mod sheet_ui_tests;
 mod bom_kind_tests;
 // Sheet process profiles and allowance methods (mitcad#1939).
 mod sheet_process_tests;
+// The Hem command's forms: flat, open and rolled hems (mitcad#2112).
+mod sheet_hem_tests;

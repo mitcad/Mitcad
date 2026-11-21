@@ -14,6 +14,14 @@
 #      (appearance/boostButton false), no link opened.
 #   4. Preferences › Display › Show the Boost development button checked:
 #      saved, the button back with its places.
+# The Discord button right of it (mitcad#2123; its order in the row the
+# wrappers check from the logged parts):
+#   5. It shows ("Discord button at x,y"); a click on it opens MitCad's
+#      Discord server: "Discord link opened: https://mitcad.org/discord",
+#      only logged in the test.
+#   6. It stays while Boost development is hidden by its ×: a click on it
+#      opens the link again.
+#   7. Help › MitCad on Discord opens the same link.
 # Preferences is a dialog on Windows and Linux (applied on OK) and the
 # Settings window on macOS (at once). Run by tools/ui-boost-button-test.sh
 # (Linux), tools/ui-windows-boost-button-test.ps1 (Windows) and
@@ -25,9 +33,18 @@ expect-ever '^Boost button shown$' 30
 expect-ever '^Boost button at ' 30
 expect-ever '^Boost button close at ' 30
 expect-never '^Boost button hidden$'
+expect-ever '^Discord button at ' 30
 wait-idle
 sleep 300
 screenshot '${MITCAD_TEST_WORK}/boost-button.png'
+
+# 5. The Discord button: the link logged, not opened.
+mark
+click-logged '^Discord button at '
+wait-log '^Discord link opened: https://mitcad[.]org/discord$'
+wait-log '^Open URL [(]test, not opened[)]: https://mitcad[.]org/discord$'
+expect-no-log '^Boost link opened'
+wait-idle
 
 # 2. The click: the link logged, not opened.
 mark
@@ -43,6 +60,21 @@ wait-log '^Boost button hidden$'
 wait-idle
 expect-setting appearance/boostButton false
 expect-no-log '^Boost link opened'
+
+# 6. The Discord button stays without Boost development: its click opens
+# the link (at its place logged last).
+mark
+click-logged '^Discord button at '
+wait-log '^Discord link opened: https://mitcad[.]org/discord$'
+wait-log '^Open URL [(]test, not opened[)]: https://mitcad[.]org/discord$'
+wait-idle
+
+# 7. Help › MitCad on Discord: the same link.
+mark
+menu 'Help/MitCad on Discord'
+wait-log '^Discord link opened: https://mitcad[.]org/discord$'
+wait-log '^Open URL [(]test, not opened[)]: https://mitcad[.]org/discord$'
+wait-idle
 
 # 4. Preferences › Display: shown again.
 mark

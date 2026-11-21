@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <streambuf>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,9 @@
 #include <XSControl_TransferWriter.hxx>
 #include <XSControl_WorkSession.hxx>
 
+#include "mitcad/geometry/cancel.hpp"
+#include "mitcad/geometry/guard.hpp"
+#include "mitcad/geometry/user_error.hpp"
 #include "step_names.hpp"
 #include "xcaf.hpp"
 
@@ -209,22 +213,45 @@ occ::handle<TDocStd_Document> read_step_document(const std::string& path,
   // name, for the files an assembly refers to).
   std::optional<std::string> recoded = recoded_step_text(path);
   IFSelect_ReturnStatus parsed = IFSelect_RetVoid;
-  if (recoded) {
-    TextBuffer buffer(*recoded);
-    std::istream stream(&buffer);
-    parsed = reader.ChangeReader().ReadStream(path.c_str(), parameters, stream);
-  } else {
-    parsed = reader.ChangeReader().ReadFile(path.c_str(), parameters);
+  bool done = false;
+  // The parse and the transfer are one of the geometry's operations
+  // (guard.hpp, mitcad#2028): a crash or an exception inside OCCT's reader
+  // is an error that says in words that the file could not be read, with
+  // OCCT's message only in its detail (user_error.hpp), and the caller's
+  // exchange lock and the document are released as it unwinds. A stop
+  // (Cancelled) passes as it is. MITCAD_TEST_OCCT_CRASH=step crashes it.
+  try {
+    geometry::run_operation("step", [&] {
+      if (recoded) {
+        TextBuffer buffer(*recoded);
+        std::istream stream(&buffer);
+        parsed = reader.ChangeReader().ReadStream(path.c_str(), parameters, stream);
+      } else {
+        parsed = reader.ChangeReader().ReadFile(path.c_str(), parameters);
+      }
+      // (The parsed entities are the reader's own: the text is not needed
+      // for the transfer.)
+      recoded.reset();
+      if (parsed != IFSelect_RetDone) {
+        return;
+      }
+      done = detail::stoppable_transfer(
+          range, [&](const Message_ProgressRange& transfer) { return reader.Transfer(document, transfer); });
+    });
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const geometry::Cancelled&) {
+    throw;
+  } catch (const std::runtime_error& failure) {
+    const std::string what = failure.what();
+    // An allocation that failed stays "out of memory" for the model
+    // (KernelError::OUT_OF_MEMORY).
+    const bool memory = what.size() >= 13 && what.compare(what.size() - 13, 13, "out of memory") == 0;
+    const std::string message =
+        memory ? "the STEP file could not be read: out of memory" : "the STEP file could not be read";
+    throw Error(geometry::placed_error(message, "cannot read STEP file " + path + ": " + what));
   }
-  // (The parsed entities are the reader's own: the text is not needed for
-  // the transfer.)
-  recoded.reset();
-  if (parsed != IFSelect_RetDone) {
-    throw Error("cannot read STEP file " + path);
-  }
-  const bool done = detail::stoppable_transfer(
-      range, [&](const Message_ProgressRange& transfer) { return reader.Transfer(document, transfer); });
-  if (!done) {
+  if (parsed != IFSelect_RetDone || !done) {
     throw Error("cannot read STEP file " + path);
   }
   return document;

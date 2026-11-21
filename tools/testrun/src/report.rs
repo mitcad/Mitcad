@@ -432,7 +432,7 @@ mod tests {
         ];
         outcomes[0].first = Some(ResultKind::Failed);
         outcomes[1].first = Some(ResultKind::KilledForMemory);
-        let line = "UI entries at once: cap 3 -> 2; this run at most 3";
+        let line = "UI entries at once: cap 3; this run at most 3";
         let summary = Summary {
             elapsed: 30.0,
             outcomes: &outcomes,

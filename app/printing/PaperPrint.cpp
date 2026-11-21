@@ -21,6 +21,7 @@
 #include <QPrintDialog>
 #include <QPrinter>
 #include <QProgressDialog>
+#include <QSettings>
 #include <QStringList>
 #include <QSvgRenderer>
 #include <QThread>
@@ -320,6 +321,14 @@ QPageSize::PageSizeId paperFromSetting(const QString& setting, const std::vector
   }
   return fallback;
 }
+
+QPageSize::PageSizeId listPaper(const QString& saved, QLocale::MeasurementSystem system) {
+  const QPageSize::PageSizeId fallback =
+      system == QLocale::ImperialUSSystem ? QPageSize::Letter : QPageSize::A4;
+  return paperFromSetting(saved, {QPageSize::A4, QPageSize::Letter}, fallback);
+}
+
+QString savedPrintPaper() { return QSettings().value(QStringLiteral("print/paper")).toString(); }
 
 void paintPage(QPainter& painter, double pixelsPerMm, const PrintPlan& pagePlan, const PrintPage& page,
                const PrintPicture& picture) {

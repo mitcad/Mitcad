@@ -176,24 +176,6 @@ struct Outcome {
   int beside = -1;
 };
 
-// The edge a made face is named after (<feature>:<role>(E{…}), a piece's
-// "#k" left out); empty for a corner or another name.
-std::string own_edge(const std::string& name, const std::string& feature, const char* role) {
-  const std::string own = feature + ":" + role + "(";
-  if (name.compare(0, own.size(), own) != 0) {
-    return {};
-  }
-  std::string text = name.substr(own.size());
-  const std::size_t hash = text.rfind(")#");
-  if (hash != std::string::npos) {
-    text.erase(hash + 1);
-  }
-  if (!text.empty() && text.back() == ')') {
-    text.pop_back();
-  }
-  return text.compare(0, 2, "E{") == 0 ? text : std::string();
-}
-
 // The names of the two faces in an edge's name E{a|b} (split at its bar
 // outside brackets); none for another name.
 std::vector<std::string> named_faces_of_edge(const std::string& edge) {
@@ -483,6 +465,26 @@ DressupFinding turned_over(const Shape& input, const Shape& result, const std::v
 }
 
 } // namespace
+
+std::string own_edge(const std::string& name, const std::string& feature, const char* role) {
+  const std::string own = feature + ":" + role + "(";
+  if (name.compare(0, own.size(), own) != 0) {
+    return {};
+  }
+  std::string text = name.substr(own.size());
+  // (A piece's "#k" only at the very end: the edge's own name holds ")#"
+  // where it names pieces of faces, mitcad#1821.)
+  const std::size_t hash = text.rfind('#');
+  if (hash != std::string::npos && hash > 0 && text[hash - 1] == ')' && hash + 1 < text.size() &&
+      std::all_of(text.begin() + static_cast<std::ptrdiff_t>(hash) + 1, text.end(),
+                  [](char c) { return c >= '0' && c <= '9'; })) {
+    text.erase(hash);
+  }
+  if (!text.empty() && text.back() == ')') {
+    text.pop_back();
+  }
+  return text.compare(0, 2, "E{") == 0 ? text : std::string();
+}
 
 std::string made_face(const std::string& name, const std::string& feature, const char* role, bool vertex_word) {
   const std::string own = feature + ":" + role + "(";

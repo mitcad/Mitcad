@@ -40,9 +40,9 @@ each domain, as the test that every sample be ON used.
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
 geometry.suite.chamfer_overflow),
-test_chamfer_as_wide_as_a_ledge_along_a_line_and_an_arc: Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+test_chamfer_as_wide_as_a_ledge_along_a_line_and_an_arc: It fails without
+the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted together
+with 0321, 0322, 0440, 1560, which change the same lines).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

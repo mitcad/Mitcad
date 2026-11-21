@@ -219,11 +219,18 @@ impl<K: Kernel> Document<K> {
         let mut rows = Vec::new();
         let instances = self.instances();
         let mut by_body = std::collections::BTreeMap::new();
+        // A machined occurrence (mitcad#2131) is still the part it machines:
+        // its pieces count as the body they stand for, once per occurrence.
+        let machined = &self.result.machined;
         for instance in &instances {
-            by_body
-                .entry(instance.body)
-                .or_insert_with(Vec::new)
-                .push(instance);
+            let body = machined.replaced_by(instance.body).unwrap_or(instance.body);
+            let placed = by_body.entry(body).or_insert_with(Vec::new);
+            if !placed
+                .iter()
+                .any(|i: &&super::InstanceView| i.path == instance.path)
+            {
+                placed.push(instance);
+            }
         }
         let mut parts = self.parts_list();
         parts.push(PartsListRow {

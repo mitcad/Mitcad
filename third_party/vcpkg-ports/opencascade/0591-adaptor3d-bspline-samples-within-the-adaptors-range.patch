@@ -24,9 +24,8 @@ test_face_on_a_part_of_a_multi_turn_surface_sampled_within_it (ctest
 geometry.multi_turn_faces): the bound it checks: the samples of a face on a
 third of a turn of a 32-turn flank are the knot spans within the face's
 range, those of the whole face its knots times its degree as before (without
-the patch the part had the whole surface's samples). Its failure without the
-patch, stated in its documentation, is still to be shown in the port's
-before/after run (mitcad#1986).
+the patch the part had the whole surface's samples). It fails without the
+patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 --- a/src/ModelingData/TKG3d/Adaptor3d/Adaptor3d_HSurfaceTool.cxx
 +++ b/src/ModelingData/TKG3d/Adaptor3d/Adaptor3d_HSurfaceTool.cxx

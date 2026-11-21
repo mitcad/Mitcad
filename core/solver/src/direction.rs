@@ -8,6 +8,9 @@
 //! vertical line can collapse to a point), so contradictions are found here
 //! and not only by the rank analysis. Union-find with offsets detects the
 //! cycles; the cycle's constraints are reported.
+//!
+//! Perpendicular circles or arcs with a common center are found here too
+//! (mitcad#2114): only zero radii would satisfy them.
 
 use std::collections::{HashMap, VecDeque};
 use std::f64::consts::{FRAC_PI_2, PI};
@@ -215,5 +218,80 @@ pub(crate) fn check(sys: &System, classes: &[usize]) -> (Vec<Dependency>, Vec<De
             conflicts.push(dep);
         }
     }
+    conflicts.extend(common_center(sys, &classes));
     (conflicts, redundant)
+}
+
+/// Perpendicular circles or arcs with a common center (mitcad#2114): their
+/// coincident centers, or centers joined by concentric constraints, leave
+/// `|c1 c2|^2 = r1^2 + r2^2` only zero radii, so the pair is reported as a
+/// conflict here instead of being solved to a point. The involved
+/// constraints are the perpendicular and the concentric ones that join the
+/// centers.
+fn common_center(sys: &System, classes: &[usize]) -> Vec<Dependency> {
+    let center = |e: EntityId| match sys.entities[e.index()].as_ref().map(|r| &r.data) {
+        Some(d @ (EntityData::Circle { .. } | EntityData::Arc { .. })) => {
+            d.centre().map(|c| classes[c])
+        }
+        _ => None,
+    };
+    // Center classes joined by concentric constraints.
+    let mut adj: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    for (cid, rec) in sys.live_constraints() {
+        if let Constraint::Concentric(a, b) = rec.def {
+            let ends = [a, b].map(|e| {
+                sys.entities[e.index()]
+                    .as_ref()
+                    .and_then(|r| r.data.centre())
+                    .map(|c| classes[c])
+            });
+            if let [Some(ca), Some(cb)] = ends
+                && ca != cb
+            {
+                adj.entry(ca).or_default().push((cb, cid));
+                adj.entry(cb).or_default().push((ca, cid));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (cid, rec) in sys.live_constraints() {
+        let Constraint::Perpendicular(a, b) = rec.def else {
+            continue;
+        };
+        let (Some(ca), Some(cb)) = (center(a), center(b)) else {
+            continue;
+        };
+        // The concentric constraints on a path from one center to the other.
+        let mut prev: HashMap<usize, (usize, usize)> = HashMap::new();
+        let mut queue = VecDeque::from([ca]);
+        prev.insert(ca, (ca, usize::MAX));
+        while let Some(n) = queue.pop_front() {
+            if n == cb {
+                break;
+            }
+            for &(m, c) in adj.get(&n).map(Vec::as_slice).unwrap_or_default() {
+                if let std::collections::hash_map::Entry::Vacant(e) = prev.entry(m) {
+                    e.insert((n, c));
+                    queue.push_back(m);
+                }
+            }
+        }
+        if !prev.contains_key(&cb) {
+            continue;
+        }
+        let mut involved = vec![ConstraintId(cid as u32)];
+        let mut n = cb;
+        while n != ca {
+            let (p, c) = prev[&n];
+            involved.push(ConstraintId(c as u32));
+            n = p;
+        }
+        involved.sort_unstable();
+        involved.dedup();
+        out.push(Dependency {
+            constraint: ConstraintId(cid as u32),
+            involved,
+        });
+    }
+    out
 }

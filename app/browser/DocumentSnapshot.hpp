@@ -137,6 +137,12 @@ struct DocumentSnapshot {
     QVector<Occurrence> children;
     // The condition it is shown under (mitcad#800); empty: none.
     QString visibleWhen;
+    // The folder of its parent's occurrences the Browser lists it in
+    // (mitcad#2103); empty: none.
+    QString folder;
+    // Machined by cuts made in an assembly (mitcad#2131): what the row and
+    // the selection card say of it; empty when it is not.
+    QString machinedNote;
   };
   struct Component {
     QString uid;
@@ -239,6 +245,9 @@ struct DocumentSnapshot {
   // the plane is not there), and one by name (an empty object when none).
   QJsonArray imageReferences;
   QJsonObject imageReference(const QString& name) const;
+  // Sketch blocks (mitcad#2110): the `sketch_blocks` query's blocks (name,
+  // instances, outline).
+  QJsonArray sketchBlocks;
   // CAM (mitcad#1013): the `cam_setups` query's setups (each with its
   // operations and their states, its work frame) and the design's
   // machines; empty when the design has none. A setup's `visible` is its

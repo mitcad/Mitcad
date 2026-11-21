@@ -513,10 +513,13 @@ fn tangent_plan(
     if a == b {
         return self_join(a.index());
     }
+    // Splines last: a spline is `hi` whenever one takes part. An elliptical
+    // arc (kind 2) joins a spline at their ends only (setup_tangent).
     let kind = |e: usize| match sys.entities[e].as_ref().expect("live").data {
         EntityData::Line { .. } => 0,
         EntityData::Circle { .. } | EntityData::Arc { .. } => 1,
-        _ => 2,
+        EntityData::Ellipse { .. } | EntityData::EllipticalArc { .. } => 2,
+        _ => 3,
     };
     let (mut lo, mut hi) = (a.index(), b.index());
     if kind(lo) > kind(hi) {
@@ -557,7 +560,8 @@ fn tangent_plan(
         },
         (k, _) => {
             let ends = spline_ends(hi);
-            if k == 2 {
+            // Two splines, or a spline and an elliptical arc: end to end.
+            if k >= 2 {
                 let other = spline_ends(lo);
                 if let Some(at) = at {
                     return TanPlan::SplineEnd {
@@ -683,6 +687,21 @@ fn curvature_term(v: &mut Vars, x: &Ctx, e: usize, end: usize) -> CurvTerm {
                 sign,
             }
         }
+        // At the arc's end parameter (mitcad#2107).
+        EntityData::EllipticalArc {
+            c,
+            a,
+            b: minor,
+            ts,
+            te,
+            ..
+        } => CurvTerm::Ellipse {
+            c: x.p(v, *c),
+            a: x.p(v, *a),
+            b: v.v(*minor),
+            t: v.v(if end == 0 { *ts } else { *te }),
+            sign,
+        },
         _ => CurvTerm::Zero,
     }
 }
@@ -763,6 +782,27 @@ fn tangent_equations(b: &mut Builder, rec: &ConstraintRec, plan: &TanPlan) {
                     a2: l0,
                     b1: l0,
                     b2: l1,
+                },
+                // Along the elliptical arc's tangent at its joined end
+                // (mitcad#2107).
+                EntityData::EllipticalArc {
+                    c,
+                    a,
+                    b: minor,
+                    ts,
+                    te,
+                    ..
+                } => EqKind::DirEllipse {
+                    c: x.p(v, *c),
+                    a: x.p(v, *a),
+                    b: v.v(*minor),
+                    t: v.v(if other_end.unwrap_or(0) == 0 {
+                        *ts
+                    } else {
+                        *te
+                    }),
+                    l1: l0,
+                    l2: l1,
                 },
                 _ => {
                     let (f0, f1) = spline_leg(x.ent(other), other_end.unwrap_or(0));
@@ -922,6 +962,37 @@ fn constraint_equations(
         }
         HorizontalPoints(p, q) => diff(b, q.index(), p.index(), 1, z, 1.0),
         VerticalPoints(p, q) => diff(b, q.index(), p.index(), 0, z, 1.0),
+        // A line and a circle or arc: the center on the infinite line, as
+        // point on curve writes it; two circles or arcs: they cross at right
+        // angles (mitcad#2114).
+        Perpendicular(e1, e2)
+            if !matches!(
+                (ent(e1), ent(e2)),
+                (EntityData::Line { .. }, EntityData::Line { .. })
+            ) =>
+        {
+            match (ent(e1), ent(e2)) {
+                (EntityData::Line { p1, p2 }, round) | (round, EntityData::Line { p1, p2 }) => {
+                    let (p1, p2) = (*p1, *p2);
+                    let c = round.centre().expect("round");
+                    b.push(z, |v, x| EqKind::PointLine {
+                        p: x.p(v, c),
+                        a: x.p(v, p1),
+                        b: x.p(v, p2),
+                        side: 1.0,
+                    });
+                }
+                _ => {
+                    let (i1, i2) = (e1.index(), e2.index());
+                    b.push(z, |v, x| EqKind::PerpCircles {
+                        c1: x.p(v, x.centre(i1)),
+                        r1: x.rad(v, i1),
+                        c2: x.p(v, x.centre(i2)),
+                        r2: x.rad(v, i2),
+                    });
+                }
+            }
+        }
         Parallel(l1, l2) | Perpendicular(l1, l2) => {
             let par = matches!(rec.def, Parallel(..));
             b.push(z, |v, x| {

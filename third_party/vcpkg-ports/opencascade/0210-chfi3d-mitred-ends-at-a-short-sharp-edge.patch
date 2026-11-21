@@ -38,8 +38,9 @@ Fv's edge. E vanishes.
 
 Test: geometry/tests/test_fillet_corners.cpp (ctest
 geometry.suite.fillet_corners), test_two_roundings_mitred_at_a_short_edge:
-Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+Its failure without the patch is still to be shown: with it and the 40
+later patches that change the same lines reverted at the port's tip, the
+test does not build (tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 64a188b6..dc5de34d 100644

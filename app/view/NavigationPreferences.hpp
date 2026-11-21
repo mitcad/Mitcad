@@ -506,7 +506,8 @@ private:
     grid->addWidget(box, row, column);
     connect(box, &QCheckBox::toggled, this, [this, field](bool value) { m_settings.*field = value; notify(); });
   }
-  // The 3D mouse's tab (mitcad#951): on or off, its speed, its Navigation
+  // The 3D mouse's tab (mitcad#951): what is connected, a hint while the
+  // vendor's driver runs (mitcad#1981), on or off, its speed, its Navigation
   // mode, each axis on and reversed, the locks, the dominant axis, its
   // Lock horizon (mitcad#978), the cross-talk filter (mitcad#1720) and its
   // buttons' commands.
@@ -520,6 +521,16 @@ private:
     found->setObjectName(QStringLiteral("navigationSpaceMouseStatus"));
     found->setWordWrap(true);
     box->addWidget(found);
+    // The vendor's driver can send wheel steps for the cap's Tilt, which
+    // zoom the view (mitcad#1981); the view ignores the wheel during a
+    // motion, and the line says how to stop it at the source.
+    if (spaceMouseStatus().vendorDriver) {
+      auto* driver = new QLabel(tr("The 3D mouse driver is running: in its settings for MitCad, turn off Tilt or "
+                                   "set it to send nothing, so it does not zoom the view."));
+      driver->setObjectName(QStringLiteral("navigationSpaceMouseDriverHint"));
+      driver->setWordWrap(true);
+      box->addWidget(driver);
+    }
     auto* on = new QCheckBox(tr("Use a 3D mouse"));
     on->setObjectName(QStringLiteral("navigationSpaceMouseOn"));
     on->setChecked(m_settings.spaceMouse.enabled);

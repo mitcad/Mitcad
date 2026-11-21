@@ -976,6 +976,10 @@ QJsonObject MainWindow::mcpTool(const QString& name, const QJsonObject& argument
   if (name == QStringLiteral("ui_command")) {
     return mcpUiCommand(arguments);
   }
+  // A guide step shown to the user (mitcad#2012).
+  if (name == QStringLiteral("ui_guide")) {
+    return mcpGuide(arguments);
+  }
   // A new design beside this one (mitcad#1266).
   if (name == QStringLiteral("document_new")) {
     return mcpNew(arguments);

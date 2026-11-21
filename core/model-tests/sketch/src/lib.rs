@@ -118,3 +118,19 @@ mod sketch_pattern_free_2007_tests;
 // Auto Constrain: a sketch's relations, then dimensions for what is left
 // free (mitcad#2019).
 mod sketch_auto_constrain_2019_tests;
+// The curves and points that are not fully constrained, which Show
+// Unconstrained selects (mitcad#2026).
+mod sketch_unconstrained_2026_tests;
+// Make Driven and Make Driving on an existing sketch dimension, named undo
+// steps (mitcad#2055).
+mod sketch_driven_switch_2055_tests;
+// Blend Curve: a spline joining two curve ends with tangent or curvature
+// continuity that stays attached (mitcad#2107).
+mod sketch_blend_curve_2107_tests;
+// Sketch Scale: selected points, curves and texts scaled about a point,
+// their dimensions scaled or kept, Create Copy (mitcad#2109).
+mod sketch_scale_selection_2109_tests;
+
+// Perpendicular takes a line and a circle or arc, and two circles or arcs
+// (mitcad#2114).
+mod sketch_perpendicular_rounds_2114_tests;

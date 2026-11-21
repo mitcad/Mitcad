@@ -564,6 +564,44 @@ fn migrate(value: &mut serde_json::Value) {
     }
 }
 
+impl<P> FeatureDef<P> {
+    /// The cut scope of an Extrude, Revolve or Hole that cuts with one
+    /// (mitcad#200; Revolve and Hole since mitcad#2131): it decides the
+    /// bodies the feature cuts across components. None for every other
+    /// feature, and for an Extrude or Revolve whose operation is no Cut.
+    pub fn active_cut_scope(&self) -> Option<&extrude_scope::CutScope> {
+        match self {
+            FeatureDef::Extrude(e) => e.active_cut_scope(),
+            FeatureDef::Revolve(r) => r.active_cut_scope(),
+            FeatureDef::Hole(h) => h.cut_scope.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The stored cut scope of an Extrude, Revolve or Hole, active or not
+    /// (mitcad#2131).
+    pub(crate) fn stored_cut_scope(&self) -> Option<&extrude_scope::CutScope> {
+        match self {
+            FeatureDef::Extrude(e) => e.cut_scope.as_ref(),
+            FeatureDef::Revolve(r) => r.cut_scope.as_ref(),
+            FeatureDef::Hole(h) => h.cut_scope.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The stored cut scope of an Extrude, Revolve or Hole, active or not,
+    /// to rewrite (mitcad#2131): what moves occurrences or features moves
+    /// its places.
+    pub(crate) fn cut_scope_mut(&mut self) -> Option<&mut Option<extrude_scope::CutScope>> {
+        match self {
+            FeatureDef::Extrude(e) => Some(&mut e.cut_scope),
+            FeatureDef::Revolve(r) => Some(&mut r.cut_scope),
+            FeatureDef::Hole(h) => Some(&mut h.cut_scope),
+            _ => None,
+        }
+    }
+}
+
 impl FeatureDef {
     /// The parameters the definition uses, in slot order.
     pub fn params(&self) -> Vec<ParamId> {
@@ -776,6 +814,10 @@ pub struct FeatureOutput<S> {
     /// set no size (mitcad#1827): at the size and shape of what it is made
     /// from; None when nothing measures.
     pub drawn: Option<construction::DrawnExtent>,
+    /// The occurrences an assembly cut machined (mitcad#2131): the pieces
+    /// it set (in `changes`, owned by `assembly_cut::MACHINED_HOLDER`) and
+    /// the definition bodies they stand for there.
+    pub machined: Vec<crate::assembly_cut::MachinedChange>,
 }
 
 impl<S> Default for FeatureOutput<S> {
@@ -796,6 +838,7 @@ impl<S> Default for FeatureOutput<S> {
             inputs: None,
             curve: None,
             drawn: None,
+            machined: Vec::new(),
         }
     }
 }
@@ -979,6 +1022,10 @@ pub(crate) struct Env<'a, S> {
     /// without one: a Flex item with a fixed length hangs its slack that
     /// way (mitcad#1713), through [`EvalContext::gravity`].
     pub gravity: Option<[f64; 3]>,
+    /// The occurrences assembly cuts machined before this point
+    /// (mitcad#2131): a cut that reaches one cuts its pieces, which are in
+    /// `components` under `assembly_cut::MACHINED_HOLDER`.
+    pub machined: &'a crate::assembly_cut::Machined,
 }
 
 // (References only: an evaluation and its preview's extra see the same,
@@ -1560,6 +1607,37 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
                 )
             })
             .collect()
+    }
+
+    /// The bodies the occurrence at `path` (from the root) of `component`
+    /// shows at this point (mitcad#2131): the component's, those an
+    /// assembly cut machined there replaced by its pieces.
+    pub fn bodies_at(
+        &mut self,
+        component: ComponentUid,
+        path: &[OccurrenceUid],
+    ) -> Vec<(BodyUid, K::Shape)> {
+        let bodies = self.bodies_in(component);
+        let env = self.env;
+        let Some(machined) = env.machined.at(path) else {
+            return bodies;
+        };
+        let mut shown = Vec::with_capacity(bodies.len());
+        for (uid, shape) in bodies {
+            match machined.replaced.get(&uid) {
+                None => shown.push((uid, shape)),
+                Some(pieces) => {
+                    for piece in pieces {
+                        if let Ok(shape) =
+                            self.body_in(crate::assembly_cut::MACHINED_HOLDER, *piece)
+                        {
+                            shown.push((*piece, shape));
+                        }
+                    }
+                }
+            }
+        }
+        shown
     }
 
     /// The id of the next body this feature creates; ids of pieces it

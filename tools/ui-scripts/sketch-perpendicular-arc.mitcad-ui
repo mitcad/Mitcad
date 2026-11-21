@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# Perpendicular of a line and an arc (mitcad#2114) on
+# sketch-perpendicular-arc.json's Sketch1: the line c3 from the fixed p1
+# (-25, -10) to p2, held on the construction line x = -5, and the arc c10
+# round the fixed center (20, 5); 4 degrees of freedom.
+#   1. Perpendicular (Shift+R), the line, then the arc: one perpendicular,
+#      one degree of freedom less.
+#   2. The line turns through the arc's center: p2 at (-5, -10/3).
+#   3. The constraint's symbol shows; one undo step takes it away.
+# The clicks stay within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit, also in session 0's 1024x768 window on Windows. Run
+# by tools/ui-sketch-perpendicular-arc-test.sh (Linux),
+# tools/ui-windows-sketch-perpendicular-arc-test.ps1 (Windows) and
+# tools/ui-macos-sketch-perpendicular-arc-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+wait-log '^Sketch Sketch1: 4 DOF$'
+key F6
+wait-idle
+capture-undo-depth baseline
+
+# 1. The tool, the line's middle, then the arc's.
+mark
+key shift+r
+wait-log '^Sketch tool Perpendicular$'
+sketch-click -15 -12.5
+sketch-click 25.66 10.66
+wait-log '^Added constraint perpendicular k[0-9]+ on c3, c10$'
+wait-log '^Sketch Sketch1: 3 DOF$'
+expect-no-log 'Perpendicular not added|does not take'
+key Escape
+wait-idle
+
+# 2. Through the center.
+capture-model-number endY '{"query":"sketch","uid":"F1"}' entities.1.at.1
+expect-near ${endY} -3.3333333333333335 0 0.000001
+capture-model-number endX '{"query":"sketch","uid":"F1"}' entities.1.at.0
+expect-near ${endX} -5 0 0.000001
+
+# 3. Its symbol, and one undo step.
+wait-log '^Constraint k[0-9]+ glyph at [0-9]+,[0-9]+ \(perpendicular by c3\)$' 10
+screenshot '${MITCAD_TEST_WORK}/sketch-perpendicular-arc.png'
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+expect-undo-depth ${baseline} 0
+wait-log '^Sketch Sketch1: 4 DOF$'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

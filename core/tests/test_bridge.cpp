@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -2129,6 +2130,69 @@ void test_face_extruded_up_to_a_face_of_its_own_body() {
   CHECK(near(body_volume(*block, "F3.b0"), 60.0 * 40.0 * 26.0));
 }
 
+// mitcad#2127: a join whose tool solid merges with no body (one that
+// touches a body only along a line, which cannot make one solid with it,
+// or a profile of several away from the bodies) makes it a body of its
+// own, and the feature says so in its warnings, in the preview too.
+void test_join_apart_warns() {
+  const std::string apart = "a part of the joined shape touches the bodies at most along an edge or at a point, "
+                            "so it became a body of its own";
+  const double cylinder = kPi * 25.0 * 20.0;
+  // Two cylinders 10 across, their centres `gap` apart: the second joined
+  // to the first. The demo block lies far from them.
+  const auto cylinders = [&](double gap) {
+    rust::Box<mitcad::Document> document = mitcad::new_demo_document();
+    run(*document, R"({"cmd": "sketch.create"})"); // F3
+    run(*document, sketch_circle("F3", 100, 0, 10));
+    run(*document, extrude("F3", "r{c1}", 20, "new_body")); // F4
+    run(*document, R"({"cmd": "sketch.create"})"); // F5
+    run(*document, sketch_circle("F5", 100 + gap, 0, 10));
+    const std::string join = extrude("F5", "r{c1}", 20, "join", R"(["F4.b0"])");
+    const std::string report(document->preview(join));
+    CHECK(contains(report, R"("status":"ok")"));
+    const bool previewed = contains(report, apart);
+    run(*document, join); // F6
+    return std::make_pair(std::move(document), previewed);
+  };
+
+  // In line contact: the second cylinder is a body of its own, said.
+  {
+    auto [document, previewed] = cylinders(10);
+    CHECK(previewed);
+    CHECK(body_count(*document) == 3);
+    CHECK(near(body_volume(*document, "F4.b0"), cylinder));
+    const std::string timeline(document->query(R"({"query": "timeline"})"));
+    CHECK(contains(timeline, apart));
+    CHECK(!contains(timeline, R"("status":"error")"));
+  }
+  // Overlapping: one body, nothing said.
+  {
+    auto [document, previewed] = cylinders(8);
+    CHECK(!previewed);
+    CHECK(body_count(*document) == 2);
+    CHECK(body_volume(*document, "F4.b0") > 1.5 * cylinder);
+    CHECK(!contains(std::string(document->query(R"({"query": "timeline"})")), apart));
+  }
+  // Two profiles joined to the block, one away from it: the block takes
+  // the boss, the other profile is a new body, said.
+  {
+    auto document = mitcad::new_demo_document();
+    run(*document, R"({"cmd": "sketch.create"})"); // F3
+    run(*document, sketch_rectangle("F3", 10, 10, 20, 10)); // c1..c4
+    run(*document, sketch_circle("F3", 100, 20, 10)); // c9
+    const std::string join =
+        R"({"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": ")" +
+        kRectangle + R"("}, {"sketch": "F3", "region": "r{c9}"}], "extent": {"type": "distance", "distance": 30}, "operation": "join", "participants": ["F2.b0"]}})";
+    const std::string report(document->preview(join));
+    CHECK(contains(report, R"("status":"ok")"));
+    CHECK(contains(report, apart));
+    run(*document, join); // F4
+    CHECK(body_count(*document) == 2);
+    CHECK(near(body_volume(*document), 60.0 * 40.0 * 20.0 + 20.0 * 10.0 * 10.0));
+    CHECK(contains(std::string(document->query(R"({"query": "timeline"})")), apart));
+  }
+}
+
 void test_thread_end_pieces_keep_their_names() {
   const std::string end = "E{" + kBore + "|F3:high_thread(" + kBore + ")#0}";
   const std::string chamfer_face = "F4:chamfer(" + end + ")#0";
@@ -2239,6 +2303,116 @@ void test_thread_end_pieces_keep_their_names() {
   }
 }
 
+// The string values of `key` in a JSON text, in order (`"key":"value"`).
+std::vector<std::string> string_values(const std::string& text, const std::string& key) {
+  std::vector<std::string> values;
+  const std::string marker = "\"" + key + "\":\"";
+  for (std::size_t at = text.find(marker); at != std::string::npos; at = text.find(marker, at + 1)) {
+    const std::size_t start = at + marker.size();
+    const std::size_t end = text.find('"', start);
+    if (end == std::string::npos) {
+      break;
+    }
+    values.push_back(text.substr(start, end - start));
+  }
+  return values;
+}
+
+std::string read_text(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+// Assembly cuts (mitcad#2131): a welded frame of two linked plates, 40 x 40
+// x 5 mm each, the second on top of the first, drilled at assembly level
+// with one hole of 10 mm through both. Each plate's occurrence is machined
+// there only: its piece has the plate's volume less the hole's, the
+// linked bodies keep theirs, and the plates' design files stay as written.
+void test_assembly_cut_through_two_linked_plates() {
+  const std::filesystem::path dir =
+      std::filesystem::temp_directory_path() /
+      ("mitcad-bridge-2131-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(dir);
+  const std::filesystem::path plates[2] = {dir / "plate-a.mitcad", dir / "plate-b.mitcad"};
+  std::string written[2];
+  for (int i = 0; i < 2; ++i) {
+    auto plate = mitcad::new_document();
+    run(*plate, R"({"cmd": "sketch.create"})"); // F1
+    run(*plate, sketch_rectangle("F1", 0, 0, 40, 40));
+    run(*plate, extrude("F1", kRectangle, 5, "new_body")); // F2
+    CHECK(near(body_volume(*plate), 40.0 * 40.0 * 5.0));
+    plate->save_design(plates[i].string(), "single");
+    written[i] = read_text(plates[i]);
+    CHECK(!written[i].empty());
+  }
+  auto frame = mitcad::new_document();
+  std::string components[2];
+  std::string occurrences[2];
+  std::string definitions[2];
+  for (int i = 0; i < 2; ++i) {
+    const std::string inserted =
+        run(*frame, R"({"cmd": "insert_component", "link": true, "path": )" + quoted(plates[i].generic_string()) +
+                        R"(, "transform": {"translation": [0, 0, )" + std::to_string(5 * i) + "]}}");
+    const auto component = string_values(inserted, "component");
+    const auto occurrence = string_values(inserted, "occurrence");
+    CHECK(!component.empty() && !occurrence.empty());
+    if (component.empty() || occurrence.empty()) {
+      return;
+    }
+    components[i] = component.front();
+    occurrences[i] = occurrence.front();
+    // The definition's body: the first body uid the reply lists.
+    const std::size_t at = inserted.find("\"bodies\":[\"");
+    CHECK(at != std::string::npos);
+    if (at == std::string::npos) {
+      return;
+    }
+    const std::size_t start = at + std::string("\"bodies\":[\"").size();
+    definitions[i] = inserted.substr(start, inserted.find('"', start) - start);
+  }
+  const auto sketch = string_values(run(*frame, R"({"cmd": "sketch.create"})"), "uid");
+  CHECK(!sketch.empty());
+  if (sketch.empty()) {
+    return;
+  }
+  run(*frame, sketch_circle(sketch.front(), 20, 20, 10));
+  const std::string cut =
+      R"({"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": ")" + sketch.front() +
+      R"(", "region": "r{c1}"}], "extent": {"type": "distance", "distance": 10}, "operation": "cut",)"
+      R"( "cut_scope": {"context": {"component": "C0", "occurrence": ""}, "targets": {"type": "explicit",)"
+      R"( "included": [{"component": ")" + components[0] + R"(", "occurrence": ")" + occurrences[0] +
+      R"("}, {"component": ")" + components[1] + R"(", "occurrence": ")" + occurrences[1] + R"("}]}}}})";
+  run(*frame, cut);
+  CHECK(!contains(std::string(frame->query(R"({"query": "timeline"})")), R"("status":"error")"));
+  // Each occurrence shows a piece of its own, drilled.
+  const std::string instances(frame->query(R"({"query": "instances"})"));
+  const double machined = 40.0 * 40.0 * 5.0 - kPi * 5.0 * 5.0 * 5.0;
+  int pieces = 0;
+  for (std::size_t at = instances.find("\"machined_from\""); at != std::string::npos;
+       at = instances.find("\"machined_from\"", at + 1)) {
+    const std::size_t object = instances.rfind('{', at);
+    const auto body = string_values(instances.substr(object, at - object), "body");
+    CHECK(!body.empty());
+    if (!body.empty()) {
+      CHECK(near(body_volume(*frame, body.front().c_str()), machined));
+      ++pieces;
+    }
+  }
+  CHECK(pieces == 2);
+  // The linked bodies keep the plates' volume, and the plates' files are
+  // as they were written, also after the frame is saved.
+  for (int i = 0; i < 2; ++i) {
+    CHECK(near(body_volume(*frame, definitions[i].c_str()), 40.0 * 40.0 * 5.0));
+  }
+  frame->save_design((dir / "frame.mitcad").string(), "single");
+  for (int i = 0; i < 2; ++i) {
+    CHECK(read_text(plates[i]) == written[i]);
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(dir, ignored);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2286,6 +2460,8 @@ int main(int argc, char** argv) {
   test_exceptions_across_the_bridge();
   test_thread_end_pieces_keep_their_names();
   test_face_extruded_up_to_a_face_of_its_own_body();
+  test_join_apart_warns();
+  test_assembly_cut_through_two_linked_plates();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

@@ -39,7 +39,7 @@ wsl -d mitcad-dev --cd "~/src/mitcad" -- bash -lc "cmake --preset dev && cmake -
 |---|---|
 | `sync-to-wsl.sh [distro] [dir]` | Mirrors tracked and non-ignored untracked files into the distro (default `mitcad-dev`, `~/src/mitcad`). Only files whose content differs are replaced and get the sync time, so switching branches rebuilds exactly what changed. Deletes removed files; keeps `build/` and `CMakeUserPresets.json`. |
 | `install-packages.sh` | System packages (compilers, CMake, Ninja, ccache, rsync, X11/OpenGL headers, gdb, Xvfb, xdotool, rsvg-convert, ImageMagick; mosquitto for the live updates' tests, its service disabled; libsecret's headers for QtKeychain and GNOME's keyring for the keychain's test; the system libraries CEF's runtime loads, for the web browser component). Run as root. |
-| `setup-user.sh` | Pinned per-user toolchain: Rust from `rust-toolchain.toml`, cargo-deny, vcpkg at `vcpkg.json`'s `builtin-baseline`, Qt via aqtinstall, the pinned CEF distribution (`fetch-cef.sh`, `MITCAD_CEF_ROOT` in `~/.profile`; [the web browser component](#the-web-browser-component)), the render worker's Cycles with its CUDA device and Open Image Denoise (`build-cycles.sh --cuda`, once; `MITCAD_RENDER_CUDA=0` without CUDA); writes `CMakeUserPresets.json` (`dev` = Linux debug). Under WSLg sets `GALLIUM_DRIVER=d3d12`; `MITCAD_GPU_ADAPTER=NVIDIA` picks a GPU. |
+| `setup-user.sh` | Pinned per-user toolchain: Rust from `rust-toolchain.toml`, cargo-deny, vcpkg at `vcpkg.json`'s `builtin-baseline`, Qt via aqtinstall, the pinned CEF distribution (`fetch-cef.sh`, `MITCAD_CEF_ROOT` in `~/.profile`; [the web browser component](#the-web-browser-component)), the render worker's Cycles with its CUDA device and Open Image Denoise (`build-cycles.sh --cuda`, once; `MITCAD_RENDER_CUDA=0` without CUDA); sets ccache's size limit to 20G where the user set none ([the compiler cache of the vcpkg ports](#the-compiler-cache-of-the-vcpkg-ports)); writes `CMakeUserPresets.json` (`dev` = Linux debug). Under WSLg sets `GALLIUM_DRIVER=d3d12`; `MITCAD_GPU_ADAPTER=NVIDIA` picks a GPU. |
 | `install-appimage-tools.sh` | AppImage tools into `~/appimage-tools` (`MITCAD_APPIMAGE_TOOLS`), see [below](#tools-downloaded-from-releases). |
 | `build-root.sh` | An Ubuntu 24.04 build root on a newer Linux host, entered with bubblewrap, see [below](#linux-on-a-newer-host). |
 
@@ -130,7 +130,7 @@ ssh -i <key> <user>@<vm-host> "cd /d C:\dev\src\mitcad && tools\dev-env\msvc.cmd
 |---|---|
 | `sync-to-vm.sh [user@host] [dir]` | Like `sync-to-wsl.sh`, over SSH. Defaults: `MITCAD_VM`, `MITCAD_VM_DIR` (`C:/dev/src/mitcad`), `MITCAD_VM_KEY` (`~/.ssh/mitcad_vm`). |
 | `setup-windows.ps1 [-Repo <dir>]` | Installs Git, CMake, Ninja, Rustup, Python, NSIS (winget), ccache, the pinned Rust toolchain, cargo-deny, vcpkg, Qt and the pinned CEF distribution (`fetch-cef.ps1`, the user's `MITCAD_CEF_ROOT`) under `C:\dev`, the render worker's libraries (`build-cycles.ps1 -Cuda`, once; `MITCAD_RENDER_CUDA=0` without CUDA); writes `CMakeUserPresets.json` (`dev` = Windows release). Run as administrator. |
-| `setup-ccache-windows.ps1 [-Dir] [-MaxSize]` | ccache into `C:\dev\ccache`, on the machine `PATH`, cache limit 4G (a build with the render worker; 2G was cleaned over and over). |
+| `setup-ccache-windows.ps1 [-Dir] [-MaxSize]` | ccache into `C:\dev\ccache`, on the machine `PATH`, cache limit 20G (a build with the render worker and OCCT's objects from vcpkg's port builds; 2G was cleaned over and over). |
 | `setup-mesa-windows.ps1 [-Out] [-Vcpkg] [-Jobs]` | Builds Mesa's llvmpipe (~20 min) into `<Out>\bin` (default `C:\dev\mesa`). Needed in a VM without a GPU (Windows offers only OpenGL 1.1). |
 | `msvc.cmd <command>` | Runs a command in the VS x64 environment, rebuilding `PATH` from the registry first (SSH sessions keep a stale one). |
 
@@ -180,7 +180,7 @@ ssh -i ~/.ssh/mitcad_mac $MITCAD_MAC "cd ~/src/mitcad && cmake --preset dev && c
 | Script | Use |
 |---|---|
 | `sync-to-mac.sh [user@host] [dir]` | Like `sync-to-vm.sh`: stages the archive, compares contents and replaces only changed files with the sync time; unchanged files keep their times, and deleted files disappear. Keeps `build/` and `CMakeUserPresets.json`; no `._*` files or extended attributes. Defaults: `MITCAD_MAC`, `MITCAD_MAC_DIR` (`~/src/mitcad`), `MITCAD_MAC_KEY` (`~/.ssh/mitcad_mac`). |
-| `setup-macos.sh [--compiler-caches-only]` | CMake, Ninja, ccache (universal) and sccache (arm64) release archives into `~/.local` (not Homebrew), the pinned Rust toolchain, cargo-deny, vcpkg at `vcpkg.json`'s baseline, Qt via aqtinstall (`~/Qt/<version>/macos`), the pinned CEF distribution (`fetch-cef.sh`), the render worker's libraries (`build-cycles-macos.sh`, once); writes `CMakeUserPresets.json` (`dev` = `macos-debug`). Downloads are checked against the SHA-256 pins in `versions.sh`; an empty pin stops it unless `MITCAD_SKIP_HASH=1`. The optional flag installs only the two compiler caches, leaving other dependencies, shell files and presets alone. |
+| `setup-macos.sh [--compiler-caches-only]` | CMake, Ninja, ccache (universal) and sccache (arm64) release archives into `~/.local` (not Homebrew), the pinned Rust toolchain, cargo-deny, vcpkg at `vcpkg.json`'s baseline, Qt via aqtinstall (`~/Qt/<version>/macos`), the pinned CEF distribution (`fetch-cef.sh`), the render worker's libraries (`build-cycles-macos.sh`, once); writes `CMakeUserPresets.json` (`dev` = `macos-debug`). Downloads are checked against the SHA-256 pins in `versions.sh`; an empty pin stops it unless `MITCAD_SKIP_HASH=1`. The optional flag installs only the two compiler caches, leaving other dependencies, shell files and presets alone. Both set ccache's size limit to 20G where the user set none. |
 
 `tools/dev-env/versions.sh` holds the pins `setup-user.sh` and
 `setup-macos.sh` share; the Windows script mirrors them by hand. The
@@ -1209,18 +1209,21 @@ it into use on its machine.
   learnt from the same runs, without a measuring run: each UI entry's run
   records how many other UI entries ran beside it. A failure beside others
   that passes alone is a contention failure (+2 to the failure score, not
-  +10): it halves that test's room (the UI entries it may have beside it);
-  a run in which two or more UI entries fail so lowers the machine's cap
-  (per platform, in the profile file) by one (mitcad#872: one test that
-  is sensitive to load holds back only itself); two clean runs that
-  reached the cap raise it by one. A machine
-  opts in by giving the bound, `--ui-max` or `MITCAD_UI_JOBS`: then the
-  scheduler holds UI entries to the cap (which starts at the bound
-  and never goes above it) and to their rooms, and reruns a UI entry that
-  failed beside others alone after them, so `MITCAD_UI_JOBS` is the
-  ceiling, no longer the number at once. Without a bound the runs only
-  record and learn (within 4); UI entries are scheduled as before. For
-  the Linux UI tests that `tools/check-all.sh` runs itself,
+  +10): it halves that test's room (the UI entries it may have beside it),
+  and three passes with the room full grow it by one. Contention lowers
+  only the test's own room, never the machine's cap (mitcad#872,
+  mitcad#2124: a few tests sensitive to load held a 12-core VM at 2 of
+  its 6): the machine's cap is the bound, `--ui-max` or `MITCAD_UI_JOBS`,
+  else 4 (one number for the scheduler and the report), kept for the
+  memory budget only (the scheduler admits a UI entry, as
+  any test, only while its predicted memory fits the budget). A cap that
+  an older runner learnt lower into the profile file is not read, and the
+  file's next save drops it. The scheduler holds UI entries to the cap
+  on every machine. A machine opts in to the rooms by giving the bound:
+  then the scheduler also holds UI entries to their rooms, and reruns a
+  UI entry that failed beside others alone after them. Without a bound
+  the runs only record and learn the rooms; no room applies and none is
+  rerun. For the Linux UI tests that `tools/check-all.sh` runs itself,
   `mitcad-testrun --ui-cap` prints the cap to run at, `--ui-rooms` the
   tests' rooms, which it keeps as the scheduler does, and `--record-ui
   FILE` takes the runs back (name, exit status, seconds, UI entries beside
@@ -1353,6 +1356,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_CARGO_SWEEP=0`, `MITCAD_CARGO_JOB_MIB` | The crates' test builds (`core.cargo_build*`): no sweep of stale units after the build; MiB of available memory per cargo job instead of 2560 ([the crates' test builds](#the-crates-test-builds-sweep-jobs-debug-information)). |
 | `MITCAD_TEST_PRINT_PDF=<file>` | File › Print (mitcad#1089) shows no system print dialog: it prints to this PDF file through `QPrinter` (`printing::askPrinter`, logged `Print dialog skipped (test): printing to <file>`): `tools/ui-paper-print-test.sh`, `app.ui-windows-paper-print`, the print steps of `tools/ui-drawings-test.sh` and `tools/ui-build-test.sh`. |
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
+| `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). |
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
 `--no-recovery`, `--no-native-dialogs` (Qt's file dialogs, so paths can
@@ -2004,7 +2008,7 @@ It checks at two depths:
 | root-compile | On a host whose GCC is newer than the Linux release's [build root](#linux-on-a-newer-host)'s, the C and C++ files the change touches compiled with the root's GCC, `-fsyntax-only` (`tools/check-root-compile.py`, mitcad#1551), so that code the host's compiler accepts and the release's refuses fails here rather than in the release (0.53.0-rc1 and 0.54.0-rc1 failed on an OCCT handle of a derived class copy-initialized or returned as a handle of its base, which GCC 15 accepts and GCC 13 refuses). The files: those that differ from the merge base with the nearest of `origin/dev`, `origin/features` and `origin/main` (committed or not) and have compile commands, and for a changed header the sources whose dependencies name it (`ninja -t deps`); with `--full` every source file of `geometry/`, `core/cpp/` and `app/`. Each runs in the root (`build-root.sh run`) with the dev build's `compile_commands.json` flags, so the tree, its generated headers and the build's packages are the same and only the compiler and its system headers are the root's; include folders outside `/usr`, `/etc` and `/var` (a Qt installation, the render prefix) are bound in at their real paths. An error or a warning fails the row (the release's build fails on warnings too) and its log, `check-logs/root-compile.log`, shows the compiler's output per file. The root is `MITCAD_LINUX_BUILD_ROOT`, the variable the release reads: export it in the login profile of a machine that has a root. The row is `skipped`, with the reason as its line, without that variable or root, when the build's compiler is not GCC or not newer than the root's (inside the root itself, as in the release's own check), or without `bwrap`. Beside the ctest step with fmt, clippy, deps and guide. `tools/check-root-compile.py --list` names the files without compiling; `--base REF` measures the change from another ref. |
 | ctest | The tests whose sources changed (below), without the corpus group, through the test runner (below); `cli.perf_*` run serially. The Linux UI ctests (`app.ui-linux-*`, each on a hidden X server of its own) run beside the others, within the runner's UI entries at once (mitcad#832). The geometry suite runs as one ctest per part (`geometry.suite.<part>`). |
 | corpus | `f3d.corpus*`, `f3d.models_loft`, `freecad.corpus*`, `ipt.corpus`, several at once (`--corpus-tests`), each importing several files at once (`--corpus-jobs`, `MITCAD_CORPUS_JOBS`). By default the test runner gives each corpus test its files at once from its profile (`mitcad-testrun --corpus-children`, mitcad#832; [tools/testrun/README.md](../tools/testrun/README.md#corpus-tests)): every run records each file's time and peak, and the next starts the longest files first and shares the machine's cores and the run's memory budget among the corpus tests by their work, a long test more children and a short one fewer, each child's memory limit twice its test's largest file's peak, never below `MITCAD_CORPUS_MEMORY` (1536M). A test without that history yet, every test with `--corpus-jobs`, and ctest -j without the runner take the fixed plan: all their children together fit the run's memory limit less 1G at `MITCAD_CORPUS_MEMORY` each, and the cores of a test slot; about the square root of that many tests run at once (12G, 32 cores and three slots: two tests, three files each). Each child runs within 300 s (`MITCAD_CORPUS_TIMEOUT`); `f3d.corpus_designs` checks its designs one after another in one process since 0.32.0 (at once, under the full check's load in the Linux release's build root, an item ran out of its item time), and a debug build's imports try an item from its own start, the route tried first, three times as long (`--own-start-time-scale`, mitcad#847); the runner then plans it by its own history, not by children (mitcad#872). With the budget from the free memory (`--memory auto` on bare metal, below) a child beside others starts only while the memory available exceeds the reserve by the child's file's last peak (`MITCAD_CORPUS_RESERVE`). The corpus step runs beside the UI tests (`--overlap auto`). Every corpus test is a row of the table. `auto` runs them only when `CORPUS_SOURCES` or the corpus files differ from every passing run on the machine (`~/.cache/mitcad/corpus-passed`). `CORPUS_SOURCES`: the readers and the import, the bridge's kernel and import files (`core/ffi/src/kernel`, `*_import.rs`, `ipt_history.rs`, `exchange.rs`, `memory.rs`, `core/cpp`; not `lib.rs` or other families' files), the geometry, `mitcad-cli`'s imports (`tools/cli/import.cpp`, not `main.cpp`), the build files, the OCCT port, and the resolved dependencies of the import's crates (`cargo tree` of `CORPUS_CRATES`, instead of `Cargo.toml` and `Cargo.lock`, so a crate added for something else does not count). Changes in `core/model` alone don't trigger it: use `--corpus always` when they may affect imports. |
-| `ui-<name>` | The `tools/ui-*-test.sh` whose sources changed (below), `--ui-jobs` at a time (below), longest first, 30 min limit each (`UI_TIMEOUT`); with the test runner the machine's learnt cap within `MITCAD_UI_JOBS`, and each test's learnt room (`mitcad-testrun --ui-rooms`: the most other UI tests it may have beside it after it failed beside more and passed alone) is kept: such a test waits until few enough run, while the others go on (mitcad#872). The tests' waits for a log line (`ui_expect_log`, `ui_expect_new`) do not count the time the application computes (a job logged `Computing ... started` and not its end), up to 60 s more, so that a preview that takes longer under load is not a failure. `ui-compute` runs alone at the end (flaky under load), after the corpus step that ran beside the others. A test that fails among the others without crashing runs once more alone after them: a pass shows as `ok-again` and counts, so load flakiness stays visible without failing the check; a second failure, or a crash, fails it (mitcad#657). |
+| `ui-<name>` | The `tools/ui-*-test.sh` whose sources changed (below), `--ui-jobs` at a time (below), longest first, 30 min limit each (`UI_TIMEOUT`); with the test runner `MITCAD_UI_JOBS` (the machine's cap, which contention failures never lower, mitcad#2124), and each test's learnt room (`mitcad-testrun --ui-rooms`: the most other UI tests it may have beside it after it failed beside more and passed alone) is kept: such a test waits until few enough run, while the others go on (mitcad#872). The tests' waits for a log line (`ui_expect_log`, `ui_expect_new`) do not count the time the application computes (a job logged `Computing ... started` and not its end), up to 60 s more, so that a preview that takes longer under load is not a failure. `ui-compute` runs alone at the end (flaky under load), after the corpus step that ran beside the others. A test that fails among the others without crashing runs once more alone after them: a pass shows as `ok-again` and counts, so load flakiness stays visible without failing the check; a second failure, or a crash, fails it (mitcad#657). |
 
 ctests by what changed (`--ctest auto`, the default; mitcad#134): each
 ctest has a fingerprint of what it depends on, and is skipped (an
@@ -2144,8 +2148,9 @@ test first renames its logs to `ui-<name>.failed.log` and
 UI test that crashed runs once more under gdb (`UI_GDB=1`), its log
 `ui-<name>.gdb.log` and the app's in `ui-<name>.gdb/`; the test stays
 failed whatever that run gives. UI tests run `--ui-jobs` at once, by
-default the test runner's learnt cap within `MITCAD_UI_JOBS`, else 4
-(each takes about 0.5 G without gdb), each within its learnt room.
+default `MITCAD_UI_JOBS`, else 4 (each takes about 0.5 G without gdb),
+each within its learnt room; a test that fails beside others and passes
+alone lowers only its own room, never that number (mitcad#2124).
 
 The ctest and corpus steps run through the test runner
 ([mitcad-testrun](#the-test-runner-mitcad-testrun), `--schedule`) when it
@@ -2224,7 +2229,8 @@ runs one step after another. Build and lint use half the cores unless
 - C++ and macOS Objective-C++ go through ccache when installed (`MITCAD_COMPILER_CACHE`, default
   on). Paths are hashed relative to the checkout, so side-by-side
   checkouts share the cache. MSVC uses `/Z7` (CMP0141) because ccache
-  can't cache shared PDBs. Rust can use sccache with
+  can't cache shared PDBs. vcpkg's port builds, OCCT's above all, go
+  through it too ([below](#the-compiler-cache-of-the-vcpkg-ports)). Rust can use sccache with
   `MITCAD_RUST_COMPILER_CACHE` (default on for macOS, off elsewhere),
   disabling incremental compilation only while that cache is active;
   see the [macOS cache setup and limitations](#macos-the-build-vm).
@@ -2242,6 +2248,69 @@ runs one step after another. Build and lint use half the cores unless
   sync keeps), and can be deleted afterwards: every later configure, in
   any checkout, restores OCCT from vcpkg's binary cache (an archive of
   0.3 GB on Linux, 0.55 GB on Windows). macOS builds it the same way.
+  A changed patch is a new package, but its build takes most objects from
+  ccache ([below](#the-compiler-cache-of-the-vcpkg-ports)).
+
+### The compiler cache of the vcpkg ports
+
+vcpkg's binary cache (`~/.cache/vcpkg/archives`, `%LOCALAPPDATA%\vcpkg\archives`)
+holds whole packages: a new or changed OCCT patch is a new package hash
+and was built from scratch, all of OCCT's translation units, although the
+patch changes a few. With `MITCAD_COMPILER_CACHE` on (the default) and
+ccache installed, the port builds compile through ccache as well, in the
+same cache as MitCad's own C++, so such a rebuild compiles only the files
+the patch changed:
+
+- `cmake/VcpkgCompilerCache.cmake`, before `project()` (where the vcpkg
+  toolchain installs the manifest), sets the environment variables
+  `CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_CXX_COMPILER_LAUNCHER` to ccache.
+  Every CMake-based port takes them as its default launcher; ports built
+  with Meson or Make do not. vcpkg builds the ports in a clean environment
+  on Windows: `VCPKG_KEEP_ENV_VARS` lets these and the `CCACHE_*` variables
+  through. The variables are removed again after `project()`, so they do
+  not change MitCad's own launcher. A launcher or `CCACHE_*` variable the
+  caller set already is kept.
+- The binary cache stays valid: vcpkg hashes the triplet, the port's files
+  and the compiler, not the environment (only a triplet's
+  `VCPKG_ENV_PASSTHROUGH` is hashed), so a package built through ccache has
+  the same hash as one built without it, and either restores the other.
+  The triplets are not changed.
+- The cache key: `CCACHE_BASEDIR` is vcpkg's root, so the paths under it
+  (the sources and the build folders in `buildtrees`) are hashed relative
+  to the compile's folder, and `CCACHE_NOHASHDIR=1` keeps that folder out
+  of the hash, which `-g` would otherwise put in. Every port's build
+  folder under one vcpkg root is the same for every checkout, so the debug
+  information of a cached object names the right paths.
+- vcpkg names a port's extracted sources after the hash of its patch set
+  (`buildtrees/opencascade/src/V8_0_1-<hash>.clean`): with a changed patch
+  every file would be under a new path and nothing would hit. OCCT's
+  portfile therefore moves the patched sources to a folder of a fixed name,
+  `buildtrees/opencascade/src/occt`, and builds from there (the sources are
+  extracted and patched afresh on every build all the same). Other ports
+  keep vcpkg's naming: their patches do not change.
+- Each checkout installs into its own `vcpkg_installed` folder, and the
+  ports compile against the headers of their dependencies there, under a
+  path outside vcpkg's root. A compile with such an include path misses
+  ccache's direct mode in another checkout and then hits in its
+  preprocessor mode, which leaves include paths out of the key; only a
+  file that includes a dependency's header (FreeType and the like) can
+  still miss.
+- MSVC: vcpkg's Windows toolchain compiles the ports with `/Z7` already,
+  which ccache needs, as MitCad's own build does.
+- `MITCAD_COMPILER_CACHE=OFF` builds the ports without ccache too.
+- Size: OCCT's debug and release objects take several GB of the cache.
+  The setup scripts set ccache's limit to 20G where the user set none
+  (`CCACHE_MAX_SIZE` in `tools/dev-env/versions.sh`;
+  `setup-ccache-windows.ps1 -MaxSize`); `ccache --set-config max_size=20G`
+  does it by hand, and `ccache -s` shows the hits.
+
+Measured on a Linux VM (12 cores, ports at 6 jobs, beside another check;
+mitcad#2106): OCCT's first build through an empty cache took 1.9 h
+(11 139 compiles, 0.9 GB of cache). A second checkout at another path,
+with a one-line change in one ChFi3d patch, then rebuilt OCCT in 3 min:
+11 131 of the 11 139 compiles hit (99.9 %), 606 of them in ccache's
+preprocessor mode, as its `vcpkg_installed` path differed. The other 43
+packages were restored from the binary cache both times, as before.
 
 ## Code conventions
 
@@ -2465,6 +2534,19 @@ A patch file keeps its number and its place in `portfile.cmake` when it
 changes; after a change the port gets the checks of any port change (the
 scoped check of the machine's platform), and the failing-before proof of a
 new test is one run of it against the port with and without the patch.
+`tools/occt-port-proof.py <number>...` makes that run on Linux: it
+reverts each patch at the port's tip in a scratch OCCT tree, rebuilds the
+changed libraries (and the MitCad tests that include a changed OCCT
+header), runs the ctests the header's `Test:` paragraph names against
+them, and writes the table
+[opencascade-before-after.md](../third_party/vcpkg-ports/docs/opencascade-before-after.md);
+`--update-headers` then records each verdict in the patch's header.
+A patch that does not revert at the tip (later patches change the same
+lines) is shown at its own place in the chain with `--in-chain`: OCCT with
+the patches before it and with the patches up to it, the MitCad tests
+built against each state's headers, a later patch carried onto both only
+where the MitCad code needs the API it adds (`--jobs` workers, resumable;
+`--table-verdict` takes the patches by their verdict at the tip).
 
 ## Licence policy
 

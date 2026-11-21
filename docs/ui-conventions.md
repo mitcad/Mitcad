@@ -113,7 +113,10 @@ not a level of its own, and MitCad has no separate assembly file.
   component; a supplier's code for it is a **Supplier Part Number**.
   Stored ids keep their old spelling (`tools.library_parts`,
   `build.linear_part`, `derived_part`, `drawing.parts_list`): they are
-  not user-facing.
+  not user-facing. *Parts of a design* is the one other use, in the
+  plural: what is chosen from a design to link, its occurrences and its
+  root's bodies together (**Choose Parts…**, **Choose Linked Parts…**,
+  mitcad#2130); one of them is still a component or a body by name.
 - **Bill of Materials (BOM)** is the list of a design's components with
   their quantities, part numbers and suppliers: the Build tab's *Bill of
   Materials*, the tab of Components in This Design and the drawing's table. It
@@ -405,7 +408,14 @@ label.
    "608 (8x22x7)" as a stored name).
 8. **Menu paths and pages.** "›" between levels; a page as *the
    Diagnostics page of Tools › Preferences*. Shortcuts through
-   `QKeySequence::NativeText`, never a hard-coded "Ctrl".
+   `QKeySequence::NativeText`, never a hard-coded "Ctrl". A key sequence
+   (keys pressed one after the other, mitcad#2095) is written as that
+   text writes it, its keys separated by a comma and a space (*G, L*);
+   where one command's several keys are listed and one of them is a
+   sequence, the keys are separated by "; " (*G, L; F3*), else by ", ". A
+   key that is the start of another is named with its command in brackets
+   (*E (Extrude) is the start of E, X (Line) in the 3D view. Change one of
+   them.*).
 9. **The program's name.** MitCad in every message, window title and
    log line (see [The program's name](#the-programs-name)).
 10. **One source per string.** The AppKit frontend takes labels from the
@@ -677,6 +687,20 @@ Where the window's messages are shown and kept (mitcad#1042,
   An error that the closing itself raised (a tool that ends on its own
   failure) stays, as it says why. Errors from elsewhere (a failed feature,
   an import, a refused file) keep the rule above.
+- **A message's button.** A message carries one button at most (Update,
+  Open Linked Design, a sketch refusal's Replace, mitcad#2090): beside
+  the close button in the Floating band, after the message in the Docked
+  status bar. What it does is one undo step, and it checks first that what
+  the message was about is still as it was. A message with a button does
+  not fade; one raised by a source goes with that source, as its error
+  does, and its button with it.
+- **Modifiers in a running tool.** Shift held with the step that finishes
+  a tool's action (the click that adds a constraint, the Enter that
+  accepts a dimension's value) means "at once", as Shift + click does in
+  command inputs (mitcad#451, mitcad#2090): what a button would offer
+  after the step is done in it. Not Ctrl (it adds to the selection and is
+  Cmd on macOS) and not Alt (it orbits in some mouse schemes and opens the
+  menu bar).
 - **No empty start.** A message built from what was typed names the typed
   text only when there is some: an empty value says *Enter a value.*, never
   *: Enter a value.*
@@ -950,6 +974,41 @@ window's Options and Rows, the Render Appearances panel's Favorites:
 A list that is empty only because a search or a filter matches nothing
 needs no text.
 
+**Columns: the name keeps its room** (mitcad#2096). In a list with
+several columns, the name column (the command, the item) stretches and
+takes the room left; every other column is as wide as the longest text
+its rows show, never as wide as the longest text it could show (Keyboard
+Shortcuts' Context once took the width of all four contexts joined and cut
+the commands to "Ke…"). The view is never narrower than its name column's
+longest name needs beside the other columns, so the window's smallest
+size still shows whole names (`ShortcutDialog::fitColumns`).
+
+**On paper the name keeps its room too** (mitcad#2116). A printed list
+(the Cut List, Bill of Materials and Sheet Metal PDFs and prints, the
+Keyboard and Mouse Overview's cheat sheet; `app/build/ListPages.cpp`)
+has the page's fixed width, so when its columns are too wide together:
+
+1. The other columns close up: each keeps its longest text and its gap
+   after it shrinks from two average characters to one.
+2. The name column (`ListTable::nameColumn`: the component, the command)
+   takes the room left, and a name longer than that wraps whole onto a
+   second line, broken after a word; the other cells of its row stay on
+   its first line.
+3. Only when the page still cannot hold the table is anything cut, with
+   "…": a name longer than two lines at the end of its second line, and,
+   when the other columns do not fit beside a name column of its header
+   and a third of the page, the widest of the other columns, narrowed to
+   one width. A short column and a header are cut only then.
+
+A table that goes on to the next page repeats its caption there with
+"(continued)", and its column header and rule under it (one shared
+header at the top of each page where the tables share their columns).
+The pages are laid out and painted in a fixed 1200 dpi reference scaled
+to the device, with the fonts sized in its pixels (`kReferenceDpi`), so
+that the saved PDF (300 dpi) and every printer give the same rows on each
+page, the same column widths and the same lines; the rule under a header
+is 0.25 pt on every device (`kRuleWidth`).
+
 The ctest `repo.tree-indentation` (`tools/tree-indentation-check`) reads
 the sources of `app/` (comments and strings left out) and fails on a
 `QTreeView` or `QTreeWidget` made without the helper, counted per file
@@ -1006,6 +1065,7 @@ part inside a control are not spaces.
 | Bar margins | 16 at the sides, 4 above and below (`GlassCard::barMargins`) | around a bottom bar's one row |
 | Row spacing | 4 | between the controls of one row (tabs, chips, small buttons) |
 | Top bar spacing | 12 | between the top bar's groups |
+| Printed rule | 4 pt under the rule (`kRuleGap`), the rule 0.25 pt (`kRuleWidth`, `app/build/ListPages.cpp`) | between a printed list's column header and its rule, and the caption or row under it (mitcad#2096, mitcad#2116); a printed list is laid out in a fixed 1200 dpi reference scaled to the device (`kReferenceDpi`), so the PDF and the print break the pages at the same rows and give the columns the same widths (chapter 6, "On paper the name keeps its room too") |
 
 ## 9. Corners
 
@@ -1066,12 +1126,22 @@ so Text size scales them all.
   backdrop they stand on (`IconBackdrop`); one stroke weight across a
   row. A command without an icon gets one drawn in this style, never
   third-party art.
-- Sizes are `uiIconSize(n)` so that Icon size scales them: **26** on the
-  toolbar panel's buttons (`kMacIconSize`), **18** in the top bar and the
-  card headers' small buttons, **16** in rows, chips and pills, **14**
-  for marks inside a control (a ˅, a ×).
-- A button is its icon with 5 px around it (`macButtonSize`); an icon
-  never touches its button's edge.
+- The thin outline (mitcad#2092): the toolbar's buttons (Floating and
+  Docked, a collapsed group's too) and the timeline draw the sources'
+  outline at half its width, 0.65 in the 24 grid (`kThinOutlineWeight`,
+  applied when the icon is drawn, `themeIcon`'s outline weight); the
+  action, sketch, construction and status strokes keep theirs. The
+  Browser, menus, the top bar, cards and dialogs keep 1.3. A command
+  button draws `commandButtonIcon`; its action keeps the 1.3 icon for the
+  menus and the command search.
+- Sizes are `uiIconSize(n)` so that Icon size scales them: **30** on the
+  Floating toolbar panel's buttons (`kMacIconSize`) and **32** on the
+  Docked toolbar's (`kIconSize`), **24** in the timeline's 28 cell,
+  **18** in the top bar and the card headers' small buttons, **16** in
+  rows, chips and pills, **14** for marks inside a control (a ˅, a ×).
+- A toolbar button is its icon with 3 px around it (`macButtonSize`,
+  `classicButtonSize`: 36 and 38 px); other buttons keep 5 px around their
+  icon (the top bar's). An icon never touches its button's edge.
 
 ## 12. The top bar
 
@@ -1080,23 +1150,57 @@ controls 30 px high, 12 px between its groups and at its ends. Nothing is
 painted behind it but the window; its groups are pills of the card
 radius only where they are a pair or a menu.
 
-From the left: ☰ (the menus), Home, File, Save, Undo and Redo, the open
+From the left: **one left group** (mitcad#2129), then the open
 documents' tabs; at the right Boost development (while shown), the
+Discord button (an icon, mitcad#2123; also while Boost is hidden), the
 project and assistant indicators (compact icon buttons with a ˅, their
 text in the tooltip), the chat, Preferences, ? (Help) and the version.
-The quick-access group comes after Redo only while it has commands.
+
+**The left group** is the quick-access group (`QuickAccessGroup::
+setTopBar`), flat on the bar, its buttons the command buttons' size and
+2 px apart, a hairline after Home and before its add button:
+
+- **Fixed:** ☰ (the menus) and Home. They are always shown, never fold
+  and have no remove entry; their right-click gives the group's menu.
+- **Default items**, in this order: File ˅ (the File menu, a text button),
+  New Design, Open, Save, Design Properties, Print, Undo, Redo. Each can
+  be removed (Remove from Quick Access in its right-click menu, or its
+  check cleared in the add button's menu) and added back, which puts it
+  at its default place again. Print shows only while something prints (a
+  drawing or the rendered view), as in the File menu.
+- **Added commands** (Add to Quick Access from a toolbar button or a
+  command search result, or a check in the add button's menu) follow the
+  default items in the order added.
+- **The add button** (⋮) at the group's end: the File Menu check, the File,
+  Edit, View and Tools menus' commands as checks, Reset to Default and
+  Hide Quick-Access Toolbar. Hiding hides only the added commands: ☰,
+  Home and the default items stay.
+- **Narrow windows:** the items fold from the group's end into the add
+  button's menu, first in it; the document tabs keep their room.
+- What the bar shows itself (Preferences) is never a button of the group
+  as well.
 
 The Docked layout has the same top bar on Windows and Linux (mitcad#2082):
 the same class (`TitleBar`), controls, order, flatness and fonts, at the
 window's top above the toolbar panel and the docks, with the window's
-own title bar as in the Floating layout. Neither layout has a menu bar
-row there: ☰ holds the menus, File and ? drop from the bar, and the
+own title bar as in the Floating layout, the same left group. Neither
+layout has a menu bar row there: ☰ holds the menus, File and ? drop from
+the bar (File from the ☰ while the user removed File ˅), and the
 menus' keys open them from it. The two layouts differ only in cards
 (Floating) against docks (Docked) and in the toolbar panel spanning the
 window (Docked) instead of floating between the view's margins. Where
 the system shows the menu bar (macOS) the Docked layout keeps its own
 toolbar without this bar: Undo, Redo, the quick-access group, Boost
-development and the command search at its tab row's right end.
+development, the Discord button and the command search at its tab row's
+right end.
+
+A document tab in the top bar is as wide as its name in the wider of the
+two weights it is drawn in (Regular, and DemiBold on the shown design's
+tab), so it keeps its width when it is shown, plus its × and padding, up
+to 240 px for the name: a short name ("Untitled", "Bracket") is always
+whole, only a longer one is elided in the middle (mitcad#2060,
+mitcad#2082). The row narrows the tabs to their elided names only when it
+has no room for them.
 
 ## 13. The toolbar panel
 
@@ -1129,7 +1233,10 @@ shown last in it, at first on its first tab.
   its buttons with a short label under each icon (Preferences › Display ›
   Toolbar labels: Icons only turns the labels off; the toolbar panel
   shows them by default in both layouts) and its caption with ˅ under them, which opens
-  the group's menu of all its commands.
+  the group's menu of all its commands. The buttons' icons are 30 px
+  with 3 px around them and the thin outline ([Icons](#11-icons)); with
+  Icons only the panel is lower than with labels, in every workspace and
+  after a restart (mitcad#2092).
 - **A tab's own content is groups too.** A workspace whose page is its
   own (the Render workspace's stage actions, mitcad#2013) builds it of
   the same parts (`Ribbon::createContentGroup`, `createContentButton`,
@@ -1173,7 +1280,9 @@ Docked tab row before the selector came there).
      between the rocket and the ×), its name and where it leads in the
      tooltip; the × still hides it. Its name is never cut, and the pill is
      never wider than the rocket and the × need. It takes its whole form
-     back once every tab fits beside it.
+     back once every tab fits beside it. The Discord button after it
+     (mitcad#2123) is its icon only, as compact as it gets: the row
+     counts its width, and it neither shrinks nor squeezes the tabs.
   2. **Then the tabs fold**: the tabs at the row's right end go into a »
      right after the last tab in sight, and the + of the tabs' menu
      follows the » at the row's spacing, as it follows the last tab of a
@@ -1249,12 +1358,13 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
 
 | State | Look |
 |---|---|
-| Hover | on a button, tab or chip a translucent tint of the text color (about 8 %) of the control radius; on a row or a cell `HoverFill`; in the 3D view, the sketch and the drawings `Hover` |
+| Hover | on a button, tab or chip a translucent tint of the text color (about 8 %) of the control radius; on a row or a cell `HoverFill`; in the 3D view, the sketch and the drawings `Hover`. A button's hover ends when its menu closes with the pointer off the button (an entry chosen below it, mitcad#2061) |
 | Pressed | the same tint, stronger (about 14 %) |
 | Disabled | the palette's disabled text color (further from `Text` than `TextSecondary`) and the icon's disabled form; no fill |
 | Checked / chosen | the accent: a filled rectangle (the shown tab), an outline (a toggle) |
-| Selected row | a band of the accent (`Action`, translucent) across the row's whole width, of the control radius, inset 2 px |
+| Selected row | a band of the accent (`Action`, translucent) across the row's whole width, of the control radius, inset 2 px; also in a popup's list (the parameter suggestions), where a hovered row takes `HoverFill`, so that hover and selection differ |
 | Highlighted row of a pop-up list | the selected row's band, the row's text in its usual colour: every drop-down's list (a combo box's, editable or not), a completer's and a list in a pop-up window (Command Search), in both themes and layouts; never the system's highlight colour as a square band (mitcad#2084) |
+| Selected text | the palette's `Highlight` and `HighlightedText` (the accent with `AccentText`) in every field, also a field over the view (the sketch's value fields, in their light values); never `HoverFill` |
 | Selected object | `Select` in the 3D view, the sketch, the drawings, the pickers and the Timeline |
 | Focus | an accent ring on fields; none on flat buttons (they take no focus) |
 | Error, warning | the level's border, fill, icon and word ([Messages and severity](#3-messages-and-severity)), never the color alone |

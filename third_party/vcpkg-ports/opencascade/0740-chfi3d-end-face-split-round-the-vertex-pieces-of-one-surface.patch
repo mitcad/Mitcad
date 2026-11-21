@@ -44,8 +44,8 @@ test_bar_top_rounded_into_a_bore_split_round_the_corner (ctest
 geometry.suite.fillet_results): a bar across a ring of two layers, the
 upper notched over the bar and the notch filled again (the bore's wall in
 three pieces round each end of the bar's top edges), as copied (each piece
-on its own surface): the bar's top edges rounded. Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+on its own surface): the bar's top edges rounded. It fails without the
+patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

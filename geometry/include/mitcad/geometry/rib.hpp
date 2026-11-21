@@ -59,6 +59,27 @@ enum class ThicknessLocation { Symmetric, Side1, Side2 };
 //
 // With `direction` (a rib's, in the sketch plane) the rib grows along it
 // instead of at right angles to the chord (mitcad#1746); `flip` turns it.
+//
+// With `draft_angle` (radians, 0 for none; mitcad#2102) both sides of the
+// wall lean by that angle, so that it is thicker where it meets the bodies
+// (a moulded part's draft). `thickness` is measured at the curves: at a
+// distance u from them, the way the wall grows, each side lies
+// u tan(draft_angle) further out than `location` puts it there. A rib
+// widens from its curves the way it grows: its sides are the curves swept
+// along the leaned directions (planes for lines). A web whose curves lie
+// on a face of `bodies` (the material just behind the sketch plane at a
+// curve's middle) narrows the way it grows; any other web widens. A
+// negative angle does the opposite. Mitred corners lean with the walls and
+// stay joined (a mitre cut off at a sharp corner is cut at the same share
+// of its length at the sketch plane and at the far end), and so do the
+// pieces at nodes of three or more walls. An end continued with
+// `extend_ends` leans as the wall does, and a free end stays square to its
+// curve while its sides lean. An angle that makes the sides meet before the
+// wall's depth fails with "the draft angle closes the rib (web) before its
+// depth"; up to the next faces the wall runs at most until its sides are
+// a tenth of `thickness` apart, and fails with "... before it reaches the
+// faces of the bodies" where none closes it off by then. The faces have
+// the names they have without a draft.
 struct RibSpec {
   std::string feature;
   Frame frame;
@@ -72,6 +93,7 @@ struct RibSpec {
   bool extend_ends = false;
   double end_offset = 0.0;
   std::optional<gp_Dir> direction;
+  double draft_angle = 0.0;
 };
 
 ShapePtr rib(const RibSpec& spec);

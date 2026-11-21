@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: MIT
+# Drags leave placed parts at their Offset, a carriage's travel limits
+# (mitcad#2088, GitHub mitcad/Mitcad#411), on build-drag-travel.json with the
+# library the runner makes (a 20 mm profile, a guide rail and its carriage):
+# Upright (grounded, along +Z, 1000 long); Arm (F2) on its x+ slot 100 from
+# end A, along +X; Post (F4) on the arm's slot 200 from its end A, along -Y;
+# Rail (F6) on the upright's y+ slot 100 from end A, 400 long; Carriage (F8)
+# on the rail, its frame 100 from the rail's end A (its travel 20 to 380).
+#   1. A drag of the arm is refused in words that say to use Placement; it
+#      stays where it is.
+#   2. Placement of the arm: Offset 300 mm moves it, and the post on it
+#      follows (both from z = 100 to z = 300).
+#   3. The carriage dragged far up along the rail stops flush with the
+#      rail's end B (its slide at 380); the rail stays at its Offset.
+#   4. Placement of the carriage reads its Min and Max (the defaults, 20 and
+#      380); Max 300 mm and Offset 100 mm, then a drag up stops it at 300.
+# Run by tools/ui-build-drag-travel-test.sh (Linux),
+# tools/ui-windows-build-drag-travel-test.ps1 (Windows) and
+# tools/ui-macos-build-drag-travel-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+wait-idle
+command view.back
+wait-idle
+command view.fit
+wait-idle
+capture-model-number low '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.2
+expect-near ${low} 100
+capture-model-number low '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.min.2
+expect-near ${low} 100
+
+# 1. The arm does not drag: Placement moves it.
+mark
+drag-from '^Body F2[.]b0 in [O0-9/]+ at ' 0 -80
+wait-log '^Drag refused: Arm:1 stays where it was placed: move it with Placement$' 30
+wait-idle 30
+expect-no-log '^Drag of Arm:1 started'
+capture-model-number low '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.2
+expect-near ${low} 100
+
+# 2. Placement of the arm: the post on it follows.
+mark
+command build.placement
+wait-log '^Command Placement started' 30
+wait-idle
+mark
+click-logged '^Panel Placement input part at '
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/'
+wait-log '^BUILD placement of C[0-9]+: from a, offset 100 mm$' 30
+expect-no-log '^Panel Placement input min at [0-9]+,[0-9]+$'
+wait-idle
+mark
+type-in '^Panel Placement input offset at ' '300 mm'
+wait-log '^Inspect Placement: C[0-9]+ from a, offset 300 mm$' 30
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^Placement of C[0-9]+: from a, offset 300 mm$' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number low '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.2
+expect-near ${low} 300
+capture-model-number low '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.min.2
+expect-near ${low} 300
+
+# 3. The carriage up along the rail: it stops flush with end B.
+command view.fit
+wait-idle
+mark
+drag-from '^Body F8[.]b0 in [O0-9/]+ at ' 0 -450
+wait-log '^Drag of Carriage:1 started' 10
+wait-log '^Dragged Carriage:1 to [(].*[)]: .*Carriage on Rail tx 380 mm' 30
+wait-idle 30
+capture-model-number slide '{"query": "build_parts"}' parts.4.offset
+expect-near ${slide} 380
+capture-model-number rail '{"query": "build_parts"}' parts.3.offset
+expect-near ${rail} 100
+capture-model-number high '{"query": "properties", "bodies": ["F8.b0"]}' total.bbox.max.2
+expect-near ${high} 500
+
+# 4. Its Min and Max in Placement; a Max of its own stops the next drag.
+mark
+command build.placement
+wait-log '^Command Placement started' 30
+wait-idle
+mark
+click-logged '^Panel Placement input part at '
+wait-log '^Pick places:' 20
+click-pick 'face F8[.]b0/'
+wait-log '^BUILD travel of C[0-9]+: min 20, max 380$' 30
+wait-log '^BUILD placement of C[0-9]+: from a, offset 380 mm$' 30
+wait-log '^Panel Placement input min at [0-9]+,[0-9]+$' 20
+wait-log '^Panel Placement input max at [0-9]+,[0-9]+$' 20
+wait-idle
+mark
+type-in '^Panel Placement input max at ' '300 mm'
+wait-idle
+mark
+type-in '^Panel Placement input offset at ' '100 mm'
+wait-log '^Inspect Placement: C[0-9]+ from a, offset 100 mm, travel default to 300 mm$' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Placement of C[0-9]+: from a, offset 100 mm, travel default to 300 mm$' 60
+wait-idle 30
+capture-model-number max '{"query": "build_parts"}' parts.4.limits.max
+expect-near ${max} 300
+capture-model-number min '{"query": "build_parts"}' parts.4.limits.min
+expect-near ${min} 20
+command view.fit
+wait-idle
+mark
+drag-from '^Body F8[.]b0 in [O0-9/]+ at ' 0 -450
+wait-log '^Drag of Carriage:1 started' 10
+wait-log '^Dragged Carriage:1 to [(].*[)]: .*Carriage on Rail tx 300 mm' 30
+wait-idle 30
+capture-model-number slide '{"query": "build_parts"}' parts.4.offset
+expect-near ${slide} 300
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

@@ -26,6 +26,12 @@
 //!   normal or the path's tangent, with the default x axis; a tangent
 //!   plane's `offset` moves it along the face normal, negative into the
 //!   face;
+//! - perpendicular to a face at a point (mitcad#2111): through the face
+//!   point nearest to the point, x along the reference direction (a line's
+//!   direction, a plane's normal, else the first of X, Y, Z not along the
+//!   face normal) projected onto the face's tangent plane there and turned
+//!   about the face normal by the angle (right-handed), y along the outward
+//!   face normal; the plane's normal is x × y;
 //! - flange wall (mitcad#1776): the wall frame of the sheet-metal flange
 //!   whose profile sketch lies on the plane, its origin on the bend's
 //!   moving tangent line at the middle of the boundary, x along that line
@@ -151,6 +157,23 @@ pub enum PlaneDefinition<P = ParamId> {
         x_axis: Vec3,
         y_axis: Vec3,
     },
+    /// Plane Perpendicular to Face at Point (mitcad#2111): through the face
+    /// point nearest to `point`, containing the face's normal there, turned
+    /// about that normal by `angle` from the reference direction.
+    PerpendicularAtPoint {
+        face: GeomRef,
+        point: GeomRef,
+        /// Radians about the face normal; none is 0.
+        #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+        angle: Option<P>,
+        /// What angle 0 lies along: a line's direction or a plane's normal
+        /// (an axis, a straight or circular edge, a sketch line, a face of
+        /// revolution's axis, a plane or a planar face), projected onto the
+        /// face's tangent plane at the point; none is the first of the
+        /// origin axes X, Y, Z that is not along the face normal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reference: Option<GeomRef>,
+    },
 }
 
 impl<P> ConstructionPlaneDef<P> {
@@ -259,6 +282,20 @@ impl<P> ConstructionPlaneDef<P> {
                 x_axis: *x_axis,
                 y_axis: *y_axis,
             },
+            D::PerpendicularAtPoint {
+                face,
+                point,
+                angle,
+                reference,
+            } => D::PerpendicularAtPoint {
+                face: face.clone(),
+                point: point.clone(),
+                angle: angle
+                    .as_ref()
+                    .map(|value| f("definition.angle", value))
+                    .transpose()?,
+                reference: reference.clone(),
+            },
         };
         Ok(ConstructionPlaneDef {
             definition,
@@ -293,6 +330,18 @@ impl<P> ConstructionPlaneDef<P> {
             D::OffsetThroughPoint { plane, point } => {
                 vec![(plane, Want::Plane), (point, Want::Point)]
             }
+            // The reference is checked as a direction (`direction`).
+            D::PerpendicularAtPoint { face, point, .. } => {
+                vec![(face, Want::Face), (point, Want::Point)]
+            }
+        }
+    }
+
+    /// The optional reference direction (`perpendicular_at_point`).
+    fn direction(&self) -> Option<&GeomRef> {
+        match &self.definition {
+            PlaneDefinition::PerpendicularAtPoint { reference, .. } => reference.as_ref(),
+            _ => None,
         }
     }
 
@@ -314,6 +363,9 @@ impl FeatureInfo for ConstructionPlaneDef {
         if let Some(path) = self.path() {
             path.add_to(&mut references);
         }
+        if let Some(direction) = self.direction() {
+            direction.add_to(&mut references);
+        }
         references
     }
 
@@ -325,6 +377,9 @@ impl FeatureInfo for ConstructionPlaneDef {
         distinct(&inputs.iter().map(|(r, _)| *r).collect::<Vec<_>>())?;
         if let Some(path) = self.path() {
             path.check(ctx)?;
+        }
+        if let Some(direction) = self.direction() {
+            crate::features::coordinate_system::check_direction(ctx, direction)?;
         }
         if let PlaneDefinition::Fixed {
             origin,
@@ -431,6 +486,27 @@ impl<K: Kernel> Evaluate<K> for ConstructionPlaneDef {
                 },
                 None => fixed(*origin, *x_axis, *y_axis)?,
             },
+            D::PerpendicularAtPoint {
+                face,
+                point,
+                angle,
+                reference,
+            } => {
+                let near = ctx.point(point)?;
+                let on = ctx.face_point(face, near)?;
+                let along = match reference {
+                    Some(reference) => Some((
+                        reference,
+                        crate::features::coordinate_system::direction(ctx, reference, on.point)?,
+                    )),
+                    None => None,
+                };
+                let angle = match angle {
+                    Some(id) => ctx.param(*id)?,
+                    None => 0.0,
+                };
+                perpendicular_at(on.point, on.normal, along, angle)?
+            }
         };
         let plane = if self.flip {
             DatumPlane {
@@ -478,6 +554,8 @@ impl ConstructionPlaneDef {
             D::NormalAtPoint { point, .. } => (Vec::new(), vec![point]),
             D::AlongPath { .. } => (Vec::new(), Vec::new()),
             D::Fixed { .. } | D::FlangeWall { .. } => return None,
+            // Edge-on to the face: over where it cuts the face's body.
+            D::PerpendicularAtPoint { face, point, .. } => (Vec::new(), vec![face, point]),
         };
         super::drawn::plane_extent(ctx, plane, &faces, &nearby, self.path())
     }
@@ -654,4 +732,43 @@ pub(crate) fn through_line_and_point(line: &DatumAxis, point: Vec3) -> Result<Da
         normal,
         Some(line.direction),
     ))
+}
+
+/// The plane through `at` containing the unit face normal `normal`, its x
+/// axis along `reference`'s direction (else the first of X, Y, Z not along
+/// the normal) projected square to the normal and turned about it by
+/// `angle`, its y axis the normal (mitcad#2111). A reference along the
+/// normal is refused.
+pub(crate) fn perpendicular_at(
+    at: Vec3,
+    normal: Vec3,
+    reference: Option<(&GeomRef, Vec3)>,
+    angle: f64,
+) -> Result<DatumPlane, String> {
+    let normal = unit(normal).ok_or("the face has no normal at the point")?;
+    let across = |v: Vec3| unit(sub(v, scale(normal, dot(v, normal))));
+    let start = match reference {
+        Some((reference, direction)) => across(direction)
+            .filter(|_| norm(cross(direction, normal)) > ANGULAR * norm(direction))
+            .ok_or_else(|| {
+                reference.error(|what| {
+                    format!(
+                        "{what} is along the face's normal at the point: pick a reference across it"
+                    )
+                })
+            })?,
+        None => {
+            let along = |axis: Vec3| dot(axis, normal).abs() >= 1.0 - 1e-3;
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+                .into_iter()
+                .find(|axis| !along(*axis))
+                .and_then(across)
+                .ok_or("the face has no normal at the point")?
+        }
+    };
+    Ok(DatumPlane {
+        origin: at,
+        x_axis: rotate(start, normal, angle),
+        y_axis: normal,
+    })
 }

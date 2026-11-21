@@ -335,12 +335,12 @@ void threadTests() {
 
   // The user's answer: no longer waiting; nor a comment without replies,
   // nor an addressed one.
-  shown.replies.append({QStringLiteral("user"), QStringLiteral("Steel, M6"), QStringLiteral("2026-11-01T18:05:00Z")});
+  shown.replies.append({QStringLiteral("user"), QStringLiteral("Steel, M6"), QStringLiteral("2026-11-01T18:05:00Z"), {}});
   CHECK(!commentWaitingForYou(shown));
   CHECK(commentStatusText(shown) == QStringLiteral("Open"));
   CHECK(commentAnswered(shown, 0) == 2);
   CHECK(commentAnswered(shown, 1) == 1);
-  shown.replies.append({QStringLiteral("claude-code"), QStringLiteral("Done?"), QString()});
+  shown.replies.append({QStringLiteral("claude-code"), QStringLiteral("Done?"), QString(), {}});
   shown.status = QStringLiteral("addressed");
   shown.resolution = QStringLiteral("Bracket1");
   shown.addressedBy = QStringLiteral("claude-code");
@@ -362,6 +362,62 @@ void threadTests() {
   CHECK(commentTimeText(QStringLiteral("2026-11-01T18:00:00Z")) != QStringLiteral("2026-11-01T18:00:00Z"));
 }
 
+// Images on comments and replies (mitcad#2011): read from the answer's
+// `attachments`, found by id, logged, and with their entries in the
+// details pane; the tooltip counts them.
+void imageTests() {
+  const auto image = [](const char* id, const char* name, int width, int height) {
+    return QJsonObject{{QStringLiteral("id"), QLatin1String(id)},
+                       {QStringLiteral("media_type"), QStringLiteral("image/png")},
+                       {QStringLiteral("width"), width},
+                       {QStringLiteral("height"), height},
+                       {QStringLiteral("bytes"), 51234},
+                       {QStringLiteral("sha256"), QStringLiteral("ab12")},
+                       {QStringLiteral("name"), QLatin1String(name)}};
+  };
+  QJsonObject pictured = comment("C7", "open", xyz(1.0, 2.0, 3.0));
+  pictured.insert(QStringLiteral("attachments"), QJsonArray{image("A1", "capture.png", 300, 200)});
+  QJsonObject reply{{QStringLiteral("author"), QStringLiteral("claude-code")},
+                    {QStringLiteral("text"), QStringLiteral("done")},
+                    {QStringLiteral("created"), QStringLiteral("2026-11-01T18:00:00Z")},
+                    {QStringLiteral("attachments"),
+                     QJsonArray{image("A2", "result.png", 640, 480), image("A3", "side.png", 64, 48)}}};
+  pictured.insert(QStringLiteral("replies"), QJsonArray{reply});
+  const CommentsShown shown =
+      commentsOf(QJsonObject{{QStringLiteral("comments"), QJsonArray{pictured}}, {QStringLiteral("open"), 1}});
+  CHECK(shown.comments.size() == 1);
+  if (shown.comments.isEmpty()) {
+    return;
+  }
+  const CommentShown& c7 = shown.comments.first();
+  CHECK(c7.images.size() == 1);
+  CHECK(c7.images.first().id == QStringLiteral("A1"));
+  CHECK(c7.images.first().width == 300 && c7.images.first().height == 200);
+  CHECK(c7.images.first().bytes == 51234 && c7.images.first().sha256 == QStringLiteral("ab12"));
+  CHECK(c7.replies.size() == 1 && c7.replies.first().images.size() == 2);
+  const CommentImage* found = commentImageById(c7, QStringLiteral("A3"));
+  CHECK(found != nullptr && found->name == QStringLiteral("side.png"));
+  CHECK(commentImageById(c7, QStringLiteral("A9")) == nullptr);
+  CHECK(commentImageText(c7.images.first()) == QStringLiteral("capture.png, 300 × 200"));
+  // A comment without images has none.
+  CHECK(commentsOf(answer()).comments.first().images.isEmpty());
+
+  const QStringList lines = commentLogLines(shown);
+  CHECK(lines.contains(QStringLiteral("Comment C7 image A1: capture.png, image/png, 300 x 200")));
+  CHECK(lines.contains(QStringLiteral("Comment C7 reply 1 image A2: result.png, image/png, 640 x 480")));
+  CHECK(lines.contains(QStringLiteral("Comment C7 reply 1 image A3: side.png, image/png, 64 x 48")));
+  // In order: the comment's line, its image, then the reply and its images.
+  CHECK(lines.indexOf(QStringLiteral("Comment C7 image A1: capture.png, image/png, 300 x 200")) == 1);
+
+  // The details pane: each entry with its own images.
+  const CommentDetails thread = commentDetails(c7, 0);
+  CHECK(thread.entries.size() == 2);
+  CHECK(thread.entries.at(0).images.size() == 1 && thread.entries.at(1).images.size() == 2);
+  const CommentDetails one = commentDetails(c7, 1);
+  CHECK(one.entries.size() == 1 && one.entries.first().images.size() == 2);
+  CHECK(commentTip(c7).contains(QStringLiteral("3 image")));
+}
+
 } // namespace
 
 int commentsTests() {
@@ -371,6 +427,7 @@ int commentsTests() {
   targetTests();
   pinTests();
   threadTests();
+  imageTests();
   return failures;
 }
 MITCAD_UNIT_TEST(commentsTests);

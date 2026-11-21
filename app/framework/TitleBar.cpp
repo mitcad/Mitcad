@@ -262,6 +262,14 @@ void TitleBar::setMenuButton(QWidget* button) {
 }
 
 void TitleBar::setMenuButtonVisible(bool visible) {
+  if (m_menuInGroup) {
+    // In the top bar's left group (mitcad#2129), where it is fixed.
+    if (m_menuButton != nullptr && m_menuButton->isHidden() == visible) {
+      m_menuButton->setVisible(visible);
+      scheduleQuickFold();
+    }
+    return;
+  }
   if (m_menu == nullptr || m_menu->isHidden() != visible) {
     return;
   }
@@ -342,7 +350,43 @@ void TitleBar::setBoostButton(QWidget* button) {
       at = std::min(at, index);
     }
   }
+  // Left of the Discord button when it came first (mitcad#2123).
+  if (m_discord != nullptr && row->indexOf(m_discord.data()) >= 0) {
+    at = std::min(at, row->indexOf(m_discord.data()));
+  }
   row->insertWidget(at, button, 0, Qt::AlignVCenter);
+  if (m_floatingRow) {
+    button->installEventFilter(this);
+  }
+  updateRowMask();
+  scheduleQuickFold();
+  update();
+}
+
+void TitleBar::setDiscordButton(QWidget* button) {
+  auto* row = qobject_cast<QHBoxLayout*>(layout());
+  if (row == nullptr || button == nullptr) {
+    return;
+  }
+  m_discord = button;
+  button->setParent(this);
+  // Right after the Boost development button (mitcad#2123), shown or not;
+  // without one where Boost's would go: left of the indicators, the chat's
+  // button and Preferences.
+  int at = rightIndex();
+  const int boost = m_boost != nullptr ? row->indexOf(m_boost.data()) : -1;
+  if (boost >= 0) {
+    at = boost + 1;
+  } else {
+    for (const QWidget* part : {m_indicator.data(), m_agentIndicator.data(), m_chatButton.data()}) {
+      const int index = part != nullptr ? row->indexOf(const_cast<QWidget*>(part)) : -1;
+      if (index >= 0) {
+        at = std::min(at, index);
+      }
+    }
+  }
+  row->insertWidget(at, button, 0, Qt::AlignVCenter);
+  button->show();
   if (m_floatingRow) {
     button->installEventFilter(this);
   }
@@ -386,7 +430,7 @@ void TitleBar::setFloatingRow(bool floating) {
   for (QWidget* part :
        std::initializer_list<QWidget*>{static_cast<QWidget*>(m_menu), m_history, m_tabs, m_tabsButton, m_search,
                                        m_indicator.data(), m_agentIndicator.data(), m_chatButton.data(),
-                                       m_boost.data(), static_cast<QWidget*>(m_quickAccess.data())}) {
+                                       m_boost.data(), m_discord.data(), static_cast<QWidget*>(m_quickAccess.data())}) {
     if (part == nullptr) {
       continue;
     }
@@ -447,7 +491,10 @@ QWidget* TitleBar::takeSearchField() {
 
 void TitleBar::openMenuByKeys(QMenu* menu, const QString& how) {
   QToolButton* from = nullptr;
-  for (QToolButton* button : {m_fileButton.data(), m_helpButton.data()}) {
+  // The left group's File ˅ while it is an item there and in sight
+  // (mitcad#2129); else File drops from the ☰.
+  QToolButton* file = m_quickAccess != nullptr ? m_quickAccess->fileMenuButton() : nullptr;
+  for (QToolButton* button : {file, m_helpButton.data()}) {
     if (menu != nullptr && button != nullptr && button->menu() == menu && button->isVisible()) {
       from = button;
     }
@@ -476,7 +523,7 @@ void TitleBar::addPart(QWidget* part) {
 
 void TitleBar::setRowControls(const RowControls& controls) {
   auto* row = qobject_cast<QHBoxLayout*>(layout());
-  if (row == nullptr || !m_floatingRow || m_file != nullptr) {
+  if (row == nullptr || !m_floatingRow || m_documents != nullptr) {
     return;
   }
   const int icon = uiIconSize(18);
@@ -495,50 +542,40 @@ void TitleBar::setRowControls(const RowControls& controls) {
     return frame;
   };
 
-  // Home, File and Save before Undo and Redo.
-  m_file = capsule("titleFile");
-  auto* file = static_cast<QHBoxLayout*>(m_file->layout());
+  // The one left group (mitcad#2129): the quick-access group with ☰ and
+  // Home fixed first in it, then its items (File ˅, New Design, Open, Save,
+  // Design Properties, Print, Undo and Redo by default, each removable) and
+  // the commands the user added. It replaces the ☰'s capsule, the File
+  // capsule and the Undo and Redo pill.
+  QList<QWidget*> leading;
+  if (m_menu != nullptr && m_menuButton != nullptr) {
+    m_menu->layout()->removeWidget(m_menuButton.data());
+    row->removeWidget(m_menu);
+    m_menu->removeEventFilter(this);
+    m_menu->hide();
+    m_menuInGroup = true;
+    leading.append(m_menuButton.data());
+  }
   if (controls.home != nullptr) {
     auto* home = new RibbonButton(controls.home, icon);
     home->setObjectName(QStringLiteral("titleHome"));
-    file->addWidget(home);
     m_home = home;
-    file->addWidget(new Divider);
+    leading.append(home);
   }
-  if (controls.file != nullptr) {
-    auto* menu = new RowTextButton(tr("File"), button);
-    menu->setObjectName(QStringLiteral("titleFileMenu"));
-    menu->setToolTip(tr("New, open, save, import and export designs"));
-    menu->setMenu(controls.file);
-    menu->setPopupMode(QToolButton::InstantPopup);
-    file->addWidget(menu);
-    m_fileButton = menu;
+  row->removeWidget(m_history);
+  m_history->removeEventFilter(this);
+  m_history->hide();
+  if (m_quickAccess != nullptr) {
+    m_quickAccess->setTopBar(controls.file);
+    m_quickAccess->setLeadingWidgets(leading);
+    placeQuickAccess();
   }
-  if (controls.save != nullptr) {
-    auto* save = new RibbonButton(controls.save, icon);
-    save->setObjectName(QStringLiteral("titleSave"));
-    file->addWidget(save);
-    m_rowCommands.insert(QStringLiteral("file.save"), save);
-  }
-  row->insertWidget(row->indexOf(m_history), m_file);
-  addPart(m_file);
 
-  // The document tabs (hostDocumentTabs) and the + of a new design after
-  // Undo and Redo.
+  // The document tabs (hostDocumentTabs) right after the group.
   m_documents = capsule("titleTabs");
   m_documentsRow = static_cast<QHBoxLayout*>(m_documents->layout());
-  if (QAction* newDesign = controls.newDesign) {
-    auto* plus = new RowTextButton(QStringLiteral("+"), button);
-    plus->setObjectName(QStringLiteral("titleNewDesign"));
-    plus->setToolTip(tr("New design"));
-    plus->setAccessibleName(tr("New design"));
-    plus->setEnabled(newDesign->isEnabled());
-    connect(plus, &QToolButton::clicked, newDesign, &QAction::trigger);
-    connect(newDesign, &QAction::changed, plus, [plus, newDesign] { plus->setEnabled(newDesign->isEnabled()); });
-    m_documentsRow->addWidget(plus);
-    m_rowCommands.insert(QStringLiteral("file.new_design"), plus);
-  }
-  row->insertWidget(row->indexOf(m_history) + 1, m_documents);
+  const int afterGroup = m_quickAccess != nullptr ? row->indexOf(m_quickAccess.data()) + 1 : 1;
+  row->insertWidget(afterGroup, m_documents);
   addPart(m_documents);
 
   // Preferences and Help, then the version, at the right end.
@@ -572,8 +609,8 @@ void TitleBar::setRowControls(const RowControls& controls) {
   m_version->setVisible(!version.isEmpty());
   row->addWidget(m_version);
   addPart(m_version);
-  // The quick-access group leaves out what the bar shows itself: Save, New
-  // (the +) and Preferences are not there twice (mitcad#1990).
+  // The quick-access group leaves out what the bar shows itself:
+  // Preferences is not there twice (mitcad#1990, mitcad#2129).
   if (m_quickAccess != nullptr) {
     m_quickAccess->setRowCommands(m_rowCommands);
   }
@@ -610,8 +647,18 @@ std::vector<std::pair<QString, QRect>> TitleBar::rowParts() const {
       }
     }
   };
-  add("titleMenu", m_menu);
-  add("titleFile", m_file);
+  if (m_menuInGroup) {
+    // The ☰ inside the top bar's left group (mitcad#2129), at its start.
+    const QWidget* menu = m_menuButton.data();
+    if (menu != nullptr && !menu->isHidden() && m_quickAccess != nullptr && !m_quickAccess->isHidden()) {
+      const QRect rect = QRect(menu->mapTo(this, QPoint(0, 0)), menu->size()) & this->rect();
+      if (!rect.isEmpty()) {
+        parts.emplace_back(QStringLiteral("titleMenu"), rect);
+      }
+    }
+  } else {
+    add("titleMenu", m_menu);
+  }
   add("titleHistory", m_history);
   // The tabs with the + after them (mitcad#1975), one part: the document
   // tabs in the Floating row (mitcad#1990), the ribbon's in the macOS one.
@@ -629,6 +676,7 @@ std::vector<std::pair<QString, QRect>> TitleBar::rowParts() const {
   }
   add("titleQuickAccess", m_quickAccess.data());
   add("titleBoost", m_boost.data());
+  add("titleDiscord", m_discord.data());
   add("titleIndicator", m_indicator.data());
   add("titleAgent", m_agentIndicator.data());
   add("titleChat", m_chatButton.data());
@@ -647,14 +695,9 @@ void TitleBar::placeQuickAccess() {
   row->removeWidget(m_quickAccess);
   int at = row->indexOf(const_cast<QWidget*>(tabsEnd())) + 1;
   if (m_floatingRow) {
-    // Right after the row's stretch: at the free part's right end, just
-    // left of the indicators or the search field (mitcad#1989).
-    for (int i = 0; i < row->count(); ++i) {
-      if (row->itemAt(i)->spacerItem() != nullptr) {
-        at = i + 1;
-        break;
-      }
-    }
+    // The top bar's one left group (mitcad#2129): first in the row, the
+    // document tabs after it.
+    at = row->indexOf(m_inset) + 1;
   }
   row->insertWidget(at, m_quickAccess);
 }
@@ -691,8 +734,10 @@ const QWidget* TitleBar::rightPart() const {
   if (right != nullptr && right->isHidden()) {
     right = nullptr;
   }
-  // The Boost development button left of them all (mitcad#1990).
-  for (const QWidget* part : {m_chatButton.data(), m_agentIndicator.data(), m_indicator.data(), m_boost.data()}) {
+  // The Boost development button left of them all (mitcad#1990), the
+  // Discord button between it and the indicators (mitcad#2123).
+  for (const QWidget* part :
+       {m_chatButton.data(), m_agentIndicator.data(), m_indicator.data(), m_discord.data(), m_boost.data()}) {
     if (part != nullptr && !part->isHidden()) {
       right = part;
     }
@@ -728,39 +773,27 @@ void TitleBar::updateQuickFold() {
   const int leftEnd = left != nullptr ? left->geometry().right() + 1 : 0;
   const int rightStart = right != nullptr ? right->geometry().left() : width();
   if (m_floatingRow) {
-    // The group sits at the right end of the free part between the
-    // document tabs and the indicators or Preferences and Help
-    // (mitcad#1989, mitcad#1990): folded when its whole width does not fit
-    // there, with the row's spacing at both ends. The room is measured from
-    // the parts' own widths, not from where the row put them: the document
-    // tabs count with the width they ask for (an unfolded group would
-    // otherwise keep its room while the row squeezes the tabs, whose first
-    // ones then scroll out of their bar), and the indicators with theirs
-    // (once the group folds they stretch into its room, and measured from
-    // their places the group would never unfold again when the window
-    // widens).
-    const int wanted = left != nullptr && left == m_documents ? left->geometry().left() + left->sizeHint().width() : 0;
-    const int freeLeft = std::max(leftEnd, wanted) + spacing;
-    const std::initializer_list<const QWidget*> rightParts{
-        static_cast<const QWidget*>(m_settings), static_cast<const QWidget*>(m_chatButton.data()),
-        static_cast<const QWidget*>(m_agentIndicator.data()), static_cast<const QWidget*>(m_indicator.data()),
-        static_cast<const QWidget*>(m_boost.data())};
-    int rightEnd = -1;
-    for (const QWidget* part : rightParts) {
-      if (part != nullptr && !part->isHidden()) {
-        rightEnd = std::max(rightEnd, part->geometry().right() + 1);
+    // The top bar's one left group (mitcad#2129) gets the row's width less
+    // what every other part of the row asks for, and folds its items from
+    // the end into its ⋮'s menu where they do not fit; ☰ and Home never
+    // fold. The room is measured from the parts' own widths, not from where
+    // the row put them: the document tabs count with the width they ask for
+    // (they keep their room: an unfolded group would otherwise squeeze them,
+    // and their first tabs would scroll out of their bar), and the parts at
+    // the right with theirs (measured from their places the group would
+    // never unfold again when the window widens).
+    const QMargins margins = layout()->contentsMargins();
+    int room = width() - margins.left() - margins.right();
+    auto* row = qobject_cast<QHBoxLayout*>(layout());
+    for (int i = 0; row != nullptr && i < row->count(); ++i) {
+      const QWidget* part = row->itemAt(i)->widget();
+      if (part == nullptr || part == m_quickAccess.data() || part->isHidden()) {
+        continue;
       }
+      const int wanted = std::clamp(part->sizeHint().width(), part->minimumWidth(), part->maximumWidth());
+      room -= wanted + spacing;
     }
-    int freeRight = rightStart - spacing;
-    if (rightEnd >= 0) {
-      freeRight = rightEnd;
-      for (const QWidget* part : rightParts) {
-        if (part != nullptr && !part->isHidden()) {
-          freeRight -= std::min(part->width(), part->sizeHint().width()) + spacing;
-        }
-      }
-    }
-    m_quickAccess->setFolded(freeRight - freeLeft < m_quickAccess->unfoldedWidth());
+    m_quickAccess->fitWidth(room);
     return;
   }
   // The macOS toolbar row: the room the name has with the group unfolded,
@@ -775,8 +808,9 @@ void TitleBar::updateQuickFold() {
 const QWidget* TitleBar::tabsEnd() const {
   if (m_floatingRow) {
     // The document tabs' capsule (mitcad#1990), else the last control at
-    // the left.
-    for (const QWidget* part : std::initializer_list<const QWidget*>{m_documents, m_history, m_file, m_menu}) {
+    // the left (the left group, mitcad#2129).
+    for (const QWidget* part : std::initializer_list<const QWidget*>{
+             m_documents, static_cast<const QWidget*>(m_quickAccess.data()), m_history, m_menu}) {
       if (part != nullptr && !part->isHidden()) {
         return part;
       }
@@ -962,9 +996,9 @@ void TitleBar::paintEvent(QPaintEvent*) {
   const QPalette pal = palette();
   if (m_floatingRow) {
     // One flat bar across the view's top (mitcad#1990): the window's
-    // surface, a hairline at its bottom, a thin line after the File group
-    // and after Undo and Redo. No name: the window's title and the
-    // document tabs show it (mitcad#1989).
+    // surface, a hairline at its bottom, a thin line between the left group
+    // and the document tabs (mitcad#2129). No name: the window's title and
+    // the document tabs show it (mitcad#1989).
     painter.fillRect(rect(), themeColor(ColorRole::Window, pal));
     const QColor line = themeColor(ColorRole::Line, pal);
     painter.fillRect(QRect(0, height() - 1, width(), 1), line);
@@ -975,8 +1009,7 @@ void TitleBar::paintEvent(QPaintEvent*) {
       const int x = (before->geometry().right() + 1 + after->geometry().left()) / 2;
       painter.fillRect(QRect(x, height() / 2 - 9, 1, 18), line);
     };
-    divider(m_file, m_history);
-    divider(m_history, m_documents);
+    divider(m_quickAccess.data(), m_documents);
     return;
   }
   const TitleText text = titleText();

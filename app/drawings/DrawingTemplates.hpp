@@ -30,6 +30,9 @@ struct TemplateChoice {
   // The projection method it starts with ("first_angle", mitcad#725),
   // empty when none.
   QString projection;
+  // The dimensioning standard it starts with ("iso", "asme"; mitcad#2047),
+  // empty when none.
+  QString standard;
   // What `add_drawing`'s and `edit_drawing_sheet`'s `template` takes: a
   // built-in one's id, a user's or a project's data, "" for none.
   QJsonValue value;
@@ -63,12 +66,14 @@ struct NewDrawingChoice {
   // The template's choice ("ansi", "user:company-a3", "" for the simple
   // title block).
   QString choice;
-  // The sheet size ("ANSI_B"), its orientation ("landscape", "portrait")
-  // and the projection method ("third_angle"); empty: as the template
-  // brings it, else the dialog's first.
+  // The sheet size ("ANSI_B"), its orientation ("landscape", "portrait"),
+  // the projection method ("third_angle") and the dimensioning standard
+  // ("asme", mitcad#2047); empty: as the template brings it, else the
+  // dialog's first.
   QString size;
   QString orientation;
   QString projection;
+  QString standard;
 
   // The kept choice, none when no drawing was created yet.
   static std::optional<NewDrawingChoice> load(QSettings& settings);

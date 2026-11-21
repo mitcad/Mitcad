@@ -72,9 +72,14 @@ blends that are one where one of them is a single piece run out to the
 faces at both its ends. Only the sizes come from the case: the screw
 continuation reaches a turn or the surface's own length at most, margins
 for an end face met within a turn.
-Test: pending (mitcad#2003): the port test written for this patch does not
-reach its case yet. Existing: geometry/tests/test_fillet_thread_crests.cpp
-(the case: a crest 0.8 wide rounded with 0.8, radius 28).
+Test: geometry/tests/port/p0750-thread-crest-rounded-on-both-edges.cpp
+(ctest geometry.port.0750): a thread of radius 28.5 to 30.2, pitch 3, its
+crest 0.81 wide, its B-spline faces cut down to the faces, between the
+planes z = 3 and 6 or 9; both crest edges rounded with 0.8: built, valid,
+the crest gone, one turn of the blend taking off its section swept round
+the axis (the port before this patch: not built). The boundary: rounded
+with 0.6, the crest kept between two blends.
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 80d0ddce..4fc65c4d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

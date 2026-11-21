@@ -22,16 +22,18 @@ Modes:
                         tests with the highest failure scores, hard memory
                         limits, a rerun alone after a memory limit
   --dry-run             lists the tests with their predictions; runs nothing
-  --ui-cap              prints the UI entries this machine runs at once (the
-                        cap learnt from its runs, within --ui-max); runs
-                        nothing
+  --ui-cap              prints the UI entries this machine runs at once: the
+                        bound (--ui-max, else MITCAD_UI_JOBS, else 4), kept
+                        for the memory budget only; a test that fails
+                        beside others and passes alone lowers its own room
+                        (--ui-rooms), never this cap; runs nothing
   --ui-rooms            prints each UI entry's learnt room (name, the other
                         UI entries it may have beside it; tab-separated, a
                         line each); runs nothing
   --record-ui FILE      adds UI runs that tools/check-all.sh ran itself (a
                         line each: name, exit status, seconds, other UI
                         entries beside it, tab-separated) to the profiles
-                        and learns the cap from them
+                        and learns their rooms from them
 
 Selection (passed to ctest): -R REGEX, -E REGEX, -L REGEX, -LE REGEX
   -C CONFIG             ctest's configuration (multi-configuration builds)
@@ -64,11 +66,11 @@ Options:
   --sensitive PATTERN   tests timing-sensitive from the start (a * matches
                         anything; repeatable), e.g. 'app.ui-*'
   --ui-max N            the most UI entries at once (default:
-                        MITCAD_UI_JOBS): opts in to the cap learnt from the
-                        runs, which starts at it, and to the rerun
-                        alone of a UI entry that failed beside others;
-                        without either no UI cap applies (learning goes on,
-                        within 4)
+                        MITCAD_UI_JOBS, else 4): giving it opts in to each
+                        UI entry's learnt room and to the rerun alone of a
+                        UI entry that failed beside others; without either
+                        the cap is 4 and no room applies (the rooms are
+                        still learnt)
   --lane-share F        the budget's share kept for the lane (default 0.2)
   --lane-score N        the failure score that puts a test in the lane
                         (default 1)
@@ -223,7 +225,7 @@ pub struct Options {
     pub corpus_children: bool,
     /// The bound of the UI entries at once (`concurrency::bound`).
     pub ui_max: Option<usize>,
-    /// Prints the learnt UI entries at once and runs nothing.
+    /// Prints the machine's UI entries at once and runs nothing.
     pub ui_cap: bool,
     /// Prints the UI entries' learnt rooms and runs nothing.
     pub ui_rooms: bool,

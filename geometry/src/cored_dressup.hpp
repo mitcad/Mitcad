@@ -16,16 +16,21 @@
 // kernel's roundings of two edges that meet at an inner (concave) corner of
 // a face end on each other's surfaces; a side the fillet leaves alone (no
 // rounded edge on it) is moved outward instead, so that the result runs on
-// past it and is cut by it. Where the ends lie exactly 2r apart, the core
-// is flat; where the polygon's sides meet in a point or a segment, it is a
-// point (the ball) or a segment (a capsule).
+// past it and is cut by it. Where the fillet rounds the edge of an inner
+// corner between two rounded sides too (mitcad#2068), the ball rolls between
+// those sides' roundings: the core's inner corner is closed by a disc of 2r
+// (the core's arc about the centres of the balls that touch both roundings),
+// so that the inner edge's rounding is the ball swept along that arc. Where
+// the ends lie exactly 2r apart, the core is flat; where the polygon's sides
+// meet in a point or a segment, it is a point (the ball) or a segment (a
+// capsule).
 //
 // Built here as the union of the core's pieces swept by the ball: the core
 // polygon thickened by r (where it has an area), each core edge's half
-// stadium (the ball's section about it, on its outer side) swept along it,
-// and at each outer corner of the core the same section turned about the
-// corner by the angle the core turns there; then cut by the faces the
-// fillet leaves alone.
+// stadium (the ball's section about it, on its outer side) swept along it
+// (turned about the arc's centre along an arc), and at each outer corner of
+// the core the same section turned about the corner by the angle the core
+// turns there; then cut by the faces the fillet leaves alone.
 
 #include <string>
 #include <vector>
@@ -41,9 +46,10 @@ struct CoredFillet {
   // holds all their names), the faces left of the body's keeping theirs.
   // Null when the body or the selection is not such (see below).
   ShapePtr shape;
-  // Selected inner (concave) edges between two rounded faces: rounded, they
-  // would need the core's corner to be a rounding of its own, which this
-  // construction does not build.
+  // Selected inner (concave) edges between two rounded faces, where the
+  // shape is null: the core's corner closed by the disc of 2r did not build
+  // (no disc touches both core edges beside the corner or their far ends,
+  // or the arc meets the rest of the core at an inner corner).
   std::vector<int> inner;
 };
 
@@ -53,9 +59,10 @@ struct CoredFillet {
 // 2r apart and one loop of edges on each end; every selected edge of one
 // radius r; the faces with no selected edge (left alone) are sides of the
 // prism; every outer edge between two faces that have selected edges is
-// selected, no inner one; the moved sides' lines meet in the polygon's
-// order, no side turned round, and every corner of the core is r or more
-// from every rounded side; the result is one valid solid.
+// selected (an inner one may be: its corner closed as above); the moved
+// sides' lines meet in the polygon's order, no side turned round, and every
+// outer corner of the core is r or more from every rounded side; the result
+// is one valid solid.
 CoredFillet cored_fillet(const std::string& feature, const Shape& body, const std::vector<double>& radius);
 
 } // namespace mitcad::geometry::detail

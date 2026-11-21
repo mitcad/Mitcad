@@ -142,6 +142,9 @@ struct Manipulator {
   // Toggle: the element it stands for and whether it is on.
   int element = -1;
   bool on = true;
+  // Marker: a short arrow from origin along direction instead of a labelled
+  // point (a construction plane's normal in its preview, mitcad#2048).
+  bool pointing = false;
   // Arrow and Ring: the value in a box at the handle (mitcad#656): an
   // arrow is drawn as a dimension line from its origin (the reference it
   // measures from) with the box at its middle, a ring with the box beside
@@ -222,6 +225,11 @@ struct SketchHandle {
 struct PreviewMarker {
   QString label;
   gp_Pnt point;
+  // A way it points: drawn as a short arrow from the point that way, no
+  // label shown (a construction plane's normal, mitcad#2048); none: a
+  // labelled point. A datum preview's markers are in the coordinates of
+  // the datum's component, placed as the datum is.
+  std::optional<gp_Dir> direction{};
 };
 
 // An InputNote action's "icon" that shows it as a link (mitcad#655): after
@@ -476,6 +484,11 @@ struct InputDef {
   // For a list's input, the first row's value is kept. Editing a feature
   // and Cancel keep nothing.
   bool remembered = false;
+  // Value: the field that gets the keyboard when the panel hands it to
+  // the values (mitcad#338), in place of the first visible one, while it
+  // is shown (mitcad#2098: Flange's Length before its Angle). The rows keep
+  // their order.
+  bool keyboardFirst = false;
   // Value: a length default that is a standard size (a thread's pitch, a
   // gear's module, a filament's diameter) keeps its text in every design;
   // other length defaults are shown in the design's unit, as a sensible
@@ -734,6 +747,10 @@ struct InputDef {
   }
   InputDef& withRemembered() {
     remembered = true;
+    return *this;
+  }
+  InputDef& withKeyboardFirst() {
+    keyboardFirst = true;
     return *this;
   }
   InputDef& withExactDefault() {
@@ -1685,6 +1702,12 @@ struct CommandDef {
   bool surfaceBodiesOnly = false;
   std::function<bool(const Selection&)> offeredFor;
   std::function<bool(const Selection&)> completes;
+  // When set and it holds, the command takes the whole selection although
+  // its first selection input does not: the items go to the inputs that
+  // take them, as a selection made before a command does, and complete it
+  // (unless `completes` says otherwise). Plane Perpendicular to Face at
+  // Point for a face with a point (mitcad#2111).
+  std::function<bool(const Selection&)> takesSpread;
   // When set and it holds for the selection, the view's context menu
   // offers the command at its top level instead of in its kind's submenu,
   // and the browser's rows offer it for the rows selected
@@ -1704,8 +1727,9 @@ struct CommandDef {
   // The inputs' state as the command starts, before any pick: every
   // input's default, a list's first rows.
   CommandState initialState() const;
-  // Whether the selection alone completes the command (mitcad#494): the
-  // first selection input takes all of it and as many as it needs, every
+  // Whether the selection alone completes the command (mitcad#494): spread
+  // over its inputs (`takesSpread`), or the first selection input takes all
+  // of it and as many as it needs, every
   // other selection input shown at the start can stay empty, and, unless
   // `completes` decides, it is no creation command (`creation`: its home is
   // a CREATE group of the layout, mitcad#1951) given a face or a plane, or

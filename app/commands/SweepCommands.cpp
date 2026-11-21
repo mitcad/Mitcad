@@ -17,6 +17,7 @@
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "PlaceInputs.hpp"
+#include "RibDraft.hpp"
 #include "SpatialPaths.hpp"
 
 namespace mitcad::cmd {
@@ -852,6 +853,8 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
                         .withTooltip(QObject::tr("How much further the ends go into the faces they meet; "
                                                  "negative stops them short"))
                         .withVisible([](const CommandState& s) { return s.checked(QStringLiteral("extend_ends")); }));
+  // The Draft Angle (mitcad#2102), right after Thickness.
+  insertRibDraft(def.inputs);
   def.enabled = [&context] { return hasSketches(context, true); };
   const QString type = def.featureType;
 
@@ -889,6 +892,8 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
     if (state.checked(QStringLiteral("flip"))) {
       result.def.insert(QStringLiteral("flip"), true);
     }
+    // Only when not 0, as ribs and webs made before it (mitcad#2102).
+    writeRibDraft(state, result.def);
     if (state.checked(QStringLiteral("extend_ends"))) {
       result.def.insert(QStringLiteral("extend_ends"), true);
       result.def.insert(QStringLiteral("end_offset"), state.expression(QStringLiteral("end_offset")));
@@ -917,6 +922,8 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     loadPath(feature.value(QStringLiteral("curves")), state, QStringLiteral("curves"), context);
     loadValue(state, QStringLiteral("thickness"), feature.value(QStringLiteral("thickness")), feature, context);
+    // Absent: 0, no draft (mitcad#2102).
+    loadValue(state, QStringLiteral("draft_angle"), feature.value(QStringLiteral("draft_angle")), feature, context);
     state.setChoice(QStringLiteral("location"),
                     feature.value(QStringLiteral("thickness_location")).toString(QStringLiteral("symmetric")));
     const QJsonObject extent = feature.value(QStringLiteral("extent")).toObject();

@@ -7,6 +7,8 @@
 // clicks into `sketch.*` commands through SketchOp, one undo step each.
 
 #include <functional>
+
+#include <qnamespace.h>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -119,6 +121,14 @@ public:
     (void)snap;
     return {};
   }
+  // A key pressed in the tool's value boxes that the tool takes for
+  // itself (Insert Block's Space turns the block, mitcad#2110); false
+  // leaves it to the box.
+  virtual bool key(int key, Qt::KeyboardModifiers modifiers) {
+    (void)key;
+    (void)modifiers;
+    return false;
+  }
 
 protected:
   SketchController& m_c;
@@ -148,6 +158,9 @@ std::unique_ptr<SketchTool> textTool(SketchController& c);
 // Tools that pick sketch geometry.
 std::unique_ptr<SketchTool> trimTool(SketchController& c);
 std::unique_ptr<SketchTool> extendTool(SketchController& c);
+// Break and Split at Point (mitcad#2108): a curve split into pieces that stay.
+std::unique_ptr<SketchTool> breakTool(SketchController& c);
+std::unique_ptr<SketchTool> splitTool(SketchController& c);
 std::unique_ptr<SketchTool> dimensionTool(SketchController& c);
 // type: coincident, horizontal_vertical, parallel, perpendicular, tangent,
 // equal, concentric, collinear, midpoint, symmetric, smooth, fix

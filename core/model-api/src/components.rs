@@ -155,6 +155,10 @@ named_enum! {
             /// project's `parts/` folder first and the copy is linked.
             #[serde(default)]
             copy_into_project: bool,
+            /// Linked parts of the design only (mitcad#2130): occurrence
+            /// paths from its root and body uids of its root.
+            #[serde(default)]
+            parts: Option<mitcad_model::LinkPartsInput>,
         },
         "update_links" => UpdateLinks {
             #[serde(default)]
@@ -247,7 +251,105 @@ named_enum! {
             #[serde(default = "yes")]
             flexible: bool,
         },
+        // Folders of a component's occurrences and of its Bodies folder in
+        // the browser (mitcad#2103): organization only.
+        "set_occurrence_folder" => SetOccurrenceFolder {
+            occurrence: String,
+            /// The folder's name; null or left out: in no folder.
+            #[serde(default)]
+            folder: Option<String>,
+        },
+        "rename_occurrence_folder" => RenameOccurrenceFolder {
+            /// The component whose occurrences are in it (uid or name).
+            component: String,
+            folder: String,
+            name: String,
+        },
+        "rename_body_folder" => RenameBodyFolder {
+            /// The component whose bodies are in it (uid or name).
+            component: String,
+            folder: String,
+            name: String,
+        },
+        // An occurrence's place among its siblings (mitcad#2104).
+        "reorder_occurrence" => ReorderOccurrence {
+            occurrence: String,
+            /// Its new place among the occurrences of its parent.
+            index: usize,
+            /// Other occurrences of the same parent that go with it, after
+            /// it in this order.
+            #[serde(default)]
+            with: Vec<String>,
+        },
+        // Choose Linked Parts... (mitcad#2130): the parts of its design a
+        // linked component holds, one undo step.
+        "set_link_parts" => SetLinkParts {
+            /// The linked component (uid or name).
+            component: String,
+            /// Occurrence paths and root body uids of its design; null or
+            /// left out: the whole design.
+            #[serde(default)]
+            parts: Option<mitcad_model::LinkPartsInput>,
+            /// The folder of relative link paths; left out: the design
+            /// file's.
+            #[serde(default)]
+            base: Option<String>,
+        },
     }
+}
+
+/// A link's chosen parts as the API shows them (mitcad#2130): occurrence
+/// paths (`O1/O4`) and root body uids; null for the whole design.
+pub(crate) fn link_parts_value(parts: Option<&[mitcad_model::assembly::LinkPart]>) -> Value {
+    let Some(parts) = parts else {
+        return Value::Null;
+    };
+    let occurrences: Vec<String> = parts
+        .iter()
+        .filter(|p| p.body.is_none())
+        .map(|p| {
+            p.occurrence
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect();
+    let bodies: Vec<String> = parts
+        .iter()
+        .filter_map(|p| p.body.map(|b| b.to_string()))
+        .collect();
+    let names: Vec<&str> = parts.iter().map(|p| p.name.as_str()).collect();
+    json!({"occurrences": occurrences, "bodies": bodies, "names": names})
+}
+
+/// The `link_parts` query (mitcad#2130): a design's occurrences and root
+/// bodies to choose from, and the parts a linked component holds.
+pub(crate) fn link_parts_json<K: Kernel>(
+    doc: &Document<K>,
+    component: Option<&str>,
+    path: Option<&str>,
+    base: Option<&str>,
+) -> Result<Value, ApiError> {
+    let component = component.map(|c| doc.component_ref(c)).transpose()?;
+    let base = base.map(PathBuf::from);
+    let tree = doc.link_parts_tree(component, path, base.as_deref())?;
+    fn node(n: &mitcad_model::LinkPartNode) -> Value {
+        let path: Vec<String> = n.path.iter().map(ToString::to_string).collect();
+        json!({"uid": n.uid, "name": n.name, "path": path.join("/"), "visible": n.visible,
+               "children": n.children.iter().map(node).collect::<Vec<_>>()})
+    }
+    let bodies: Vec<Value> = tree
+        .bodies
+        .iter()
+        .map(|(uid, name, visible)| json!({"uid": uid, "name": name, "visible": visible}))
+        .collect();
+    Ok(json!({
+        "file": tree.file,
+        "occurrences": tree.occurrences.iter().map(node).collect::<Vec<_>>(),
+        "bodies": bodies,
+        "chosen": link_parts_value(tree.chosen.as_deref()),
+    }))
 }
 
 /// The `links` query (mitcad#1416): the linked designs, the files they
@@ -607,7 +709,15 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 mount,
                 parameters,
                 copy_into_project,
+                parts,
             } => {
+                if parts.is_some() && library.is_some() {
+                    return Err(ApiError(
+                        "a library part is inserted whole; chosen parts are for a linked design \
+                         file"
+                            .to_owned(),
+                    ));
+                }
                 let mut options = InsertOptions {
                     link,
                     transform: optional(transform.as_ref())?.unwrap_or(Transform::IDENTITY),
@@ -615,6 +725,7 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                     base: base.map(PathBuf::from),
                     mount: mount.map(|m| *m),
                     parameters,
+                    parts,
                 };
                 // A file the link would not follow, copied into the project
                 // first (mitcad#1719).
@@ -638,6 +749,15 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                     }
                 };
                 let mut reply = super::mounts::inserted_json(self, &inserted);
+                // The parts it links (mitcad#2130).
+                if let Some(parts) = self
+                    .assembly()
+                    .component(inserted.component)
+                    .and_then(|c| c.link.as_ref())
+                    .and_then(|l| l.parts.as_deref())
+                {
+                    reply["parts"] = link_parts_value(Some(parts));
+                }
                 if copy_into_project {
                     reply["copied"] = json!(copied);
                 }
@@ -756,6 +876,54 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 let uid = self.occurrence_ref(&occurrence)?;
                 self.set_occurrence_flexible(uid, flexible)?;
                 json!({"flexible": flexible})
+            }
+            ComponentCommand::SetOccurrenceFolder { occurrence, folder } => {
+                let uid = self.occurrence_ref(&occurrence)?;
+                self.set_occurrence_folder(uid, folder.as_deref())?;
+                json!({"folder": self.assembly().occurrence(uid).and_then(|o| o.folder.clone())})
+            }
+            ComponentCommand::RenameOccurrenceFolder {
+                component,
+                folder,
+                name,
+            } => {
+                let uid = self.component_ref(&component)?;
+                self.rename_occurrence_folder(uid, &folder, &name)?;
+                json!({"folder": name.trim()})
+            }
+            ComponentCommand::RenameBodyFolder {
+                component,
+                folder,
+                name,
+            } => {
+                let uid = self.component_ref(&component)?;
+                self.rename_body_folder(uid, &folder, &name)?;
+                json!({"folder": name.trim()})
+            }
+            ComponentCommand::ReorderOccurrence {
+                occurrence,
+                index,
+                with,
+            } => {
+                let mut moved = vec![self.occurrence_ref(&occurrence)?];
+                for other in &with {
+                    moved.push(self.occurrence_ref(other)?);
+                }
+                self.reorder_occurrences(&moved, index)?;
+                json!({"index": self.occurrence_index(moved[0])})
+            }
+            ComponentCommand::SetLinkParts {
+                component,
+                parts,
+                base,
+            } => {
+                let uid = self.component_ref(&component)?;
+                let base = base.map(PathBuf::from);
+                let set = self.set_link_parts(uid, parts.as_ref(), base.as_deref())?;
+                json!({"component": uid, "changed": set.changed,
+                       "parts": link_parts_value(set.parts.as_deref()),
+                       "messages": set.messages,
+                       "bodies": self.component_bodies(uid)})
             }
         })
     }
@@ -939,6 +1107,13 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             if let Some(detail) = def.and_then(|d| d.link.as_ref()).and_then(|l| l.envelope) {
                 value["envelope"] = json!(detail);
             }
+            // A link to chosen parts of its design (mitcad#2130).
+            if let Some(parts) = def
+                .and_then(|d| d.link.as_ref())
+                .and_then(|l| l.parts.as_deref())
+            {
+                value["link_parts"] = link_parts_value(Some(parts));
+            }
             value
         };
         let mut components = vec![component(ComponentUid::ROOT)];
@@ -971,6 +1146,11 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             // The body or an occurrence on its path (mitcad#1093).
             if i.transparent {
                 value["transparent"] = json!(true);
+            }
+            // A machined occurrence's piece (mitcad#2131): the body of
+            // the component it stands for.
+            if let Some(source) = self.machined_occurrences().replaced_by(i.body) {
+                value["machined_from"] = json!(source);
             }
             if query.properties {
                 let error =
@@ -1086,6 +1266,20 @@ impl<K: Kernel> ComponentsLocal<K> for Document<K> {
                 // Drawn see-through with its contents (mitcad#1093).
                 if o.transparent {
                     value["transparent"] = json!(true);
+                }
+                // Machined by assembly cuts here (mitcad#2131): the cuts
+                // and what the browser row says.
+                if let Some(machined) = self.machined_occurrences().at(&path) {
+                    value["machined"] = json!({
+                        "cuts": machined.cuts,
+                        "bodies": machined.replaced.keys().collect::<Vec<_>>(),
+                        "note": mitcad_model::assembly_cut::MACHINED_NOTE,
+                    });
+                }
+                // The folder of its parent's occurrences it is in
+                // (mitcad#2103).
+                if let Some(folder) = &o.folder {
+                    value["folder"] = json!(folder);
                 }
                 // Flexible in its parent (mitcad#1793), with the values of
                 // its component's joints for it.

@@ -3,6 +3,7 @@
 # check-all sources: app/sketch/SketchItemList.cpp app/sketch/SketchItemList.hpp
 # check-all sources: app/sketch/SketchController.cpp app/sketch/SketchController.hpp app/sketch/SketchReveal.cpp
 # check-all sources: app/sketch/SketchModel.cpp app/sketch/DrawTools.cpp app/MainWindow.cpp
+# check-all sources: app/commands/EqualSpacingCommands.cpp
 # check-all sources: app/framework/TestDriver.cpp tools/cli
 # check-all sources: core/sketch/src/order.rs core/sketch/src/steps.rs core/model-api/src/sketch.rs
 # check-all sources: core/model-api/src/dispatch.rs core/model/src/document.rs
@@ -20,7 +21,12 @@
 # dimension's cell opens its value editor; a refused Parallel puts the
 # error badge on the Rectangle cell; a click on the Rectangle cell selects
 # its items and Delete removes them and the cell; Sketch3 shows one cell
-# per item, the inactive Horizontal's dimmed; Finish Sketch brings the
+# per item, the inactive Horizontal's dimmed; a rectangular pattern's step
+# opens Edit Pattern on a double-click and offers Edit Pattern and Free
+# Pattern on a right-click, its original's step neither (mitcad#2089);
+# an Equal Spacing step opens Edit Equal Spacing on a double-click and
+# offers it on a right-click (mitcad#2099);
+# Finish Sketch brings the
 # timeline back. The steps are tools/ui-scripts/sketch-item-list.mitcad-ui,
 # run in the Docked layout and in the Floating one, where the hover list
 # is over the message band's card and its low rows take the pointer
@@ -78,7 +84,7 @@ check_view() {
 run_app() {
   export MITCAD_TEST_INPUT=$here/ui-scripts/$2
   ui_start_app --ui=qt --no-mcp --chrome=$1 --open "$work/items.mitcad"
-  for _ in $(seq 1 900); do
+  for _ in $(seq 1 1200); do
     kill -0 "$UI_RUNNER" 2> /dev/null || break
     sleep 0.2
   done
@@ -105,6 +111,13 @@ for chrome in docked floating; do
   ui_expect_log 'Sketch steps: p1 point, p2 point, c3 line, k4 horizontal inactive' \
     "$chrome: a sketch without steps: one cell per item"
   ui_expect_log 'Sketch step k4 drawn: dimmed, icon disabled' "$chrome: an inactive item's cell dimmed"
+  ui_expect_log 'double-clicked: pattern' "$chrome: a pattern's step opens Edit Pattern"
+  ui_expect_log 'menu: Edit Pattern | Free Pattern' "$chrome: a pattern's step's menu"
+  ui_expect_log 'Freed pattern k' "$chrome: Free Pattern from the step's menu"
+  ui_expect_log 'double-clicked: equal spacing' "$chrome: an Equal Spacing step opens Edit Equal Spacing"
+  ui_expect_log 'Edited equal spacing k' "$chrome: the spacing edited from its step"
+  ui_expect_log 'menu: Edit Equal Spacing' "$chrome: an Equal Spacing step's menu"
+  ui_expect_log 'double-clicked: nothing' "$chrome: the original's step opens nothing"
   ui_expect_log 'Timeline back in its place' "$chrome: the timeline back after the sketch"
   ui_expect_log 'TestDriver: done' "$chrome: the steps listed, hovered, selected, deleted and edited"
   check_bar $chrome "${limit[$chrome]}"

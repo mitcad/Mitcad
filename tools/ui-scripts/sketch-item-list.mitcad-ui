@@ -20,9 +20,19 @@
 #      badge of its conflicting constraints is on the Rectangle cell.
 #   8. A click on the Rectangle cell selects its items, Delete deletes them
 #      and the cell goes (the dimension on its side with it).
-#   9. Sketch3, saved without steps, shows one cell per item; the inactive
+#   9. A rectangular pattern of a circle (mitcad#2089): a double-click on
+#      its step opens Edit Pattern with the pattern's values; Spacing
+#      changed and OK moves the copies in one undo step. A right-click on
+#      the step offers Edit Pattern and Free Pattern, and Free Pattern
+#      frees it. A double-click and a right-click on the step of the
+#      circle the pattern copied (its original) open no panel and no menu.
+#      The three circles then get an Equal Spacing Dimension (mitcad#2099):
+#      a double-click on its step opens Edit Equal Spacing with its
+#      spacing, a new spacing and OK move the circles in one undo step, and
+#      a right-click offers Edit Equal Spacing.
+#  10. Sketch3, saved without steps, shows one cell per item; the inactive
 #      Horizontal's cell is drawn dimmed, its icon in its disabled colors.
-#  10. Finish Sketch brings the timeline back.
+#  11. Finish Sketch brings the timeline back.
 # The clicks in the view stay inside the top face, away from its edges
 # (60 x 40 around the origin), but for the edge the dimension picks.
 # The rectangle's corner is on a multiple of 5 mm: the click snaps to the
@@ -155,7 +165,157 @@ key Delete
 wait-log "^Sketch steps: ${project} project x[0-9]+$" 20
 wait-idle
 
-# 9. A sketch saved without steps: one cell per item.
+# 9. A pattern's step (mitcad#2089). A circle about (-20, 0) through
+#    (-15, 0), drawn by two clicks (no typed value, so no dimension in its
+#    step), and a rectangular pattern of 3 along x, 15 mm apart, in one
+#    row: copies about (-5, 0) and (10, 0).
+mark
+command sketch.circle
+sketch-click -20 0
+sketch-click -15 0
+wait-log '^Added circle, diameter 10 mm at '
+key Escape
+wait-idle
+wait-log "^Sketch steps: ${project} project x[0-9]+, s[0-9]+ (add_)?circle x[0-9]+$" 20
+capture circle "^Sketch steps: ${project} project x[0-9]+, (s[0-9]+) (add_)?circle x[0-9]+$"
+mark
+sketch-click -20 5
+expect-selection 1 0
+mark
+command sketch.rectangular_pattern
+wait-log '^Command Rectangular Pattern started'
+wait-log '^Preview Rectangular Pattern: ok'
+type-in '^Panel Rectangular Pattern input quantity2 at ' '1'
+type-in '^Panel Rectangular Pattern input distance1 at ' '15'
+wait-log '^Preview Rectangular Pattern copies: .*\(-5\.000, 0\.000\)'
+wait-idle
+# The command runs live on the sketch, so its preview already shows the
+# pattern's step in the steps bar; OK keeps it and its line is not
+# written again. The step is read from the preview, and OK must not take
+# it away.
+wait-log "^Sketch steps: .*${circle} (add_)?circle x[0-9]+, s[0-9]+ rectangular_pattern x[0-9]+$" 20
+capture pattern "^Sketch steps: .*, (s[0-9]+) rectangular_pattern x[0-9]+$"
+wait-log "^Sketch step ${pattern} at "
+mark
+button '^OK$'
+wait-log '^Rectangular pattern of 1 object\(s\), 3 x 1$'
+wait-idle
+expect-no-log '^Sketch steps: (?!.*rectangular_pattern x)'
+# A double-click on the pattern's step: Edit Pattern on that pattern, its
+# values in the panel.
+capture-undo-depth before
+mark
+dblclick-logged "^Sketch step ${pattern} at "
+wait-log "^Sketch step ${pattern} double-clicked: pattern$"
+wait-log '^Command Edit Pattern started'
+wait-log '^Preview Edit Pattern copies: '
+expect-input-text quantity '^3$'
+expect-input-text distance1 '^15( mm)?$'
+expect-input-text quantity2 '^1$'
+wait-idle
+mark
+type-in '^Panel Edit Pattern input distance1 at ' '12'
+wait-log '^Preview Edit Pattern copies: .*\(-8\.000, 0\.000\)'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited pattern k[0-9]+: 3 in all$'
+wait-idle
+expect-undo-depth ${before} 1
+# A right-click on the step: the view's menu for one of its curves.
+leave-widget sketchItemList
+wait-idle
+mark
+context-menu-logged "^Sketch step ${pattern} at " 'Free Pattern'
+wait-log "^Sketch step ${pattern} menu: Edit Pattern [|] Free Pattern$"
+wait-log '^Freed pattern k[0-9]+$'
+wait-idle
+
+# 9b. An Equal Spacing step (mitcad#2099). The pattern freed leaves three
+#     circles about (-20, 0), (-8, 0) and (4, 0); Equal Spacing Dimension
+#     on them, 15 mm apart, makes one Equal Spacing step holding the
+#     constraint and its Common Spacing Dimension.
+leave-widget sketchItemList
+wait-idle
+mark
+sketch-click -20 5
+expect-selection 1 0
+mark
+sketch-click -8 5 ctrl
+expect-selection 2 0
+mark
+sketch-click 4 5 ctrl
+expect-selection 3 0
+mark
+command sketch.equal_spacing_dimension
+wait-log '^Command Equal Spacing Dimension started'
+wait-log '^Preview Equal Spacing Dimension: ok'
+type-in '^Panel Equal Spacing Dimension input spacing at ' '15'
+wait-log '^Equal spacing k[0-9]+ horizontal: .* \(spacing k[0-9]+ = 15\.00\)$'
+wait-idle
+# As with the pattern: the preview already shows the step, OK keeps it.
+wait-log "^Sketch steps: .*, s[0-9]+ (add_)?equal_spacing x[0-9]+$" 20
+capture spacing "^Sketch steps: .*, (s[0-9]+) (add_)?equal_spacing x[0-9]+$"
+wait-log "^Sketch step ${spacing} at "
+mark
+button '^OK$'
+wait-log '^Equal spacing dimension of 3 object\(s\), horizontal, spacing 15'
+wait-idle
+expect-no-log '^Sketch steps: (?!.*equal_spacing x)'
+# A double-click on the step: Edit Equal Spacing on that constraint, its
+# values in the panel (the step holds the dimension too: the panel, not
+# the dimension's value editor).
+capture-undo-depth before
+mark
+dblclick-logged "^Sketch step ${spacing} at "
+wait-log "^Sketch step ${spacing} double-clicked: equal spacing$"
+wait-log '^Double-click on k[0-9]+: sketch.edit_equal_spacing$'
+wait-log '^Command Edit Equal Spacing started'
+wait-log '^Preview Edit Equal Spacing: ok'
+expect-input-text spacing '^15( mm)?$'
+wait-idle
+expect-no-log '^Sketch value editor at '
+mark
+type-in '^Panel Edit Equal Spacing input spacing at ' '12'
+wait-log '^Equal spacing k[0-9]+ horizontal: .* \(spacing k[0-9]+ = 12\.00\)$'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited equal spacing k[0-9]+ of 3 object\(s\), horizontal, spacing 12'
+wait-idle
+# The circles moved with the spacing in one undo step.
+expect-undo-depth ${before} 1
+# A right-click on the step: the view's menu entry for the glyph.
+leave-widget sketchItemList
+wait-idle
+mark
+context-menu-logged "^Sketch step ${spacing} at " 'Edit Equal Spacing'
+wait-log "^Sketch step ${spacing} menu: Edit Equal Spacing$"
+wait-log '^Command Edit Equal Spacing started'
+wait-log '^Preview Edit Equal Spacing: ok'
+wait-idle
+mark
+key Escape
+wait-log '^Command Edit Equal Spacing cancelled'
+wait-idle
+
+# The circle's step (the pattern's original): no panel, no menu.
+leave-widget sketchItemList
+wait-idle
+mark
+dblclick-logged "^Sketch step ${circle} at "
+wait-log "^Sketch step ${circle} double-clicked: nothing$"
+wait-idle
+expect-no-log '^Command (Edit Pattern|Rectangular Pattern|Edit Equal Spacing) started'
+expect-no-log '^Sketch value editor at '
+mark
+context-menu-logged "^Sketch step ${circle} at " cancel
+wait-log "^Sketch step ${circle} menu: none$"
+wait-idle
+leave-widget sketchItemList
+wait-idle
+
+# 10. A sketch saved without steps: one cell per item.
 mark
 command sketch.finish
 wait-log '^Timeline back in its place$'
@@ -169,7 +329,7 @@ wait-log '^Sketch steps: p1 point, p2 point, c3 line, k4 horizontal inactive$'
 wait-log '^Sketch step k4 drawn: dimmed, icon disabled$'
 wait-idle
 
-# 10. The timeline back when the sketch is finished.
+# 11. The timeline back when the sketch is finished.
 mark
 command sketch.finish
 wait-log '^Timeline back in its place$'

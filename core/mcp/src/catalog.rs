@@ -675,6 +675,21 @@ fn ui_tools() -> Vec<Value> {
             false,
             false,
         ),
+        // A guide step shown to the user (mitcad#2012), as a tutorial
+        // page's bridge shows one; its completion is the resource
+        // mitcad://ui-guide.
+        tool(
+            "ui_guide",
+            "Show the user a guide step in the application, as a MitCad tutorial does: the step's target (a command id at its button, an input of the open panel by its key, a Browser row by its name, or the view with a pick filter) is outlined with the step's text beside it, the commands the step does not allow are refused and the window's other input is held back until the user does what it asks, leaves it with Escape (no command open) or Leave Tutorial, or the step is ended. action start shows step (replacing a shown one), end ends it, state (the default) reads it. The step: {id, text, target: {command | input | browser | view: true or kinds}, done: {command: id (finished with OK, or an action run) | started: id (its panel opened) | input: key, value: text | pick: true or kinds | mode: idle, pick_plane, sketch or command}, allow: [command ids], navigation: true}; never pixels. The result and the resource mitcad://ui-guide (subscribe instead of polling) carry active, the step, sequence and last_event (step_done with what was done, step_left with the reason, refused with the command).",
+            json!({
+                "document": document,
+                "action": {"type": "string", "enum": ["start", "end", "state"], "default": "state", "description": "start shows step; end ends the shown step; state reads it"},
+                "step": {"type": "object", "description": "The step for action start (docs/tutorials.md, Guide steps)"}
+            }),
+            &[],
+            false,
+            false,
+        ),
         // A new design beside the open ones (mitcad#1266), as File > New
         // Design makes it.
         tool(
@@ -785,6 +800,13 @@ pub(crate) fn check(name: &str, arguments: &Value) -> Result<(), String> {
         "ui_command" if has("search") && (has("id") || has("edit") || has("inputs")) => Err(
             "ui_command's search lists the commands: give no id, edit or inputs with it".to_owned(),
         ),
+        // A step to start, and only to start (mitcad#2012).
+        "ui_guide"
+            if (arguments.get("action").and_then(Value::as_str) == Some("start"))
+                != has("step") =>
+        {
+            Err("ui_guide's step goes with action start, which needs it".to_owned())
+        }
         // One place for a click, one thing to type, one step of a dialog
         // (mitcad#1735).
         "ui_click" if has("input") == has("at") => {

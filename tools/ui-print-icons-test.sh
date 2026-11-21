@@ -3,12 +3,15 @@
 # check-all sources: app/files/MainWindowPrint.cpp app/icons/print-3d.svg app/icons/print-settings.svg
 # check-all sources: app/icons/print-process.svg
 # check-all sources: app/icons/print-analysis.svg app/framework/TestDriver.cpp tools/ui-scripts/print-icons.mitcad-ui
+# check-all sources: app/framework/Icons.cpp app/framework/Ribbon.cpp
 # The Make tab's 3D Print group shows four different icons (mitcad#1096,
 # mitcad#1135): Send to Slicer the printer (print-3d), Printers… the
 # printer with a gear (print-settings), Processes… the printed layers with
 # a gear (print-process), Print Analysis its own; checked on
 # the commands' actions and their ribbon buttons, in the Floating and the
-# Docked layout (tools/ui-scripts/print-icons.mitcad-ui).
+# Docked layout (tools/ui-scripts/print-icons.mitcad-ui); the toolbar's
+# buttons draw it with the thin outline, the actions with the sources'
+# (mitcad#2092).
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-test-lib.sh"
@@ -27,9 +30,9 @@ for chrome in floating docked; do
   for pair in "make.print3d print-3d" "make.printers print-settings" "make.processes print-process" \
     "inspect.print_analysis print-analysis"; do
     set -- $pair
-    grep -qE "TestDriver: command $1 shows the icon $2 \([1-9][0-9]* buttons\)" "$UI_LOG" ||
-      ui_fail "$1 has no ribbon button with the icon $2 ($chrome)"
-    echo "ok   $1 shows $2 on its action and ribbon buttons ($chrome)"
+    grep -qE "TestDriver: command $1 shows the icon $2 \([1-9][0-9]* buttons, [1-9][0-9]* thin\)" "$UI_LOG" ||
+      ui_fail "$1 has no toolbar button with the icon $2 drawn thin ($chrome)"
+    echo "ok   $1 shows $2 on its action and, thin, on its toolbar buttons ($chrome)"
   done
 done
 ui_finish '3D Print icons'

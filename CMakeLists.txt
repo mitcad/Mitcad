@@ -26,10 +26,14 @@ else()
   set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON CACHE BOOL "Leave out vcpkg.json's default features (MITCAD_HEIF)" FORCE)
 endif()
 
+# ccache for vcpkg's port builds; defines MITCAD_COMPILER_CACHE (below).
+include(cmake/VcpkgCompilerCache.cmake)
+
 project(Mitcad
-  VERSION 0.68.0
+  VERSION 0.69.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
+mitcad_vcpkg_compiler_cache_done()
 
 if(APPLE)
   # app/platform/macos: the parts that need AppKit.
@@ -67,7 +71,8 @@ include(cmake/MacOptimization.cmake)
 # writes the debug information into the object files (/Z7): ccache cannot
 # cache compiles that share a target's PDB file (/Zi); the linker still
 # makes the executables' PDB files.
-option(MITCAD_COMPILER_CACHE "Compile C++ and Objective-C++ through ccache when it is installed" ON)
+# MITCAD_COMPILER_CACHE: cmake/VcpkgCompilerCache.cmake, which also hands
+# ccache to vcpkg's port builds.
 if(MITCAD_COMPILER_CACHE)
   find_program(MITCAD_CCACHE ccache)
   if(MITCAD_CCACHE)

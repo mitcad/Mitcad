@@ -66,6 +66,26 @@ pub(crate) enum CurvTerm {
         t: f64,
         sign: f64,
     },
+    /// An elliptical arc (centre `c`, major axis end `a`, minor radius `b`)
+    /// at its parameter `t` (an end's); `sign` is +1 at the start
+    /// (counter-clockwise into the arc) and -1 at the end.
+    Ellipse {
+        c: P,
+        a: P,
+        b: usize,
+        t: usize,
+        sign: f64,
+    },
+}
+
+/// The derivative `E'(t)` of the ellipse with centre `c`, major axis end
+/// `a` and minor radius `b`, `E(t) = c + A cos t + B sin t` with `A = a - c`
+/// and `B` the left perpendicular of `A` scaled to `b`.
+fn ellipse_d1<T: Scalar>(x: &[T], c: P, a: P, b: usize, t: usize) -> V2<T> {
+    let av = pt(x, a).sub(pt(x, c));
+    let ratio = x[b] / av.norm();
+    let tv = x[t];
+    av.mul(-tv.sin()).add(av.perp().mul(ratio * tv.cos()))
 }
 
 impl CurvTerm {
@@ -83,6 +103,13 @@ impl CurvTerm {
                 let e = basis.eval(&cp, T::cst(*t), 2);
                 let n = e.d1.norm();
                 e.d1.cross(e.d2).mulf(*sign) / (n * n * n)
+            }
+            CurvTerm::Ellipse { c, a, b, t, sign } => {
+                // E' x E'' = A x B = |A| b for every t.
+                let d1 = ellipse_d1(x, *c, *a, *b, *t);
+                let n = d1.norm();
+                let ab = pt(x, *a).sub(pt(x, *c)).norm() * x[*b];
+                ab.mulf(*sign) / (n * n * n)
             }
         }
     }
@@ -149,6 +176,17 @@ pub(crate) enum EqKind {
     DirParallel { a1: P, a2: P, b1: P, b2: P },
     /// `unit(a2 - a1) . unit(b2 - b1) * scale`
     DirPerp { a1: P, a2: P, b1: P, b2: P },
+    /// `unit(E'(t)) x unit(l2 - l1) * scale` for the ellipse with centre
+    /// `c`, major axis end `a` and minor radius `b` (a spline's leg along
+    /// an elliptical arc's end).
+    DirEllipse {
+        c: P,
+        a: P,
+        b: usize,
+        t: usize,
+        l1: P,
+        l2: P,
+    },
     /// `|a2 - a1| - |b2 - b1|`
     EqualLength { a1: P, a2: P, b1: P, b2: P },
     /// `r_a - r_b`
@@ -259,6 +297,11 @@ pub(crate) enum EqKind {
         how: Interval,
         side: f64,
     },
+    // Perpendicular circles and arcs (mitcad#2114).
+    /// `|c2 - c1| - sqrt(r1^2 + r2^2)`: the circles cross at right angles
+    /// (`|c1 c2|^2 = r1^2 + r2^2`), written as a length so that it is held
+    /// to the same tolerance as the other rows.
+    PerpCircles { c1: P, r1: Rad, c2: P, r2: Rad },
 }
 
 fn pt<T: Scalar>(x: &[T], p: P) -> V2<T> {
@@ -348,6 +391,11 @@ impl EqKind {
                 let u = pt(x, *a2).sub(pt(x, *a1)).unit();
                 let v = pt(x, *b2).sub(pt(x, *b1)).unit();
                 u.dot(v).mulf(scale)
+            }
+            DirEllipse { c, a, b, t, l1, l2 } => {
+                let u = ellipse_d1(x, *c, *a, *b, *t).unit();
+                let v = pt(x, *l2).sub(pt(x, *l1)).unit();
+                u.cross(v).mulf(scale)
             }
             EqualLength { a1, a2, b1, b2 } => {
                 pt(x, *a2).sub(pt(x, *a1)).norm() - pt(x, *b2).sub(pt(x, *b1)).norm()
@@ -544,6 +592,11 @@ impl EqKind {
             }
             EqualSpacing { a, b, c, how } => interval(x, *a, *b, *how) - interval(x, *b, *c, *how),
             Spacing { a, b, how, side } => interval(x, *a, *b, *how) - T::cst(side * value),
+            PerpCircles { c1, r1, c2, r2 } => {
+                let d = pt(x, *c2).sub(pt(x, *c1)).norm();
+                let (a, b) = (rad(x, r1), rad(x, r2));
+                d - (a * a + b * b).sqrt()
+            }
         }
     }
 }
@@ -613,6 +666,28 @@ mod tests {
                 a2: [2, 3],
                 b1: [4, 5],
                 b2: [6, 7],
+            },
+            EqKind::DirEllipse {
+                c: [2, 3],
+                a: [4, 5],
+                b: 8,
+                t: 9,
+                l1: [0, 1],
+                l2: [6, 7],
+            },
+            EqKind::Curvature {
+                a: CurvTerm::Ellipse {
+                    c: [2, 3],
+                    a: [4, 5],
+                    b: 8,
+                    t: 9,
+                    sign: -1.0,
+                },
+                b: CurvTerm::Arc {
+                    c: [0, 1],
+                    s: [6, 7],
+                    sign: 1.0,
+                },
             },
             EqKind::EqualLength {
                 a1: [0, 1],
@@ -835,6 +910,12 @@ mod tests {
                 b: [[2, 3], [10, 11]],
                 how: Interval::Distance,
                 side: 1.0,
+            },
+            EqKind::PerpCircles {
+                c1: [0, 1],
+                r1: Rad::Param(8),
+                c2: [2, 3],
+                r2: Rad::Dist([2, 3], [4, 5]),
             },
         ];
         let n = x0.len();

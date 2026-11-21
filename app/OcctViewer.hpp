@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -66,6 +67,7 @@
 #include "view/ViewMatch.hpp"
 #include "view/ViewNavigation.hpp"
 #include "view/SpaceMouseTiming.hpp"
+#include "view/SpaceMouseWheelGuard.hpp"
 #include "view/Navigation.hpp"
 #include "view/OrbitWrap.hpp"
 
@@ -74,6 +76,7 @@ class QScreen;
 class QTimer;
 class QToolButton;
 class QWheelEvent;
+class QWindow;
 
 namespace mitcad {
 
@@ -227,6 +230,12 @@ struct HighlightDisplay {
   // of a whole occurrence drawn under the others.
   bool pickable = true;
   bool light = false;
+  // A whole body or component held by a command's selection input
+  // (mitcad#2069): a fill as faint as the light tint's, its face
+  // boundaries kept in the colour at the highlight width, and no copy
+  // through the bodies, so that it neither reads as an error nor lies over
+  // the command's preview. The idle selection keeps the plain look.
+  bool faintWhole = false;
   // Original topology for a face/edge overlay's boundary picks, including
   // while a command preview replaces the displayed body.
   std::shared_ptr<geometry::Shape> body = nullptr;
@@ -349,6 +358,12 @@ public:
   // horizon (mitcad#978). Zero rates end the motion and log "3D mouse
   // motion: …".
   void setSpaceMouseRates(const SpaceMouseRates& rates);
+  // The 3D mouse's cap deflected past its dead zone or back at rest, at
+  // every report, whatever moves the view (mitcad#1981): the wheel is
+  // ignored while it is deflected and for a short time after
+  // (SpaceMouseWheelGuard.hpp), as the driver's emulated wheel steps come
+  // then, even for an axis that is switched off or locked here.
+  void spaceMouseInput(bool deflected);
   // The background: a vertical gradient from top to bottom, or one colour.
   void setBackground(const QColor& top, const QColor& bottom, bool gradient);
   // The layout grid on the grid plane (XY, or the sketch plane): `step`
@@ -537,11 +552,21 @@ public:
   // fitted.
   void goHome();
   void setHome(const std::optional<CameraState>& home) { m_home = home; }
-  // The orientation cube's corner of the view (widget pixels): the square
-  // its arrows and the home button stay in, and its centre's distance from
-  // the corner.
-  static constexpr int kCubeArea = 190;
-  static constexpr int kCubeOffset = 100;
+  // The orientation cube's corner of the view (widget pixels) at the cube's
+  // size: the square its arrows and the home button stay in (190 at
+  // 100 %), and its centre's distance from the corner (100 at 100 %).
+  int cubeAreaSize() const { return cubeScaled(kCubeAreaBase); }
+  int cubeOffset() const { return cubeScaled(kCubeOffsetBase); }
+  // The orientation cube's size in percent (mitcad#2071, GitHub
+  // mitcad/Mitcad#447, `view/cubeSize`): 75, 100 (the default), 125 or 150;
+  // any other reads as 100. The whole corner scales by it as one, on top of
+  // the device pixel ratio: the cube and its font, its place, cubeArea(),
+  // the home button and the arrows with their icons. Logs "Orientation cube
+  // size 125 %" and the corner's measures, and emits cubeAreaChanged and
+  // overlayInsetsChanged.
+  void setCubeScale(int percent);
+  int cubeScale() const { return m_cubeScale; }
+  static bool isCubeScale(int percent);
   // The part of the view that is free for its own overlays (the orientation
   // cube, its arrows and the home button): the widget less these margins.
   // Floating chrome lays cards over the view and keeps these overlays out
@@ -1010,6 +1035,11 @@ public:
   // (selectedEdgeWidth, selectedBoundaryWidth) times the ratio.
   double highlightEdgeWidth() const;
   double highlightBoundaryWidth() const;
+  // The device pixel ratio the view's lines are drawn at: the highlights'
+  // widths and the sketches' curves, their halos and a feature's input
+  // lines (mitcad#2063) are their logical widths times it, so that they are
+  // as wide on a 200 % display as on a 100 % one.
+  double lineRatio() const;
   // More of the hover (mitcad#290): the rest of the tangent chain of the
   // edge or face under the mouse, drawn as the hover draws that one (edges
   // in a compound) and not pickable; null takes it away.
@@ -1286,6 +1316,9 @@ signals:
   // The free area for the view's overlays changed (`setOverlayInsets`): the
   // version watermark (mitcad#1209) follows.
   void overlayInsetsChanged();
+  // The cube's corner changed its size (setCubeScale): the floating layout
+  // moves the upper right cards below it.
+  void cubeAreaChanged();
   // A click (window false) or a window selection; empty when the click hit
   // nothing. Emitted while the view paints: connect queued. `click` is the
   // click's number (clickedAt's, 0 for a window): its two reports are one
@@ -1540,6 +1573,15 @@ private:
   // screen axes to move along (mitcad#773).
   occ::handle<Graphic3d_Camera> pannedCamera(const QPointF& shift) const;
   void placeHomeButton();
+  // A length of the cube's corner at 100 % at the cube's size: a place
+  // rounded half away from zero, a button's or an icon's size rounded down,
+  // so that buttons side by side at 100 % never overlap (mitcad#2071).
+  int cubeScaled(int length) const;
+  int cubeScaledSize(int length) const;
+  // The home button's and the arrows' sizes and icons at the cube's size,
+  // and "Orientation cube corner …" when the measures change.
+  void sizeCubeButtons();
+  void logCubeCorner();
   // The buttons over the view take dark or light icons by the background.
   void updateOverlayIcons();
   // What a shown sketch entity's colour and line follow (setSketchEntities):
@@ -1620,6 +1662,9 @@ private:
   // Recolours the sketch entities shown after the background turned dark
   // or light.
   void restyleSketchEntities();
+  // The sketches' curves, halos and copies through the bodies drawn again
+  // at a new device pixel ratio (applyDevicePixelRatio, mitcad#2063).
+  void restyleSketchLines();
   // The orientation cube and the pick tolerance are in device pixels; this
   // scales them by the widget's device pixel ratio (no change at 1).
   void applyDevicePixelRatio();
@@ -1684,6 +1729,14 @@ private:
   void activatePicking(const occ::handle<AIS_Shape>& object);
   void activateAllPicking();
   std::optional<SelectionItem> itemFor(const occ::handle<SelectMgr_EntityOwner>& owner) const;
+  // The owner a hover at the device pixel would detect (MoveTo's choice:
+  // the first under it that the context's filters take, nothing where the
+  // topmost is filtered out with SelectMgr_PickingStrategy_OnlyTopmost),
+  // without highlighting it or changing the context's detected owner
+  // (mitcad#2062: pickPoints() tries thousands of pixels on a large
+  // design, and each new owner MoveTo highlighted built its highlight).
+  // The main selector keeps this pick's results (pickedPoint(), accepts()).
+  occ::handle<SelectMgr_EntityOwner> detectQuietly(const NCollection_Vec2<int>& pixel);
   // Where the last click hit an owner, in its object's own coordinates.
   std::optional<std::array<double, 3>> pickedPoint(const occ::handle<SelectMgr_EntityOwner>& owner) const;
   // The same in the design's coordinates.
@@ -1944,6 +1997,26 @@ private:
   bool m_directFrameQueued = false; // requestFrame() in an unexposed window
   bool m_painting = false;          // in paintGL()
   QString m_glVersion;              // GL_VERSION (glVersion())
+  // Attaching OCCT to Qt's GL context (mitcad#2125): whether an attach has
+  // succeeded, whether the last one failed (each frame tries again and
+  // draws nothing meanwhile), and whether the failure was told (once, until
+  // a frame is drawn again).
+  bool m_glAttached = false;
+  bool m_glAttachFailed = false;
+  bool m_glFailureTold = false;
+  // The top-level window of the last attach: with MITCAD_TEST_GL_FAILURE a
+  // move to another window counts as Qt making its surface again.
+  QPointer<QWidget> m_glAttachedTopLevel;
+  // With MITCAD_TEST_GL_FAILURE a screen change of that window counts as
+  // Qt making the surface again too (mitcad#2125, the TestDriver's
+  // screen-change): the window watched and whether it changed screens
+  // since the last attach.
+  QPointer<QWindow> m_glTestScreenWindow;
+  QMetaObject::Connection m_glTestScreenConnection;
+  bool m_glTestScreenChanged = false;
+  void watchGlTestScreen();
+  QString attachGl();
+  void reportGlFailure(const QString& reason);
   // The left press that starts a pick, and whether its release was a drag.
   QPointF m_pressPosition;
   // Where the last click was released, and whether it picked nothing
@@ -2148,6 +2221,12 @@ private:
   QString m_loggedHighlightLine;
   double m_cubeBaseSize = 0.0;   // the cube's size and font height at ratio 1
   double m_cubeBaseFont = 0.0;
+  // The cube's corner at 100 % (widget pixels), its size in percent
+  // (setCubeScale, mitcad#2071) and its measures as last logged.
+  static constexpr int kCubeAreaBase = 190;
+  static constexpr int kCubeOffsetBase = 100;
+  int m_cubeScale = 100;
+  QString m_loggedCubeCorner;
   CubeProjection m_cubeProjection = CubeProjection::FollowView; // mitcad#774
   // Anaglyph 3D (mitcad#1449): on or off, the projection to go back to when
   // it ends, and its stereo depth and convergence (relative, as OCCT's).
@@ -2236,6 +2315,12 @@ private:
   double m_spaceMouseTurned = 0.0; // degrees
   double m_spaceMousePanned = 0.0; // view heights
   double m_spaceMouseStartScale = 0.0; // the camera's scale as it began (the zoom logged)
+  // The wheel ignored during a 3D mouse motion and shortly after it
+  // (mitcad#1981: the driver's emulated wheel input zoomed against it),
+  // and the keys that arrive then logged; spaceMouseNow() is its clock.
+  SpaceMouseWheelGuard m_spaceMouseWheel;
+  QElapsedTimer m_spaceMouseWheelClock;
+  std::int64_t spaceMouseNow();
   // The Center of Mass marker (setCenterOfMass, mitcad#1094): the point
   // drawn and its tooltip, the marker, and the image's tone and ratio.
   void paintCenterOfMass();

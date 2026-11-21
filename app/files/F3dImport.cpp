@@ -53,6 +53,7 @@
 #include "../framework/Dialogs.hpp"
 #include "FileDialogs.hpp"
 #include "IamImport.hpp"
+#include "ImportWorkerFailure.hpp"
 
 namespace mitcad {
 namespace {
@@ -1066,11 +1067,28 @@ QString F3dImport::failure(int exitCode, QProcess::ExitStatus status) const {
   if (status == QProcess::NormalExit && !m_failure.isEmpty()) {
     return m_failure;
   }
-  // Otherwise it stopped (a crash, a panic of a reader, memory): what it
-  // said last, a crash report's place.
-  const QString how = status == QProcess::CrashExit ? tr("it crashed") : tr("exit code %1").arg(exitCode);
-  return m_lastLine.isEmpty() ? tr("the import process stopped (%1)").arg(how)
-                              : tr("the import process stopped (%1): %2").arg(how, m_lastLine);
+  // Otherwise it stopped (a crash, a panic of a reader, memory): said in
+  // words with the item it was importing (mitcad#2085); its last raw line
+  // goes to the log only.
+  if (!m_lastLine.isEmpty()) {
+    qWarning().noquote() << QStringLiteral("Import of %1: the import process's last line: %2")
+                                .arg(QFileInfo(m_path).fileName(), m_lastLine);
+  }
+  return importWorkerStopped(status == QProcess::CrashExit, exitCode, stoppedItem(), m_lastLine);
+}
+
+QString F3dImport::stoppedItem() const {
+  if (m_parts > 0) {
+    const QString part = m_partName.isEmpty() ? tr("component %1").arg(std::clamp(m_part, 1, m_parts))
+                                              : tr("component %1").arg(m_partName);
+    return m_current.isEmpty() ? part
+                               : tr("timeline item %1 (%2) of %3").arg(std::max(m_position, 1)).arg(m_current, part);
+  }
+  if (m_position > 0) {
+    return m_current.isEmpty() ? tr("timeline item %1").arg(m_position)
+                               : tr("timeline item %1 (%2)").arg(m_position).arg(m_current);
+  }
+  return QString();
 }
 
 void F3dImport::processFinished(int exitCode, QProcess::ExitStatus status) {

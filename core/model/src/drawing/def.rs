@@ -129,7 +129,8 @@ pub struct Drawing {
 
 /// What every dimension and annotation of a drawing takes unless it has
 /// its own (mitcad#729): its value's decimals (a dimension's `format`),
-/// its letters' height (an annotation's, a note's or a text's `height`).
+/// its letters' height (an annotation's, a note's or a text's `height`);
+/// and the standard its dimensions follow (mitcad#2047).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DrawingDefaults {
@@ -140,6 +141,10 @@ pub struct DrawingDefaults {
     /// The letters' height, paper mm; 3.5 when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_height: Option<f64>,
+    /// The standard its dimensions are written to (mitcad#2047): ISO 129-1
+    /// when left out, so that drawings made before keep their look.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub standard: super::Standard,
 }
 
 impl DrawingDefaults {

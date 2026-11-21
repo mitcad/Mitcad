@@ -64,6 +64,8 @@ pub use document::{
 };
 // A slot's own parameter kept as a user parameter (mitcad#1536).
 pub use document::KeptSlotParameter;
+// What a sketch block command did (mitcad#2110).
+pub use document::BlockEdit;
 pub use exchange::{BaseInput, BodyKind, ImportBody, Imported};
 pub use features::{FeatureDef, FeatureEntry, ValueInput};
 pub use file::FileError;
@@ -336,8 +338,9 @@ pub use document::{SUMMARY_KEYS, SUMMARY_SET};
 pub use file::{DesignStatistics, SaveStamp};
 // Comments pinned to the model for an AI agent (mitcad#1119).
 pub use document::{
-    COMMENT_USER, Comment, CommentFound, CommentReply, CommentSketchItem, CommentStatus,
-    CommentTarget, CommentTargetKind, comment_number,
+    AttachmentSource, COMMENT_USER, Comment, CommentAttachment, CommentFound, CommentReply,
+    CommentSketchItem, CommentStatus, CommentTarget, CommentTargetKind, MAX_COMMENT_IMAGE,
+    attachment_number, comment_number,
 };
 
 // Read-only BOM grouping (mitcad#1176).
@@ -384,6 +387,9 @@ mod spatial_path_tests;
 // A planar sketch turned into a 3D sketch in place (mitcad#1544).
 #[cfg(test)]
 mod sketch_conversion_tests;
+// Sketch blocks in a design (mitcad#2110).
+#[cfg(test)]
+mod sketch_block_tests;
 // A 3D sketch's Fillet of corners between lines (mitcad#1548).
 #[cfg(test)]
 mod spatial_fillet_tests;
@@ -447,3 +453,9 @@ pub use document::HeldFreePart;
 // removal, segmentation and surface fitting (mitcad#1871).
 pub mod mesh_tools;
 pub use document::{MAX_SECTIONS, MeshSectionRequest, MeshSections, SectionTarget};
+// Assembly cuts: an Extrude, Revolve or Hole cut made in an assembly that
+// machines the linked and multiply placed components it reaches there only
+// (mitcad#2131).
+pub mod assembly_cut;
+// Linked parts of a design (mitcad#2130).
+pub use document::{LinkPartNode, LinkPartsInput, LinkPartsSet, LinkPartsTree};

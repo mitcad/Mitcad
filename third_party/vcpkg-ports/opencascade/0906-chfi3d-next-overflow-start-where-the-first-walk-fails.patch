@@ -43,10 +43,15 @@ end or this retry is tried.
 
 Upstream: new.
 
-Test: pending (mitcad#1986): no synthetic body is known that reaches its
-case; it is verified on the stored design's bodies only
-(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded with
-0.86). A regression test needs such a body first.
+Test: none, because no synthetic body reached its failure (mitcad#1986).
+Tried with the patch's code traced and with the retry switched off: the
+plates and slots whose rims ride on each other (test_fillet_ride_corners,
+_ride_against, the eave's end strip and the port tests of 0016) take the
+next overflow start many times, and variants of their dimensions too, but
+each builds alike without the retry (the stripes are built by the ride
+when it is not made). Verified on the stored design's bodies
+(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded
+with 0.86).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index 6aa3ca39..a0004ca1 100644

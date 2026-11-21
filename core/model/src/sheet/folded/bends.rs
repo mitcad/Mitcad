@@ -1308,7 +1308,17 @@ pub(crate) fn flange<K: Kernel>(
     // The fold's own allowance in place of the rules' (mitcad#1939).
     let rules = rules.with_fold_allowance(d.allowance.as_ref());
     free(&state, &d.boundary)?;
-    let frame = port_frame(&state, &d.boundary)?;
+    let frame = port_frame(&state, &d.boundary).map_err(|e| {
+        if d.hem.is_some() && e.contains("straight") {
+            hem_refusal(
+                d,
+                "A hem goes only on a straight edge of the sheet.".into(),
+                &e,
+            )
+        } else {
+            e
+        }
+    })?;
     // A wall drawn by a profile sketch (mitcad#1648): one bend, its span
     // and overhangs where the profile's outline puts them.
     let profile = d
@@ -1324,7 +1334,13 @@ pub(crate) fn flange<K: Kernel>(
                 wall: wall.length,
             }]
         }
-        None => flange_steps(d, &rules)?,
+        None => flange_steps(d, &rules).map_err(|e| {
+            if d.hem.is_some() {
+                hem_refusal(d, e.clone(), &e)
+            } else {
+                e
+            }
+        })?,
     };
     let first = steps[0];
     let mut metrics = BendMetrics::past_half_turn(first.angle, Some(first.radius), &rules)?;
@@ -1665,7 +1681,9 @@ pub(super) fn flange_steps(
         }
     };
     if let Some(hem) = &d.hem {
-        if d.length.mode != SheetLengthMode::OuterTangent {
+        // A rolled hem has no wall: its length is not used (mitcad#2112).
+        if d.length.mode != SheetLengthMode::OuterTangent && !matches!(hem, SheetHem::Rolled { .. })
+        {
             return Err(
                 "a hem's length is measured from the plane touching its bend's outer surface \
                  (length mode outer_tangent)"
@@ -1700,8 +1718,9 @@ pub(super) fn flange_steps(
 
 /// A hem's bends and walls (mitcad#1378; the forms' geometry:
 /// [`SheetHem`]), folding to the side `sign`, of inside radius `r` on a
-/// sheet of thickness `t`, `length` its length from the plane touching
-/// the first bend's outer surface.
+/// sheet of thickness `t` (a flat or open hem's radius is half its gap, a
+/// rolled hem's its own where it has one, mitcad#2112), `length` its
+/// length from the plane touching the first bend's outer surface.
 pub(super) fn hem_steps(
     hem: &SheetHem<f64>,
     sign: f64,
@@ -1796,7 +1815,84 @@ pub(super) fn hem_steps(
                 step(PI, under),
             ])
         }
+        // One bend of 180 degrees whose inside radius is half the gap and
+        // a wall back over the panel to the length (mitcad#2112): the
+        // flange of 180 degrees the imports made of these hems.
+        SheetHem::Flat { gap } => {
+            let g = gap.unwrap_or(FLAT_HEM_GAP * t);
+            folded_back(sign, g, t, length, false)
+        }
+        SheetHem::Open { gap } => folded_back(sign, *gap, t, length, true),
+        // One bend of its angle and no wall (mitcad#2112): the flange of
+        // that angle with a length of 0 the imports made of a rolled hem.
+        SheetHem::Rolled { angle, radius } => {
+            let angle = angle.abs();
+            if !angle.is_finite() || angle <= PI + 1e-9 || angle >= std::f64::consts::TAU - 1e-9 {
+                return Err(
+                    "a rolled hem's angle must be more than 180 degrees and less than a full turn"
+                        .into(),
+                );
+            }
+            let radius = radius.unwrap_or(r);
+            if !radius.is_finite() || radius <= TOLERANCE {
+                return Err("a rolled hem's radius must be more than 0".into());
+            }
+            Ok(vec![FlangeStep {
+                angle: sign * angle,
+                radius,
+                wall: 0.0,
+            }])
+        }
     }
+}
+
+/// A hem's refusal (mitcad#2112): `message` in words for the person, the
+/// wall of the hem's edge in the input sheet painted on hover, `detail`
+/// for agents.
+fn hem_refusal(d: &SheetFlangeDef<f64>, message: String, detail: &str) -> String {
+    crate::notice::FeatureError::new(message)
+        .at(crate::notice::NoticePlace::face(
+            crate::sheet::pick::wall_name(d.boundary.panel, &d.boundary.curve),
+        ))
+        .in_body(&d.body.to_string())
+        .with_detail(detail)
+        .text()
+}
+
+/// A flat or an `open` hem (mitcad#2112): one bend of 180 degrees to the
+/// side `sign` whose inside radius is half the gap `g`, and a wall back
+/// over the panel ending at `length` from the plane touching the bend's
+/// outer surface (`length - g / 2 - t`; none at 0).
+fn folded_back(
+    sign: f64,
+    g: f64,
+    t: f64,
+    length: f64,
+    open: bool,
+) -> Result<Vec<FlangeStep>, String> {
+    let radius = g / 2.0;
+    if !radius.is_finite() || radius <= TOLERANCE {
+        return Err(if open {
+            "an open hem's gap must be more than 0".into()
+        } else {
+            "a flat hem's gap must be more than 0".into()
+        });
+    }
+    // As a flange's outer tangent length: the length less `r + t`.
+    let outer = radius + t;
+    let wall = length - outer;
+    if wall < -TOLERANCE {
+        return Err(if open {
+            format!("an open hem's length must be at least its bend's outer radius, {outer:.4} mm")
+        } else {
+            format!("a flat hem's length must be at least its bend's outer radius, {outer:.4} mm")
+        });
+    }
+    Ok(vec![FlangeStep {
+        angle: sign * std::f64::consts::PI,
+        radius,
+        wall: if wall <= TOLERANCE { 0.0 } else { wall },
+    }])
 }
 
 /// The port frame at the far end of a flange's wall `wall` long, whose
@@ -3074,6 +3170,7 @@ mod tests {
             opened: Vec::new(),
             lineage: Vec::new(),
             overlays: Vec::new(),
+            gaps: Vec::new(),
             invalidated: None,
             blockers: Vec::new(),
         }
@@ -3662,6 +3759,158 @@ mod tests {
             flange_steps(&flange, &rules)
                 .unwrap_err()
                 .contains("outer_tangent")
+        );
+    }
+
+    /// The flat, open and rolled forms (mitcad#2112) give the bends and
+    /// walls of the flanges the imports made of these hems: a flange of 180
+    /// degrees whose inside radius is half the gap, its length from the
+    /// outer tangent plane; a flange of the rolled hem's angle and radius
+    /// with no wall. The flange's own radius does not count for a flat or
+    /// open hem; a flat hem's gap is 0.1 times the thickness unless typed.
+    #[test]
+    fn flat_open_and_rolled_hems_are_the_imports_flanges() {
+        use std::f64::consts::PI;
+        let rules = hem_rules();
+        let t = rules.thickness;
+        let plain = |angle: f64, mode: &str, length: f64, radius: f64| {
+            flange_steps(
+                &hem_flange(angle, mode, length, radius, serde_json::Value::Null),
+                &rules,
+            )
+            .expect("a plain flange")
+        };
+        let hem = |angle: f64, length: f64, radius: f64, hem: serde_json::Value| {
+            flange_steps(
+                &hem_flange(angle, "outer_tangent", length, radius, hem),
+                &rules,
+            )
+        };
+        // Open, gap 2: the 180-degree flange of radius 1.
+        let open = hem(
+            PI,
+            10.0,
+            7.0,
+            serde_json::json!({"form": "open", "gap": 2.0}),
+        )
+        .expect("an open hem");
+        assert_eq!(open, plain(PI, "outer_tangent", 10.0, 1.0));
+        assert!((open[0].wall - (10.0 - 1.0 - t)).abs() < 1e-12);
+        // Flat with its gap typed, and with the default gap; to the back.
+        let flat = hem(
+            -PI,
+            10.0,
+            7.0,
+            serde_json::json!({"form": "flat", "gap": 0.02}),
+        )
+        .expect("a flat hem");
+        assert_eq!(flat, plain(-PI, "outer_tangent", 10.0, 0.01));
+        let flat = hem(PI, 10.0, 7.0, serde_json::json!({"form": "flat"})).expect("a flat hem");
+        assert_eq!(
+            flat,
+            plain(PI, "outer_tangent", 10.0, FLAT_HEM_GAP * t / 2.0)
+        );
+        // Rolled, 270 degrees of radius 3 and no wall: the 270-degree flange
+        // of length 0; its radius else the flange's; its length not used.
+        let rolled = serde_json::json!({"form": "rolled", "angle": 1.5 * PI, "radius": 3.0});
+        let steps = hem(PI, 0.0, 7.0, rolled.clone()).expect("a rolled hem");
+        assert_eq!(steps, plain(1.5 * PI, "tangent", 0.0, 3.0));
+        let steps = hem(-PI, 40.0, 7.0, rolled).expect("a rolled hem to the back");
+        assert_eq!(steps, plain(-1.5 * PI, "tangent", 0.0, 3.0));
+        let own = hem(
+            PI,
+            0.0,
+            3.0,
+            serde_json::json!({"form": "rolled", "angle": 1.5 * PI}),
+        )
+        .expect("a rolled hem of the flange's radius");
+        assert_eq!(own, plain(1.5 * PI, "tangent", 0.0, 3.0));
+        let tangent = hem_flange(
+            PI,
+            "tangent",
+            0.0,
+            3.0,
+            serde_json::json!({"form": "rolled", "angle": 1.5 * PI}),
+        );
+        assert_eq!(
+            flange_steps(&tangent, &rules).expect("any length mode"),
+            own
+        );
+        // Refusals in words: no gap, a length short of the bend, an angle
+        // not past 180 degrees or a full turn.
+        let refused = |angle: f64, length: f64, h: serde_json::Value, part: &str| {
+            let error = hem(angle, length, 7.0, h).unwrap_err();
+            assert!(error.contains(part), "{error}");
+            assert!(crate::notice::user_text_leaks(&error).is_none(), "{error}");
+        };
+        refused(
+            PI,
+            10.0,
+            serde_json::json!({"form": "open", "gap": 0.0}),
+            "gap must be more than 0",
+        );
+        refused(
+            PI,
+            10.0,
+            serde_json::json!({"form": "flat", "gap": -1.0}),
+            "gap must be more than 0",
+        );
+        refused(
+            PI,
+            3.0,
+            serde_json::json!({"form": "open", "gap": 2.0}),
+            "an open hem's length must be at least its bend's outer radius, 3.5000 mm",
+        );
+        refused(
+            PI,
+            1.0,
+            serde_json::json!({"form": "flat"}),
+            "a flat hem's length must be at least",
+        );
+        for angle in [PI, 0.5 * PI, 2.0 * PI, 7.0] {
+            refused(
+                PI,
+                0.0,
+                serde_json::json!({"form": "rolled", "angle": angle, "radius": 3.0}),
+                "more than 180 degrees and less than a full turn",
+            );
+        }
+        refused(
+            PI,
+            0.0,
+            serde_json::json!({"form": "rolled", "angle": 1.5 * PI, "radius": 0.0}),
+            "radius must be more than 0",
+        );
+        // The forms read back as written; the parameter slots.
+        for form in [
+            serde_json::json!({"form": "flat"}),
+            serde_json::json!({"form": "flat", "gap": 0.2}),
+            serde_json::json!({"form": "open", "gap": 2.0}),
+            serde_json::json!({"form": "rolled", "angle": 4.0}),
+            serde_json::json!({"form": "rolled", "angle": 4.0, "radius": 3.0}),
+        ] {
+            let h: SheetHem<f64> = serde_json::from_value(form.clone()).expect("a hem form");
+            assert_eq!(serde_json::to_value(&h).expect("written"), form);
+            assert_eq!(h.form(), form["form"]);
+        }
+        let mut slots = Vec::new();
+        let flange = hem_flange(
+            PI,
+            "outer_tangent",
+            0.0,
+            3.0,
+            serde_json::json!({"form": "rolled", "angle": 4.0, "radius": 3.0}),
+        );
+        flange
+            .map_params(&mut |slot: &str, v: &f64| -> Result<f64, ()> {
+                slots.push(slot.to_owned());
+                Ok(*v)
+            })
+            .expect("mapped");
+        assert!(slots.iter().any(|s| s == "hem.angle"), "{slots:?}");
+        assert!(slots.iter().any(|s| s == "hem.radius"), "{slots:?}");
+        assert!(
+            serde_json::from_value::<SheetHem<f64>>(serde_json::json!({"form": "open"})).is_err()
         );
     }
 

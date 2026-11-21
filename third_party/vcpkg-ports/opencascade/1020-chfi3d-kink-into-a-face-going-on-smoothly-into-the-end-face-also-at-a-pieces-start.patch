@@ -64,8 +64,8 @@ corner edges given either way and rounded with 0.5: valid, the block's
 corner cylinders from its foot up past the creases, the material taken
 within 1e-3 mm3 of the peg rounded alone with the block carried on up into
 it; the port's notes record the fillet failing with 0980 and without this
-patch. Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+patch. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 7ea438ae..d71cd1cd 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

@@ -35,8 +35,8 @@ Test: geometry/tests/test_fillet_results.cpp (ctest
 geometry.suite.fillet_results),
 test_top_rounded_past_a_corner_of_the_balls_radius,
 test_closed_top_rounded_past_four_corners,
-test_pocket_floor_rounded_past_its_corners: Its failure without the patch
-is still to be shown in the port's before/after run (mitcad#1986).
+test_pocket_floor_rounded_past_its_corners: It fails without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py).
 
 Upstream: local to the walk's transitions and StoreData's orientation; a
 moving contact is unchanged.

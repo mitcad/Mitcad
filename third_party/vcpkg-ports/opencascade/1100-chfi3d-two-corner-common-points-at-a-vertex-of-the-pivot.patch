@@ -35,8 +35,8 @@ geometry.suite.dressup_takes_face): a tray's corner chamfered and rounded
 with OCCT's dressups alone, which failed in
 TopOpeBRepDS_DataStructure::Point without the patch; and test_tray and
 test_tray_rounded_all_round through MitCad's dressups: the tray's four
-edges at their size, the volumes exact. Its failure without the patch is
-still to be shown in the port's before/after run (mitcad#1986).
+edges at their size, the volumes exact. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
 index 4b4b4474..acebc51b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx

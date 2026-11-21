@@ -132,6 +132,8 @@ private:
   void listingFinished(int exitCode, QProcess::ExitStatus status);
   // Why the worker failed: its own message, or that it stopped.
   QString failure(int exitCode, QProcess::ExitStatus status) const;
+  // The item the worker was importing when it stopped, in words (mitcad#2085).
+  QString stoppedItem() const;
   void readProgress();
   // The worker's question (mitcad#283): keep the imported bodies that
   // match the file's or replace them with the stored ones; the answer goes

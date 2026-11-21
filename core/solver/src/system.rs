@@ -1049,9 +1049,21 @@ impl System {
             Horizontal(e) | Vertical(e) | Length { line: e, .. } => {
                 self.line(e)?;
             }
-            Parallel(a, b) | Perpendicular(a, b) | Collinear(a, b) => {
+            Parallel(a, b) | Collinear(a, b) => {
                 self.line(a)?;
                 self.line(b)?;
+            }
+            // Two lines, a line and a circle or arc in either order, or two
+            // circles or arcs (mitcad#2114).
+            Perpendicular(a, b) => {
+                for e in [a, b] {
+                    if !(self.is_round(e)? || matches!(self.ent(e)?, EntityData::Line { .. })) {
+                        return Err(Error::WrongEntityKind {
+                            entity: e,
+                            expected: "a line, a circle or an arc",
+                        });
+                    }
+                }
             }
             Angle {
                 a,
@@ -1251,6 +1263,16 @@ impl System {
             return self.setup_self_join(a);
         }
         let (da, db) = (self.ent(a)?.clone(), self.ent(b)?.clone());
+        // An elliptical arc and a spline joined at their ends (mitcad#2107).
+        let elliptical = |d: &EntityData| matches!(d, EntityData::EllipticalArc { .. });
+        if elliptical(&da) || elliptical(&db) {
+            let (arc, spline) = if elliptical(&da) {
+                (&da, &db)
+            } else {
+                (&db, &da)
+            };
+            return self.setup_ellipse_join(arc, spline);
+        }
         let kind = |d: &EntityData| match d {
             EntityData::Line { .. } => 0,
             EntityData::Circle { .. } | EntityData::Arc { .. } => 1,
@@ -1337,6 +1359,36 @@ impl System {
         Ok(())
     }
 
+    /// A tangent between an elliptical arc and a spline (mitcad#2107): only
+    /// where an end of the spline (clamped knots) is an end of the arc, its
+    /// leg then along the arc's tangent there.
+    fn setup_ellipse_join(&self, arc: &EntityData, spline: &EntityData) -> Result<(), Error> {
+        let Some((basis, _)) = spline.spline() else {
+            return Err(Error::Unsupported(
+                "an elliptical arc is tangent only to a spline that ends at one of its ends",
+            ));
+        };
+        let classes = self.point_classes();
+        let (ea, es) = (
+            arc.ends().expect("arc ends"),
+            spline.ends().expect("spline ends"),
+        );
+        if !ea
+            .iter()
+            .any(|x| es.iter().any(|y| classes[*x] == classes[*y]))
+        {
+            return Err(Error::Unsupported(
+                "an elliptical arc is tangent only to a spline that ends at one of its ends",
+            ));
+        }
+        if !basis.is_clamped() {
+            return Err(Error::Unsupported(
+                "spline end tangency needs clamped knots",
+            ));
+        }
+        Ok(())
+    }
+
     /// A spline tangent or smooth to itself (mitcad#783): an open spline
     /// (clamped knots) whose two ends are at one point, joined there.
     fn setup_self_join(&self, e: EntityId) -> Result<(), Error> {
@@ -1375,8 +1427,12 @@ impl System {
         }
         let (da, db) = (self.ent(a)?, self.ent(b)?);
         let spline = |d: &EntityData| d.spline().map(|(basis, _)| basis.is_clamped());
-        let ok_other =
-            |d: &EntityData| matches!(d, EntityData::Line { .. } | EntityData::Arc { .. });
+        let ok_other = |d: &EntityData| {
+            matches!(
+                d,
+                EntityData::Line { .. } | EntityData::Arc { .. } | EntityData::EllipticalArc { .. }
+            )
+        };
         let valid = match (spline(da), spline(db)) {
             (Some(ca), Some(cb)) => ca && cb,
             (Some(c), None) => c && ok_other(db),
@@ -1385,7 +1441,7 @@ impl System {
         };
         if !valid {
             return Err(Error::Unsupported(
-                "curvature continuity joins a spline (clamped knots) with a line, arc or spline",
+                "curvature continuity joins a spline (clamped knots) with a line, arc, elliptical arc or spline",
             ));
         }
         let classes = self.point_classes();

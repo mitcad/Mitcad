@@ -275,3 +275,45 @@ fn turning_and_milling_keep_apart_in_words() {
             .any(|d| d["id"] == json!("fanuc_turning") && d["lathe"] == json!(true))
     );
 }
+
+/// A controller of the other kind of machine is refused with the kind it
+/// writes for (mitcad#2119): a turning dialect on a mill, a milling one on
+/// a lathe; a controller MitCad does not know keeps its plain refusal.
+#[test]
+fn a_controller_of_the_other_kind_says_which_kind_it_is_for() {
+    let mut doc = Document::new(MockKernel::default());
+    let mill = |controller: &str| {
+        json!({"cmd": "cam_machine_put", "machine": {
+            "id": "router",
+            "machine": {"name": "Router", "controller": controller,
+                        "travel": {"min": [0, 0, -100], "max": [500, 500, 0]},
+                        "spindle": {"min_rpm": 8000, "max_rpm": 24000,
+                                    "nose_diameter": 50, "nose_length": 80},
+                        "max_feed": 5000, "rapid_feed": 6000},
+            "tools": {"tools": []}}})
+    };
+    let turning = |controller: &str| {
+        let mut machine = lathe();
+        machine["machine"]["controller"] = json!(controller);
+        json!({"cmd": "cam_machine_put", "machine": machine})
+    };
+    assert_eq!(
+        refused(&mut doc, mill("fanuc_turning")),
+        "The machine Router is a milling machine; Fanuc (turning) writes for lathes."
+    );
+    assert_eq!(
+        refused(&mut doc, turning("grbl")),
+        "The lathe Lathe needs a lathe controller; grbl writes for milling machines."
+    );
+    assert_eq!(
+        refused(&mut doc, mill("no_such_controller")),
+        "The machine Router has a controller MitCad does not write for."
+    );
+    assert_eq!(
+        refused(&mut doc, turning("no_such_controller")),
+        "The machine Lathe has a controller MitCad does not write for."
+    );
+    // Each kind's own dialect is taken.
+    command(&mut doc, mill("grbl"));
+    command(&mut doc, turning("fanuc_turning"));
+}

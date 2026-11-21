@@ -41,8 +41,10 @@ radius of the rounding at its end, the floor edges as circles and as
 B-splines: the end grows up to the section the two tubes share. Another
 caller: geometry/tests/test_fillet_end_overflow.cpp,
 test_wall_foot_ending_at_a_sliver (ctest geometry.fillet_end_overflow), the
-same end across a sliver. Its failure without the patch is still to be shown
-in the port's before/after run (mitcad#1986).
+same end across a sliver. It fails with this patch and 18 later patches
+that change the same lines reverted together, so the test does not single
+this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the patches
+are listed in third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 25e11c8..0a0fd55 100644

@@ -287,6 +287,9 @@ public:
   // Image references (mitcad#782): one opened in the Image Reference panel,
   // and one calibrated by two points clicked on it and a typed distance.
   virtual void editImageReference(const QString& /*name*/) {}
+  // Sketch blocks (mitcad#2110): a block opened for an edit in a sketch of
+  // its own, from the Browser's Sketch Blocks.
+  virtual void editSketchBlock(const QString& /*name*/) {}
   virtual void calibrateImageReference(const QString& /*name*/) {}
 
   // Comments for AI agents (mitcad#1119): asks for the text of a comment
@@ -306,6 +309,9 @@ public:
   // tab of its own (Derived Component's Open Source Design).
   virtual void openLibrarySource(const QString& /*source*/) {}
   virtual void updateLink(const QString& /*component*/) {}
+  // Choose Linked Parts… (mitcad#2130) of a linked component (a uid): the
+  // parts of its design it holds, chosen again as one undo step.
+  virtual void chooseLinkedParts(const QString& /*component*/) {}
 
   // CAM (mitcad#1013, cam/MainWindowCam.cpp): a setup or an operation (by
   // id) edited in its panel; a setup's toolpaths generated, simulated or

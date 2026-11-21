@@ -125,10 +125,10 @@ echo "ok   the project and assistant indicators are compact icon buttons"
 ui_expect_log 'Menu bar hidden: Floating' "the window's menu bar hidden"
 grep -q '^Floating cards: .*; titleRow 0,0 ' <<< "$cards" || ui_fail "the title row is not at the window's top: '$cards'"
 echo "ok   no menu bar above the title row"
-# No quick-access group in the top bar: it has no commands by default and
-# is hidden while empty (mitcad#1990).
-ui_expect_log 'Quick access group hidden: no commands' "the empty quick-access group hidden"
-ui_quick_access_place "the title row" "$cards" none
+# The top bar's one left group (mitcad#2129): its default items, at the
+# row's left end with the ☰ first in it.
+ui_expect_log 'Quick access: menu.file, file.new_design, file.open, file.save' "the left group's default items"
+ui_quick_access_place "the title row" "$cards"
 for picture in start solid list make-print make-laser make-cnc render drawing narrow; do
   [ -s "$pictures/workspaces-$picture.png" ] || ui_fail "no picture workspaces-$picture.png in $pictures"
 done

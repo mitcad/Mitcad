@@ -37,9 +37,11 @@
 #include "../framework/NoticeLevel.hpp"
 #include "../framework/ValueStep.hpp"
 #include "AutoConstraint.hpp"
+#include "SketchConflict.hpp"
 #include "SketchModel.hpp"
 #include "SketchSnap.hpp"
 
+class QAction;
 class QLabel;
 class QLineEdit;
 class QWidget;
@@ -68,6 +70,19 @@ public:
   // when that source closes; the history keeps it.
   virtual void showSourceError(const QString& message, const QString& /*source*/) { showError(message); }
   virtual void closeMessageSource(const QString& /*source*/) {}
+  // A message of a source with one button (mitcad#2090: a refusal for a
+  // conflict with Replace): `action` its label, `tooltip` the button's,
+  // `run` what it does. It goes with its source as showSourceError's error
+  // does. Without a message band the message alone, as an error.
+  virtual void showSourceAction(const QString& message, NoticeLevel level, const QString& source,
+                                const QString& /*action*/, const QString& /*tooltip*/,
+                                std::function<void()> /*run*/) {
+    if (level == NoticeLevel::Error) {
+      showSourceError(message, source);
+    } else {
+      showStatus(message, level);
+    }
+  }
   // Starts a command of the registry (an edit panel opened by a
   // double-click).
   virtual void trigger(const QString& id) = 0;
@@ -245,6 +260,9 @@ public:
   const QString& error() const { return m_error; }
   // Whether the last refusal was for conflicting constraints.
   bool conflicted() const { return m_conflicted; }
+  // The last refusal as read (mitcad#2090): its message, its blocking
+  // items and their words.
+  const ConflictText& conflict() const { return m_conflict; }
   // Names the undo step in place of its first command's label ("Cut in
   // Sketch1", mitcad#788): commit() then relabels even a single step.
   void setLabel(const QString& label) {
@@ -280,6 +298,7 @@ private:
   bool m_relabel = false; // setLabel() named the step
   QString m_error;
   bool m_conflicted = false;
+  ConflictText m_conflict;
   // What the action is to tell when it ends: refused attempts, constraints
   // a new one replaced (mitcad#287).
   QStringList m_notices;
@@ -360,6 +379,10 @@ public:
   // A horizontal or vertical distance made signed or unsigned, its point
   // kept where it is (`sketch.set_signed`, mitcad#409).
   void setDimensionSigned(const QString& id, bool on);
+  // Make Driven / Make Driving (mitcad#2055): dimension `id` made driven,
+  // only measuring, or driving at its measured value (`sketch.set_driven`),
+  // one undo step; a refusal is shown in words.
+  void setDimensionDriven(const QString& id, bool driven);
   // The parameter of dimension `id` when it is the sketch's own (a driving
   // dimension's, owned by the sketch, used by no other of its dimensions):
   // what Move to User Parameters moves (mitcad#1535); empty otherwise.
@@ -399,6 +422,37 @@ public:
   void paste();
   // Whether the clipboard holds a sketch fragment.
   bool canPaste() const;
+  // Sketch blocks (mitcad#2110, SketchBlocks.cpp): Create Block on the
+  // selected points and curves (the base point clicked or typed); Insert
+  // Block (the design's blocks listed with a preview, one placed and
+  // turned); Explode Block and Edit Block (in place) on the selected
+  // instance; Finish Block takes the edit, `cancel` leaves the block as it
+  // was. A block edited in a sketch of its own ends with that sketch.
+  void createBlock();
+  void insertBlock();
+  void explodeBlock();
+  void editBlock();
+  void finishBlock(bool cancel);
+  // The selected instance of a block, the one open for an edit here.
+  const BlockInstanceData* selectedInstance() const;
+  const BlockInstanceData* openInstance() const;
+  // Whether the block open here is in a sketch made for its edit, and
+  // whether its Finish asked to leave the block as it was (read once by
+  // MainWindow::finishSketch).
+  bool openBlockIsTemporary() const;
+  bool takeBlockCancel() {
+    const bool cancel = m_cancelBlock;
+    m_cancelBlock = false;
+    return cancel;
+  }
+  // Every point and curve of the closed instance `entity` is part of
+  // (empty for none), and as selection items: an instance is picked and
+  // hovered as one.
+  QStringList instanceMembers(const QString& entity) const;
+  Selection instanceSelection(const SelectionItem& item) const;
+  // Logs each instance of `block` here with its extent along its direction
+  // ("Block instance k2 of Slot: 30.000 mm along its direction").
+  void logBlockInstances(const QString& what, const QString& block) const;
   // Insert Point (mitcad#836, `sketch.insert_spline_point`): a point on the
   // spline `curve` where it is nearest to the view position `screen` (the
   // context menu's right click, a double-click on the curve). A fitted
@@ -415,6 +469,14 @@ public:
   void setConstruction(bool on);
   bool gridSnap() const { return m_gridSnap; }
   void setGridSnap(bool on);
+  // Snap to line extensions (mitcad#2035): a drawing tool acquires a line
+  // the pointer rests on and snaps onto its extension. Off, nothing is
+  // acquired (and what was is released).
+  bool extensionSnap() const { return m_extensionSnap; }
+  void setExtensionSnap(bool on);
+  // The lines acquired by resting the pointer on them, oldest first (at
+  // most two).
+  const QStringList& acquiredLines() const { return m_acquired; }
   // The grid's fixed spacing (mm), or 0: snap steps follow the zoom (U5).
   void setGridStep(double step) { m_gridStep = step; }
   bool showDimensions() const { return m_showDimensions; }
@@ -506,6 +568,11 @@ public:
   std::optional<V2> sketchAtF(const QPointF& screen) const;
   // Millimetres per pixel near the sketch origin.
   double pixel() const;
+  // Where the pointer clicked `curve` on the sketch plane (Blend Curve's
+  // ends, mitcad#2107): of the recent clicks on it, the one nearest `pickedAt`
+  // (the view's pick place, which is off by up to its pick tolerance)
+  // within that tolerance at the click's zoom; none without one.
+  std::optional<V2> clickPlace(const QString& curve, const V2& pickedAt) const;
   const Snap& snapped() const { return m_snap; }
   // Whether the snap is a command input's (mitcad#1563: Point to Point's
   // points, the drag of Move/Copy's handle), which the overlay marks as a
@@ -562,6 +629,20 @@ public:
   // status, conflicts()). Logged when what is painted changes ("Sketch
   // conflict painted: k5 on c3, c6", "Sketch conflict painted: none").
   void setConflict(const QString& source, const QStringList& items);
+  // A refusal for a conflict with Replace (mitcad#2090, GitHub
+  // mitcad/Mitcad#475): `message` shown at `level` as the running tool's
+  // (else sketch mode's) with the button, the one blocking item `blocker`
+  // painted meanwhile. Pressed, it first checks that the blocker is still
+  // there and the sketch unchanged since (its undo depth and revision);
+  // else it replaces nothing and says so (a hint); then `replace` swaps it
+  // out in an undo step of its own. The offer goes with the refusal's
+  // painting (the action's conflict): the next pick, Esc, another tool,
+  // Finish Sketch. Logged `Sketch conflict replace offered: k5`.
+  void offerReplace(const QString& message, NoticeLevel level, const QString& blocker,
+                    std::function<void()> replace);
+  // Whether the value editor's text was accepted with Shift held
+  // (Shift+Return or Shift+Enter, mitcad#2090), while its accept runs.
+  bool editorAcceptedWithShift() const { return m_editorShift; }
   void setConflictHovered(const QString& source, bool hovered);
   QStringList conflictItems(const QString& source) const { return m_conflicts.value(source); }
   // Every item painted, each once: the sources' and the sketch's own
@@ -688,6 +769,51 @@ public:
   // or taken out of it when all of them are in it. Ids the sketch lacks
   // are left out; false when none is left.
   bool selectItems(const QStringList& ids, Qt::KeyboardModifiers modifiers);
+  // Show Unconstrained (mitcad#2026, SketchReveal.cpp; the Sketch
+  // Palette's button, the sketch's context menu and a click on the degrees
+  // of freedom badge): the curves and points that are not fully
+  // constrained, construction and projected geometry included, selected in
+  // place of the selection; the sketch's axes and origin left out. The
+  // status bar says how many; returns how many it selected.
+  int selectUnconstrained();
+  // The ids selectUnconstrained selects: the curves first, then the
+  // points, each in the sketch's order.
+  QStringList unconstrainedEntities() const;
+  // The pattern a step of the step list made (mitcad#2089): a step of
+  // kind `rectangular_pattern`, `circular_pattern` or `edit_pattern` holds
+  // a pattern's copies (never its originals), and its pattern is the one
+  // those copies belong to; null for any other step and when its copies
+  // are gone.
+  const PatternData* patternOfStep(const QString& kind, const QStringList& items) const;
+  // One copy of that pattern selected alone (a curve when it has one), as
+  // the view's click on it selects it; false for no pattern.
+  bool selectStepPattern(const QString& kind, const QStringList& items);
+  // A double-click on that step: the copy selected and the edit panel the
+  // view's double-click on it opens (Edit Pattern); false for no pattern.
+  bool editStepPattern(const QString& kind, const QStringList& items);
+  // The edit panel a double-click on one selected item of this sketch
+  // opens, shared by the view and the step list (mitcad#2089):
+  // `sketch.edit_code`, `sketch.edit_text`, `sketch.edit_offset` or
+  // `sketch.edit_pattern`; empty for none.
+  QString editCommandOf(const SelectionItem& item) const;
+  // The edit panel a double-click on constraint `id`'s glyph opens, shared
+  // by the view and the step list (mitcad#2099): `sketch.edit_equal_spacing`
+  // for an equal spacing; empty for none.
+  QString constraintEditCommandOf(const QString& id) const;
+  // The equal spacing an Equal Spacing step of the step list holds
+  // (mitcad#2099): a step of kind `add_equal_spacing` or
+  // `edit_equal_spacing` holds its `equal_spacing` constraint (and its
+  // Common Spacing Dimension when it has one); empty for any other step
+  // and when the constraint is gone.
+  QString spacingOfStep(const QString& kind, const QStringList& items) const;
+  // That constraint's glyph selected alone, as the view's click on it
+  // selects it; false for none.
+  bool selectStepSpacing(const QString& kind, const QStringList& items);
+  // A double-click on that step: the glyph selected and Edit Equal
+  // Spacing opened, as the view's double-click on it does; false for none.
+  bool editStepSpacing(const QString& kind, const QStringList& items);
+  // The registry's action of command `id` (the step list's menu).
+  QAction* commandAction(const QString& id) const;
   // A constraint or dimension highlighted in the view as the pointer over
   // it does (mitcad#1750: a row of the step list's hover list); empty for
   // none.
@@ -924,18 +1050,48 @@ private:
   QString pointerTextAt(const V2& at) const;
   void setPointerText(const QString& text);
   void logPointer();
+  // Lines acquired for their extensions (mitcad#2035): resting the pointer
+  // on a line for the dwell (about 0.4 s; MITCAD_TEST_DWELL_MS for UI tests)
+  // without moving more than a few pixels acquires it, at most two.
+  bool m_extensionSnap = true;
+  QStringList m_acquired;
+  QTimer m_dwellTimer;
+  QPointF m_dwellAt; // where the pointer came to rest
+  // A drawing tool's pointer moved to `position`: the dwell starts again
+  // when it went further than a few pixels from where it rested.
+  void restartDwell(const QPointF& position, Qt::KeyboardModifiers modifiers);
+  // The dwell is over: the line the pointer rests on is acquired, or
+  // released when it was acquired already.
+  void acquireAtDwell();
+  // Every acquired line released, for `why` (the log's reason).
+  void releaseAcquired(const QString& why);
   QString m_hover;
+  // Finish Block's cancel of a block edited in a sketch of its own
+  // (finishBlock, MainWindow::finishSketch).
+  bool m_cancelBlock = false;
   QStringList m_picked;
   QString m_hoverAnnotation;
 
   // A press on geometry: a click (selection) or the start of a drag.
   bool m_pressed = false;
+  // A press on the degrees of freedom badge (mitcad#2026): its release
+  // selects what is not fully constrained; a drag from it is handed to the
+  // view, pressed where it began.
+  bool m_badgePressed = false;
   bool m_dragging = false;
   bool m_forwarding = false;
   QPointF m_pressPosition;
   QPointF m_rightPressPosition;
   Qt::KeyboardModifiers m_pressModifiers;
   QString m_dragEntity;
+  // The places on the sketch plane of the last clicks on curves, newest
+  // last, each with the click's millimetres per pixel (clickPlace).
+  struct ClickPlace {
+    QString curve;
+    V2 at;
+    double pixel = 1.0;
+  };
+  QVector<ClickPlace> m_clickPlaces;
   // The selection dragged together with m_dragEntity (mitcad#837); empty
   // when only m_dragEntity is dragged.
   QStringList m_dragSelection;
@@ -971,6 +1127,21 @@ private:
   QPointer<QLineEdit> m_editor;
   FieldSpec::Kind m_editorKind = FieldSpec::Kind::Length;
   std::function<void(const QString&)> m_editorAccept;
+  bool m_editorShift = false; // accepted with Shift (mitcad#2090)
+  // The refusal's Replace offered (mitcad#2090, offerReplace): the item it
+  // swaps out, the message's source, the sketch's undo depth and revision
+  // then, and the swap.
+  struct ReplaceOffer {
+    QString blocker;
+    QString source;
+    int depth = -1;
+    QString revision;
+    std::function<void()> replace;
+  };
+  std::optional<ReplaceOffer> m_replaceOffer;
+  int m_replaceOffers = 0; // which offer a button belongs to
+  void dropReplaceOffer();
+  void pressReplace(int offer);
   std::optional<int> m_editorToolSession; // a callback belonging to this tool session
   QPointer<QLabel> m_editorLabel; // "d3 =" before the editor (mitcad#231)
   int m_editorBaseWidth = 0;       // its width before its text grows it (mitcad#1724)

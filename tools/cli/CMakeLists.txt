@@ -91,6 +91,8 @@ if(BUILD_TESTING)
   # Copies of bodies joined to them, scale patterns and copies scaled
   # about their own centres (mitcad#539).
   add_test(NAME cli.f4_pattern_scaled COMMAND mitcad-cli run "${scripts}/f4_pattern_scaled.json")
+  # Pattern on Path along a body's edges, with and without a tangent chain (mitcad#2105).
+  add_test(NAME cli.f4_pattern_edge_path COMMAND mitcad-cli run "${scripts}/f4_pattern_edge_path.json")
 
   # Face operations (F2): the T0 models' volumes, names through edits, failures.
   foreach(script f2_fillet_chamfer f2_shell_draft f2_face_ops f2_names_follow_parameters f2_failures)
@@ -116,6 +118,8 @@ if(BUILD_TESTING)
                  f3_rib_extend_ends f3_rib_direction f3_web_corners f3_rib_web_pattern)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json")
   endforeach()
+  # A rib's and a web's Draft Angle (mitcad#2102): drafted, edited, patterned.
+  add_test(NAME cli.f3_rib_web_draft COMMAND mitcad-cli run "${scripts}/f3_rib_web_draft.json")
   # Plastic part features and plastic rules (mitcad#459): analytic volumes,
   # the rules' defaults and warnings, refused rims and hooks.
   add_test(NAME cli.plastic COMMAND mitcad-cli run "${scripts}/plastic.json")
@@ -1363,6 +1367,9 @@ if(BUILD_TESTING)
   # Bends past 180 degrees: rolled, teardrop, rope and double hems, their
   # volumes and flat lengths (mitcad#1378).
   add_test(NAME cli.sheet_flange_hem_past COMMAND mitcad-cli run "${scripts}/sheet_flange_hem_past.json")
+  # The Hem command's forms (mitcad#2112): flat, open and rolled hems give
+  # the imports' flanges' bodies, an edit through all six forms, refusals.
+  add_test(NAME cli.sheet_hem_forms COMMAND mitcad-cli run "${scripts}/sheet_hem_forms.json")
   # Walls of one sheet that meet: a full open corner accepted, a face
   # contact and a penetration refused naming both walls (mitcad#1409).
   add_test(NAME cli.sheet_open_corner COMMAND mitcad-cli run "${scripts}/sheet_open_corner.json")
@@ -1377,6 +1384,11 @@ if(BUILD_TESTING)
   # A new flange whose free end meets an existing flange across a bend
   # stops the Corner Gap short of its wall, never cutting it (mitcad#1877).
   add_test(NAME cli.sheet_flange_edges_existing COMMAND mitcad-cli run "${scripts}/sheet_flange_edges_existing.json")
+  # Edges whose ends face each other across a rip or a corner gap the sheet
+  # records are one corner (mitcad#2098): a converted tray's rim and the rim
+  # of a tray whose walls are a flange on several edges, both ways, every
+  # Position.
+  add_test(NAME cli.sheet_flange_edges_gap COMMAND mitcad-cli run "${scripts}/sheet_flange_edges_gap.json")
   # A face joined to a sheet in its panel's plane (mitcad#242).
   add_test(NAME cli.sheet_face_join COMMAND mitcad-cli run "${scripts}/sheet_face_join.json")
   # The sheet-domain adapter of ordinary features (mitcad#242).
@@ -1389,6 +1401,8 @@ if(BUILD_TESTING)
   add_test(NAME cli.sheet_dressup_overlay COMMAND mitcad-cli run "${scripts}/sheet_dressup_overlay.json")
   # Coplanar panels of one face meeting along an arc (mitcad#242).
   add_test(NAME cli.sheet_curved_seam COMMAND mitcad-cli run "${scripts}/sheet_curved_seam.json")
+  # A Face with a filled round hole and a Flange unfolds (mitcad#1942).
+  add_test(NAME cli.sheet_unfold_disc COMMAND mitcad-cli run "${scripts}/sheet_unfold_disc.json")
   # Patterns and mirrors of features kept as sheet overlays (mitcad#242).
   add_test(NAME cli.sheet_pattern_straight_cut COMMAND mitcad-cli run "${scripts}/sheet_pattern_straight_cut.json")
   add_test(NAME cli.sheet_mirror_dressup COMMAND mitcad-cli run "${scripts}/sheet_mirror_dressup.json")
@@ -2436,6 +2450,17 @@ if(BUILD_TESTING)
       set_property(TEST cli.f3d_reported_house APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
+    # The same design imported by the application's import worker, the
+    # process the Import command starts (mitcad#2085: it stopped there in
+    # the application while the CLI imported it), with the same checks.
+    if(TARGET mitcad)
+      add_test(NAME cli.f3d_reported_house_worker
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/f3d-reported-house-test.py"
+                --cli "$<TARGET_FILE:mitcad-cli>" --worker "$<TARGET_FILE:mitcad>"
+                --work "${CMAKE_CURRENT_BINARY_DIR}/f3d-reported-house-worker")
+      set_tests_properties(cli.f3d_reported_house_worker PROPERTIES TIMEOUT 3000
+        ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "f3d reported house: skipped")
+    endif()
   endif()
 endif()
 
@@ -2672,6 +2697,66 @@ if(BUILD_TESTING)
     set_property(TEST cli.dressup_blend_remnants_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
+endif()
+
+# A crash inside OCCT's STEP reader while a STEP file is opened (mitcad#2028,
+# MITCAD_TEST_OCCT_CRASH=step): the import fails with the error that the
+# STEP file could not be read, OCCT's message in its detail (what
+# mitcad-cli prints), not a crash.
+if(BUILD_TESTING)
+  if(WIN32)
+    set(step_crash_error "step: ACCESS VIOLATION")
+  elseif(APPLE)
+    set(step_crash_error "step: SIG(SEGV|BUS)")
+  else()
+    set(step_crash_error "step: SIGSEGV")
+  endif()
+  add_test(NAME cli.occt_crash_step COMMAND mitcad-cli import "${CMAKE_CURRENT_BINARY_DIR}/holed-block.step")
+  set_tests_properties(cli.occt_crash_step PROPERTIES ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=step"
+    FIXTURES_REQUIRED cli_step PASS_REGULAR_EXPRESSION "mitcad-cli: .*cannot read STEP file .*${step_crash_error}")
+endif()
+
+# GitHub #449's design (mitcad#2039, port patch 1830), found by its content
+# id under MITCAD_MITCAD_REPORTED and opened in a copy: the concave edge
+# whose ends meet a wall's side running on tangentially into two curved
+# faces rounded and chamfered with 1 mm, each one valid solid without a note
+# (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_tangent_seam_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-tangent-seam-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-tangent-seam-reported-test.cmake")
+  set_tests_properties(cli.fillet_tangent_seam_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet tangent seam reported: skipped" TIMEOUT 900)
+endif()
+
+# The bent guide of GitHub #372 near its smallest bend radius (mitcad#2038,
+# GitHub #456): at 16.8 mm through the import and set_parameter every
+# feature rebuilds within the pads; at 15 mm the Fillet is refused in words
+# (skipped without the report's archive under MITCAD_MITCAD_REPORTED).
+if(BUILD_TESTING)
+  add_test(NAME cli.fcstd_bend_limit_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fcstd-bend-limit-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fcstd-bend-limit-reported-test.cmake")
+  set_tests_properties(cli.fcstd_bend_limit_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fcstd bend limit reported: skipped" TIMEOUT 1800)
+endif()
+
+# The reported nut design's Chamfer8, which left 16 pieces of the end face
+# at the corners of a chain rounded more tightly than it reaches without a
+# word (mitcad#1821), found by its content id under MITCAD_MITCAD_REPORTED
+# and opened in a copy: its bevels meet at a mitre there, no piece left and
+# no warning (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.chamfer_remnants_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/chamfer-remnants-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/chamfer-remnants-reported-test.cmake")
+  set_tests_properties(cli.chamfer_remnants_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "chamfer remnants reported: skipped" TIMEOUT 1800)
 endif()
 
 # A test's PASS_REGULAR_EXPRESSION is a list: a ';' in its text splits it

@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The assembly of the assembly cut UI tests (mitcad#2131), made in the folder of plate.mitcad: the plate linked at the origin (plate:1, its block F1.b0), and in the root Sketch1 (F2) on XY with a 12 x 4 mm square inside the block."},
+  {"cmd": "insert_component", "path": "plate.mitcad"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F2", "corner": [4, 4], "width": 12, "height": 4},
+  {"expect": {"instances": 1, "world_volume": 4000}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"uid": "C1", "name": "plate", "link": "plate.mitcad"}]}}}
+]

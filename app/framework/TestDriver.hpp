@@ -85,6 +85,9 @@
 //   type <text>             the characters as key events
 //   expect-no-qt-popup     no Qt popup owns input or remains logically
 //                           visible, including hidden native presenters
+//   expect-clear-of-cube <object-name>  wait until that visible widget
+//                           lies clear of the orientation cube's corner
+//                           (mitcad#2071)
 //   expect-widget-property <object-name> <property> <value>
 //                           a Qt target widget's property as text (a
 //                           size as WxH)
@@ -111,6 +114,11 @@
 //   workspace DESIGN|MAKE|RENDER|DRAWING  the toolbar panel's workspace chosen as
 //                           its selector's list does (mitcad#1990); nothing
 //                           without the selector (Docked, macOS)
+//   show-workspace DESIGN|RENDER  that workspace shown in either layout:
+//                           by the selector (Floating), else a click on its
+//                           tab (RENDER, SOLID for Design; mitcad#2092)
+//   capture-toolbar-height <var>  the toolbar's height as laid out (the
+//                           Floating panel, the Docked toolbar) into ${var}
 //   leave-start-page        the Start page left by a click: on the design's
 //                           tab where the toolbar panel is hidden over the
 //                           page (Floating on Windows and Linux,
@@ -189,6 +197,23 @@
 //   expect-view-pixel <regex> <#rrggbb> <tolerance>  wait until that
 //                           colour there is within the tolerance (the sum
 //                           of the channels' differences)
+//   capture-view-point-pixel <var> <x,y,z>  the OCCT framebuffer's colour
+//                           where the model point is on the screen, into
+//                           ${var} (mitcad#2069)
+//   expect-view-point-pixel <x,y,z> blue-over-red | nearer <a> <b>  wait
+//                           until that colour has its blue channel above
+//                           its red, or lies nearer colour a than b (each
+//                           #rrggbb or a view colour role's name)
+//   view-line-width <var> <least px> <regex>|sketch:<x>,<y> [<narrower var>]
+//                           wait until the line the OCCT framebuffer shows
+//                           at the view's pick point whose "Pick <kind>
+//                           <owner>/<name>" the regex matches, as
+//                           click-pick-offset finds it (or at a sketch
+//                           point, mm), measured across it, is
+//                           at least <least> logical pixels times the
+//                           device pixel ratio wide (less half a pixel),
+//                           and wider than ${narrower} when given; its
+//                           width in device pixels into ${var} (mitcad#2063)
 //   expect-view-smooth <most %>  wait until, in the middle of a command's
 //                           see-through preview on the screen, at most that
 //                           share of the framebuffer's pixels have a step in
@@ -315,6 +340,10 @@
 //                           places; dx pixels right of the end
 //   drag-from <regex> <dx> <dy>         left drag from a logged place by
 //                           dx, dy pixels (a manipulator's handle)
+//   dialog-drag-logged <regex> <dx1> <dy1> <dx2> <dy2>   left drag in the
+//                           focused dialog from the logged place moved by
+//                           dx1, dy1 to it moved by dx2, dy2 (Capture and
+//                           Annotate's picture, mitcad#2011)
 //   sketch-click <x> <y> [button] [mods]   a sketch point in mm, from the
 //                           logged "Sketch view" (the origin, (100, 0) and
 //                           (0, 100) in window coordinates)
@@ -565,7 +594,7 @@
 //   view-context-menu-logged <regex> cancel|item right click a logged position
 //   view-pointer press|move|release <x%> <y%> none|left|right|middle [mods]
 //                           separate events can simulate a release lost to menus
-//   pointer-logged press|move|release <regex> none|left [dx dy]   the same at
+//   pointer-logged press|move|release <regex> none|left|right [dx dy]   the same at
 //                           a logged place, dx, dy pixels off it: a drag held
 //                           between steps (a screenshot of it under way).
 //                           While a press of it is held, move and release
@@ -785,6 +814,7 @@
 //   set <var> <value>
 //   expect-near <actual> <expected> [rel] [abs]   numbers: |a - e| <=
 //                           max(rel * |e|, abs); rel 1e-6, abs 0.01 by default
+//   expect-less <smaller> <larger>   numbers: smaller < larger
 //
 // The system:
 //   wait-idle [seconds]            no job computes (60 s)
@@ -850,6 +880,8 @@
 #include <QElapsedTimer>
 #include <QEvent>
 #include <QHash>
+#include <QKeyCombination>
+#include <QList>
 #include <QMutex>
 #include <QObject>
 #include <QPoint>
@@ -944,6 +976,10 @@ private:
   // The widget a key goes to (the target window activated by Qt when the
   // system did not activate it); `window` gets the target window.
   QWidget* keyReceiver(QWidget*& window);
+  // The shortcut of the key, as the platform's key handling runs it: an
+  // action, a QShortcut or a button whose key it is, or (mitcad#2095) the
+  // next key of a sequence started by the keys before it; a key that starts
+  // or continues a sequence and ends none waits for the next one.
   bool triggerShortcut(QWidget* window, const KeyPress& press);
   GlassCard* cardAt(const QPoint& windowPos) const;
   void sendText(const QString& text);
@@ -951,6 +987,9 @@ private:
                  Qt::KeyboardModifiers modifiers);
   void queueClick(const QPoint& at, Qt::MouseButton button, Qt::KeyboardModifiers modifiers, int clicks);
   void queueDialogClick(const QPoint& at, int clicks);
+  // A left drag in the focused dialog from `from` to `to` (top window
+  // coordinates), the press's widget getting every move and the release.
+  void queueDialogDrag(const QPoint& from, const QPoint& to);
   void queueDrag(const QPoint& from, const QPoint& to, Qt::MouseButton button, Qt::KeyboardModifiers modifiers);
   // hold-pick (mitcad#1703): the press held at `at` until the view logs its
   // pick list after log line `since`, at most `limitMs`, then let go there.
@@ -1038,6 +1077,12 @@ private:
   mutable QPointer<QWidget> m_viewer;
 
   std::deque<std::function<void()>> m_micro;
+  // The keys of a key sequence pressed so far (G of G, L), waiting for the
+  // rest of it (mitcad#2095), and the window they were pressed in. A
+  // `type` step or a key in another window drops them (mitcad#2096).
+  QList<QKeyCombination> m_sequenceKeys;
+  QPointer<QWidget> m_sequenceWindow;
+  void dropSequence(const QString& why);
   bool m_waiting = false;
   std::function<bool()> m_ready;
   std::function<void()> m_then;

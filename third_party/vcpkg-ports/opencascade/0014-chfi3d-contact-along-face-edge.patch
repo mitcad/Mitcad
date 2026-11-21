@@ -39,8 +39,9 @@ geometry.suite.fillet_overflow),
 test_contacts_along_the_far_edge_of_a_face: a step 3 high whose foot and
 top edge are rounded or chamfered with 3 (its side exactly as wide as the
 contact distance), and a boss's front edges ending at its corners. Its
-failure without the patch is still to be shown in the port's before/after
-run (mitcad#1986).
+failure without the patch is still to be shown: the patch does not revert
+at the port's tip without the more than 40 later patches that change the
+same lines (tried 2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 3a60958..3b50a0d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

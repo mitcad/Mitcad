@@ -52,8 +52,8 @@ test_rounding_turns_past_the_seam_other_version (ctest
 geometry.fillet_roll_over_blend): the cases fillet-roll-over-seam and
 fillet-roll-over-seam-2, the rim rounded with OCCT alone against the
 stored body after it; the port's notes record it failing without the
-patch. Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986). The test reads a stored case
+patch. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py). The test reads a stored case
 (MITCAD_GEOMETRY_CASES), not a synthetic body: a synthetic test is still
 wanted (mitcad#1986).
 

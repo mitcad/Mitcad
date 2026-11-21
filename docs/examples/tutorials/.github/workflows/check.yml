@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Checks every tutorial's manifest against MitCad's package format
+# (https://github.com/mitcad/Mitcad/blob/main/docs/tutorials.md) on each
+# push and pull request.
+name: Check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Check the manifests
+        run: python3 -I tools/check-tutorials.py
+
+  # TODO: take every tutorial's steps to their end against MitCad, as
+  # MitCad's own UI test (app.ui-*-tutorials, tools/ui-tutorials-test.py)
+  # does for the example tutorial. It needs a released MitCad build that
+  # runs headless on Linux (Xvfb) with its in-process UI test driver
+  # (MITCAD_TEST_INPUT) and the web browser component, and the driver's
+  # steps for each tutorial: written beside the tutorial, or made from the
+  # steps its page shows.

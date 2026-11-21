@@ -249,7 +249,8 @@ if ($LASTEXITCODE -ne 0) { Ui-Fail 'the library was not committed' }
 Run-Cli 'library fetch' @('library', 'fetch', $library)
 # The post (O1, its derived part F1) on the ground at the origin, 1200
 # long; the member (O2, F2) on the post's +X side 300 up, 600 long; its
-# joint Joint1 (F3) in the root.
+# joint (F3) in the root, named after its parts by BUILD (mitcad#2088).
+$bj = 'Timber 200x300 test L=600 on Timber 200x300 test L=1200'
 # The path as library fetch had it, escaped for JSON.
 $libraryUrl = $library.Replace('\', '\\')
 $timber = Save-Design 'timber' (@'
@@ -259,24 +260,24 @@ $timber = Save-Design 'timber' (@'
   {"cmd": "build_place", "part": {"source": "S1"},
    "at": {"occurrence": "O1", "geometry": {"mount": "F1:mount(face_xp)"}, "offset": 300}, "length": 600},
   {"expect": {"query": {"query": "joints"}, "result": {"joints": [
-    {"name": "Joint1", "a": {"on": "mount", "path": ["O2"]}, "b": {"on": "mount", "path": ["O1"]}}]}}}
+    {"name": "BJ", "a": {"on": "mount", "path": ["O2"]}, "b": {"on": "mount", "path": ["O1"]}}]}}}
 ]
-'@).Replace('URL', $libraryUrl)
+'@).Replace('URL', $libraryUrl).Replace('"BJ"', "`"$bj`"")
 
 Ui-StartApp 'joint-highlight-build' @('--open', $timber)
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
-Ui-ExpectLog 'Browser joints: Joint1 ' "the browser has the member's joint"
+Ui-ExpectLog "Browser joints: $bj " "the browser has the member's joint"
 Open-Joints
 Ui-Mark
-Ui-Step "click the member's joint"       { Ui-ClickLogged 'Browser Root/Joints/Joint1' }
-Expect-Side 'b' 'mount frame face_xp of F1 in ' ' (O1), frame and part [Joint1]' "side b: the post's side frame, with the post"
-Expect-Side 'a' 'mount frame ' ' (O2), frame and part [Joint1]' "side a: the member's own frame, with the member"
+Ui-Step "click the member's joint"       { Ui-ClickLogged "Browser Root/Joints/$bj" }
+Expect-Side 'b' 'mount frame face_xp of F1 in ' " (O1), frame and part [$bj]" "side b: the post's side frame, with the post"
+Expect-Side 'a' 'mount frame ' " (O2), frame and part [$bj]" "side a: the member's own frame, with the member"
 Ui-ExpectNew 'Joint highlight frame a at ' "side a's frame is drawn"
 Ui-ExpectNew 'Joint highlight frame b at ' "side b's frame is drawn"
 $occurrences = Ui-LogLines | Select-Object -Skip $script:UiMark |
   Where-Object { $_.StartsWith('Joint highlight occurrences: ') } | Select-Object -Last 1
-if ("$occurrences" -notmatch ' \(O2\), .* \(O1\) \[Joint1\]$') { Ui-Fail "the joined parts: $occurrences" }
+if (-not ("$occurrences".Contains(' (O2), ') -and "$occurrences".EndsWith(" (O1) [$bj]"))) { Ui-Fail "the joined parts: $occurrences" }
 Write-Host "ok   the two parts: $occurrences"
-Ui-ExpectNew 'Joint card: Joint1: ' 'the card names the BUILD joint'
+Ui-ExpectNew "Joint card: ${bj}: " 'the card names the BUILD joint'
 
 Ui-Finish 'UI Windows joint highlight test'

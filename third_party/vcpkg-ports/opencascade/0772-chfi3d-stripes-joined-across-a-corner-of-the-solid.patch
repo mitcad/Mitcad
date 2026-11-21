@@ -71,9 +71,10 @@ test_roundings_joined_across_a_corner (ctest geometry.fillet_lens_overflow):
 a bulge on a housing's rounded corner, its foot rounded with 20, the edges
 given in both orders: valid, the junctions at the height of the blend within
 1e-4, nothing beyond the first side above the top, the material added alike
-on both sides of the corner's bisector. Its failure without the patch,
-stated in its documentation, is still to be shown in the port's before/after
-run (mitcad#1986).
+on both sides of the corner's bisector. Its failure without the patch is
+still to be shown: the patch does not revert at the port's tip without the
+more than 40 later patches that change the same lines (tried 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 75f492a0..ff88e36e 100644

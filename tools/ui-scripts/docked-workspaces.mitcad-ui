@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# The Docked layout of Windows and Linux (mitcad#2082, GitHub
+# The Docked layout of Windows, Linux and macOS (mitcad#2082, GitHub
 # mitcad/Mitcad#476) through the real UI: the Floating layout's top bar at
 # the window's top and its toolbar panel under it across the window, the
 # docks below them, on a box with one drawing (workspaces.json), in a
@@ -9,10 +9,12 @@
 #      hidden: Docked"), the ☰ of the menus at the bar's left ("Menu bar
 #      button at"); the bar's parts in the Floating order ("Docked top
 #      bar: ..." as "Floating cards: ..." names them): titleRow at the
-#      window's top, then titleMenu (☰), titleFile (Home, File, Save),
-#      titleHistory (Undo, Redo), titleTabs (the design's tab, also with one
-#      design), the quick-access group only while it has commands (none by
-#      default), titleBoost, the indicators, titleChat, titleSettings
+#      window's top, then titleQuickAccess (the one left group: ☰, Home,
+#      File, New Design, Open, Save, Design Properties, Undo and Redo,
+#      mitcad#2129) with titleMenu (its ☰) inside it, titleTabs (the
+#      design's tab, also with one design), titleBoost, titleDiscord
+#      (mitcad#2123), the indicators,
+#      titleChat, titleSettings
 #      (Preferences, ?) and titleVersion; then the toolbar panel: the
 #      workspace block (ribbonWorkspace), the workspace's tabs (ribbonTabs)
 #      and the command search field at the card's row's right end
@@ -46,10 +48,10 @@
 #      drawing opens with the same docks hidden; Close Drawing shows the
 #      docks shown before the Start page.
 #   7. The selector disabled while a sketch is edited, enabled after it.
-# Run by tools/ui-docked-workspaces-test.sh (Linux) and
-# tools/ui-windows-docked-workspaces-test.ps1 (Windows), both Docked. The
-# macOS Docked layout (the system's menu bar, no top bar) has its own
-# steps: docked-workspaces-macos.mitcad-ui.
+# Run by tools/ui-docked-workspaces-test.sh (Linux),
+# tools/ui-windows-docked-workspaces-test.ps1 (Windows) and
+# tools/ui-macos-docked-workspaces-test.sh (macOS, whose shared Qt UI has
+# the same top bar; the system's menu bar holds the menus), all Docked.
 expect-ever 'View area' 30
 window-resize 1280 800
 wait-idle
@@ -66,7 +68,7 @@ expect-ever '^Ribbon tab MAKE_PRINT out of sight$' 30
 expect-ever '^Document tab shown at ' 30
 # The title row's top within the tool bar's own margin (Qt's own style
 # of Linux gives 4 px, Windows' style less), never below a menu bar row.
-expect-ever '^Docked top bar: window 1280x800, view top [0-9]+; titleRow [0-9]+,[0-9] [0-9]+x[0-9]+; titleMenu [^;]+; titleFile [^;]+; titleHistory [^;]+; titleTabs [^;]+;( titleBoost [^;]+;)?( titleIndicator [^;]+;)?( titleAgent [^;]+;)?( titleChat [^;]+;)? titleSettings [^;]+; titleVersion [^;]+; ribbon [^;]+; ribbonWorkspace [^;]+; ribbonTabs [^;]+; ribbonSearch [^;]+' 30
+expect-ever '^Docked top bar: window 1280x800, view top [0-9]+; titleRow [0-9]+,[0-9] [0-9]+x[0-9]+; titleQuickAccess [^;]+; titleMenu [^;]+; titleTabs [^;]+;( titleBoost [^;]+;)?( titleDiscord [^;]+;)?( titleIndicator [^;]+;)?( titleAgent [^;]+;)?( titleChat [^;]+;)? titleSettings [^;]+; titleVersion [^;]+; ribbon [^;]+; ribbonWorkspace [^;]+; ribbonTabs [^;]+; ribbonSearch [^;]+' 30
 expect-widget-property ribbonWorkspace enabled true
 expect-widget-property dockedPanel visible true
 expect-dock browserDock shown

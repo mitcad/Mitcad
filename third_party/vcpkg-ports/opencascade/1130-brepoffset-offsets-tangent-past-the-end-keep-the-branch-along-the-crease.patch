@@ -44,9 +44,9 @@ octagon-to-circle lofts of radii 24.5 and 21.7, the seam on a side and on
 a corner, shelled 0.5 to 3 mm with both ends removed, and a square to a
 circle of radius 20 shelled 0.5 to 2 mm, with OCCT alone: valid single
 solids, both ends open, the walls the thickness within 1e-6 mm; the port's
-notes record every OCCT-only case failing without the patch. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+notes record every OCCT-only case failing without the patch. It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted
+together with 1190, 1480, which change the same lines).
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
 index cde0d94a..8f56ff39 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx

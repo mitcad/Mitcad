@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-blocks.mitcad-ui (mitcad#2110): Sketch1 (F1) on XY holds a slot between the centres p5 (0, 0) and p6 (20, 0), 6 wide: its outline c1..c4 (points p7..p10) and its construction centre line c11."},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.slot", "sketch": "F1", "mode": "center_to_center", "a": [0, 0], "b": [20, 0], "width": 6}
+]

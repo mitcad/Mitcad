@@ -1020,6 +1020,25 @@ design in a project.
   chosen scopes retain exclusions through operation changes and file
   round trips. Legacy Cuts and explicit local participants remain local;
   opening an editor never expands targets.
+- **Assembly cuts** (mitcad#2131, `core/model/src/assembly_cut.rs`): a
+  scoped Cut (Extrude, Revolve, Hole; `FeatureDef::active_cut_scope`) that
+  includes an occurrence of a linked or multiply placed component machines
+  that occurrence only. Its pieces are bodies of the cut's own, kept in the
+  recompute's component body states under the reserved key
+  `MACHINED_HOLDER`, which no component has, so no feature of the machined
+  component sees them and the result store, caches, unpacking and final
+  bodies handle them as any body; `Recomputed::machined` maps each
+  machined occurrence (its path from the root) to the definition bodies
+  its pieces stand for. `Document::instances` shows the pieces in their
+  place, so every consumer of the instances (view, drawings, exports,
+  mass properties, interference, contact sets) gets the machined geometry
+  without code of its own; `bodies` and `component_bodies` stay the
+  definitions'. The scope keeps the cut's frame against each machined
+  occurrence (`CutScope::frames`, filled by `add_feature`/`edit_feature`),
+  so placements changed later (joints, drags) do not move the removed
+  material on the part. The `extrude_scope::assembly_key` read covers the
+  machined map, so a cut is evaluated again when an earlier one machines
+  differently.
 - **Extrude of a body face** (mitcad#535, `features/extrude.rs`): an
   extrusion's profile may be a planar face of a body (`profile_face`)
   instead of sketch regions: the face is found by its topological name on
@@ -2208,6 +2227,15 @@ entities and constraints, shared by the UI and the imports.
   use, and the ids that stood for the origin and axes), so it goes
   between sketches and designs through the clipboard; a paste maps every
   id anew and the origin and axes to the target's own.
+- **Sketch blocks** (`sketch/block.rs`, mitcad#2110): a block is a
+  fragment in its own frame kept by the design (`DocState::sketch_blocks`);
+  an instance in a sketch is ordinary entities with a copy of the block's
+  shape, so a sketch still solves on its own: its points are bound rigidly
+  to a base point and a direction line (`Distance`, `TurnedDirection`,
+  `Radius` and `MinorRadius` bindings), three degrees of freedom. An edit
+  of a block remakes every instance where it is
+  (`core/model/src/document/sketch_blocks.rs`), keeping the ids of what
+  stays.
 
 The solver works on its own ids; the sketch model maps entity ids to them.
 
@@ -3447,6 +3475,25 @@ not recompute.
   `create_component`, `import_file`, `set_property` (the part number) and
   `merge_undo` into one step, then Move/Copy
   ([app/COMMANDS.md](../app/COMMANDS.md#component-from-web-mitcad1579)).
+- **In-app tutorials** (`app/tutorials/`, mitcad#2012,
+  [tutorials.md](tutorials.md)): one guide-step engine
+  (`TutorialGuide`, the step's JSON in `GuideStep`, plain Qt Core) for
+  a tutorial page's bridge and live MCP's `ui_guide`: it outlines the
+  target the step names (a command's button, an open panel's input, a
+  Browser row, the view), holds back the window's other input through an
+  application event filter and `MainWindow::trigger`'s check, and reports
+  what completed the step as an event (to the page, and as the resource
+  `mitcad://ui-guide`, `core/mcp/src/ui_guide.rs`). The pane is the web
+  browser component's module (`webbrowser/TutorialPageView`, the
+  component's interface 3) docked at the left; its bridge `window.mitcad`
+  rides on CEF's message router (`cef/CefBridge*`): the subprocess
+  helper's renderer side makes it only in the frames of the tutorial
+  package's own folder (the browser's extra information) and the browser
+  side checks each call's frame again; calls are answered from the event
+  loop, never inside CEF's callback. Tutorials repositories are fetched
+  as libraries are (`RepoKind::Tutorials`,
+  `core/vcs/src/library/tutorials.rs`: `tutorial_list`,
+  `tutorial_install` into the user's data folder).
 - **Texture sources** (`app/materials/`, mitcad#315): where Edit
   Appearances finds sets of texture maps. Each source is one class behind
   `TextureSource` (asynchronous categories, search, thumbnails and fetch;

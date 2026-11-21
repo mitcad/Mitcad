@@ -85,13 +85,62 @@ pub enum SheetFlangeWidth<P> {
 ///   with a wall of `gap + t` between them, a wall of `length - 2 a` over
 ///   the panel, a bend of 180 degrees and a wall back under it, ending
 ///   `setback` short of the first wall (`length - a - t - setback`).
+///
+/// The forms of mitcad#2112 fold in one bend and set its radius
+/// themselves (the flange's `radius` is not used):
+///
+/// - `flat`: one bend of 180 degrees whose inside radius is half the gap
+///   and a wall back over the panel, ending at the hem's length (`length -
+///   gap / 2 - t`); the gap is the smallest the model builds, by default
+///   0.1 times the thickness;
+/// - `open`: the same with the gap typed, the wall `gap` above the panel;
+/// - `rolled`: one bend of `angle` (more than 180 degrees, less than a
+///   full turn) and no wall; its `radius` (else the flange's, else the
+///   rule's) is its inside radius, and the flange's length is not used.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "form", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SheetHem<P> {
-    Teardrop { gap: P },
-    Rope { gap: P },
-    Double { gap: P, setback: P },
+    Teardrop {
+        gap: P,
+    },
+    Rope {
+        gap: P,
+    },
+    Double {
+        gap: P,
+        setback: P,
+    },
+    Flat {
+        #[serde(default = "Option::default", skip_serializing_if = "Option::is_none")]
+        gap: Option<P>,
+    },
+    Open {
+        gap: P,
+    },
+    Rolled {
+        angle: P,
+        #[serde(default = "Option::default", skip_serializing_if = "Option::is_none")]
+        radius: Option<P>,
+    },
 }
+
+impl<P> SheetHem<P> {
+    /// The form's name as definitions write it (`flat`, `teardrop`, ...).
+    pub fn form(&self) -> &'static str {
+        match self {
+            SheetHem::Teardrop { .. } => "teardrop",
+            SheetHem::Rope { .. } => "rope",
+            SheetHem::Double { .. } => "double",
+            SheetHem::Flat { .. } => "flat",
+            SheetHem::Open { .. } => "open",
+            SheetHem::Rolled { .. } => "rolled",
+        }
+    }
+}
+
+/// A flat hem's gap when none is typed, as a factor of the sheet's
+/// thickness (mitcad#2112).
+pub const FLAT_HEM_GAP: f64 = 0.1;
 
 /// The corner joint a flange makes where its wall closes against another
 /// wall of the same sheet (mitcad#1410). The flange's length is then the
@@ -419,6 +468,16 @@ impl<P> SheetFlangeDef<P> {
                         SheetHem::Double { gap, setback } => SheetHem::Double {
                             gap: f("hem.gap", gap)?,
                             setback: f("hem.setback", setback)?,
+                        },
+                        SheetHem::Flat { gap } => SheetHem::Flat {
+                            gap: gap.as_ref().map(|g| f("hem.gap", g)).transpose()?,
+                        },
+                        SheetHem::Open { gap } => SheetHem::Open {
+                            gap: f("hem.gap", gap)?,
+                        },
+                        SheetHem::Rolled { angle, radius } => SheetHem::Rolled {
+                            angle: f("hem.angle", angle)?,
+                            radius: radius.as_ref().map(|r| f("hem.radius", r)).transpose()?,
                         },
                     })
                 })

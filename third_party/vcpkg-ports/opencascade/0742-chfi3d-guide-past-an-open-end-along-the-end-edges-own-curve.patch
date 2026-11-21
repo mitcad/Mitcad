@@ -56,7 +56,9 @@ above it, the thread's root rounded up to the ring's faces: valid, the
 vertices within 1e-3, the volume added that of the section the ball fills
 turned over the ring's height, and each face's gain that section turned
 through the angle the root rises across it. Its failure without the patch
-is still to be shown in the port's before/after run (mitcad#1986).
+is still to be shown: the patch does not revert at the port's tip without
+the more than 40 later patches that change the same lines (tried
+2026-11-20 by tools/occt-port-proof.py).
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

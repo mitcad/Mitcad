@@ -84,6 +84,10 @@ pub(crate) struct GeoKernel {
     /// their radius the circle's at the middle of the extrusion: for the
     /// tangent planes of cones (mitcad#1779).
     cone: Option<f64>,
+    /// The sides of extruded circles as spheres of the circle's radius
+    /// about the middle of the extrusion: for planes perpendicular to a
+    /// sphere at a point (mitcad#2111).
+    sphere: bool,
 }
 
 fn failed(message: impl Into<String>) -> KernelError {
@@ -302,6 +306,12 @@ impl Kernel for GeoKernel {
             Some(SegmentGeometry::Circle { center, radius, .. }) => {
                 let origin = prism.at(*center, (prism.start + prism.end) / 2.0);
                 let axis = prism.frame.normal();
+                if self.sphere {
+                    return Ok(SurfaceGeometry::Sphere {
+                        center: origin,
+                        radius: *radius,
+                    });
+                }
                 Ok(match self.cone {
                     Some(half_angle) => SurfaceGeometry::Cone {
                         origin,
@@ -484,6 +494,13 @@ impl Kernel for GeoKernel {
                 Ok(SurfacePoint {
                     point: add(start, scale(along, dot(sub(near, start), along))),
                     normal: sub(scale(out, cos), scale(axis, sin)),
+                })
+            }
+            SurfaceGeometry::Sphere { center, radius } => {
+                let out = unit(sub(near, center)).ok_or_else(|| failed("at the centre"))?;
+                Ok(SurfacePoint {
+                    point: add(center, scale(out, radius)),
+                    normal: out,
                 })
             }
             _ => Err(failed("no geometry")),
@@ -2416,4 +2433,200 @@ fn datums_in_the_active_component_take_sketches_of_a_turned_occurrence_by_links(
     let plane = datum(&doc, &plane_uid);
     assert_near(&plane["origin"], [100.0, 15.0, 20.0]);
     assert_near(&plane["normal"], [0.0, 0.0, -1.0]);
+}
+
+// Plane Perpendicular to Face at Point (mitcad#2111).
+
+/// A perpendicular plane on the block's top at its corner (60, 40, 20).
+fn upright(angle: Option<Value>) -> Value {
+    let corner = vertex([&top(), &side(RIGHT), &side(BACK)]);
+    let mut definition =
+        json!({"type": "perpendicular_at_point", "face": face(&top()), "point": corner});
+    if let Some(angle) = angle {
+        definition["angle"] = angle;
+    }
+    definition
+}
+
+#[test]
+fn planes_perpendicular_to_a_box_top_at_a_vertex_stand_upright_and_turn() {
+    let mut doc = block();
+    // Turned 0: along X, its y the top's normal, upright.
+    let plain = plane(&mut doc, upright(None));
+    assert_near(&plain["origin"], [60.0, 40.0, 20.0]);
+    assert_near(&plain["x_axis"], [1.0, 0.0, 0.0]);
+    assert_near(&plain["y_axis"], [0.0, 0.0, 1.0]);
+    assert_near(&plain["normal"], [0.0, -1.0, 0.0]);
+    let zero = plane(&mut doc, upright(Some(json!("0 deg"))));
+    assert_near(&zero["normal"], [0.0, -1.0, 0.0]);
+    // Turned 30 degrees about the top's normal, right-handed.
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    let uid = construct(
+        &mut doc,
+        "construction_plane",
+        upright(Some(json!("30 deg"))),
+    );
+    let turned = query(&doc, json!({"query": "datum", "uid": uid}));
+    assert_near(&turned["origin"], [60.0, 40.0, 20.0]);
+    assert_near(&turned["x_axis"], [cos, sin, 0.0]);
+    assert_near(&turned["y_axis"], [0.0, 0.0, 1.0]);
+    assert_near(&turned["normal"], [sin, -cos, 0.0]);
+    // Flip turns the normal round.
+    let flipped = flipped_plane(&mut doc, upright(None));
+    assert_near(&flipped["normal"], [0.0, 1.0, 0.0]);
+
+    // The box grows (the extrusion is d3): the plane follows the corner.
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "d3", "value": 25}),
+    );
+    let grown = query(&doc, json!({"query": "datum", "uid": uid}));
+    assert_near(&grown["origin"], [60.0, 40.0, 25.0]);
+    assert_near(&grown["normal"], [sin, -cos, 0.0]);
+
+    // The angle is a parameter of its own: setting it turns the plane.
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    let parameter = file["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["uid"] == uid.as_str())
+        .unwrap()["definition"]["angle"]
+        .as_str()
+        .expect("the angle's parameter")
+        .to_owned();
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": parameter, "value": std::f64::consts::FRAC_PI_2}),
+    );
+    let quarter = query(&doc, json!({"query": "datum", "uid": uid}));
+    assert_near(&quarter["x_axis"], [0.0, 1.0, 0.0]);
+    assert_near(&quarter["normal"], [1.0, 0.0, 0.0]);
+
+    // A reference sets angle 0: the front face's normal (-Y), square to
+    // the top's normal already.
+    let mut definition = upright(None);
+    definition["reference"] = face(&side(FRONT));
+    let from_front = plane(&mut doc, definition);
+    assert_near(&from_front["x_axis"], [0.0, -1.0, 0.0]);
+    assert_near(&from_front["normal"], [-1.0, 0.0, 0.0]);
+
+    // At an edge's middle: the top's front edge, (30, 0, 25) now.
+    let mut definition = upright(None);
+    definition["point"] = edge(&top(), &side(FRONT));
+    let at_middle = plane(&mut doc, definition);
+    assert_near(&at_middle["origin"], [30.0, 0.0, 25.0]);
+    assert_near(&at_middle["normal"], [0.0, -1.0, 0.0]);
+}
+
+#[test]
+fn a_reference_along_the_face_normal_is_refused() {
+    let mut doc = block();
+    for reference in [json!("z"), json!("xy"), edge(&side(RIGHT), &side(BACK))] {
+        let mut definition = upright(None);
+        definition["reference"] = reference.clone();
+        let error = failure(&mut doc, "construction_plane", definition);
+        assert!(
+            error.contains("is along the face's normal at the point"),
+            "{reference}: {error}"
+        );
+    }
+    // A point gives no direction.
+    let mut definition = upright(None);
+    definition["reference"] = json!("origin");
+    let error = command_error(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane", "definition": definition}}),
+    );
+    assert!(error.contains("gives no direction"), "{error}");
+}
+
+#[test]
+fn planes_perpendicular_to_a_cylinder_contain_the_radial_direction() {
+    let mut doc = cylinder();
+    let side = json!({"body": "F2.b0", "face": "F2:side(c1)"});
+    let near = json!({"point": [20.0, 0.0, 5.0]});
+    // Without a reference: X is along the normal there, so Y is angle 0.
+    let across = plane(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": side, "point": near}),
+    );
+    assert_near(&across["origin"], [10.0, 0.0, 5.0]);
+    assert_near(&across["y_axis"], [1.0, 0.0, 0.0]);
+    assert_near(&across["x_axis"], [0.0, 1.0, 0.0]);
+    assert_near(&across["normal"], [0.0, 0.0, -1.0]);
+    // With the top's circular edge (along the cylinder's axis) as
+    // reference: the plane through the axis.
+    let rim = json!({"body": "F2.b0", "edge": EdgeName::new(
+        "F2:end(r{c1})".parse().unwrap(), "F2:side(c1)".parse().unwrap()).to_string()});
+    let through = plane(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": side, "point": near, "reference": rim}),
+    );
+    assert_near(&through["origin"], [10.0, 0.0, 5.0]);
+    assert_near(&through["y_axis"], [1.0, 0.0, 0.0]);
+    assert_near(&through["x_axis"], [0.0, 0.0, 1.0]);
+    assert_near(&through["normal"], [0.0, 1.0, 0.0]);
+    for on_axis in [[0.0, 0.0, 0.0], [0.0, 0.0, 40.0]] {
+        assert!(plane_distance(&through, on_axis).abs() < 1e-9);
+    }
+    // The cylinder's own face as reference gives its axis too.
+    let by_face = plane(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": side, "point": near, "reference": side}),
+    );
+    assert_near(&by_face["normal"], [0.0, 1.0, 0.0]);
+}
+
+#[test]
+fn planes_perpendicular_to_a_sphere_pass_through_its_centre() {
+    // A sphere of radius 10 about (0, 0, 20).
+    let mut doc = round(GeoKernel {
+        sphere: true,
+        ..GeoKernel::default()
+    });
+    let ball = json!({"body": "F2.b0", "face": "F2:side(c1)"});
+    let center = [0.0, 0.0, 20.0];
+    // Beside it at +Y: X is angle 0, the plane the level one through the
+    // centre.
+    let level = plane(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": ball,
+               "point": {"point": [0.0, 30.0, 20.0]}}),
+    );
+    assert_near(&level["origin"], [0.0, 10.0, 20.0]);
+    assert_near(&level["y_axis"], [0.0, 1.0, 0.0]);
+    assert_near(&level["normal"], [0.0, 0.0, 1.0]);
+    assert!(plane_distance(&level, center).abs() < 1e-9);
+    // Up and out along X: X projected square to the leaning normal.
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let leaning = plane(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": ball,
+               "point": {"point": [20.0, 0.0, 40.0]}}),
+    );
+    assert_near(&leaning["origin"], [10.0 * h, 0.0, 20.0 + 10.0 * h]);
+    assert_near(&leaning["y_axis"], [h, 0.0, h]);
+    assert_near(&leaning["x_axis"], [h, 0.0, -h]);
+    assert_near(&leaning["normal"], [0.0, -1.0, 0.0]);
+    assert!(plane_distance(&leaning, center).abs() < 1e-9);
+}
+
+#[test]
+fn a_perpendicular_plane_without_angle_or_reference_is_saved_without_them() {
+    let mut doc = block();
+    construct(&mut doc, "construction_plane", upright(None));
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    let made = file["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["type"] == "construction_plane")
+        .unwrap();
+    assert!(made["definition"].get("angle").is_none(), "{made}");
+    assert!(made["definition"].get("reference").is_none(), "{made}");
+    let mut loaded = Document::from_json(&saved, GeoKernel::default()).unwrap();
+    loaded.recompute();
+    assert_eq!(loaded.to_json(), saved);
 }

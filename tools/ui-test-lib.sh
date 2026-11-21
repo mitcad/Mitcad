@@ -1026,6 +1026,35 @@ ui_sketch_drag() {
   xdotool mouseup 1
 }
 
+# ui_menu_skipped count: how many of the first `count` entries of the
+# context menu logged last ("Context menu: a | b | c") cannot be chosen, as
+# the Browser's menus log them just before it ("Context menu disabled: b"):
+# Qt's menus pass over them with the arrow keys, so ui_menu_choose presses
+# Down that many times fewer (as Ui-MenuSkipped in ui-windows-lib.ps1).
+ui_menu_skipped() {
+  awk -v count="$1" '
+    { sub(/\r$/, ""); lines[NR] = $0 }
+    END {
+      for (i = NR; i >= 1; i--) { if (index(lines[i], "Context menu: ")) break }
+      if (i < 1) { print 0; exit }
+      n = split(substr(lines[i], index(lines[i], "Context menu: ") + 14), entries, / [|] /)
+      disabled = ""
+      for (j = i - 1; j >= 1; j--) {
+        if (!index(lines[j], "Context menu ")) break
+        at = index(lines[j], "Context menu disabled: ")
+        if (at) { disabled = substr(lines[j], at + 23); break }
+      }
+      m = split(disabled, off, / [|] /)
+      skipped = 0
+      for (k = 1; k <= count && k <= n; k++) {
+        for (o = 1; o <= m; o++) {
+          if (entries[k] == off[o]) { skipped++; break }
+        }
+      }
+      print skipped
+    }' "$UI_LOG"
+}
+
 # ui_menu_choose "entry" ["entry of its submenu" ...]: picks an entry of
 # the context menu just opened, with the arrow keys, from the logged
 # "Context menu: a | b | c"; with more entries, the first opens a submenu
@@ -1052,6 +1081,8 @@ ui_menu_choose() {
     done
     [ -n "$found" ] || ui_fail "'$wanted' is not in the context menu${path}: $entries"
     # The menu opens with nothing active; a submenu with its first entry.
+    # The arrow keys pass over the entries that cannot be chosen.
+    [ $level != 0 ] || found=$((found - $(ui_menu_skipped $((found - 1)))))
     [ $level = 0 ] || found=$((found - 1))
     [ "$found" -le 0 ] || xdotool key --delay 80 --repeat "$found" Down
     ui_key Return
@@ -1456,51 +1487,49 @@ ui_save_state() {
   ui_fail "$2: Save is not $1 (last: '$last')"
 }
 
-# ui_quick_access_place description line [none]: in a "Floating cards: "
-# line, the title row has no title box (mitcad#1989: the window's title and
-# the document tabs show the design's name), and its quick-access group,
-# when it is there, sits where the box was: right of the document tabs
-# (titleTabs, mitcad#1990), its right end just left of the next part (the
-# Boost development button, the project, agent or chat indicator, or
-# Preferences and Help), the row's
-# spacing (6) apart, folded or not. With "none" the group must not be
-# there: the Floating top bar's group has no commands by default and is
-# hidden while empty (mitcad#1990).
+# ui_quick_access_place description line: in a "Floating cards: " or
+# "Docked top bar: " line, the title row has no title box (mitcad#1989: the
+# window's title and the document tabs show the design's name), and its one
+# left group (titleQuickAccess, mitcad#2129) is there at the row's left
+# end, before every other part of the row, with the ☰ (titleMenu) inside it
+# at its start; the document tabs (titleTabs), when they are there, follow
+# it, the row's spacing (6) apart, folded or not.
 ui_quick_access_place() {
-  local description=$1 line=$2 name xy size x w tabs_end="" qa_x="" qa_end="" next="" gap
-  local entries
+  local description=$1 line=$2 name xy size x w row_x="" tabs_x="" qa_x="" qa_end="" menu_x="" menu_end=""
+  local entries first="" gap
   grep -qE "(^|; )titleBox " <<< "$line" && ui_fail "$description: a title box in the title row: '$line'"
-  if [ "${3:-}" = none ] && grep -qE "(^|; )titleQuickAccess " <<< "$line"; then
-    ui_fail "$description: a quick-access group in the title row, which has no commands by default: '$line'"
-  fi
   entries=$(tr ';' '\n' <<< "${line#*; }" | sed 's/^ *//')
   while read -r name xy size; do
     x=${xy%,*}
     w=${size%x*}
     case $name in
-      titleTabs) tabs_end=$((x + w)) ;;
+      titleRow) row_x=$x ;;
+      titleTabs) tabs_x=$x ;;
       titleQuickAccess) qa_x=$x qa_end=$((x + w)) ;;
+      titleMenu) menu_x=$x menu_end=$((x + w)) ;;
     esac
   done <<< "$entries"
-  if [ -z "$qa_x" ]; then
-    echo "ok   $description: no title box, no quick-access group in the row"
-    return
-  fi
-  [ -n "$tabs_end" ] && [ "$qa_x" -ge "$tabs_end" ] ||
-    ui_fail "$description: the quick-access group ($qa_x) is not right of the tabs (end $tabs_end): '$line'"
+  [ -n "$qa_x" ] || ui_fail "$description: no left group (titleQuickAccess) in the title row: '$line'"
+  [ -n "$row_x" ] && [ $((qa_x - row_x)) -le 12 ] ||
+    ui_fail "$description: the left group ($qa_x) is not at the title row's left end ($row_x): '$line'"
   while read -r name xy size; do
     x=${xy%,*}
     case $name in
-      titleBoost | titleIndicator | titleAgent | titleChat | titleSearch | titleSettings)
-        [ "$x" -ge "$qa_end" ] && { [ -z "$next" ] || [ "$x" -lt "$next" ]; } && next=$x
-        ;;
+      titleRow | titleQuickAccess | titleMenu | title) ;;
+      title*) [ "$x" -ge "$qa_end" ] || first=$name ;;
     esac
   done <<< "$entries"
-  [ -n "$next" ] || ui_fail "$description: nothing right of the quick-access group: '$line'"
-  gap=$((next - qa_end))
-  [ "$gap" -le 24 ] ||
-    ui_fail "$description: the quick-access group ends $gap px before the indicators or Preferences: '$line'"
-  echo "ok   $description: no title box; the quick-access group at the free part's right end, $gap px before the next part"
+  [ -z "$first" ] || ui_fail "$description: $first is not right of the left group (end $qa_end): '$line'"
+  [ -n "$menu_x" ] && [ "$menu_x" -ge "$qa_x" ] && [ "$menu_end" -le "$qa_end" ] && [ $((menu_x - qa_x)) -le 8 ] ||
+    ui_fail "$description: the ☰ (titleMenu $menu_x..$menu_end) is not first inside the left group ($qa_x..$qa_end): '$line'"
+  if [ -n "$tabs_x" ]; then
+    gap=$((tabs_x - qa_end))
+    [ "$gap" -ge 0 ] && [ "$gap" -le 24 ] ||
+      ui_fail "$description: the document tabs ($tabs_x) do not follow the left group (end $qa_end): '$line'"
+    echo "ok   $description: no title box; the left group at the row's left end, the ☰ first in it, the document tabs $gap px after it"
+  else
+    echo "ok   $description: no title box; the left group at the row's left end, the ☰ first in it"
+  fi
 }
 
 # ui_save_if_changed file: Ctrl+S and "Saved <file>" while Save is enabled;

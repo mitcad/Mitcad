@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/drawing-standard.mitcad-ui (mitcad#2047): a 40 x 30 x 20 block (F2.b0) and Drawing1 (D1, A3, the ISO template, ISO dimensioning) with its front view at 1:1 (the block 80,110 to 120,130 on the sheet) and a vertical dimension between the front's bottom and top edges: 20, written along its line (90 degrees) under ISO."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}], "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"cmd": "add_drawing", "size": "A3", "template": "iso"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front", "at": [100, 120], "scale": "1:1"},
+  {"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "linear", "along": "vertical", "picks": [[100, 110], [100, 130]]}
+]

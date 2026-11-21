@@ -48,6 +48,10 @@ pub struct Progress {
     /// The threads that work beside the import's own, and how many it may
     /// have in all ([`Progress::helper`], mitcad#103).
     helpers: Arc<Helpers>,
+    /// A recompute of the whole design the import runs as one model
+    /// command ([`Progress::recompute_monitor`]), whose features are its
+    /// steps.
+    recompute: std::sync::Mutex<Option<Arc<RecomputeMonitor>>>,
 }
 
 /// What the memory guard told an import (mitcad#80).
@@ -96,7 +100,43 @@ impl Progress {
             memory_share: AtomicU64::new(0),
             ahead: std::sync::Mutex::new(Arc::new(RecomputeMonitor::new())),
             helpers: Arc::default(),
+            recompute: std::sync::Mutex::new(None),
         }
+    }
+
+    /// A monitor for a recompute of the whole design that the import runs
+    /// as one model command (mitcad#2085: the turn of a Y-up design to
+    /// stand on Z up recomputes every feature, minutes for a large design
+    /// in which no kernel call hangs): each feature it reaches or evaluates
+    /// is a step of the import ([`Progress::steps`]), and it is cancelled
+    /// when the watchdog gives the try up, so that the try ends and frees
+    /// its memory before the next one.
+    /// `also`: a monitor it is cancelled with too (the document's own, a
+    /// stop of the user's).
+    pub fn recompute_monitor(&self, also: Option<Arc<RecomputeMonitor>>) -> Arc<RecomputeMonitor> {
+        let parents = std::iter::once(Arc::clone(&self.abandoned))
+            .chain(also)
+            .collect();
+        let monitor = Arc::new(RecomputeMonitor::within(parents, None));
+        if let Ok(mut r) = self.recompute.lock() {
+            *r = Some(Arc::clone(&monitor));
+        }
+        monitor
+    }
+
+    /// How far the import has come, for its watchdog: its [`Progress::step`]
+    /// and the features of a recompute it runs
+    /// ([`Progress::recompute_monitor`]); a value that changes is progress.
+    pub fn steps(&self) -> u64 {
+        let recompute = self.recompute.lock().ok().and_then(|r| {
+            r.as_ref().map(|m| {
+                let p = m.progress();
+                (p.position as u64).wrapping_add((p.evaluated as u64) << 32)
+            })
+        });
+        self.step
+            .load(Ordering::Relaxed)
+            .wrapping_add(recompute.unwrap_or(0))
     }
 
     /// Memory is getting tight (mitcad#80; `mitcad-ffi`'s memory guard,
@@ -436,5 +476,34 @@ impl Progress {
             }
         }
         Some(Helper(Arc::clone(&self.helpers)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A recompute the import runs as one model command is progress for
+    /// its watchdog as it reaches and evaluates features, and is cancelled
+    /// when the try is given up (mitcad#2085).
+    #[test]
+    fn a_recompute_s_features_are_steps_and_stop_when_given_up() {
+        let progress = Progress::new();
+        let before = progress.steps();
+        let user = Arc::new(RecomputeMonitor::new());
+        let monitor = progress.recompute_monitor(Some(Arc::clone(&user)));
+        assert_eq!(progress.steps(), before, "no feature reached yet");
+        monitor.enter(1, 10).unwrap();
+        let reached = progress.steps();
+        assert_ne!(reached, before);
+        monitor.kept();
+        assert_ne!(progress.steps(), reached);
+        assert!(!monitor.is_cancelled());
+        progress.abandon();
+        assert!(monitor.is_cancelled());
+        // With the user's stop too.
+        let other = Progress::new().recompute_monitor(Some(Arc::clone(&user)));
+        user.cancel();
+        assert!(other.is_cancelled());
     }
 }

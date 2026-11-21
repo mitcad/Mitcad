@@ -4,11 +4,13 @@
 // SpaceMouseCamera.hpp, through the pure spaceMouseMove) in the 3D mouse's
 // Navigation mode and with its Lock horizon (mitcad#978), each frame's
 // step paced and the motion's timing logged by SpaceMouseTiming.hpp
-// (mitcad#1023).
+// (mitcad#1023). The wheel is ignored during a motion and shortly after it
+// (SpaceMouseWheelGuard.hpp, mitcad#1981).
 #include "../OcctViewer.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include <QDebug>
 
@@ -42,6 +44,17 @@ void OcctViewer::setSpaceMouseRates(const SpaceMouseRates& rates) {
     m_spaceMouseStartScale = 0.0;
   }
   requestFrame();
+}
+
+void OcctViewer::spaceMouseInput(bool deflected) {
+  m_spaceMouseWheel.motion(spaceMouseNow(), deflected);
+}
+
+std::int64_t OcctViewer::spaceMouseNow() {
+  if (!m_spaceMouseWheelClock.isValid()) {
+    m_spaceMouseWheelClock.start();
+  }
+  return static_cast<std::int64_t>(m_spaceMouseWheelClock.elapsed());
 }
 
 void OcctViewer::endSpaceMouse() {

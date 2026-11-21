@@ -60,8 +60,9 @@ test_synthetic_corner_occt (ctest geometry.fillet_step_corner): a
 synthetic step corner rounded with OCCT alone at 0.5, 0.75 and 1 against
 the body of planes (without the patch 0.75 folds at the top vertex and 1
 is invalid); and test_synthetic_corner, the same through MitCad's fillet,
-also after its floor is rounded. Its failure without the patch is still to
-be shown in the port's before/after run (mitcad#1986).
+also after its floor is rounded. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py, reverted together with 1430, 1580,
+which change the same lines).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 94f06a74..1ba82fc4 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

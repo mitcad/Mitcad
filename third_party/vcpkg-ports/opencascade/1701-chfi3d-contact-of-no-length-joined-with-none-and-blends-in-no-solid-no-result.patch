@@ -31,8 +31,8 @@ test_cube_rounded_within_a_hair_of_half_its_side (ctest
 geometry.fillet_rib_full_round): the cube of 10 rounded on its twelve
 edges with 4.9998 returns (before the patch it ran into the test's time
 limit), either not done or one valid solid with the exact shape's volume,
-never the cube as done. Its failure without the patch is still to be shown
-in the port's before/after run (mitcad#1986).
+never the cube as done. It fails without the patch: the test does not
+build without it (shown 2026-11-20 by tools/occt-port-proof.py).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx

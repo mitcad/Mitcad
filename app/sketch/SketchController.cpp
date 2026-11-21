@@ -11,6 +11,7 @@
 
 #include <QAction>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QLabel>
@@ -36,12 +37,38 @@
 #include "../framework/Theme.hpp"
 #include "../framework/TestSync.hpp"
 #include "SketchConflict.hpp"
+#include "SketchFieldStyle.hpp"
 #include "SketchOverlay.hpp"
 #include "SketchPreferences.hpp"
 #include "SketchTool.hpp"
 
 namespace mitcad::sketch {
 namespace {
+
+// Shift+Return and Shift+Enter in a sketch value editor (mitcad#2090):
+// accepted as Enter accepts it, marked to replace what blocks the new
+// dimension. Installed before the parameter suggestions' filter, which
+// therefore sees the keys first: with its list open, Enter picks a row
+// whatever the modifiers, and nothing is accepted here.
+class ShiftEnterFilter : public QObject {
+public:
+  ShiftEnterFilter(QObject* parent, std::function<void()> accept) : QObject(parent), m_accept(std::move(accept)) {}
+
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (event->type() == QEvent::KeyPress) {
+      const auto* key = static_cast<QKeyEvent*>(event);
+      const Qt::KeyboardModifiers held = key->modifiers() & ~Qt::KeyboardModifiers(Qt::KeypadModifier);
+      if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && held == Qt::ShiftModifier) {
+        m_accept();
+        return true;
+      }
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  std::function<void()> m_accept;
+};
 
 // The sketch modes of every open document window: Show points is one
 // setting per user (mitcad#1764), so a change in one window draws or hides
@@ -64,20 +91,10 @@ constexpr double kPointPixels = 8.0;
 constexpr double kCurvePixels = 6.0;
 
 // The fields float over the view, whose background does not follow the
-// palette: their own light background needs its own dark text.
-// The text and the frame from the role table (mitcad#1041); a value that is
-// not valid has the error's frame and fill.
-QString fieldStyle(bool invalid) {
-  const auto light = [](ColorRole role) { return themeColor(role, false).name(); };
-  return QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3;"
-                        " border-radius: 3px; padding: 1px 4px; selection-background-color: %4;"
-                        " selection-color: %2; }")
-      .arg(invalid ? light(ColorRole::ErrorFill) : QStringLiteral("rgba(255, 255, 255, 240)"),
-           light(ColorRole::Text), invalid ? light(ColorRole::ErrorBorder) : light(ColorRole::Hover),
-           light(ColorRole::HoverFill));
-}
-const QString kFieldStyle = fieldStyle(false);
-const QString kInvalidFieldStyle = fieldStyle(true);
+// palette: always light, with the light roles' text, frame and selection
+// (SketchFieldStyle.hpp).
+const QString kFieldStyle = valueFieldStyle(false);
+const QString kInvalidFieldStyle = valueFieldStyle(true);
 
 // A dimension's value or a constraint's glyph of sketch `uid` as a
 // selection item ("fix:<entity>" for a fixed entity's lock).
@@ -292,6 +309,7 @@ bool SketchOp::run(const QJsonObject& command, QJsonObject* result) {
     const ConflictText conflict = splitConflict(raw);
     m_error = conflict.message;
     m_conflicted = conflict.conflict;
+    m_conflict = conflict;
     if (conflict.conflict) {
       m_c.setConflict(QStringLiteral("action"), conflict.items);
     }
@@ -434,6 +452,20 @@ void SketchOp::constrain(const QString& point, const Snap& snap) {
                    {QStringLiteral("point"), point},
                    {QStringLiteral("entity"), entity}});
   };
+  // On a line's extension (mitcad#2035): the same coincident, which holds
+  // the point on the line beyond its end, logged for UI tests.
+  const auto onExtension = [&](const QString& entity) {
+    if (entity.isEmpty() || entity == point) {
+      return;
+    }
+    QJsonObject cmd = command(QStringLiteral("sketch.add_constraint"));
+    cmd.insert(QStringLiteral("constraint"), QJsonObject{{QStringLiteral("type"), QStringLiteral("coincident")},
+                                                         {QStringLiteral("point"), point},
+                                                         {QStringLiteral("entity"), entity}});
+    if (attempt(cmd)) {
+      qDebug().noquote() << QStringLiteral("Coincident %1 on the extension of %2").arg(point, entity);
+    }
+  };
   switch (snap.kind) {
   case Snap::Kind::Point:
   case Snap::Kind::Center:
@@ -465,6 +497,10 @@ void SketchOp::constrain(const QString& point, const Snap& snap) {
       }
       break;
     }
+    if (snap.extended) {
+      onExtension(snap.curve);
+      break;
+    }
     coincident(snap.curve);
     break;
   case Snap::Kind::Quadrant: {
@@ -476,8 +512,16 @@ void SketchOp::constrain(const QString& point, const Snap& snap) {
     break;
   }
   case Snap::Kind::Intersection:
-    coincident(snap.curve);
-    coincident(snap.curve2);
+    if (snap.extended) {
+      onExtension(snap.curve);
+    } else {
+      coincident(snap.curve);
+    }
+    if (snap.extended2) {
+      onExtension(snap.curve2);
+    } else {
+      coincident(snap.curve2);
+    }
     break;
   case Snap::Kind::BodyVertex:
   case Snap::Kind::BodyMidpoint:
@@ -846,6 +890,14 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, Command
   m_pointerTimer.setInterval(150);
   connect(&m_pointerTimer, &QTimer::timeout, this, &SketchController::logPointer);
   TestSync::watch(&m_pointerTimer);
+  // A line a drawing tool's pointer rests on is acquired for its extension
+  // (mitcad#2035). Not a timer the UI tests' sync waits for: only a test
+  // that rests the pointer on a line waits for the acquisition's log line.
+  m_dwellTimer.setSingleShot(true);
+  bool dwellSet = false;
+  const int dwell = qEnvironmentVariableIntValue("MITCAD_TEST_DWELL_MS", &dwellSet);
+  m_dwellTimer.setInterval(dwellSet && dwell > 0 ? dwell : 400);
+  connect(&m_dwellTimer, &QTimer::timeout, this, &SketchController::acquireAtDwell);
 }
 
 SketchController::~SketchController() {
@@ -855,6 +907,9 @@ SketchController::~SketchController() {
 
 void SketchController::enter(const QString& uid) {
   m_uid = uid;
+  m_clickPlaces.clear();
+  m_acquired.clear();
+  m_dwellTimer.stop();
   m_surfaceAround.reset();
   m_surfaceHits.clear();
   m_status.clear();
@@ -1239,6 +1294,8 @@ void SketchController::stopTool() {
   }
   // For UI tests (mitcad#1085: a right-click with nothing in progress).
   qDebug().noquote() << QStringLiteral("Sketch tool ended: %1").arg(m_tool->name());
+  m_dwellTimer.stop();
+  releaseAcquired(QStringLiteral("the tool ended"));
   // Ended or switched: its errors go with it (mitcad#1621).
   m_host.closeMessageSource(kToolSource);
   // A tool may end itself from one of its own handlers: delete it later.
@@ -1303,6 +1360,9 @@ bool SketchController::cancel() {
     return true;
   }
   if (m_tool) {
+    // Esc releases the lines acquired for their extensions (mitcad#2035)
+    // and steps back as before.
+    releaseAcquired(QStringLiteral("Esc"));
     if (!m_tool->cancel()) {
       stopTool();
       hint(tr("Sketch: choose a tool, or %1.").arg(m_registry.shortcutHint(QStringLiteral("sketch.finish"))));
@@ -1861,6 +1921,31 @@ void SketchController::setDimensionSigned(const QString& id, bool on) {
                                  changed != nullptr ? changed->expression : QString());
 }
 
+void SketchController::setDimensionDriven(const QString& id, bool driven) {
+  const DimensionData* d = m_model.dimension(id);
+  if (d == nullptr || d->driven == driven) {
+    return;
+  }
+  SketchOp op(*this);
+  QJsonObject cmd = op.command(QStringLiteral("sketch.set_driven"));
+  cmd.insert(QStringLiteral("dimension"), id);
+  cmd.insert(QStringLiteral("driven"), driven);
+  if (!op.run(cmd)) {
+    const QString reason = op.error();
+    op.rollback();
+    qDebug().noquote() << QStringLiteral("Dimension %1 not made %2: %3")
+                              .arg(id, driven ? QStringLiteral("driven") : QStringLiteral("driving"), reason);
+    error(reason);
+    return;
+  }
+  op.commit();
+  const DimensionData* changed = m_model.dimension(id);
+  // "Dimension k5 made driven: 50.00", for UI tests.
+  qDebug().noquote() << QStringLiteral("Dimension %1 made %2: %3")
+                            .arg(id, driven ? QStringLiteral("driven") : QStringLiteral("driving"),
+                                 changed != nullptr ? m_overlay->dimensionText(*changed) : QString());
+}
+
 QString SketchController::splineAt(const QPointF& screen) const {
   const QString id = entityAt(screen, PickCurves);
   const CurveData* c = m_model.curve(id);
@@ -1995,6 +2080,86 @@ void SketchController::setGridSnap(bool on) {
   }
   m_gridSnap = on;
   emit optionsChanged();
+}
+
+void SketchController::setExtensionSnap(bool on) {
+  if (on == m_extensionSnap) {
+    return;
+  }
+  m_extensionSnap = on;
+  qDebug().noquote() << QStringLiteral("Snap to line extensions %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  if (!on) {
+    m_dwellTimer.stop();
+    releaseAcquired(QStringLiteral("Snap to line extensions turned off"));
+  }
+  emit optionsChanged();
+  m_overlay->update();
+}
+
+void SketchController::restartDwell(const QPointF& position, Qt::KeyboardModifiers modifiers) {
+  if (!m_tool || !m_tool->snaps() || !m_extensionSnap || m_dragging || dragsFreely(modifiers)) {
+    m_dwellTimer.stop();
+    return;
+  }
+  // Moving within a few pixels of where the pointer came to rest keeps the
+  // dwell going.
+  constexpr double kDwellPixels = 3.0;
+  if (m_dwellTimer.isActive() && screenDistance(position, m_dwellAt) <= kDwellPixels) {
+    return;
+  }
+  m_dwellAt = position;
+  m_dwellTimer.start();
+}
+
+void SketchController::acquireAtDwell() {
+  if (!isActive() || !m_tool || !m_tool->snaps() || !m_extensionSnap || m_dragging || m_editor ||
+      dragsFreely(QGuiApplication::keyboardModifiers())) {
+    return;
+  }
+  // The line the pointer rests on: snapped onto a line of the sketch
+  // (projected ones too), away from its points, middle and crossings, and
+  // not onto an extension or an axis. The last place the pointer was
+  // moved to, also when a posted move left the view at once (the Windows
+  // UI tests in session 0).
+  updateCursor(m_cursor);
+  if (!m_cursorValid) {
+    return;
+  }
+  const Snap under = m_snap;
+  const CurveData* line = under.kind == Snap::Kind::OnCurve && under.axis.isEmpty() && !under.onExtension()
+                              ? m_model.curve(under.curve)
+                              : nullptr;
+  if (line == nullptr || !line->isLine() || !line->axis.isEmpty()) {
+    return;
+  }
+  // For UI tests, with the line's id; the view shows the acquisition by a
+  // mark on the line and the guides of its extension.
+  if (m_acquired.removeAll(line->id) > 0) {
+    qDebug().noquote() << QStringLiteral("Sketch line %1 released").arg(line->id);
+  } else {
+    if (m_acquired.size() >= 2) {
+      const QString oldest = m_acquired.takeFirst();
+      qDebug().noquote() << QStringLiteral("Sketch line %1 dropped: a third line acquired").arg(oldest);
+    }
+    m_acquired << line->id;
+    qDebug().noquote() << QStringLiteral("Sketch line %1 acquired: its extension snaps").arg(line->id);
+  }
+  // Snapped again with the lines acquired now.
+  updateCursor(m_cursor);
+  if (m_cursorValid) {
+    m_tool->move(m_snap);
+  }
+  placeFields();
+  m_overlay->update();
+}
+
+void SketchController::releaseAcquired(const QString& why) {
+  if (m_acquired.isEmpty()) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Sketch lines released (%1): %2").arg(why, m_acquired.join(QLatin1Char(' ')));
+  m_acquired.clear();
+  m_overlay->update();
 }
 
 void SketchController::setShowDimensions(bool on) {
@@ -2442,6 +2607,25 @@ std::optional<V2> SketchController::sketchAtF(const QPointF& screen) const {
 
 double SketchController::lengthScaleOf(const QString& unit) { return unitScale(unit); }
 
+std::optional<V2> SketchController::clickPlace(const QString& curve, const V2& pickedAt) const {
+  // The view's pick tolerance (PickContext's 4 px on top of a curve's
+  // sensitivity) with a margin, in pixels at the click's zoom.
+  constexpr double kMatchPixels = 16.0;
+  std::optional<V2> best;
+  double bestDistance = std::numeric_limits<double>::max();
+  for (const ClickPlace& click : m_clickPlaces) {
+    if (click.curve != curve) {
+      continue;
+    }
+    const double d = dist(click.at, pickedAt);
+    if (d <= kMatchPixels * click.pixel && d < bestDistance) {
+      best = click.at;
+      bestDistance = d;
+    }
+  }
+  return best;
+}
+
 double SketchController::pixel() const {
   const QPointF o = toScreen(V2{});
   const double sx = screenDistance(toScreen(V2{1.0, 0.0}), o);
@@ -2840,6 +3024,10 @@ void SketchController::setHover(const QString& entity) {
 }
 
 void SketchController::setConflict(const QString& source, const QStringList& items) {
+  if (items.isEmpty() && source == QStringLiteral("action")) {
+    // The refusal's Replace goes with its painting (mitcad#2090).
+    dropReplaceOffer();
+  }
   if (m_conflicts.value(source) == items) {
     return;
   }
@@ -3152,6 +3340,10 @@ void SketchController::updateCursor(const QPointF& position) {
     settings.gridStep = m_gridStep > 0.0 ? m_gridStep : m_viewer.gridStep(); // the lines shown
     settings.body = m_tool->bodySnaps() ? &bodyGeometry() : nullptr;
     settings.axes = true; // mitcad#948
+    // The acquired lines' extensions (mitcad#2035); not while Shift or Alt
+    // is held.
+    settings.extensions = m_extensionSnap && !dragsFreely(QGuiApplication::keyboardModifiers());
+    settings.acquired = m_acquired;
     m_snap = snap(settings, *raw, position);
   } else {
     m_snap = Snap();
@@ -3289,6 +3481,23 @@ bool SketchController::viewerEvent(QEvent* event) {
     return false;
   case QEvent::MouseMove: {
     auto* e = static_cast<QMouseEvent*>(event);
+    if (m_badgePressed) {
+      if ((e->buttons() & Qt::LeftButton) == 0) {
+        m_badgePressed = false;
+      } else if (screenDistance(e->position(), m_pressPosition) <= kDragPixels) {
+        return true; // still the badge's click
+      } else {
+        // A drag from the badge: the view's (a window over the view's
+        // corner, an orbit), from where it was pressed.
+        m_badgePressed = false;
+        QMouseEvent press(QEvent::MouseButtonPress, m_pressPosition, m_viewer.mapToGlobal(m_pressPosition),
+                          Qt::LeftButton, Qt::LeftButton, m_pressModifiers);
+        m_forwarding = true;
+        QCoreApplication::sendEvent(&m_viewer, &press);
+        m_forwarding = false;
+        return false;
+      }
+    }
     updateCursor(e->position());
     if (m_pressed && !m_dragging && screenDistance(e->position(), m_pressPosition) > kDragPixels) {
       startDrag();
@@ -3307,6 +3516,12 @@ bool SketchController::viewerEvent(QEvent* event) {
       return true;
     }
     if (m_tool) {
+      // Resting on a line acquires it (mitcad#2035); a drag does not rest.
+      if ((e->buttons() & Qt::LeftButton) == 0) {
+        restartDwell(e->position(), e->modifiers());
+      } else {
+        m_dwellTimer.stop();
+      }
       m_tool->move(m_snap);
       placeFields();
       m_overlay->update();
@@ -3351,10 +3566,30 @@ bool SketchController::viewerEvent(QEvent* event) {
       acceptEditor();
       return true;
     }
+    // A click on the degrees of freedom badge with no tool running: Show
+    // Unconstrained (mitcad#2026) at its release; a drag from it stays the
+    // view's (MouseMove). With a tool the click is the tool's.
+    if (!m_tool && m_overlay->badgeAt(e->position())) {
+      m_badgePressed = true;
+      m_pressPosition = e->position();
+      m_pressModifiers = e->modifiers();
+      return true;
+    }
     updateCursor(e->position());
     if (m_tool) {
+      // A click is no rest on a line (mitcad#2035); a point placed on an
+      // acquired line's extension, or where one meets another curve,
+      // releases the acquired lines.
+      m_dwellTimer.stop();
+      const bool onExtension = m_cursorValid && m_snap.onExtension();
       if (m_cursorValid) {
+        // The keys held reach the tool with the place (mitcad#2090).
+        m_snap.modifiers = e->modifiers();
         m_tool->press(m_snap);
+        m_snap.modifiers = Qt::NoModifier;
+      }
+      if (onExtension) {
+        releaseAcquired(QStringLiteral("a point placed on an extension"));
       }
       placeFields();
       m_overlay->update();
@@ -3408,6 +3643,12 @@ bool SketchController::viewerEvent(QEvent* event) {
   }
   case QEvent::MouseButtonRelease: {
     auto* e = static_cast<QMouseEvent*>(event);
+    if (m_badgePressed && e->button() == Qt::LeftButton) {
+      m_badgePressed = false; // the badge's click, not the view's pick
+      qDebug() << "Sketch badge clicked";
+      selectUnconstrained();
+      return true;
+    }
     if (e->button() == Qt::RightButton && !m_tool && !m_editor &&
         screenDistance(e->position(), m_rightPressPosition) <= kDragPixels) {
       // A right click on a dimension or a constraint's symbol selects it,
@@ -3485,12 +3726,12 @@ bool SketchController::viewerEvent(QEvent* event) {
       return true;
     }
     // An equal spacing's symbol (the first click selected it) opens its
-    // edit panel (mitcad#221).
-    if (const ConstraintData* k = hit.kind == SketchOverlay::Hit::Kind::Constraint ? m_model.constraint(hit.id)
-                                                                                    : nullptr;
-        k != nullptr && k->type == QStringLiteral("equal_spacing")) {
-      qDebug().noquote() << QStringLiteral("Double-click on %1: sketch.edit_equal_spacing").arg(hit.id);
-      m_host.trigger(QStringLiteral("sketch.edit_equal_spacing"));
+    // edit panel (mitcad#221; the choice the step list shares, mitcad#2099).
+    if (const QString command =
+            hit.kind == SketchOverlay::Hit::Kind::Constraint ? constraintEditCommandOf(hit.id) : QString();
+        !command.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Double-click on %1: %2").arg(hit.id, command);
+      m_host.trigger(command);
       return true;
     }
     // A text, a pattern's curve or an offset's curve the first click picked
@@ -3510,20 +3751,16 @@ bool SketchController::viewerEvent(QEvent* event) {
         (kind == SelectKind::SketchCurve || kind == SelectKind::SketchPoint || kind == SelectKind::Profile)) {
       const sketch::TextData* text = m_model.textOfPick(selected.first());
       const QString id = text != nullptr ? text->id : selected.first().name;
-      const bool entity = kind != SelectKind::Profile;
-      const char* command = text != nullptr && text->code ? "sketch.edit_code"
-                            : text != nullptr             ? "sketch.edit_text"
-                            : entity && m_model.offsetOf(id) != nullptr ? "sketch.edit_offset"
-                            : entity && m_model.patternOf(id) != nullptr ? "sketch.edit_pattern"
-                                                                         : nullptr;
-      if (command != nullptr) {
+      // The choice the step list shares (mitcad#2089).
+      const QString command = editCommandOf(selected.first());
+      if (!command.isEmpty()) {
         m_pressed = false;
         m_dragEntity.clear();
         // The picks of the clicks that the view has not handled yet are
         // dropped for the same reason.
         m_viewer.cancelPointerInteraction();
-        qDebug().noquote() << QStringLiteral("Double-click on %1: %2").arg(id, QString::fromLatin1(command));
-        m_host.trigger(QString::fromLatin1(command));
+        qDebug().noquote() << QStringLiteral("Double-click on %1: %2").arg(id, command);
+        m_host.trigger(command);
         return true;
       }
       // A spline the first click picked gets a point where it is
@@ -3556,6 +3793,18 @@ bool SketchController::viewerEvent(QEvent* event) {
 void SketchController::forwardClick(const QMouseEvent* release) {
   // A press on geometry that did not become a drag is a click: the view
   // picks as usual.
+  // Where the click was on the sketch plane, for a command that reads the
+  // pointer's place on a curve (Blend Curve's ends): the view's pick place
+  // is off by up to its pick tolerance.
+  if (m_model.curve(m_dragEntity) != nullptr) {
+    if (const auto at = sketchAtF(m_pressPosition)) {
+      constexpr int kClickPlaces = 8;
+      if (m_clickPlaces.size() >= kClickPlaces) {
+        m_clickPlaces.removeFirst();
+      }
+      m_clickPlaces.append({m_dragEntity, *at, pixel()});
+    }
+  }
   QMouseEvent press(QEvent::MouseButtonPress, m_pressPosition, m_viewer.mapToGlobal(m_pressPosition),
                     Qt::LeftButton, Qt::LeftButton, m_pressModifiers);
   QMouseEvent up(QEvent::MouseButtonRelease, release->position(), release->globalPosition(),
@@ -4306,6 +4555,11 @@ bool SketchController::fieldEvent(QLineEdit* edit, QEvent* event) {
     return false;
   }
   auto* key = static_cast<QKeyEvent*>(event);
+  // The tool's own keys first (mitcad#2110).
+  if (m_tool != nullptr && m_tool->key(key->key(), key->modifiers())) {
+    m_overlay->update();
+    return true;
+  }
   if (key->key() != Qt::Key_Tab && key->key() != Qt::Key_Backtab) {
     return false;
   }
@@ -4394,6 +4648,17 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
   closeEditor();
   auto* edit = new QLineEdit(&m_viewer);
   edit->setObjectName(QStringLiteral("sketchValueEditor"));
+  // Shift+Enter accepts too, to replace what blocks a new dimension
+  // (mitcad#2090); before ParameterField's filter (see ShiftEnterFilter).
+  edit->installEventFilter(new ShiftEnterFilter(edit, [this, edit] {
+    if (edit != m_editor) {
+      return;
+    }
+    qDebug().noquote() << QStringLiteral("Sketch value editor accepted with Shift");
+    m_editorShift = true;
+    acceptEditor();
+    m_editorShift = false;
+  }));
   edit->setStyleSheet(kFieldStyle);
   edit->setText(text);
   int width = 110;

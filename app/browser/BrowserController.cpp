@@ -31,6 +31,7 @@
 #include <QWidget>
 #include <QtLogging>
 
+#include "BrowserOrder.hpp"
 #include "BrowserPreferences.hpp"
 #include "ConvertToFeatures.hpp"
 #include "../framework/Dialogs.hpp"
@@ -68,7 +69,8 @@ QJsonObject cmd(const char* name, QJsonObject fields = {}) {
 }
 
 // A context menu whose entries are logged ("Context menu: A | B") for the
-// UI tests, which choose entries by their place.
+// UI tests, which choose entries by their place; those that cannot be
+// chosen also as "Context menu disabled: B".
 class Menu {
 public:
   explicit Menu(QWidget* parent) : m_menu(parent) {}
@@ -87,6 +89,7 @@ public:
       action->setEnabled(false);
       action->setToolTip(blocked);
       m_menu.setToolTipsVisible(true);
+      m_disabled << text;
     }
   }
   // An entry with a tooltip that says what it leaves out (mitcad#863).
@@ -143,6 +146,12 @@ public:
     if (!m_checked.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Context menu checked: %1").arg(m_checked.join(QStringLiteral(" | ")));
     }
+    // The entries that cannot be chosen, just before the menu's line: the
+    // arrow keys pass over them in Windows' menus, so the UI tests that
+    // choose an entry by its place count them out (Ui-MenuSkipped).
+    if (!m_disabled.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Context menu disabled: %1").arg(m_disabled.join(QStringLiteral(" | ")));
+    }
     qDebug().noquote() << QStringLiteral("Context menu: %1").arg(m_entries.join(QStringLiteral(" | ")));
     execMenu(&m_menu, at);
   }
@@ -152,6 +161,7 @@ private:
   QStringList m_entries;
   QStringList m_bound;
   QStringList m_checked;
+  QStringList m_disabled;
 };
 
 // The targets of Transparent (mitcad#1093): the bodies (uids) of the faces,
@@ -303,6 +313,8 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   // CAM (mitcad#1013): an operation dragged onto another or a setup, and
   // the operation whose row is selected.
   follow(m_browser, &BrowserPanel::camOperationDropped, &BrowserController::camDropped);
+  // Body and component rows dragged into and out of folders (mitcad#2103).
+  follow(m_browser, &BrowserPanel::rowsDropped, &BrowserController::rowsDropped);
   connect(m_browser, &BrowserPanel::camOperationSelected, this,
           [this](int operation) { m_host.setCurrentCamOperation(operation); });
 
@@ -802,6 +814,8 @@ bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
   case BrowserNode::Type::CamSetup:
   // mitcad#1802: a folder of a Bodies folder, its bodies' light bulbs.
   case BrowserNode::Type::BodyFolder:
+  // mitcad#2103: a folder of a component's occurrences, theirs.
+  case BrowserNode::Type::ComponentFolder:
   // mitcad#2041: the Annotations folder's eye, display state as the other
   // folders'.
   case BrowserNode::Type::Measurements:
@@ -865,6 +879,20 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
       const DocumentSnapshot::Body body = m_snapshot.bodies.value(uid);
       if (body.folder == node.uid && body.visibleWhen.isEmpty() && body.visible != show) {
         commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), uid}, {QStringLiteral("visible"), show}}));
+      }
+    }
+    label = (show ? tr("Show %1") : tr("Hide %1")).arg(node.name);
+    break;
+  }
+  case BrowserNode::Type::ComponentFolder: {
+    // A folder of a component's occurrences (mitcad#2103): the light bulbs
+    // of the occurrences in it, one undo step (Hide Frame); those that
+    // follow Show When are left as they are (mitcad#863).
+    for (const QString& path : folderOccurrences(node)) {
+      const DocumentSnapshot::Occurrence* placed = occurrence(path);
+      if (placed != nullptr && placed->visibleWhen.isEmpty() && placed->visible != show) {
+        commands.append(cmd("set_occurrence_visible",
+                            {{QStringLiteral("occurrence"), path}, {QStringLiteral("visible"), show}}));
       }
     }
     label = (show ? tr("Show %1") : tr("Hide %1")).arg(node.name);
@@ -1295,6 +1323,9 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
   case BrowserNode::Type::ImageReference: // mitcad#782
     command = cmd("rename_image_reference", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
     break;
+  case BrowserNode::Type::SketchBlock: // mitcad#2110
+    command = cmd("rename_sketch_block", {{QStringLiteral("block"), node.uid}, {QStringLiteral("name"), name}});
+    break;
   case BrowserNode::Type::CamSetup: // mitcad#1013
     command = cmd("cam_setup_edit", {{QStringLiteral("setup"), node.uid.toInt()},
                                      {QStringLiteral("changes"), QJsonObject{{QStringLiteral("name"), name}}}});
@@ -1302,6 +1333,15 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
   case BrowserNode::Type::CamOperation:
     command = cmd("cam_operation_edit", {{QStringLiteral("operation"), node.uid.toInt()},
                                          {QStringLiteral("changes"), QJsonObject{{QStringLiteral("name"), name}}}});
+    break;
+  // A folder of bodies or of components (mitcad#2103): refused when the
+  // component has a folder of that name.
+  case BrowserNode::Type::BodyFolder:
+  case BrowserNode::Type::ComponentFolder:
+    command = cmd(node.type == BrowserNode::Type::BodyFolder ? "rename_body_folder" : "rename_occurrence_folder",
+                  {{QStringLiteral("component"), node.component},
+                   {QStringLiteral("folder"), node.uid},
+                   {QStringLiteral("name"), name}});
     break;
   default:
     return;
@@ -1374,6 +1414,11 @@ void BrowserController::browserDoubleClicked(const BrowserNode& node) {
     break;
   case BrowserNode::Type::ImageReference: // mitcad#782: its panel
     m_host.editImageReference(node.uid);
+    break;
+  case BrowserNode::Type::SketchBlock: // mitcad#2110: in a sketch of its own
+    if (canChange()) {
+      m_host.editSketchBlock(node.uid);
+    }
     break;
   case BrowserNode::Type::CamSetup: // mitcad#1013: their panels
     m_host.editCamSetup(node.uid.toInt());
@@ -1494,6 +1539,10 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
       command = cmd("delete_image_reference", {{QStringLiteral("name"), node.uid}});
       name = tr("image reference %1").arg(node.name);
       break;
+    case BrowserNode::Type::SketchBlock: // mitcad#2110: refused in words while it has instances
+      command = cmd("remove_sketch_block", {{QStringLiteral("block"), node.uid}});
+      name = tr("block %1").arg(node.name);
+      break;
     case BrowserNode::Type::CenterOfMass: // mitcad#1094: display state, as its light bulb
       command = cmd("delete_center_of_mass");
       name = tr("the Center of Mass marker");
@@ -1578,6 +1627,202 @@ void BrowserController::camDropped(const BrowserNode& source, const BrowserNode&
     --count; // it is one of them
   }
   moveCamOperation(source, setup, std::max(0, count));
+}
+
+// ---------------------------------------------------------------------------
+// Folders in the Browser (mitcad#2103)
+
+QStringList BrowserController::menuOccurrences(const BrowserNode& node) const {
+  const QString parent = browser_order::parentPath(node.occurrence);
+  QStringList paths;
+  for (const SelectionItem& item : m_shownItems) {
+    if (item.kind == SelectKind::Component && !item.occurrence.isEmpty() &&
+        browser_order::parentPath(item.occurrence) == parent && !paths.contains(item.occurrence)) {
+      paths << item.occurrence;
+    }
+  }
+  return paths.contains(node.occurrence) ? paths : QStringList{node.occurrence};
+}
+
+QStringList BrowserController::folderOccurrences(const BrowserNode& folder) const {
+  return browser_order::groupOf(browser_order::siblingsIn(m_snapshot, folder.occurrence), folder.uid);
+}
+
+QHash<QString, QString> BrowserController::bodyFoldersOf(const QString& component) const {
+  QHash<QString, QString> folders;
+  const DocumentSnapshot::Component* def = m_snapshot.component(component);
+  for (const QString& uid : def != nullptr ? def->bodies : QStringList()) {
+    folders.insert(uid, m_snapshot.bodies.value(uid).folder);
+  }
+  return folders;
+}
+
+void BrowserController::moveOccurrencesToFolder(const QStringList& paths, const QString& folder, bool renameNext) {
+  if (paths.isEmpty() || !canChange()) {
+    return;
+  }
+  const QString parent = browser_order::parentPath(paths.first());
+  const QJsonArray commands =
+      browser_order::occurrenceFolderCommands(browser_order::siblingsIn(m_snapshot, parent), paths, folder);
+  if (commands.isEmpty()) {
+    return;
+  }
+  if (!folder.isEmpty()) {
+    // Into a folder that stays as it is, closed at first: the rows moved
+    // are no longer selected, so that nothing opens it to show them.
+    pickRows(Selection(), QStringList());
+  }
+  const int count = static_cast<int>(commands.size());
+  const QString label = folder.isEmpty() ? tr("Take %n Component(s) out of their Folder", nullptr, count)
+                                         : tr("Move %n Component(s) to %1", nullptr, count).arg(folder);
+  if (!m_host.runModelCommands(commands, label)) {
+    return;
+  }
+  const QString what = count == 1 ? QStringLiteral("1 component") : QStringLiteral("%1 components").arg(count);
+  qDebug().noquote() << (folder.isEmpty() ? QStringLiteral("Took %1 out of their folder").arg(what)
+                                          : QStringLiteral("Moved %1 to %2").arg(what, folder));
+  if (renameNext) {
+    BrowserNode row;
+    row.type = BrowserNode::Type::ComponentFolder;
+    row.uid = folder;
+    row.name = folder;
+    row.occurrence = parent;
+    m_browser->startRename(row);
+  }
+}
+
+void BrowserController::moveBodiesToFolder(const QString& component, const QString& at, const QStringList& bodies,
+                                           const QString& folder, bool renameNext) {
+  if (bodies.isEmpty() || !canChange()) {
+    return;
+  }
+  const QJsonArray commands = browser_order::bodyFolderCommands(bodyFoldersOf(component), bodies, folder);
+  if (commands.isEmpty()) {
+    return;
+  }
+  if (!folder.isEmpty()) {
+    pickRows(Selection(), QStringList()); // as for occurrences
+  }
+  const int count = static_cast<int>(commands.size());
+  const QString label = folder.isEmpty() ? tr("Take %n Body(ies) out of their Folder", nullptr, count)
+                                         : tr("Move %n Body(ies) to %1", nullptr, count).arg(folder);
+  if (!m_host.runModelCommands(commands, label)) {
+    return;
+  }
+  const QString what = count == 1 ? QStringLiteral("1 body") : QStringLiteral("%1 bodies").arg(count);
+  qDebug().noquote() << (folder.isEmpty() ? QStringLiteral("Took %1 out of their folder").arg(what)
+                                          : QStringLiteral("Moved %1 to %2").arg(what, folder));
+  if (renameNext) {
+    BrowserNode row;
+    row.type = BrowserNode::Type::BodyFolder;
+    row.uid = folder;
+    row.name = folder;
+    row.occurrence = at;
+    m_browser->startRename(row);
+  }
+}
+
+void BrowserController::ungroupFolder(const BrowserNode& folder) {
+  if (!canChange()) {
+    return;
+  }
+  QJsonArray commands;
+  if (folder.type == BrowserNode::Type::ComponentFolder) {
+    commands = browser_order::occurrenceFolderCommands(browser_order::siblingsIn(m_snapshot, folder.occurrence),
+                                                       folderOccurrences(folder), QString());
+  } else {
+    const QHash<QString, QString> folders = bodyFoldersOf(folder.component);
+    QStringList bodies;
+    for (auto it = folders.cbegin(); it != folders.cend(); ++it) {
+      if (it.value() == folder.uid) {
+        bodies << it.key();
+      }
+    }
+    commands = browser_order::bodyFolderCommands(folders, bodies, QString());
+  }
+  if (!commands.isEmpty() && m_host.runNamedModelCommands(commands, tr("Ungroup %1").arg(folder.name))) {
+    qDebug().noquote() << QStringLiteral("Ungrouped %1").arg(folder.name);
+  }
+}
+
+void BrowserController::reorderOccurrences(const QStringList& paths, const QString& folder, const QString& anchor,
+                                           bool after) {
+  if (paths.isEmpty() || !canChange()) {
+    return;
+  }
+  const QVector<browser_order::Sibling> siblings =
+      browser_order::siblingsIn(m_snapshot, browser_order::parentPath(paths.first()));
+  const QJsonArray commands = browser_order::moveCommands(siblings, paths, folder, anchor, after);
+  if (commands.isEmpty()) {
+    return;
+  }
+  QStringList names;
+  bool refiled = false;
+  for (const browser_order::Sibling& sibling : siblings) {
+    if (paths.contains(sibling.path)) {
+      names << sibling.name;
+      refiled = refiled || sibling.folder != folder;
+    }
+  }
+  QString anchorName;
+  for (const browser_order::Sibling& sibling : siblings) {
+    if (sibling.path == anchor) {
+      anchorName = sibling.name;
+    }
+  }
+  const int count = static_cast<int>(names.size());
+  QString label;
+  if (refiled) {
+    label = count == 1 ? (folder.isEmpty() ? tr("Take %1 out of its Folder").arg(names.first())
+                                           : tr("Move %1 to %2").arg(names.first(), folder))
+                       : (folder.isEmpty() ? tr("Take %n Component(s) out of their Folder", nullptr, count)
+                                           : tr("Move %n Component(s) to %1", nullptr, count).arg(folder));
+  } else {
+    label = count == 1 ? tr("Reorder %1").arg(names.first()) : tr("Reorder %n Component(s)", nullptr, count);
+  }
+  if (m_host.runNamedModelCommands(commands, label)) {
+    qDebug().noquote() << QStringLiteral("Reordered %1 %2 %3")
+                              .arg(names.join(QStringLiteral(", ")),
+                                   anchor.isEmpty() ? QStringLiteral("to the end of")
+                                   : after          ? QStringLiteral("after")
+                                                    : QStringLiteral("before"),
+                                   anchor.isEmpty() ? (folder.isEmpty() ? QStringLiteral("the components") : folder)
+                                                    : anchorName);
+  }
+}
+
+void BrowserController::rowsDropped(const QVector<BrowserNode>& sources, const BrowserNode& target,
+                                    BrowserDrop place) {
+  if (sources.isEmpty()) {
+    return;
+  }
+  if (place != BrowserDrop::Onto) {
+    // Before or after a sibling's row (mitcad#2104), in its group.
+    QStringList paths;
+    for (const BrowserNode& source : sources) {
+      paths << source.occurrence;
+    }
+    reorderOccurrences(paths, target.folder, target.occurrence, place == BrowserDrop::After);
+    return;
+  }
+  if (sources.first().type == BrowserNode::Type::Component) {
+    QStringList paths;
+    for (const BrowserNode& source : sources) {
+      paths << source.occurrence;
+    }
+    // Onto a folder's row: into it; onto the parent's row: out of their
+    // folders.
+    moveOccurrencesToFolder(paths, target.type == BrowserNode::Type::ComponentFolder ? target.uid : QString());
+    return;
+  }
+  QStringList bodies;
+  for (const BrowserNode& source : sources) {
+    if (!bodies.contains(source.uid)) {
+      bodies << source.uid;
+    }
+  }
+  moveBodiesToFolder(sources.first().component, sources.first().occurrence, bodies,
+                     target.type == BrowserNode::Type::BodyFolder ? target.uid : QString());
 }
 
 void BrowserController::newComponent(const BrowserNode& node) {
@@ -1948,6 +2193,35 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
                [this, moved] { m_host.startCommand(QStringLiteral("solid.move"), moved, nullptr); });
     }
   };
+  // Move to Folder ▸ and Remove from Folder (mitcad#2103): New Folder (its
+  // proposed name, Folder1, …, renamed in place next) and the parent's
+  // folders, but the one every row is in already; Remove from Folder while
+  // a row is in one. `folders`: the parent's folders in the Browser's order;
+  // `current`: each row's folder (empty: none); `move` takes a folder (empty:
+  // out of their folders) and whether to rename it next.
+  const auto folderEntries = [&](const QStringList& folders, const QStringList& current,
+                                 const std::function<void(const QString&, bool)>& move) {
+    auto* submenu = new QMenu(tr("Move to Folder"), menu.widget());
+    const QString proposed = browser_order::newFolderName(folders);
+    QObject::connect(submenu->addAction(themeIcon(QStringLiteral("folder")), tr("New Folder")), &QAction::triggered,
+                     submenu, [move, proposed] { move(proposed, true); });
+    bool separated = false;
+    for (const QString& folder : folders) {
+      if (current.count(folder) == current.size()) {
+        continue; // every row is in it
+      }
+      if (!separated) {
+        submenu->addSeparator();
+        separated = true;
+      }
+      QObject::connect(submenu->addAction(themeIcon(QStringLiteral("folder")), folder), &QAction::triggered, submenu,
+                       [move, folder] { move(folder, false); });
+    }
+    menu.addSubmenu(submenu, tr("Move to Folder"));
+    if (std::any_of(current.begin(), current.end(), [](const QString& folder) { return !folder.isEmpty(); })) {
+      menu.add(QStringLiteral("folder"), tr("Remove from Folder"), [move] { move(QString(), false); });
+    }
+  };
   const bool plane = item.kind == SelectKind::Plane;
   // Save As Mesh (mitcad#734): the row's bodies, or those of the body and
   // component rows selected with it, to mesh files; disabled with the
@@ -2022,6 +2296,38 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     // Move/Copy (mitcad#735).
     if (!root) {
       menu.add(QStringLiteral("component"), tr("Move to Component…"), [this, node] { moveOccurrence(node); });
+      // Organization only (mitcad#2103): the selected component rows of
+      // the same parent into one of its folders, or out of them.
+      const QVector<browser_order::Sibling> siblings =
+          browser_order::siblingsIn(m_snapshot, browser_order::parentPath(node.occurrence));
+      const QStringList paths = menuOccurrences(node);
+      QStringList current;
+      for (const browser_order::Sibling& sibling : siblings) {
+        if (paths.contains(sibling.path)) {
+          current << sibling.folder;
+        }
+      }
+      folderEntries(browser_order::folderOrder(siblings), current, [this, paths](const QString& folder, bool renameNext) {
+        moveOccurrencesToFolder(paths, folder, renameNext);
+      });
+      // Its place among its siblings (mitcad#2104), in its group (its
+      // folder, or the rows in no folder), as a CAM setup's.
+      menu.separator();
+      const QString above = browser_order::neighbor(siblings, node.occurrence, -1);
+      const QString below = browser_order::neighbor(siblings, node.occurrence, 1);
+      const bool inFolder = !node.folder.isEmpty();
+      const QString path = node.occurrence;
+      const QString group = node.folder;
+      menu.add(QStringLiteral("view-arrow-up"), tr("Move Up"),
+               [this, path, group, above] { reorderOccurrences({path}, group, above, false); },
+               !above.isEmpty()  ? QString()
+               : inFolder        ? tr("It is the first component in its folder")
+                                 : tr("It is the first component"));
+      menu.add(QStringLiteral("view-arrow-down"), tr("Move Down"),
+               [this, path, group, below] { reorderOccurrences({path}, group, below, true); },
+               !below.isEmpty()  ? QString()
+               : inFolder        ? tr("It is the last component in its folder")
+                                 : tr("It is the last component"));
     }
     menu.separator();
     if (!root) {
@@ -2170,6 +2476,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
             m_host.updateLink(QString());
           }
         });
+        // Linked parts of the design only (mitcad#2130).
+        menu.add(QStringLiteral("component"), tr("Choose Linked Parts…"), [this, component] {
+          if (canChange()) {
+            m_host.chooseLinkedParts(component);
+          }
+        });
       }
     }
     // The whole design turned by quarter turns (mitcad#502).
@@ -2233,6 +2545,32 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
                        {QStringLiteral("source_occurrence"), node.occurrence},
                        {QStringLiteral("bodies"), QJsonArray{node.uid}}});
     });
+    // Organization only (mitcad#2103): the selected bodies of its
+    // component into a folder of its Bodies folder, or out of them.
+    {
+      const QHash<QString, QString> bodyFolders = bodyFoldersOf(node.component);
+      QStringList inComponent;
+      QStringList current;
+      for (const QString& uid : menuBodies(node)) {
+        if (bodyFolders.contains(uid)) {
+          inComponent << uid;
+          current << bodyFolders.value(uid);
+        }
+      }
+      QStringList folders;
+      const DocumentSnapshot::Component* def = m_snapshot.component(node.component);
+      for (const QString& uid : def != nullptr ? def->bodies : QStringList()) {
+        const QString folder = bodyFolders.value(uid);
+        if (!folder.isEmpty() && !folders.contains(folder)) {
+          folders << folder;
+        }
+      }
+      const QString component = node.component;
+      const QString bodiesAt = node.occurrence;
+      folderEntries(folders, current, [this, component, bodiesAt, inComponent](const QString& folder, bool renameNext) {
+        moveBodiesToFolder(component, bodiesAt, inComponent, folder, renameNext);
+      });
+    }
     // For the selected bodies when the row is one of them (mitcad#703).
     const QStringList bodies = menuBodies(node);
     // An fx mark while one of them follows an expression (mitcad#861): the
@@ -2619,6 +2957,22 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
+  // Sketch blocks (mitcad#2110): a block edited in a sketch of its own,
+  // renamed, deleted (not while it has instances).
+  case BrowserNode::Type::SketchBlock: {
+    menu.add(QStringLiteral("edit-block"), tr("Edit Block"), [this, node] {
+      if (canChange()) {
+        m_host.editSketchBlock(node.uid);
+      }
+    });
+    menu.separator();
+    renameEntry();
+    const int instances = node.featureType.toInt();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); },
+             instances > 0 ? tr("The block has %n instance(s): explode or delete them first", nullptr, instances)
+                           : QString());
+    break;
+  }
   // The Center of Mass marker (mitcad#1094): shown or hidden, deleted.
   case BrowserNode::Type::CenterOfMass:
     visibility();
@@ -2656,6 +3010,15 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
   }
+  // A folder of bodies or of components (mitcad#2103): its eye's Show or
+  // Hide, Rename and Ungroup (everything out of it, nothing deleted).
+  case BrowserNode::Type::BodyFolder:
+  case BrowserNode::Type::ComponentFolder:
+    visibility();
+    menu.separator();
+    renameEntry();
+    menu.add(QStringLiteral("folder"), tr("Ungroup"), [this, node] { ungroupFolder(node); });
+    break;
   case BrowserNode::Type::CamOperation: {
     const int id = node.uid.toInt();
     const bool suppressed = node.camState == QStringLiteral("suppressed");

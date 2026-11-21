@@ -265,6 +265,12 @@ impl<'a> SketchEdit<'a> {
         self.ids(1)[0]
     }
 
+    /// The number the next new entity gets (mitcad#2110: what an edit of a
+    /// block in place made since it opened).
+    pub(crate) fn next_entity_number(&self) -> u32 {
+        self.next_entity
+    }
+
     /// Adds an entity whose id came from [`SketchEdit::ids`].
     pub fn push(&mut self, entity: Entity) -> EntityUid {
         let id = entity.id;
@@ -804,6 +810,8 @@ impl<'a> SketchEdit<'a> {
         if !self.def.patterns.is_empty() {
             self.sync_patterns()?;
         }
+        // Block instances keep their shape (mitcad#2110).
+        self.check_blocks()?;
         self.def.check_definition()?;
         let params = &*self.params;
         self.def

@@ -38,8 +38,9 @@ test_tower_behind_the_back_edge (ctest geometry.fillet_tangent_ride): a
 half-cylinder tower 2.3 and 2.5 from the plate's back edge, its foot
 rounded with 2 and the edge with 1, both orders: valid, the volume of the
 two made one after the other within a millionth (the fillet failed without
-the patch). Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+the patch). It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py, reverted together with 1725, 1727, 1728, 1729,
+which change the same lines).
 
 Failures (mitcad#1986): the rider's walk between the crossings fails with
 OCCT's reports of a computation it cannot make

@@ -99,6 +99,8 @@ const PROCESS_COMMANDS: &[(&str, &[SheetProcess])] = &[
     ("sheet.t_nut_slot", &[SheetProcess::LaserSheet]),
     ("sheet.kerf_bend", &[SheetProcess::LaserSheet]),
     ("sheet.flat_pack", &[SheetProcess::LaserSheet]),
+    // A sheet folded back on itself (mitcad#2112): metal's.
+    ("sheet.hem", &[SheetProcess::Metal]),
 ];
 
 /// Every command the profiles filter, in the table's order.
@@ -124,6 +126,7 @@ pub fn fits(process: SheetProcess, command: &str) -> Result<(), String> {
         "sheet.t_nut_slot" => "T-nut slots",
         "sheet.kerf_bend" => "Kerf bends",
         "sheet.flat_pack" => "Flat packs",
+        "sheet.hem" => "Hems",
         _ => "This command",
     };
     let belongs = match allowed[0] {
@@ -337,6 +340,10 @@ mod tests {
         );
         let reason = fits(SheetProcess::LaserSheet, "sheet.corner_relief").unwrap_err();
         assert!(reason.contains("metal sheet"), "{reason}");
+        // Hems are metal's (mitcad#2112).
+        assert!(fits(SheetProcess::Metal, "sheet.hem").is_ok());
+        let reason = fits(SheetProcess::Board, "sheet.hem").unwrap_err();
+        assert!(reason.starts_with("Hems are for metal sheet"), "{reason}");
         let json = commands_json(SheetProcess::Metal);
         let finger = json
             .as_array()

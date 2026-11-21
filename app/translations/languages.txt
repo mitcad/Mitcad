@@ -9,4 +9,4 @@
 # texts with a count (%n), "1 degree of freedom" and "2 degrees of freedom"
 # where the source says "degree(s)"; it is no language to choose.
 fi 0
-en 2
+en 0

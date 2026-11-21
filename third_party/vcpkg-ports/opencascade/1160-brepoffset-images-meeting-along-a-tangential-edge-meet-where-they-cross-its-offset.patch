@@ -46,8 +46,8 @@ circle of radius 21.7 offset 0.5 to 3 mm, the seam on a side, closed
 inward offsets with OCCT alone: valid single solids, the walls the
 thickness within 1e-6 mm, the volume within bounds from the areas. The
 port's notes record every case but radius 15 at 0.5 mm failing without the
-patch (that one is the boundary case). Its failure without the patch is
-still to be shown in the port's before/after run (mitcad#1986).
+patch (that one is the boundary case). It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
 index 5f79e3a8..e1e74f8b 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx

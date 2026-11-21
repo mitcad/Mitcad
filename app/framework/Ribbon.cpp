@@ -186,16 +186,24 @@ int modelPage(const QString& tab) {
   }
   return kSolidPage;
 }
-constexpr int kIconSize = 28;
+// The Docked buttons' icons (mitcad#2092: 32, was 28).
+constexpr int kIconSize = 32;
 
 QString key(const QString& tab, const QString& group) { return tab + QLatin1Char('/') + group; }
 
-constexpr int kMacIconSize = 26;
+// The Floating buttons' icons (mitcad#2092: 30, was 26).
+constexpr int kMacIconSize = 30;
 constexpr int kMacCaptionHeight = 20;
 constexpr int kHeight = 30;
-// The buttons at Icon size (mitcad#1556): the icon with 5 pixels around it.
-int macButtonSize() { return uiIconSize(kMacIconSize) + 10; }
-int classicButtonSize() { return uiIconSize(kIconSize) + 10; }
+// The room around a toolbar button's icon (mitcad#2092: 3 pixels, was 5):
+// larger icons in buttons of the same size.
+constexpr int kToolbarIconMargin = 3;
+// What the Docked style's own room around the icon gives to the icon: the
+// 2 pixels a side by which the margin shrank (mitcad#2092).
+constexpr int kClassicIconGrowth = 2 * (5 - kToolbarIconMargin);
+// The buttons at Icon size (mitcad#1556): the icon with 3 pixels around it.
+int macButtonSize() { return uiIconSize(kMacIconSize) + 2 * kToolbarIconMargin; }
+int classicButtonSize() { return uiIconSize(kIconSize) + 2 * kToolbarIconMargin; }
 // A Mac group's caption, in its font 0.92 of the ribbon's: at least 20
 // pixels, higher where Text size makes the font taller (mitcad#1556).
 int macCaptionHeight(const QFont& font) {
@@ -265,6 +273,32 @@ void drawChevron(QPainter& painter, const QPointF& center, const QColor& color) 
   path.lineTo(center.x() + 3.2, center.y() - 1.6);
   painter.drawPath(path);
   painter.restore();
+}
+
+// A button's hover after its menu closed (mitcad#2061): the open menu takes
+// the pointer, so the button gets no Leave when the pointer goes on to an
+// entry, and it stayed drawn hovered until the pointer passed over it again.
+// Once the menu has closed the hover is the pointer's again: ended where the
+// pointer is not on the button, on every platform. The drawn state logged
+// for the UI tests: "Ribbon SKETCH/CREATE/Rectangles after its menu: not
+// hovered" (a split button's place, a group caption's "SKETCH/MODIFY").
+void endHoverAfterMenu(QToolButton* button, QMenu* menu, const QString& place) {
+  QObject::connect(menu, &QMenu::aboutToHide, button, [button, place] {
+    // After the menu's own hide and the events it sends.
+    QTimer::singleShot(0, button, [button, place] {
+      if (!button->isVisible()) {
+        return;
+      }
+      if (button->testAttribute(Qt::WA_UnderMouse) &&
+          !button->rect().contains(button->mapFromGlobal(QCursor::pos()))) {
+        button->setAttribute(Qt::WA_UnderMouse, false);
+      }
+      button->update();
+      qDebug().noquote() << QStringLiteral("Ribbon %1 after its menu: %2")
+                                .arg(place, button->underMouse() ? QStringLiteral("hovered")
+                                                                 : QStringLiteral("not hovered"));
+    });
+  });
 }
 
 // The group's name under its buttons, with a chevron: opens the menu of all the
@@ -346,14 +380,17 @@ public:
     }
   }
 
-  QSize sizeHint() const override { return QSize(m_iconSize + 10, m_iconSize + 10); }
+  QSize sizeHint() const override {
+    const int room = m_iconSize + 2 * kToolbarIconMargin;
+    return QSize(room, room);
+  }
 
 protected:
   void paintEvent(QPaintEvent*) override {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const QPalette pal = palette();
-    const int room = m_iconSize + 10;
+    const int room = m_iconSize + 2 * kToolbarIconMargin;
     const QRectF box = QRectF((width() - room) / 2.0, 0, room, room).adjusted(1, 1, -1, -1);
     painter.setPen(Qt::NoPen);
     if (isDown()) {
@@ -366,8 +403,10 @@ protected:
     if (m_command.isNull()) {
       return;
     }
-    const QPixmap pixmap = m_command->icon().pixmap(QSize(m_iconSize, m_iconSize), devicePixelRatioF(),
-                                                    isEnabled() ? QIcon::Normal : QIcon::Disabled);
+    // With the thin outline, as the row's buttons (mitcad#2092).
+    const QPixmap pixmap = withOutlineWeight(m_command->icon(), kThinOutlineWeight)
+                               .pixmap(QSize(m_iconSize, m_iconSize), devicePixelRatioF(),
+                                       isEnabled() ? QIcon::Normal : QIcon::Disabled);
     const QSizeF size = pixmap.deviceIndependentSize();
     painter.drawPixmap(QPointF((width() - size.width()) / 2, (room - size.height()) / 2), pixmap);
   }
@@ -416,28 +455,34 @@ private:
   static constexpr int kTop = 6;
 };
 
-// The group's name with its one ˅ in the Classic ribbon, drawn as the
-// toolbar panel's (GroupCaption, mitcad#2082: the name's own ▾ and the
-// tool button's menu indicator were two marks): never narrower than its
-// whole caption (mitcad#1477). A size taken once, when the group was made,
-// fell a pixel short on Windows in the pseudo-language: the caption's
-// metrics changed after the group came into the window, and QToolButton
-// drops its cached size on change events that do not tell the layout (the
-// layout kept the old width). So the minimum is the caption's size as it is
-// now, and a change of that size lays the group out and fits the ribbon
-// again.
-class ClassicGroupCaption : public GroupCaption {
+// A group's name with its one ˅ under its buttons, in the Classic ribbon
+// and in the Mac presentation (the Floating group cards and the toolbar
+// panel of the Docked top bar, mitcad#2082), drawn as GroupCaption: never
+// narrower than its whole caption (mitcad#1477). A size taken once, when
+// the group was made, fell a pixel short on Windows in the pseudo-language
+// and in the Docked toolbar panel at 2x on macOS (0.68.0-rc6: Insert 60 px
+// wide, its caption 61): the caption's metrics changed after the group came
+// into the window, and QToolButton drops its cached size on change events
+// that do not tell the layout (the layout kept the old width). So the
+// minimum is the caption's size as it is now, and a change of that size lays
+// the group out and fits the ribbon again. The size is compared with the one
+// last seen, not with one taken in the event: a font change has already
+// changed font() when its event comes.
+class FittedGroupCaption : public GroupCaption {
 public:
-  ClassicGroupCaption(const QString& text, std::function<void()> resized)
-      : GroupCaption(text), m_resized(std::move(resized)) {}
+  FittedGroupCaption(const QString& text, std::function<void()> resized)
+      : GroupCaption(text), m_resized(std::move(resized)) {
+    m_size = sizeHint();
+  }
 
   QSize minimumSizeHint() const override { return sizeHint(); }
 
 protected:
   void changeEvent(QEvent* event) override {
-    const QSize before = sizeHint();
     GroupCaption::changeEvent(event);
-    if (sizeHint() != before) {
+    const QSize now = sizeHint();
+    if (now != m_size) {
+      m_size = now;
       updateGeometry();
       if (m_resized) m_resized();
     }
@@ -445,7 +490,23 @@ protected:
 
 private:
   std::function<void()> m_resized;
+  QSize m_size;
 };
+
+// A group caption's width as it is now, also made its explicit minimum
+// (fitGroups, both presentations). The caption stands centred in its group's
+// column (finishGroup's Qt::AlignHCenter), and a layout gives an aligned
+// widget no more than the size hint it cached for it, whatever room its
+// group has: the group's minimum taken from the caption's current size
+// (0.68.0-rc7) left the caption at the width cached before that size grew
+// (Insert 60 px in its 77 px group at 2x on macOS, its caption 61). An
+// explicit minimum drops that cache, is part of every hint the layout takes
+// from then on and resizes the caption at once.
+int keepWholeCaption(QWidget* caption) {
+  const int width = caption->sizeHint().width();
+  caption->setMinimumWidth(width);
+  return width;
+}
 
 // The workspace tabs as a macOS segmented control: a capsule track with the
 // selected segment as a raised pill. It stays a QTabBar so that the tabs keep
@@ -1471,6 +1532,9 @@ private:
 // A command button's short label (CommandDef::shortLabel, mitcad#1936),
 // empty for its name.
 const char* const kShortLabelProperty = "mitcadShortLabel";
+// A button of the toolbar panel, whose icon is drawn with the thin outline
+// (commandButtonIcon, mitcad#2092).
+const char* const kThinOutlineProperty = "mitcadThinOutline";
 
 // The labels' font under the icons (mitcad#1936): the captions' 0.85 of the
 // ribbon's font, at Icon size.
@@ -1509,17 +1573,21 @@ public:
     update();
   }
 
-  // As QToolButton's, with the label's text and font.
+  // As QToolButton's, with the label's text and font, for an icon
+  // kClassicIconGrowth smaller (mitcad#2092): the larger icon takes that
+  // from the style's room around it, so that the button keeps its size.
   QSize sizeHint() const override {
-    if (!m_labelShown) {
-      return QToolButton::sizeHint();
-    }
     QStyleOptionToolButton option;
     labelOption(&option);
-    const QFontMetrics metrics(option.font);
-    const QSize text = metrics.size(Qt::TextSingleLine | Qt::TextShowMnemonic, option.text);
-    int width = std::max(option.iconSize.width(), text.width() + metrics.horizontalAdvance(QLatin1Char(' ')) * 2);
-    const int height = option.iconSize.height() + 4 + text.height();
+    const QSize icon = option.iconSize - QSize(kClassicIconGrowth, kClassicIconGrowth);
+    int width = icon.width();
+    int height = icon.height();
+    if (m_labelShown) {
+      const QFontMetrics metrics(option.font);
+      const QSize text = metrics.size(Qt::TextSingleLine | Qt::TextShowMnemonic, option.text);
+      width = std::max(width, text.width() + metrics.horizontalAdvance(QLatin1Char(' ')) * 2);
+      height += 4 + text.height();
+    }
     option.rect.setSize(QSize(width, height));
     if (popupMode() == QToolButton::MenuButtonPopup) {
       width += style()->pixelMetric(QStyle::PM_MenuButtonIndicator, &option, this);
@@ -1529,11 +1597,9 @@ public:
   QSize minimumSizeHint() const override { return sizeHint(); }
 
 protected:
-  void paintEvent(QPaintEvent* event) override {
-    if (!m_labelShown) {
-      QToolButton::paintEvent(event);
-      return;
-    }
+  // Through the style, with or without the label, with the icon of
+  // commandButtonIcon (mitcad#2092).
+  void paintEvent(QPaintEvent*) override {
     QStylePainter painter(this);
     QStyleOptionToolButton option;
     labelOption(&option);
@@ -1541,10 +1607,14 @@ protected:
   }
 
 private:
-  // The style's option with the shown label (an "&" in it doubled, not a
-  // mnemonic) in the labels' font.
+  // The style's option with the thin icon and, when the label is shown, the
+  // label (an "&" in it doubled, not a mnemonic) in the labels' font.
   void labelOption(QStyleOptionToolButton* option) const {
     initStyleOption(option);
+    option->icon = commandButtonIcon(this);
+    if (!m_labelShown) {
+      return;
+    }
     option->font = ribbonLabelFont(font());
     QString label = shownButtonLabel(this, option->font, iconSize().width());
     label.replace(QLatin1Char('&'), QStringLiteral("&&"));
@@ -1558,6 +1628,7 @@ QToolButton* commandButton(QAction* action, bool mac, bool labels, const QString
   QToolButton* button = nullptr;
   if (mac) {
     auto* ribbonButton = new RibbonButton(action, uiIconSize(kMacIconSize));
+    ribbonButton->setToolbarIcon();
     ribbonButton->setProperty(kShortLabelProperty, shortLabel);
     ribbonButton->setLabelShown(labels);
     button = ribbonButton;
@@ -1565,6 +1636,7 @@ QToolButton* commandButton(QAction* action, bool mac, bool labels, const QString
     auto* classic = new ClassicRibbonButton;
     classic->setDefaultAction(action);
     classic->setIconSize(uiIconSize(kIconSize, kIconSize));
+    classic->setProperty(kThinOutlineProperty, true);
     classic->setToolButtonStyle(Qt::ToolButtonIconOnly);
     classic->setAutoRaise(true);
     classic->setProperty(kShortLabelProperty, shortLabel);
@@ -1898,7 +1970,9 @@ namespace {
     QT_TRANSLATE_NOOP("RibbonName", "Patterns"), QT_TRANSLATE_NOOP("RibbonName", "Rectangles"),
     QT_TRANSLATE_NOOP("RibbonName", "References"), QT_TRANSLATE_NOOP("RibbonName", "Machine Elements"),
     QT_TRANSLATE_NOOP("RibbonName", "Pattern"), QT_TRANSLATE_NOOP("RibbonName", "Curves"),
-    QT_TRANSLATE_NOOP("RibbonName", "Joinery"), QT_TRANSLATE_NOOP("RibbonName", "Mesh")};
+    QT_TRANSLATE_NOOP("RibbonName", "Joinery"), QT_TRANSLATE_NOOP("RibbonName", "Mesh"),
+    // Sketch blocks (mitcad#2110).
+    QT_TRANSLATE_NOOP("RibbonName", "Blocks")};
 
 // Subgroups shown by another name than their key, which stays in the
 // layout and the user's layer (a "/" would split a place's path): the
@@ -1969,6 +2043,11 @@ QString displayName(const QString& key) {
   return QCoreApplication::translate("RibbonName", english.constData());
 }
 
+QIcon commandButtonIcon(const QToolButton* button) {
+  return button->property(kThinOutlineProperty).toBool() ? withOutlineWeight(button->icon(), kThinOutlineWeight)
+                                                         : button->icon();
+}
+
 RibbonButton::RibbonButton(QAction* action, int iconSize, QWidget* parent)
     : QToolButton(parent), m_iconSize(iconSize) {
   setDefaultAction(action);
@@ -1986,6 +2065,13 @@ int RibbonButton::arrowWidth() const {
   return popupMode() == QToolButton::MenuButtonPopup || m_menuArrow ? kSplitArrowWidth : 0;
 }
 
+void RibbonButton::setToolbarIcon() {
+  m_margin = kToolbarIconMargin;
+  setProperty(kThinOutlineProperty, true);
+  updateGeometry();
+  update();
+}
+
 void RibbonButton::setMenuArrow(bool arrow) {
   if (arrow == m_menuArrow) {
     return;
@@ -1997,15 +2083,16 @@ void RibbonButton::setMenuArrow(bool arrow) {
 
 QSize RibbonButton::sizeHint() const {
   const int arrow = arrowWidth();
+  const int room = m_iconSize + 2 * m_margin;
   if (!m_labelShown) {
-    return QSize(m_iconSize + 10 + arrow, m_iconSize + 10);
+    return QSize(room + arrow, room);
   }
   // The label under the icon (mitcad#1936): as wide as its shown text with
   // 4 pixels at either side, at least the icon's room.
   const QFont font = ribbonLabelFont(this->font());
   const QFontMetrics metrics(font);
   const int label = metrics.horizontalAdvance(shownButtonLabel(this, font, m_iconSize)) + 8;
-  return QSize(std::max(m_iconSize + 10, label) + arrow, m_iconSize + 10 + metrics.height());
+  return QSize(std::max(room, label) + arrow, room + metrics.height());
 }
 
 void RibbonButton::setLabelShown(bool shown) {
@@ -2065,7 +2152,7 @@ void RibbonButton::paintEvent(QPaintEvent*) {
   const int arrow = arrowWidth();
   // The icon's room: the whole button, or its top with a label under it
   // (mitcad#1936).
-  const int iconRoom = m_labelShown ? m_iconSize + 10 : height();
+  const int iconRoom = m_labelShown ? m_iconSize + 2 * m_margin : height();
   if (arrow > 0) {
     const QColor color = textTint(pal, active ? 190 : 80);
     drawChevron(painter, QPointF(width() - arrow / 2.0, iconRoom / 2.0 + 0.5), color);
@@ -2075,15 +2162,16 @@ void RibbonButton::paintEvent(QPaintEvent*) {
     }
   }
   const QIcon::Mode mode = active ? QIcon::Normal : QIcon::Disabled;
-  const QPixmap pixmap = icon().pixmap(QSize(m_iconSize, m_iconSize), devicePixelRatioF(), mode,
-                                       isChecked() ? QIcon::On : QIcon::Off);
+  const QPixmap pixmap = commandButtonIcon(this).pixmap(QSize(m_iconSize, m_iconSize), devicePixelRatioF(), mode,
+                                                        isChecked() ? QIcon::On : QIcon::Off);
   const QSizeF size = pixmap.deviceIndependentSize();
   painter.drawPixmap(QPointF((width() - arrow - size.width()) / 2, (iconRoom - size.height()) / 2), pixmap);
   if (m_labelShown) {
     const QFont font = ribbonLabelFont(this->font());
     painter.setFont(font);
     painter.setPen(textTint(pal, active ? 230 : 90));
-    const QRect label(0, m_iconSize + 7, width() - arrow, QFontMetrics(font).height());
+    // 2 pixels under the icon.
+    const QRect label(0, m_margin + m_iconSize + 2, width() - arrow, QFontMetrics(font).height());
     painter.drawText(label, Qt::AlignHCenter | Qt::AlignTop | Qt::TextSingleLine,
                      shownButtonLabel(this, font, m_iconSize));
   }
@@ -2498,6 +2586,7 @@ QTabBar* Ribbon::createPanelTabBar(QWidget* parent, bool steps) {
 
 QToolButton* Ribbon::createContentButton(QAction* action, const QString& shortLabel, bool menuArrow) {
   auto* button = new RibbonButton(action, uiIconSize(kMacIconSize));
+  button->setToolbarIcon();
   button->setProperty(kShortLabelProperty, shortLabel);
   if (menuArrow) {
     button->setPopupMode(QToolButton::InstantPopup);
@@ -3143,11 +3232,10 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
   auto* buttons = new QHBoxLayout(row);
   buttons->setContentsMargins(0, 0, 0, 0);
   buttons->setSpacing(0);
-  // A change of a Classic caption's size fits the groups again, after the
-  // event that changed it (mitcad#1477).
+  // A change of a caption's size fits the groups again, after the event
+  // that changed it (mitcad#1477), in both presentations.
   const auto refit = [this] { QTimer::singleShot(0, this, [this] { fitGroups(); }); };
-  QToolButton* menuButton = mac ? static_cast<QToolButton*>(new GroupCaption(displayName(group)))
-                                : new ClassicGroupCaption(displayName(group), refit);
+  QToolButton* menuButton = new FittedGroupCaption(displayName(group), refit);
   QMenu* menu = createGroupMenu(tab, key(tab, group), menuButton);
   // The group's entries as the layout has them (mitcad#1951): its
   // commands, a separator where a section ends (mitcad#579; never at the
@@ -3254,6 +3342,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
       QToolButton* button = ownButton(primary->id, path);
       button->setMenu(submenu);
       button->setPopupMode(QToolButton::MenuButtonPopup);
+      endHoverAfterMenu(button, submenu, path);
       button->setAccessibleDescription(
           tr("%1; its arrow opens %2").arg(m_registry.action(primary->id)->text(), subgroupTitle(entry.id)));
       m_splitButtons.insert(path, button);
@@ -3319,6 +3408,7 @@ QWidget* Ribbon::finishGroup(QWidget* widget, QWidget* row, QToolButton* menuBut
   menuButton->setPopupMode(QToolButton::InstantPopup);
   menuButton->setFocusPolicy(Qt::NoFocus);
   menuButton->setMenu(menu);
+  endHoverAfterMenu(menuButton, menu, key(tab, group));
   m_groupButtons.insert(key(tab, group), menuButton);
   // Its right-click: the group's own menu of the layout (mitcad#1991), its
   // order among the tab's groups and the buttons the user removed.
@@ -3344,7 +3434,7 @@ QWidget* Ribbon::finishGroup(QWidget* widget, QWidget* row, QToolButton* menuBut
     // Preserve the complete caption and its menu indicator. The page can
     // scroll if even the caption-only groups cannot fit in the viewport.
     // The caption's own minimum is its size as it is when laid out
-    // (ClassicGroupCaption, mitcad#1477). The group's minimum is its
+    // (FittedGroupCaption, mitcad#1477). The group's minimum is its
     // caption's width, kept current by fitGroups: without it a Fixed group's
     // minimum is its whole row, and the page's minimum, which decides its
     // scroll arrows (updateOverflow), counted a pinned button just folded
@@ -4040,7 +4130,9 @@ void Ribbon::fitTabRow() {
   // The row's width less what its other widgets take: each at the width
   // the row gives it (its layout item's hint, which keeps a fixed width:
   // the + is narrower by its own hint), Boost development (BoostButton) at
-  // its whole one, and the row's spacing after each.
+  // its whole one, and the row's spacing after each. The Discord button
+  // (DiscordButton, mitcad#2123) is an icon already, as compact as it gets:
+  // its fixed width is counted, so the tabs fold for it, never squeezed.
   const QMargins margins = layout()->contentsMargins();
   int room = width() - margins.left() - margins.right();
   // The workspace block beside the row (setWorkspaceSelector, mitcad#2082:
@@ -4109,7 +4201,7 @@ void Ribbon::fitGroups() {
         QWidget* caption = m_groupButtons.value(key(info.tab, info.group));
         if (caption == nullptr || info.capsule == nullptr || info.capsule->layout() == nullptr) continue;
         const QMargins around = info.capsule->layout()->contentsMargins();
-        const int width = caption->sizeHint().width() + around.left() + around.right();
+        const int width = keepWholeCaption(caption) + around.left() + around.right();
         info.capsule->setMinimumWidth(width);
         if (width != info.collapsedWidth) {
           info.collapsedWidth = width;
@@ -4141,6 +4233,23 @@ void Ribbon::fitGroups() {
   }
   for (auto it = m_groupsOfPage.begin(); it != m_groupsOfPage.end(); ++it) {
     QList<GroupInfo>& infos = it.value();
+    // The captions' widths as they are now, not as when the groups were made
+    // (mitcad#1477, as the Classic ones above), also as the capsules'
+    // minimums (finishGroup, sizeGroup): a minimum taken once let the
+    // toolbar panel squeeze a group a pixel under its caption (0.68.0-rc6,
+    // Docked at 2x on macOS).
+    for (GroupInfo& info : infos) {
+      QWidget* caption = m_groupButtons.value(key(info.tab, info.group));
+      if (caption == nullptr || info.capsule == nullptr || info.capsule->layout() == nullptr) continue;
+      const QMargins around = info.capsule->layout()->contentsMargins();
+      const int width = keepWholeCaption(caption) + around.left() + around.right();
+      info.capsule->setMinimumWidth(info.collapsible ? width : width + 8);
+      if (width + 8 != info.collapsedWidth) {
+        info.collapsedWidth = width + 8;
+        info.minWidth = width;
+        info.fullWidth = groupWidth(info, static_cast<int>(info.pinButtons.size()));
+      }
+    }
     // The page's margins and the space between its groups, as its row has
     // them: 12 and 8, none at the ends as group cards (the layout keeps the
     // margin), the panel's own (setPanel).
@@ -4337,8 +4446,12 @@ void Ribbon::setButtonLabels(bool labels) {
       }
     }
   }
-  layoutButtonRows();
+  // The tabs' own content first (the Render workspace's groups), so that
+  // the rows' layout and the panel's one height (layoutButtonRows,
+  // updatePanelPages) count its new height: Icons only makes the panel
+  // lower at once (mitcad#2092).
   applyContentLabels();
+  layoutButtonRows();
   const int height = buttonRowHeight();
   const int iconsOnly = m_presentation == Presentation::Mac ? macButtonSize() : classicButtonSize();
   qDebug().noquote() << (labels ? QStringLiteral("Ribbon labels: labels (rows %1 px high, %2 px for the labels)")
@@ -4435,12 +4548,15 @@ void Ribbon::layoutButtonRows() {
       overflow->updateGeometry();
     }
   }
-  if (m_panel) {
-    updatePanelPages(); // the groups' row's one height follows the labels
-  }
   m_pages->updateGeometry();
   updateGeometry();
   fitGroups();
+  if (m_panel) {
+    // The groups' row's one height follows the labels, measured once the
+    // groups are fitted: before it a group fitted collapsed still shows its
+    // buttons beside its collapsed button, two rows high (mitcad#2092).
+    updatePanelPages();
+  }
   updateGroupMask();
   // Logged once the scroll area and the cards have followed the new size.
   TestSync::singleShot(100, this, [this] {

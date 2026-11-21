@@ -34,9 +34,11 @@ to that point. OCCT failed at the corner ("bouchon non ecrit", then
 
 Test: geometry/tests/test_fillet_corners.cpp (ctest
 geometry.suite.fillet_corners),
-test_rounding_ending_where_the_top_turns_into_a_rim: Its failure without
-the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+test_rounding_ending_where_the_top_turns_into_a_rim: It fails with this
+patch and 19 later patches that change the same lines reverted together,
+so the test does not single this patch out (shown 2026-11-20 by
+tools/occt-port-proof.py; the patches are listed in
+third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

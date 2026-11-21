@@ -716,14 +716,17 @@ pub(crate) fn occurrences_used(def: &FeatureDef) -> Vec<OccurrenceUid> {
             .into_iter()
             .flat_map(|p| p.0.iter().copied())
             .collect(),
-        // Not the scope's exclusions: they use nothing (mitcad#1236).
-        FeatureDef::Extrude(e) => e.active_cut_scope().map_or_else(Vec::new, |scope| {
-            scope
-                .reference_paths()
-                .into_iter()
-                .flat_map(|path| path.0.iter().copied())
-                .collect()
-        }),
+        // Not the scope's exclusions: they use nothing (mitcad#1236). An
+        // Extrude's, a Revolve's or a Hole's (mitcad#2131).
+        FeatureDef::Extrude(_) | FeatureDef::Revolve(_) | FeatureDef::Hole(_) => {
+            def.active_cut_scope().map_or_else(Vec::new, |scope| {
+                scope
+                    .reference_paths()
+                    .into_iter()
+                    .flat_map(|path| path.0.iter().copied())
+                    .collect()
+            })
+        }
         FeatureDef::Joint(j) => [&j.a.occurrence.0[..], &j.b.occurrence.0[..]].concat(),
         FeatureDef::AsBuiltJoint(j) => {
             let mut used = [&j.a.0[..], &j.b.0[..]].concat();
@@ -1273,7 +1276,16 @@ pub(crate) enum EnvelopeSide {
     Full(ComponentUid),
     /// It cannot be resolved: why.
     Missing(String),
+    /// On a part of the linked design no longer chosen (mitcad#2130,
+    /// `ExternalLink::unlinked`): the frame it had when the part was last
+    /// linked, kept with [`UNLINKED_WARNING`].
+    Unlinked(Transform),
 }
+
+/// The warning of a joint whose origin is on a part of a linked design no
+/// longer chosen (mitcad#2130): in words, the place shown on hover.
+pub(crate) const UNLINKED_WARNING: &str = "the geometry it joins to is in a part of the linked \
+     design that is no longer linked; it keeps the place it had there";
 
 /// The body whose face, edge or vertex the geometry is.
 fn geometry_body(geometry: &GeomRef) -> Option<BodyUid> {
@@ -1296,6 +1308,14 @@ pub(crate) fn envelope_side(
     let body = geometry_body(geometry)?;
     let owner = state.entry(body.feature)?.component;
     let assembly = &state.assembly;
+    // On a part no longer chosen (mitcad#2130).
+    if let Some(kept) = assembly
+        .component(owner)
+        .and_then(|c| c.link.as_ref())
+        .and_then(|l| l.unlinked.iter().find(|f| f.geometry == *geometry))
+    {
+        return Some(EnvelopeSide::Unlinked(kept.frame));
+    }
     let here = assembly.component(at)?.link.as_ref()?;
     let link = assembly.component(owner)?.link.as_ref()?;
     if link.feature != body.feature || here.path != link.path {
@@ -1428,6 +1448,25 @@ fn motion_specs(
         .collect()
 }
 
+/// The bodies of `at` a joint's geometry is looked for in, with the pieces
+/// of the occurrences assembly cuts machined (mitcad#2131): a joint may
+/// name a face a cut made on a machined occurrence, on its piece (each
+/// piece's id is its own, in its component's coordinates).
+fn with_pieces<S: Clone>(
+    components: &BTreeMap<ComponentUid, Arc<crate::recompute::BodyState<S>>>,
+    at: ComponentUid,
+) -> Option<std::borrow::Cow<'_, crate::recompute::BodyState<S>>> {
+    let own = components.get(&at).map(|b| &**b);
+    match components.get(&crate::assembly_cut::MACHINED_HOLDER) {
+        Some(pieces) if !pieces.is_empty() => {
+            let mut all = own.cloned().unwrap_or_default();
+            all.extend(pieces.iter().map(|(uid, body)| (*uid, body.clone())));
+            Some(std::borrow::Cow::Owned(all))
+        }
+        _ => own.map(std::borrow::Cow::Borrowed),
+    }
+}
+
 /// Applies a joint, an as-built joint or a rigid group at its point of the
 /// recompute (after its evaluation, which checks its values): records the
 /// group, or resolves the joint's frames and solves it with the joints in
@@ -1479,17 +1518,25 @@ pub(crate) fn apply<K: Kernel>(
         match envelope_side(state, at, &origin.geometry) {
             None => {}
             Some(EnvelopeSide::Kept(frame)) => kept = Some(frame),
+            Some(EnvelopeSide::Unlinked(frame)) => {
+                kept = Some(frame);
+                let mut warnings = renamed.borrow_mut();
+                if !warnings.iter().any(|w| w == UNLINKED_WARNING) {
+                    warnings.push(UNLINKED_WARNING.to_owned());
+                }
+            }
             Some(EnvelopeSide::Full(owner)) => at = owner,
             Some(EnvelopeSide::Missing(why)) => return Err(why),
         }
         let mut local = match kept {
             Some(frame) => frame,
             None => {
+                let pieces = with_pieces(components, at);
                 let mut resolver = StepResolver {
                     kernel,
                     assembly,
                     component: at,
-                    bodies: components.get(&at).map(|b| &**b),
+                    bodies: pieces.as_deref(),
                     datums: &done.datums,
                     sketches: &done.sketches,
                     features: &state.features,
@@ -1523,11 +1570,12 @@ pub(crate) fn apply<K: Kernel>(
                     }
                     _ => {}
                 }
+                let pieces = with_pieces(components, at);
                 let mut resolver = StepResolver {
                     kernel,
                     assembly,
                     component: at,
-                    bodies: components.get(&at).map(|b| &**b),
+                    bodies: pieces.as_deref(),
                     datums: &done.datums,
                     sketches: &done.sketches,
                     features: &state.features,
@@ -3219,7 +3267,9 @@ pub struct Dragged {
 /// Pulls `grab` (a point in the parent component's coordinates, moving
 /// with the occurrence `path` ends in) toward `target` while the joints of
 /// the parent component hold, moving the other occurrences as little as
-/// possible. Driven motions follow like free ones. An occurrence inside a
+/// possible. Driven motions follow like free ones, but those of the joints
+/// in `held` (mitcad#2088: the joints BUILD placed its parts with), which
+/// stay at their values as if their limits were there. An occurrence inside a
 /// flexible one (mitcad#1793) that the flexible one's joints move is
 /// dragged in the flexible occurrence's parent instead, the points still
 /// in its own parent's coordinates; inside flexible occurrences nested in
@@ -3231,6 +3281,7 @@ pub(crate) fn drag(
     path: &[OccurrenceUid],
     grab: Vec3,
     target: Vec3,
+    held: &BTreeSet<FeatureUid>,
 ) -> Result<Dragged, String> {
     let occurrence = *path.last().ok_or("no occurrence to drag")?;
     let o = assembly
@@ -3257,10 +3308,32 @@ pub(crate) fn drag(
         }
         None => (o.parent, Vec::new(), grab, target),
     };
+    // A held joint's driven motions keep their values: their limits are
+    // pinned there for the drag.
+    let pinned: Vec<ActiveJoint> = joints
+        .active
+        .iter()
+        .filter(|j| j.component == component && j.row.is_none() && held.contains(&j.uid))
+        .map(|j| {
+            let mut j = j.clone();
+            for s in &mut j.motions {
+                if let Some(value) = s.target {
+                    (s.min, s.max) = (Some(value), Some(value));
+                }
+            }
+            j
+        })
+        .collect();
     let active: Vec<&ActiveJoint> = joints
         .active
         .iter()
         .filter(|j| j.component == component)
+        .map(|j| {
+            pinned
+                .iter()
+                .find(|p| p.uid == j.uid && p.row == j.row && p.under == j.under)
+                .unwrap_or(j)
+        })
         .collect();
     let mut mechanism = Mechanism::new(
         assembly,
@@ -3580,7 +3653,7 @@ pub(crate) fn orphaned(state: &DocState) -> BTreeSet<FeatureUid> {
             }
             // Missing occurrence paths stay repairable failures. Deleting a
             // component definition still uses normal dependent-feature removal.
-            if matches!(&f.def, FeatureDef::Extrude(e) if e.active_cut_scope().is_some()) {
+            if f.def.active_cut_scope().is_some() {
                 return false;
             }
             occurrences_used(&f.def)

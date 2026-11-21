@@ -6,7 +6,11 @@
 //! (`place`, design coordinates), or why it is gone (the comment is then
 //! orphaned at its last known place). After every command the targets are
 //! settled ([`CommentsOps::settle_comments_now`], called by
-//! `DocumentApi::command`). See `commands.md`, "Comments".
+//! `DocumentApi::command`). Comments and replies carry images
+//! (mitcad#2011): `add_comment` and `reply_comment` take `attachments`,
+//! `remove_comment_attachment` removes one, the `comments` query lists
+//! their fields and `comment_attachment` gives one's bytes. See
+//! `commands.md`, "Comments".
 
 use std::sync::{Mutex, PoisonError};
 
@@ -23,8 +27,8 @@ use mitcad_model::kernel::{BoundingBox, Kernel};
 use mitcad_model::sketch::Ref;
 use mitcad_model::topo::{EdgeName, FaceName};
 use mitcad_model::{
-    Comment, CommentFound, CommentSketchItem, CommentStatus, CommentTarget, CommentTargetKind,
-    Document,
+    AttachmentSource, Comment, CommentAttachment, CommentFound, CommentSketchItem, CommentStatus,
+    CommentTarget, CommentTargetKind, Document, attachment_number,
 };
 
 named_enum! {
@@ -39,6 +43,9 @@ named_enum! {
             /// `user` when left out; the MCP layer sets its client's name.
             #[serde(default)]
             author: Option<String>,
+            /// Images to attach (mitcad#2011).
+            #[serde(default)]
+            attachments: Vec<AttachmentIn>,
         },
         "edit_comment" => EditComment {
             id: String,
@@ -49,6 +56,9 @@ named_enum! {
             text: String,
             #[serde(default)]
             author: Option<String>,
+            /// Images to attach (mitcad#2011).
+            #[serde(default)]
+            attachments: Vec<AttachmentIn>,
         },
         "retarget_comment" => RetargetComment {
             id: String,
@@ -74,7 +84,55 @@ named_enum! {
         "delete_comment" => DeleteComment {
             id: String,
         },
+        // An image of a comment or of one of its replies (mitcad#2011).
+        "remove_comment_attachment" => RemoveCommentAttachment {
+            comment: String,
+            id: String,
+        },
     }
+}
+
+/// An image a command attaches (mitcad#2011): the file's bytes in base64
+/// and its name.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AttachmentIn {
+    data: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// The images of a command as the model takes them, or why one is no
+/// base64.
+fn sources(attachments: Vec<AttachmentIn>) -> Result<Vec<AttachmentSource>, ApiError> {
+    let several = attachments.len() > 1;
+    attachments
+        .into_iter()
+        .enumerate()
+        .map(|(i, attachment)| {
+            let bytes =
+                mitcad_model::internal::base64::decode(attachment.data.trim()).map_err(|e| {
+                    let what = if several {
+                        format!("image {}", i + 1)
+                    } else {
+                        "the image".to_owned()
+                    };
+                    ApiError(format!("{what}'s data is no base64: {e}"))
+                })?;
+            Ok(AttachmentSource {
+                bytes,
+                name: attachment.name,
+            })
+        })
+        .collect()
+}
+
+/// The `comment_attachment` query's fields (mitcad#2011).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AttachmentQuery {
+    comment: String,
+    id: String,
 }
 
 /// The `comments` query's fields.
@@ -144,6 +202,10 @@ pub(super) trait CommentsOps<K: Kernel> {
     /// The `comments` query: `{"comments": [...], "open": n, "revision": r}`.
     fn comments_json(&self, query: &CommentsQuery) -> Result<Value, ApiError>;
 
+    /// The `comment_attachment` query (mitcad#2011): an image's fields and
+    /// its bytes in base64 (`data`).
+    fn comment_attachment_json(&self, query: &AttachmentQuery) -> Result<Value, ApiError>;
+
     /// Finds every comment's target at the marker and keeps what was found
     /// ([`Document::settle_comments`]): the place of one found, `orphaned`
     /// for one gone. Run after every command; nothing without comments.
@@ -157,19 +219,31 @@ impl<K: Kernel> CommentsOps<K> for Document<K> {
                 text,
                 target,
                 author,
+                attachments,
             } => {
                 let found = target_now(self, &target)
                     .map_err(|e| ApiError(format!("the comment's target: {e}")))?;
-                let id = self.add_comment(&text, *target, author.as_deref(), found.place)?;
-                json!({"id": id})
+                let attachments = sources(attachments)?;
+                let first = self.next_attachment_id();
+                let id =
+                    self.add_comment(&text, *target, author.as_deref(), found.place, &attachments)?;
+                added(json!({"id": id}), &first, attachments.len())
             }
             CommentCommand::EditComment { id, text } => {
                 let changed = self.edit_comment(&id, &text)?;
                 json!({"changed": changed})
             }
-            CommentCommand::ReplyComment { id, text, author } => {
-                self.reply_comment(&id, &text, author.as_deref())?;
-                json!({})
+            CommentCommand::ReplyComment {
+                id,
+                text,
+                author,
+                attachments,
+            } => {
+                let attachments = sources(attachments)?;
+                let first = self.next_attachment_id();
+                self.reply_comment(&id, &text, author.as_deref(), &attachments)?;
+                let reply = self.comment(&id)?.replies.len();
+                added(json!({"reply": reply}), &first, attachments.len())
             }
             CommentCommand::RetargetComment { id, target } => {
                 // The comment first: an unknown id is refused as such.
@@ -199,7 +273,28 @@ impl<K: Kernel> CommentsOps<K> for Document<K> {
                 self.delete_comment(&id)?;
                 json!({})
             }
+            CommentCommand::RemoveCommentAttachment { comment, id } => {
+                self.remove_comment_attachment(&comment, &id)?;
+                json!({})
+            }
         })
+    }
+
+    fn comment_attachment_json(&self, query: &AttachmentQuery) -> Result<Value, ApiError> {
+        let comment = self.comment(&query.comment)?;
+        let number = attachment_number(&query.id)
+            .ok_or_else(|| ApiError(format!("{} is no image id (A<n>)", query.id)))?;
+        let attachment = comment.attachment(number).ok_or_else(|| {
+            ApiError(format!(
+                "{} has no image {}",
+                comment.name(),
+                query.id.trim()
+            ))
+        })?;
+        let mut value = attachment_json(attachment);
+        value["comment"] = json!(comment.name());
+        value["data"] = json!(attachment.image.data.base64());
+        Ok(value)
     }
 
     fn comments_json(&self, query: &CommentsQuery) -> Result<Value, ApiError> {
@@ -248,11 +343,53 @@ impl<K: Kernel> CommentsOps<K> for Document<K> {
     }
 }
 
+/// The answer of a command that attached images: `attachments`, their
+/// ids from `first` (the next id before the command), when there are any.
+fn added(mut value: Value, first: &str, count: usize) -> Value {
+    if count > 0 {
+        let first = attachment_number(first).unwrap_or(1);
+        let ids: Vec<String> = (0..count)
+            .map(|i| format!("A{}", u64::from(first) + i as u64))
+            .collect();
+        value["attachments"] = json!(ids);
+    }
+    value
+}
+
+/// An image's fields as the `comments` query lists it (mitcad#2011).
+fn attachment_json(attachment: &CommentAttachment) -> Value {
+    json!({
+        "id": attachment.name_id(),
+        "media_type": attachment.media_type(),
+        "width": attachment.image.width,
+        "height": attachment.image.height,
+        "bytes": attachment.bytes(),
+        "sha256": attachment.sha256(),
+        "name": attachment.name,
+    })
+}
+
 /// A comment as the `comments` query lists it: its stored fields, and
 /// `label`, `place` and `orphaned` as its target is found now (an orphan's
-/// `place` its last known one, with `error`, why it is gone).
+/// `place` its last known one, with `error`, why it is gone). The images of
+/// the comment and of each reply as `attachments`, where it has any.
 fn comment_json<K: Kernel>(doc: &Document<K>, comment: &Comment) -> Value {
     let found = target_now(doc, &comment.target);
+    let replies: Vec<Value> = comment
+        .replies
+        .iter()
+        .map(|reply| {
+            let mut value = json!({
+                "author": reply.author,
+                "text": reply.text,
+                "created": reply.created,
+            });
+            if !reply.attachments.is_empty() {
+                value["attachments"] = reply.attachments.iter().map(attachment_json).collect();
+            }
+            value
+        })
+        .collect();
     let mut value = json!({
         "id": comment.name(),
         "text": comment.text,
@@ -261,9 +398,12 @@ fn comment_json<K: Kernel>(doc: &Document<K>, comment: &Comment) -> Value {
         "orphaned": found.is_err(),
         "author": comment.author,
         "resolution": comment.resolution,
-        "replies": comment.replies,
+        "replies": replies,
         "created": comment.created,
     });
+    if !comment.attachments.is_empty() {
+        value["attachments"] = comment.attachments.iter().map(attachment_json).collect();
+    }
     match found {
         Ok(found) => {
             value["label"] = json!(found.label);

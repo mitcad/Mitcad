@@ -50,8 +50,9 @@ test_rounding_walked_past_its_end_across_a_seam (ctest
 geometry.suite.fillet_kernel): a cylinder under two tilted planes, one arc
 of its top rounded with 1, its end where the cylinder's seam lies, so that
 the walk past that end starts on the seam: the stripe is made. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+without the patch is still to be shown: the patch does not revert at the
+port's tip without the 46 later patches that change the same lines (tried
+2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
 index bf10104be..5d80857e0 100644

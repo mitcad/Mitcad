@@ -29,11 +29,17 @@ cylinder's wire as self-intersecting (the circle's tolerance is 1e-7).
 
 Upstream: new.
 
-Test: pending (mitcad#1986): no synthetic body is known that reaches its
-case; its cap crosses the edge only through the contact curve's
-approximation lying on the wrong side of the face at the end by 1.3e-6 mm,
-at a corner where the blend is nearly tangent to that face, verified on the
-design's replayed body only. A regression test needs such a body first.
+Test: geometry.port.0910
+(geometry/tests/port/p0910-onsame-cap-at-the-contacts-crossing.cpp):
+a pin of radius 3 on a wedge-shaped top whose sides are tangent to it,
+1.1 rad from +x, its foot rounded with 0.3 and 0.5 up to the sides (the
+blend nearly tangent to the face at the end, the cap rising slowly from
+its edge): valid, one torus, the material added within 1.5e-5 of the
+exact ring's (6.1e-6 and 3.1e-6); without the patch (reverted at the
+port's tip) 6.6e-5 and 3.5e-5 off. The sides 0.7 rad from +x, rounded with
+0.5, are the control (exact within 1e-7 either way). The original case's
+cap crossing the edge (a wire intersecting itself) hangs on a contact
+curve 1.3e-6 off its face; no synthetic body reproduced that crossing.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 45cb8a61..2411e415 100644

@@ -1,0 +1,28 @@
+{
+  "format": "mitcad-library", "version": 1, "id": "test-profiles", "name": "Test profiles",
+  "description": "A synthetic BUILD profile, guide rail and carriage of the drag and travel UI test (mitcad#2088).",
+  "library_version": "1.0.0", "license": "MIT", "authors": ["Mitcad UI test"], "units": "mm",
+  "categories": [{"id": "profiles", "name": "Profiles"}, {"id": "linear", "name": "Linear parts"}],
+  "components": [
+    {"id": "p-drag-test", "path": "profiles/p-drag-test.mitcad", "name": "Drag profile test", "category": "profiles",
+     "designation": "Drag profile test L={L}",
+     "build": {"role": "profile", "system": {"type": "I", "slot": 5, "grid": 20},
+       "length": {"parameter": "L", "min": "10 mm", "max": "3000 mm", "default": "500 mm", "stock": ["1000 mm"]},
+       "section": {"width": "20 mm", "height": "20 mm"},
+       "slot": {"depth": "5 mm", "opening": "5 mm"},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"},
+                  {"name": "slot_x+_1", "kind": "slot"}, {"name": "slot_y+_1", "kind": "slot"}]}},
+    {"id": "rail-drag-test", "path": "linear/rail-drag-test.mitcad", "name": "Rail drag test", "category": "linear",
+     "designation": "Rail drag test L={L}",
+     "build": {"role": "linear", "systems": [{"type": "I", "slot": 5, "grid": 20}],
+       "length": {"parameter": "L", "min": "20 mm", "max": "2000 mm", "stock": ["1000 mm"]},
+       "section": {"width": "15 mm", "height": "15 mm"},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"}, {"name": "rail", "kind": "rail"},
+                  {"name": "base", "kind": "face"}],
+       "linear": {"kind": "rail"}}},
+    {"id": "carriage-drag-test", "path": "linear/carriage-drag-test.mitcad", "name": "Carriage drag test",
+     "category": "linear",
+     "build": {"role": "linear", "frames": [{"name": "rail", "kind": "rail"}],
+       "linear": {"kind": "carriage", "mate": {"frame": "rail", "on": "rail", "joint": "slider", "axis": "x"}}}}
+  ]
+}

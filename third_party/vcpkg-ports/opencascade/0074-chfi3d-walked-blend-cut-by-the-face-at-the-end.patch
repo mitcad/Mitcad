@@ -34,8 +34,14 @@ piece fail with OCCT's reports of a computation it cannot make
 reached so: WalkedCutToEnd then reports that it made no cut, and the end
 is left to OCCT's corner as before (the builder's state restored). Any
 other failure (a broken invariant, a signal) is rethrown.
-Test: pending (mitcad#2003): the port test written for this patch passes
-without it too.
+Test: geometry/tests/port/p0074-walked-blend-cut-at-the-end.cpp (ctest
+geometry.port.0074): an inside corner between a plate's side N and a
+block's side whose top edge is rounded with 2 (made a surface of
+revolution, so that the corner's blend is walked), the corner's arc rounded
+with 3: N's contact leaves N across the top before the arc ends; built,
+valid, the blend ending in a point on the top's edge, the fill exact
+(without the patch: invalid). Nearby radii (3 and 2, 2 and 1.5) built so
+too; the boundary: the plate rising above the top, no cut, as stock.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index ba42ea6f..5b87977b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx

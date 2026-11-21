@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: MIT
+# Resting the pointer on a sketch line acquires it, and a drawing tool then
+# snaps onto its extension and to where two acquired lines' extensions meet
+# (mitcad#2035, GitHub mitcad/Mitcad#433), on sketch-line-extensions.json
+# (Sketch1: a vertical line c2 from (20, 0) to (20, 20) held 30 mm right of
+# the fixed point p1 by the dimension k2; a level line c5 from (36, 50) to
+# (56, 50) and a vertical line c8 from (70, 8) to (70, 32), whose
+# extensions meet at (70, 50)):
+#   1. Line from (5, 35); the pointer rests on c2 away from its ends and
+#      middle: c2 is acquired; the end clicked beside c2's extension above
+#      it goes onto the extension and is held there by a Coincident with
+#      c2; the point placed releases c2.
+#   2. 2-Point Rectangle: the pointer rests on c5, then on c8 (both
+#      acquired); the first corner clicked beside (70, 50) goes where their
+#      extensions meet, held by a Coincident with each; the second corner
+#      at (60, 40) finishes the rectangle.
+#   3. k2 set to 40 moves c2 to x = 30: the line's end from step 1 follows
+#      on c2's extension. With grid snapping off, the Line tool's pointer
+#      beside (30, 35) snaps to that end: "x 30.00".
+#   4. Snap to line extensions unchecked: the pointer resting on c2
+#      acquires nothing, and a line ended beside c2's extension ends where
+#      it was clicked, without a hold.
+# The pointer rests by a move without a click (sketch-move); the dwell is
+# 0.4 s, and each step waits for the acquisition's log line. The clicks
+# stay off the view's top right corner (the orientation cube), also in
+# session 0's 1024x768 window on Windows.
+# Run by tools/ui-sketch-line-extensions-test.sh (Linux),
+# tools/ui-windows-sketch-line-extensions-test.ps1 (Windows) and
+# tools/ui-macos-sketch-line-extensions-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+expect-widget-property paletteExtensions checked true
+capture-undo-depth baseline
+
+# 1. A line ended on the extension of the line the pointer rested on.
+mark
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-click 5 35
+sketch-move 20 6
+wait-log '^Sketch line c2 acquired: its extension snaps$'
+sketch-click 20.3 35
+wait-log '^Added line c[0-9]+ from '
+expect-log '^Coincident p[0-9]+ on the extension of c2$'
+expect-log '^Sketch lines released \(a point placed on an extension\): c2$'
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+expect-no-log ' not added: '
+expect-undo-depth ${baseline} 1
+wait-idle
+
+# 2. A rectangle's corner where two acquired lines' extensions meet.
+mark
+command sketch.rectangle
+wait-log '^Sketch tool 2-Point Rectangle'
+wait-idle
+sketch-move 41 50
+wait-log '^Sketch line c5 acquired: its extension snaps$'
+sketch-move 70 14
+wait-log '^Sketch line c8 acquired: its extension snaps$'
+sketch-click 70.3 50.3
+expect-log '^Sketch lines released \(a point placed on an extension\): c5 c8$'
+sketch-click 60 40
+wait-log '^Added rectangle '
+key Escape
+wait-log '^Sketch tool ended: 2-Point Rectangle'
+expect-log '^Coincident p[0-9]+ on the extension of c5$'
+expect-log '^Coincident p[0-9]+ on the extension of c8$'
+expect-no-log ' not added: '
+expect-no-log 'dropped: a third line acquired'
+expect-undo-depth ${baseline} 2
+wait-idle
+
+# 3. The vertical line moved: the end held on its extension follows.
+mark
+model-command '{"cmd":"sketch.set_dimension","sketch":"F1","dimension":"k2","value":40}'
+wait-idle
+button '^Grid$' paletteGrid
+expect-widget-property paletteGrid checked false
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-move 30.3 35.3
+wait-log '^Sketch pointer x 30\.00, y 3[45]\.[0-9]+ mm$'
+key Escape
+wait-log '^Sketch tool ended: Line'
+wait-idle
+
+# 4. Snap to line extensions off: nothing acquired, no extension snap.
+mark
+button '^Line extensions$' paletteExtensions
+wait-log '^Snap to line extensions off$'
+expect-widget-property paletteExtensions checked false
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-click 5 45
+sketch-move 30 6
+sleep 1200
+sketch-click 30.3 45
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+expect-no-log ' acquired: its extension snaps'
+expect-no-log ' on the extension of '
+wait-idle
+
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

@@ -134,6 +134,8 @@ private:
   QString m_loggedConstruction; // its state last logged (UI tests)
   QCheckBox* m_signed = nullptr; // Signed distances for Sketch Dimension (mitcad#409)
   QCheckBox* m_grid = nullptr;
+  QCheckBox* m_extensions = nullptr; // Snap to line extensions (mitcad#2035)
+  QLabel* m_snapLabel = nullptr;     // "Snap to" before Grid and Line extensions
   QCheckBox* m_dimensions = nullptr;
   QCheckBox* m_constraints = nullptr;
   QCheckBox* m_points = nullptr; // Show points (mitcad#1705)
@@ -164,6 +166,8 @@ private:
   QList<QToolButton*> m_constraintButtons;
   QToolButton* m_finish = nullptr; // Finish Sketch
   QAbstractButton* m_lookAt = nullptr; // Look At, logged for UI tests (mitcad#1060)
+  // Show Unconstrained beside the status (mitcad#2026).
+  QAbstractButton* m_showUnconstrained = nullptr;
 };
 
 } // namespace sketch

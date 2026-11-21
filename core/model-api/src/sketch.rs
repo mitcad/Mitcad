@@ -23,6 +23,7 @@ use mitcad_model::sketch::modify::{DragTarget, Item, Map2, point_input};
 use mitcad_model::sketch::offset::derived_entities;
 use mitcad_model::sketch::pattern::{PatternChange, PatternKind};
 use mitcad_model::sketch::regions::Region;
+use mitcad_model::sketch::scale::ScaleDimensions;
 use mitcad_model::sketch::solve::{SketchStatus, SolverItem};
 use mitcad_model::sketch::spacing::{SpacingDimension, SpacingInput};
 use mitcad_model::sketch::stale::Keep;
@@ -717,16 +718,42 @@ named_enum! {
             at: [f64; 2],
         },
         // The whole sketch scaled by a factor about a point (mitcad#860,
-        // `scale.rs`).
+        // `scale.rs`), or selected points, curves and texts (Sketch Scale,
+        // mitcad#2109).
         "sketch.scale" => Scale {
             sketch: FeatureUid,
             factor: f64,
             /// A point id or `[x, y]`; the sketch origin when left out.
             #[serde(default)]
             center: Option<Value>,
+            /// The points, curves and texts to scale (`p3`, `c4`, `t5`);
+            /// the whole sketch when left out.
+            #[serde(default)]
+            entities: Option<Vec<String>>,
+            /// What the driving lengths among them do: `scale` or `keep`.
+            #[serde(default)]
+            dimensions: ScaleDimensions,
+            /// Their copies are scaled; they stay.
+            #[serde(default)]
+            copy: bool,
         },
         // Auto Constrain (mitcad#2019, `sketch_auto_constrain.rs`): the
         // relations the geometry has, then dimensions for what is left free.
+        // Sketch blocks (mitcad#2110, `sketch_blocks.rs`): an instance of a
+        // design's block, its base point `at` (`[x, y]` or a point) turned
+        // by `angle` (radians); and an instance made plain geometry.
+        "sketch.insert_block" => InsertBlock {
+            sketch: FeatureUid,
+            block: String,
+            #[serde(default)]
+            at: Option<Value>,
+            #[serde(default)]
+            angle: f64,
+        },
+        "sketch.explode_block" => ExplodeBlock {
+            sketch: FeatureUid,
+            instance: ConstraintUid,
+        },
         "sketch.auto_constrain" => AutoConstrain {
             sketch: FeatureUid,
             /// The curves and points to constrain; the whole sketch when
@@ -743,6 +770,32 @@ named_enum! {
             /// Degrees.
             #[serde(default)]
             angle_tolerance: Option<f64>,
+        },
+        // Break and Split at Point (mitcad#2108, `modify/breaks.rs`): a
+        // curve split into pieces that all stay.
+        "sketch.break" => Break {
+            sketch: FeatureUid,
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            curve: EntityUid,
+            /// `[x, y]`, or (mode `point`) an existing point id.
+            at: Value,
+            /// `crossings` (the default) or `point`.
+            #[serde(default)]
+            mode: Option<String>,
+        },
+        // Blend Curve (mitcad#2107, `blend.rs` of the sketch crate): a
+        // spline from the end of `curve1` nearest `at1` to the end of
+        // `curve2` nearest `at2`, tangent or curvature-continuous.
+        "sketch.blend_curve" => BlendCurve {
+            sketch: FeatureUid,
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            curve1: EntityUid,
+            at1: [f64; 2],
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            curve2: EntityUid,
+            at2: [f64; 2],
+            #[serde(default)]
+            continuity: mitcad_model::sketch::blend::Continuity,
         },
     }
 }
@@ -1153,6 +1206,7 @@ fn refused_change(command: &SketchCommand) -> &'static str {
         C::Chamfer { .. } => "the chamfer",
         C::Trim { .. } => "the trim",
         C::Extend { .. } => "the extension",
+        C::Break { .. } => "the split",
         C::Offset { .. } | C::EditOffset { .. } => "the offset",
         C::Mirror { .. } => "the mirror",
         C::CircularPattern { .. } | C::RectangularPattern { .. } | C::EditPattern { .. } => {
@@ -1167,8 +1221,46 @@ fn refused_change(command: &SketchCommand) -> &'static str {
         C::SetActive { .. } => "the activated constraints",
         C::Move { .. } => "the move",
         C::Scale { .. } => "the scale",
+        C::BlendCurve { .. } => "the blend curve",
         _ => "the change",
     }
+}
+
+/// Sketch Scale's objects (mitcad#2109): the points and curves, and the
+/// texts, of `entities`; without them, every point, curve and text of the
+/// sketch's own (not projected).
+fn scale_objects(
+    edit: &SketchEdit<'_>,
+    entities: Option<Vec<String>>,
+) -> Result<(Vec<Ref>, Vec<EntityUid>), String> {
+    let Some(entities) = entities else {
+        let own = edit
+            .def
+            .entities
+            .iter()
+            .filter(|e| !e.reference && e.axis.is_none())
+            .map(|e| e.as_ref())
+            .collect();
+        return Ok((own, edit.def.texts.iter().map(|t| t.id).collect()));
+    };
+    if entities.is_empty() {
+        return Err("\"entities\" is empty: give the points, curves and texts to scale".to_owned());
+    }
+    let mut refs = Vec::new();
+    let mut texts = Vec::new();
+    for e in &entities {
+        match e.parse::<Item>()? {
+            Item::Entity(r) => refs.push(r),
+            Item::Text(t) => texts.push(t),
+            Item::Constraint(k) => {
+                return Err(format!(
+                    "{k} is a constraint or a dimension: give the points, curves and texts to \
+                     scale"
+                ));
+            }
+        }
+    }
+    Ok((refs, texts))
 }
 
 fn need<T>(value: Option<T>, field: &str, mode: &str) -> Result<T, String> {
@@ -1262,6 +1354,10 @@ pub(super) fn step_kind(command: &Value) -> Option<String> {
     if name == "project" && command["section"].as_bool() == Some(true) {
         return Some("intersect".to_owned());
     }
+    // Split at Point (mitcad#2108) is a step of its own.
+    if name == "break" && command["mode"].as_str() == Some("point") {
+        return Some("split".to_owned());
+    }
     Some(name.to_owned())
 }
 
@@ -1270,7 +1366,7 @@ pub(super) fn step_kind(command: &Value) -> Option<String> {
 /// `curve`. They stay with the step that made them.
 pub(super) fn step_changes(command: &Value) -> Vec<EntityUid> {
     let name = command["cmd"].as_str().unwrap_or_default();
-    if name != "sketch.trim" && name != "sketch.extend" {
+    if name != "sketch.trim" && name != "sketch.extend" && name != "sketch.break" {
         return Vec::new();
     }
     command["curve"]
@@ -1606,6 +1702,31 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                 fragment,
                 at,
             } => self.paste_fragment(sketch, fragment, at)?,
+            SketchCommand::InsertBlock {
+                sketch,
+                block,
+                at,
+                angle,
+            } => {
+                let at = match at.as_ref().map(point).transpose().map_err(ApiError)? {
+                    None => [0.0, 0.0],
+                    Some(PointInput::At(at)) => at,
+                    Some(PointInput::Existing(p)) => self
+                        .sketch_def(sketch)
+                        .and_then(|d| d.entity(p))
+                        .and_then(|e| match e.kind {
+                            mitcad_model::sketch::EntityKind::Point { at } => Some(at),
+                            _ => None,
+                        })
+                        .ok_or_else(|| {
+                            ApiError(format!("p{} is not a point of the sketch", p.0))
+                        })?,
+                };
+                super::sketch_blocks::insert_block(self, sketch, &block, at, angle)?
+            }
+            SketchCommand::ExplodeBlock { sketch, instance } => {
+                super::sketch_blocks::explode_block(self, sketch, instance)?
+            }
             SketchCommand::RedefinePlane(command) => {
                 super::sketch_plane::SketchPlaneOps::redefine_plane_command(self, command)?
             }
@@ -2198,6 +2319,42 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             })
             .collect();
         result["steps"] = json!(steps);
+        // Its instances of the design's sketch blocks (mitcad#2110): every
+        // point and curve of each, which the application picks as one.
+        if !def.blocks.is_empty() {
+            let index = EntityIndex::new(&def.entities);
+            let blocks: Vec<Value> = def
+                .blocks
+                .iter()
+                .map(|b| {
+                    let members: Vec<String> = b
+                        .members(&index)
+                        .into_iter()
+                        .filter_map(|m| def.entity(m).map(|e| e.as_ref().to_string()))
+                        .collect();
+                    let name = self
+                        .sketch_blocks()
+                        .iter()
+                        .find(|x| x.id == b.block)
+                        .map(|x| x.name.clone());
+                    json!({
+                        "id": b.id,
+                        "block": b.block,
+                        "name": name,
+                        "base": Ref::Point(b.base),
+                        "direction": Ref::Curve(b.direction),
+                        "entities": members,
+                        "open": b.open.is_some(),
+                        "temporary": b.open.as_ref().is_some_and(|o| o.temporary),
+                        // Entities numbered from this on were made while it
+                        // is open: they join the block.
+                        "since": b.open.as_ref().map(|o| o.since),
+                        "lost": b.lost.len(),
+                    })
+                })
+                .collect();
+            result["blocks"] = json!(blocks);
+        }
         // The inactive constraints and dimensions the geometry does not
         // meet (mitcad#721).
         if !status.unmet_inactive.is_empty() {
@@ -2741,7 +2898,15 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             C::AddConstraint { sketch, .. } => (*sketch, "Add Constraint to {sketch}"),
             C::AddDimension { sketch, .. } => (*sketch, "Add Dimension to {sketch}"),
             C::SetDimension { sketch, .. } => (*sketch, "Change Dimension in {sketch}"),
-            C::SetDriven { sketch, .. } => (*sketch, "Change Dimension in {sketch}"),
+            // Named by the switch (mitcad#2055), as 3D sketches name it.
+            C::SetDriven { sketch, driven, .. } => (
+                *sketch,
+                if *driven {
+                    "Make Driven in {sketch}"
+                } else {
+                    "Make Driving in {sketch}"
+                },
+            ),
             C::SetSigned { sketch, .. } => (*sketch, "Change Dimension in {sketch}"),
             C::Remove { sketch, .. } => (*sketch, "Delete in {sketch}"),
             C::SetConstruction { sketch, .. } => (*sketch, "Construction in {sketch}"),
@@ -2758,6 +2923,14 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             ),
             C::Trim { sketch, .. } => (*sketch, "Trim in {sketch}"),
             C::Extend { sketch, .. } => (*sketch, "Extend in {sketch}"),
+            C::Break { sketch, mode, .. } => (
+                *sketch,
+                if mode.as_deref() == Some("point") {
+                    "Split at Point in {sketch}"
+                } else {
+                    "Break in {sketch}"
+                },
+            ),
             C::Fillet { sketch, .. } => (*sketch, "Fillet in {sketch}"),
             C::Chamfer { sketch, .. } => (*sketch, "Chamfer in {sketch}"),
             C::Offset { sketch, .. } => (*sketch, "Offset in {sketch}"),
@@ -2781,6 +2954,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             ),
             C::InsertSplinePoint { sketch, .. } => (*sketch, "Insert Spline Point in {sketch}"),
             C::Scale { sketch, .. } => (*sketch, "Scale {sketch}"),
+            C::BlendCurve { sketch, .. } => (*sketch, "Blend Curve in {sketch}"),
             C::Create { .. }
             | C::AddRectangle { .. }
             | C::AddCircle { .. }
@@ -2793,6 +2967,8 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             | C::ImportSvg { .. }
             | C::Axis { .. }
             | C::Paste { .. }
+            | C::InsertBlock { .. }
+            | C::ExplodeBlock { .. }
             | C::AutoConstrain { .. }
             | C::RedefinePlane(_) => {
                 unreachable!("handled above")
@@ -3290,6 +3466,9 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     // (mitcad#260).
                     let merge = edit.coincident_merge(&constraint);
                     let id = edit.add_constraint(constraint);
+                    // A curve of a kind it does not take is refused in
+                    // words before the solve (mitcad#2114).
+                    edit.def.check_new_constraint(id)?;
                     if let Some((keep, drop)) = merge {
                         edit.merge_coincident(id, keep, drop)?;
                         *joined_ref = Some(json!({
@@ -3553,6 +3732,36 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     if let Some(p) = edit.extend(curve, at)? {
                         *joined_ref = Some(json!({"joined": Ref::Point(p)}));
                     }
+                }
+                C::Break {
+                    curve, at, mode, ..
+                } => {
+                    use mitcad_model::sketch::modify::{BreakAt, BreakMode};
+                    let mode = match mode.as_deref() {
+                        None | Some("crossings") => BreakMode::Crossings,
+                        Some("point") => BreakMode::Point,
+                        Some(other) => {
+                            return Err(format!(
+                                "\"mode\" of a break is \"crossings\" or \"point\", not \"{other}\""
+                            ));
+                        }
+                    };
+                    let at = match &at {
+                        Value::String(text) => match text.parse::<Ref>() {
+                            Ok(Ref::Point(p)) => BreakAt::Point(p),
+                            _ => {
+                                return Err(format!(
+                                    "\"at\" is a position [x, y] or a point id, not \"{text}\""
+                                ));
+                            }
+                        },
+                        other => {
+                            BreakAt::At(serde_json::from_value::<[f64; 2]>(other.clone()).map_err(
+                                |_| "\"at\" is a position [x, y] or a point id".to_owned(),
+                            )?)
+                        }
+                    };
+                    *made_ref = curve_list(edit.break_curve(curve, at, mode)?);
                 }
                 C::Fillet {
                     a,
@@ -3829,7 +4038,14 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let p = edit.insert_spline_point(curve, at)?;
                     made_ref.push(Ref::Point(p).to_string());
                 }
-                C::Scale { factor, center, .. } => {
+                C::Scale {
+                    factor,
+                    center,
+                    entities,
+                    dimensions,
+                    copy,
+                    ..
+                } => {
                     // A scale is made once (mitcad#1912).
                     if center.as_ref().is_some_and(written_as_text) {
                         return Err("\"center\" of a scale is read once, so it cannot follow \
@@ -3841,7 +4057,30 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         Some(PointInput::At(at)) => at,
                         Some(PointInput::Existing(p)) => edit.at(p)?,
                     };
-                    edit.scale(factor, center)?;
+                    match entities {
+                        None if dimensions == ScaleDimensions::Scale && !copy => {
+                            edit.scale(factor, center)?;
+                        }
+                        // Sketch Scale (mitcad#2109): the selection, or
+                        // the whole sketch's own geometry and texts.
+                        entities => {
+                            let (entities, texts) = scale_objects(edit, entities)?;
+                            *made_ref = edit.scale_selection(
+                                &entities, &texts, factor, center, dimensions, copy,
+                            )?;
+                        }
+                    }
+                }
+                C::BlendCurve {
+                    curve1,
+                    at1,
+                    curve2,
+                    at2,
+                    continuity,
+                    ..
+                } => {
+                    let blend = edit.blend_curve(curve1, at1, curve2, at2, continuity)?;
+                    made_ref.push(Ref::Curve(blend.spline).to_string());
                 }
                 C::Create { .. }
                 | C::AddRectangle { .. }
@@ -3855,6 +4094,8 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 | C::ImportSvg { .. }
                 | C::Axis { .. }
                 | C::Paste { .. }
+                | C::InsertBlock { .. }
+                | C::ExplodeBlock { .. }
                 | C::AutoConstrain { .. }
                 | C::RedefinePlane(_) => {
                     unreachable!("handled above")

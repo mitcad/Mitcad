@@ -132,6 +132,14 @@ pub struct Fragment {
     /// out: they also reference geometry that was not copied.
     #[serde(default)]
     pub left_out: usize,
+    /// Block instances copied whole (mitcad#2110): a paste makes them
+    /// instances again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<crate::block::BlockInstance>,
+    /// The blocks of `instances` (and the blocks they hold), for a paste
+    /// into another design; the model fills them in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<crate::block::SketchBlock>,
 }
 
 /// The source's entities that stand for its origin and axes.
@@ -364,6 +372,18 @@ pub fn copy(
         })
         .collect();
     let base = base.unwrap_or_default();
+    // Instances copied whole stay instances (mitcad#2110).
+    let index = super::EntityIndex::new(&def.entities);
+    let instances = def
+        .blocks
+        .iter()
+        .filter(|b| b.open.is_none())
+        .filter(|b| b.members(&index).iter().all(|m| copied.contains(m)))
+        .map(|b| crate::block::BlockInstance {
+            lost: Vec::new(),
+            ..b.clone()
+        })
+        .collect();
     Ok(Fragment {
         version: FRAGMENT_VERSION,
         base,
@@ -379,6 +399,8 @@ pub fn copy(
         text_values,
         references,
         left_out,
+        instances,
+        blocks: Vec::new(),
     })
 }
 
@@ -475,7 +497,7 @@ pub struct Pasted {
 }
 
 /// An entity's kind with its points replaced at once by `map`.
-fn mapped(kind: &EntityKind, map: &BTreeMap<EntityUid, EntityUid>) -> EntityKind {
+pub(crate) fn mapped(kind: &EntityKind, map: &BTreeMap<EntityUid, EntityUid>) -> EntityKind {
     let m = |p: &EntityUid| map.get(p).copied().unwrap_or(*p);
     let mut kind = kind.clone();
     match &mut kind {
@@ -670,6 +692,38 @@ impl SketchEdit<'_> {
             }
             out.kept += 1;
         }
+        // Instances again, of the blocks the fragment names (mitcad#2110).
+        for instance in &fragment.instances {
+            let m = |u: EntityUid| map.get(&u).copied();
+            let (Some(base), Some(direction)) = (m(instance.base), m(instance.direction)) else {
+                continue;
+            };
+            let entities = instance
+                .entities
+                .iter()
+                .filter_map(|(b, s)| {
+                    let to = m(s.uid())?;
+                    Some((
+                        *b,
+                        if s.is_point() {
+                            Ref::Point(to)
+                        } else {
+                            Ref::Curve(to)
+                        },
+                    ))
+                })
+                .collect();
+            let id = self.constraint_id();
+            self.def.blocks.push(crate::block::BlockInstance {
+                id,
+                base,
+                direction,
+                entities,
+                lost: Vec::new(),
+                open: None,
+                ..instance.clone()
+            });
+        }
         for v in &fragment.text_values {
             let Some(text) = texts.get(&v.text).copied() else {
                 continue;
@@ -689,7 +743,7 @@ impl SketchEdit<'_> {
     /// A pasted driving dimension: with its expression where the design
     /// has every parameter it uses, else with its value (`source` names it
     /// in `values` then).
-    fn paste_value(
+    pub(crate) fn paste_value(
         &mut self,
         kind: DimensionKind,
         value: &FragmentValue,

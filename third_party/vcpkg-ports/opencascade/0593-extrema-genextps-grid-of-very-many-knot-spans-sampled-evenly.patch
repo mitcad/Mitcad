@@ -27,8 +27,8 @@ test_projection_onto_a_multi_turn_surface_works_on_a_bounded_grid (ctest
 geometry.multi_turn_faces): the bound it checks: the first projection onto a
 32-turn flank evaluates fewer than 100000 grid nodes (44 x 6000 without the
 patch), and each point 0.05 off the surface projects back onto its foot
-within 1e-7. Its failure without the patch, stated in its documentation, is
-still to be shown in the port's before/after run (mitcad#1986).
+within 1e-7. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingData/TKGeomBase/Extrema/Extrema_GenExtPS.cxx b/src/ModelingData/TKGeomBase/Extrema/Extrema_GenExtPS.cxx
 index e22509a0..8039ceb1 100644

@@ -141,6 +141,11 @@ pub mod spatial_inputs;
 // Auto Constrain: the relations a sketch has, then dimensions for what is
 // left free (mitcad#2019).
 pub mod auto_constrain;
+// Blend Curve: a spline joining two curve ends with tangent or curvature
+// continuity, attached to them (mitcad#2107).
+pub mod blend;
+// Sketch blocks: named geometry and its instances (mitcad#2110).
+pub mod block;
 
 /// A refusal or note of a sketch edit that names the sketch's ids
 /// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`
@@ -175,6 +180,12 @@ mod text_regions_1993_tests;
 // A text in a frame wrapped to the frame's width (mitcad#2029).
 #[cfg(test)]
 mod text_wrap_2029_tests;
+// Break and Split at Point (mitcad#2108).
+#[cfg(test)]
+mod break_tests;
+// Sketch blocks (mitcad#2110).
+#[cfg(test)]
+mod block_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;

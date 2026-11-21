@@ -3415,6 +3415,10 @@ impl Kernel for MockKernel {
                 number(d[2])
             ));
         }
+        // A Draft Angle (mitcad#2102) only when not 0.
+        if spec.draft_angle != 0.0 {
+            extend.push_str(&format!(" draft {}", number(spec.draft_angle)));
+        }
         self.specs.borrow_mut().push(format!(
             "{} {} chains {} thickness {} {:?} depth {:?} flip {} bodies {}{extend}",
             if spec.web { "web" } else { "rib" },

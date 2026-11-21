@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # The Docked layout's top colours in both themes (GitHub #127, mitcad#1245;
 # the top bar and the toolbar panel of Windows and Linux since mitcad#2082):
-# the title row and its Undo and Redo pair, flat on it, show the window's
+# the title row and its left group (mitcad#2129), flat on it, show the window's
 # colour (the "window" colour of the "Window style:" line), as the
 # Floating top bar does; the Chat button on the row and the toolbar panel's
 # card (ribbonPanel) are of the theme (dark or light), not the Windows 11
@@ -23,7 +23,7 @@ capture window '^Window style: dark, window (#[0-9a-f]+), panels #[0-9a-f]+,' 10
 wait-idle
 sleep 500
 expect-widget-background titleRow ${window} 6
-expect-widget-background titleHistory ${window} 6
+expect-widget-background titleQuickAccess ${window} 6
 expect-widget-theme titleChat dark
 expect-widget-theme ribbonPanel dark
 
@@ -32,7 +32,7 @@ capture window '^Window style: light, window (#[0-9a-f]+), panels #[0-9a-f]+,' 1
 wait-idle
 sleep 500
 expect-widget-background titleRow ${window} 6
-expect-widget-background titleHistory ${window} 6
+expect-widget-background titleQuickAccess ${window} 6
 expect-widget-theme titleChat light
 expect-widget-theme ribbonPanel light
 

@@ -2,8 +2,9 @@
 # The 3D Print group's icons (mitcad#1096, mitcad#1135): Send to Slicer
 # keeps the printer, Printers… shows the printer with a gear, Processes…
 # the printed layers with a gear, and they differ in the ribbon, the menus
-# and the command search (they all take the command's action's icon); run
-# by ui-print-icons-test.sh.
+# and the command search (they all take the command's action's icon; the
+# toolbar's buttons draw it with the thin outline, mitcad#2092); run by
+# ui-print-icons-test.sh.
 wait-idle
 expect-command-icon make.print3d print-3d make.printers
 expect-command-icon make.printers print-settings make.print3d

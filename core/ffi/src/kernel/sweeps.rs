@@ -171,6 +171,8 @@ pub mod ffi {
         /// The way a rib grows, when not at right angles to its chord.
         has_direction: bool,
         direction: [f64; 3],
+        /// Leans the sides (radians, 0 for none; mitcad#2102).
+        draft_angle: f64,
     }
 
     unsafe extern "C++" {
@@ -625,6 +627,7 @@ pub fn rib(spec: &RibSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, Ker
         end_offset: spec.end_offset,
         has_direction: spec.direction.is_some(),
         direction: spec.direction.unwrap_or([0.0; 3]),
+        draft_angle: spec.draft_angle,
     };
     ffi::rib_solid(
         &spec.feature.to_string(),

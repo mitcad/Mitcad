@@ -37,8 +37,8 @@ geometry.helical_joins): two slabs of four quarters with treads on their
 rim: the rim merged into one face without a seam, valid;
 test_merge_of_a_whole_ring, the boundary case: a whole ring merged into one
 face with a seam as before; test_stair_joined_with_its_stringers: the rim's
-560 pieces merged. Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+560 pieces merged. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx

@@ -18,7 +18,8 @@
 # the upper line's middle (and the 2 mm dimension's text its left part).
 # Run by
 # tools/ui-sketch-conflict-test.sh (Linux) and
-# tools/ui-windows-sketch-conflict-test.ps1 (Windows).
+# tools/ui-windows-sketch-conflict-test.ps1 (Windows) and
+# tools/ui-macos-sketch-conflict-test.sh (macOS).
 expect-ever 'View area'
 wait-idle
 expect-ever '^Timeline Sketch1 at '

@@ -44,8 +44,8 @@ without this patch by the test's documentation). Another caller:
 geometry/tests/test_fillet_corner_cases.cpp,
 test_rounding_end_prolonged_across_a_seam (ctest
 geometry.fillet_corner_cases), whose volumes move by 1e-6 mm3 when the
-intersection is split. Its failure without the patch is still to be shown in
-the port's before/after run (mitcad#1986).
+intersection is split. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.cxx b/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.cxx
 --- a/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.cxx

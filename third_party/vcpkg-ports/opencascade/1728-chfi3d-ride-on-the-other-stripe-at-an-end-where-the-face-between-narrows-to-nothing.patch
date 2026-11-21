@@ -71,8 +71,9 @@ walk puts them (the 0.5's ends at the exact end on the foot's line), and
 test_whole_fillet1, the design's whole rounding valid within 4 mm3 of the
 stored body's with every vertex within 0.05 (the ride approximated by the
 guide's parameter left 0.4 to 1.1 mm, mitcad#2075); both on the stored case
-`fillet-wall-run-on`. Its failure without the patch is still to be shown
-in the port's before/after run (mitcad#1986).
+`fillet-wall-run-on`. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py, reverted together with 1729, which changes the
+same lines).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

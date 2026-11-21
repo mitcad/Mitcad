@@ -35,9 +35,9 @@ Test: geometry/tests/test_fillet_tangent_ride.cpp, test_wall_end_corners
 ride's point (1.2 and 1.5 beside the rounding of 2, 1.7 beside the
 rounding of 1), prism and box, both orders: valid, the volume within a
 millionth; and geometry.fillet_top_chains, test_tower_top with the legs'
-edges and test_thirteen_sets on the stored case `fillet-wall-run-on`. Its
-failure without the patch is still to be shown in the port's before/after
-run (mitcad#1986).
+edges and test_thirteen_sets on the stored case `fillet-wall-run-on`. It
+fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py,
+reverted together with 1781, which changes the same lines).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 8993987a..8843c75d 100644

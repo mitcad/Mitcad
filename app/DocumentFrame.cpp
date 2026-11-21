@@ -28,6 +28,7 @@
 #include <QPainter>
 #include <QSettings>
 #include <QStackedWidget>
+#include <QStyleOptionTab>
 #include <QTabBar>
 #include <QTimer>
 #include <QUrl>
@@ -86,29 +87,57 @@ protected:
     // weight only, it was elided in its own tab where the semibold face is
     // wider ("Un…ed" in Segoe UI Variable, the Docked layout's font,
     // mitcad#2082), and a tab keeps its width when it is shown.
-    const QWidget* close = tabButton(index, QTabBar::RightSide);
-    const int closeRoom = close != nullptr ? close->sizeHint().width() + 6 : 0;
-    const int text = std::max(QFontMetrics(nameFont(false)).horizontalAdvance(tabText(index)),
-                              QFontMetrics(nameFont(true)).horizontalAdvance(tabText(index)));
     // As high as the bar (TitleBar::hostDocumentTabs fixes its height to
     // the buttons' beside it), so that the name, the close button and the
     // block share the bar's centre line with Home, File, Undo and Redo.
-    return QSize(std::min(text + 24, 240) + closeRoom, std::max(fontMetrics().height() + 10, minimumHeight()));
+    return QSize(std::min(nameRoom(index), 240) + closeRoom(index),
+                 std::max(fontMetrics().height() + 10, minimumHeight()));
   }
+  // How narrow a tab may be squeezed when the row is short. A short name
+  // (whole at its full width) keeps that width while the long names,
+  // narrowed to their least, leave it room in the bar: the long name gives
+  // up the room and short names are not elided (mitcad#2060; QTabBar shared
+  // the shortfall between the tabs, and "Untitled" lost 2 px beside a long
+  // name that still had 76 px to give, in the Windows VM's 1028 px window).
+  // Only when even that does not fit are short names narrowed too.
   QSize minimumTabSizeHint(int index) const override {
     if (!m_rowStyle) return QTabBar::minimumTabSizeHint(index);
     const QSize full = tabSizeHint(index);
+    if (nameRoom(index) <= 240) {
+      int least = 0;
+      for (int i = 0; i < count(); ++i) {
+        least += nameRoom(i) <= 240 ? tabSizeHint(i).width() : squeezedWidth(i);
+      }
+      if (least <= width()) return full;
+    }
+    return QSize(squeezedWidth(index), full.height());
+  }
+  // The name's width in the wider of its two weights and the room around
+  // it; the close button's room beside it; the least width of a tab.
+  int nameRoom(int index) const {
+    return std::max(QFontMetrics(nameFont(false)).horizontalAdvance(tabText(index)),
+                    QFontMetrics(nameFont(true)).horizontalAdvance(tabText(index))) +
+           24;
+  }
+  int closeRoom(int index) const {
     const QWidget* close = tabButton(index, QTabBar::RightSide);
-    const int closeRoom = close != nullptr ? close->sizeHint().width() + 6 : 0;
-    return QSize(std::min(full.width(), 64 + closeRoom), full.height());
+    return close != nullptr ? close->sizeHint().width() + 6 : 0;
+  }
+  int squeezedWidth(int index) const {
+    return std::min(std::min(nameRoom(index), 240) + closeRoom(index), 64 + closeRoom(index));
   }
   void leaveEvent(QEvent* event) override {
     QTabBar::leaveEvent(event);
     if (m_rowStyle) update();
   }
   void paintEvent(QPaintEvent* event) override {
+    QStringList shown;
     if (!m_rowStyle) {
       QTabBar::paintEvent(event);
+      // The names as the style drew them (QTabBar elides them in its
+      // style option).
+      for (int i = 0; i < count(); ++i) shown.append(shownName(i));
+      logShownNames(shown);
       return;
     }
     QPainter painter(this);
@@ -133,12 +162,34 @@ protected:
       }
       // The name left of the close button, elided in the middle.
       const QRect name = nameRect(i);
-      const QFont font = nameFont(selected);
-      painter.setFont(font);
+      painter.setFont(nameFont(selected));
       painter.setPen(selected ? text : quiet);
-      painter.drawText(name, Qt::AlignVCenter | Qt::AlignLeft,
-                       QFontMetrics(font).elidedText(tabText(i), Qt::ElideMiddle, name.width()));
+      const QString elided = shownName(i);
+      painter.drawText(name, Qt::AlignVCenter | Qt::AlignLeft, elided);
+      shown.append(elided);
     }
+    logShownNames(shown);
+  }
+  // The names as shown, for the UI tests (mitcad#2060): logged when they
+  // change, e.g. "Document tabs shown: 'Bracket' 'Untitled'".
+  void logShownNames(const QStringList& shown) {
+    if (shown == m_loggedNames) return;
+    m_loggedNames = shown;
+    QString line = QStringLiteral("Document tabs shown:");
+    for (const QString& name : shown) line += QStringLiteral(" '%1'").arg(name);
+    qDebug().noquote() << line;
+  }
+  // A tab's name as it is drawn: in the row elided in the middle to the
+  // room left of its close button, in the shown weight; else as the style
+  // elides it in its option.
+  QString shownName(int index) const {
+    if (!m_rowStyle) {
+      QStyleOptionTab option;
+      initStyleOption(&option, index);
+      return option.text;
+    }
+    return QFontMetrics(nameFont(index == currentIndex()))
+        .elidedText(tabText(index), Qt::ElideMiddle, nameRect(index).width());
   }
   // Where a tab's name is painted in the row: left of its close button.
   QRect nameRect(int index) const {
@@ -154,6 +205,14 @@ protected:
     return font;
   }
 public:
+  // The names as they are drawn, logged also where the bar is never
+  // painted (Windows session 0, where paintEvent's line never came): from
+  // DocumentFrame::logShownTab as the tabs change or move.
+  void logNamesAsShown() {
+    QStringList shown;
+    for (int i = 0; i < count(); ++i) shown.append(shownName(i));
+    logShownNames(shown);
+  }
   // The tabs in the row for the UI tests (mitcad#2082): each one's width,
   // the width it asks for, and whether its name is elided.
   QString rowWidths() const {
@@ -269,6 +328,7 @@ private:
   QPointer<MainWindow> m_pressedDocument;
   bool m_dragCancelled = false;
   bool m_rowStyle = false;
+  QStringList m_loggedNames; // logShownNames' last names
   bool m_frameScrollButtons = true; // the style's, kept while in a title row
 };
 }
@@ -491,6 +551,14 @@ void DocumentFrame::logShownTab() {
     m_loggedTab = line;
     qDebug().noquote() << line;
   }
+  // The names and widths only once the row has given the bar the room it
+  // asks for at least: while the row is still laid out (the bar 0 wide in
+  // the Docked top bar) every tab is squeezed and its name elided only for
+  // that moment.
+  if (m_tabs->width() < m_tabs->minimumSizeHint().width()) {
+    return;
+  }
+  static_cast<DocumentTabs*>(m_tabs)->logNamesAsShown();
   const QString widths = static_cast<const DocumentTabs*>(m_tabs)->rowWidths();
   if (!widths.isEmpty() && widths != m_loggedWidths) {
     m_loggedWidths = widths;

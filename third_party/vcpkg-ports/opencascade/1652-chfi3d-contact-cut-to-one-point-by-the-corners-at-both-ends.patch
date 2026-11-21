@@ -24,8 +24,8 @@ test_end_face_strip_and_eave_end (ctest geometry.fillet_eave): an end
 face's two edges along the slope and the eave's end edge at 0.7, 0.9 and
 1, the end edge's contact cut to one point by both corners; valid, the
 material taken between the largest single rounding's and the sum (invalid
-without the patch). Its failure without the patch is still to be shown in
-the port's before/after run (mitcad#1986).
+without the patch). It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index dc9ef268..7f0e6903 100644

@@ -523,6 +523,8 @@ impl<K: Kernel> Document<K> {
                 frames: Vec::new(),
                 looks: false,
                 given: Vec::new(),
+                parts: None,
+                unlinked: Vec::new(),
             });
             component.library = reference;
             if let Some(looks) = &looks {

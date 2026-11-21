@@ -29,8 +29,9 @@ geometry.fillet_chain_loops): a plate whose top outline turns twice: the
 contour from a selected edge takes the outline's four edges once each
 (without the patch the contour does not end within the test's 30 s);
 test_mitcad_fillet_round_a_closed_chain_ends, MitCad's fillet of three of
-them. Its failure without the patch, stated in its documentation, is still
-to be shown in the port's before/after run (mitcad#1986).
+them. Its failure without the patch is still to be shown: with it and the
+8 later patches that change the same lines reverted at the port's tip, the
+test does not build (tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 index 7bc592e4..26465aa8 100644

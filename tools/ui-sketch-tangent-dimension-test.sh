@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/sketch/EditTools.cpp app/sketch/SketchTool.hpp app/sketch/SketchOverlay.cpp
 # check-all sources: app/sketch/SketchController.cpp app/sketch/SketchController.hpp app/MainWindow.cpp
-# check-all sources: app/framework/TestDriver.cpp core/sketch core/solver tools/cli
+# check-all sources: app/framework/TestDriver.cpp core/sketch core/solver tools/cli core/model-api/src/sketch.rs
 # check-all sources: tools/ui-scripts/sketch-tangent-dimension.mitcad-ui tools/ui-scripts/sketch-tangent-dimension.json
 # Sketch Dimension's right-click menu (mitcad#1540, GitHub #203), through
 # the real UI on a design that mitcad-cli makes
@@ -16,6 +16,9 @@
 # tangent_circle_distance that measures 13. The steps are
 # tools/ui-scripts/sketch-tangent-dimension.mitcad-ui, which
 # tools/ui-windows-sketch-tangent-dimension-test.ps1 runs on Windows.
+# The tool's prompts name the right-click Driven, and an existing
+# dimension's context menu has Make Driven and Make Driving, each one undo
+# step (mitcad#2055).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-tangent-dimension-test.sh
@@ -46,5 +49,9 @@ grep -Eq 'Added dimension k[0-9]+ tangent_point_distance d[0-9]+ = 18 mm$' "$UI_
 echo 'ok   a tangent-to-center dimension added with the value 18'
 ui_expect_log 'Sketch Dimension preview: tangent_circle_distance (13.00)' 'the driven preview in parentheses'
 ui_expect_log 'tangent_circle_distance = 13.00' 'a driven tangent-to-tangent dimension measuring 13'
+ui_expect_log 'then right-click for Driven.' 'the Pick prompt names the right-click Driven'
+ui_expect_log 'Right-click: Driven.' 'the Place prompt names the right-click Driven'
+ui_expect_log 'Undo: Make Driven in Sketch1' 'Make Driven from the context menu, one undo step'
+ui_expect_log 'Undo: Make Driving in Sketch1' 'Make Driving from the context menu, one undo step'
 ui_expect_log 'TestDriver: done' 'tangent and center picks from the right-click menu'
 ui_finish 'UI sketch dimension tangent and center picks'

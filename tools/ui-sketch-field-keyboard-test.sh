@@ -73,7 +73,7 @@ ui_step "pick the line"                  ui_sketch_click 20 0
 ui_step "place its value"                ui_sketch_click 20 10
 ui_expect_new "Sketch value editor at" "the dimension editor opened"
 ui_step "open MODIFY from the ribbon"    ui_click_logged "Ribbon SKETCH/MODIFY"
-ui_step "choose Offset"                  ui_key Down Down Down Down Down Return
+ui_step "choose Offset"                  ui_key Down Down Down Down Down Down Down Down Return
 ui_expect_new "Command Offset started" "Offset started from the ribbon"
 ui_expect_new "Sketch value editor closed" "the retired tool's editor closed"
 ui_step "cancel Offset (Esc)"            ui_key Escape

@@ -41,9 +41,11 @@ use mitcad_vec3::vec2::{add as add2, dot as dot2, norm as len2, scale as mul2, s
 pub use mitcad_model::drawing::annotate_def::*;
 
 use super::P2;
+use super::Standard;
 use super::clip::ViewMap;
 use super::compose::{
-    ARROW_LENGTH, Bounds, EXTENSION_BEYOND, EXTENSION_GAP, TEXT_GAP, arrow, upright,
+    ARROW_LENGTH, Bounds, EXTENSION_BEYOND, EXTENSION_GAP, TEXT_GAP, arrow, broken_line,
+    reach_along, unidirectional_middle, upright,
 };
 use super::sheet::{Anchor, Group, Item, Pen, text_width};
 use mitcad_model::Characteristic;
@@ -759,6 +761,24 @@ impl ValueText {
             })
     }
 
+    /// Its half width and half height at this height, mm, written
+    /// horizontal (ASME, mitcad#2047), and how far its box's middle lies
+    /// above its baseline.
+    fn half_box(&self, h: f64) -> (P2, f64) {
+        let (low, high) = self.rise(h);
+        (
+            [self.width(h) / 2.0, (high - low) / 2.0],
+            (high + low) / 2.0,
+        )
+    }
+
+    /// Writes it horizontal with its box's middle at `c` (ASME,
+    /// mitcad#2047).
+    fn write_level(&self, group: &mut Group, c: P2, h: f64) {
+        let (_, lift) = self.half_box(h);
+        self.write(group, [c[0], c[1] - lift], 0.0, Anchor::Middle, h);
+    }
+
     /// Writes it on a baseline, its letters `h` high: `at` its start
     /// (`Anchor::Start`), its middle or its end, along `angle`.
     fn write(&self, group: &mut Group, at: P2, angle: f64, anchor: Anchor, h: f64) {
@@ -785,13 +805,15 @@ impl ValueText {
 // --- On the sheet ----------------------------------------------------------
 
 /// What lays an annotation out: its view's map onto the sheet, the view's
-/// box on the sheet and the letters' height (paper mm: the annotation's
-/// own, else its drawing's; mitcad#729).
+/// box on the sheet, the letters' height (paper mm: the annotation's
+/// own, else its drawing's; mitcad#729) and the drawing's dimensioning
+/// standard (mitcad#2047).
 #[derive(Debug, Clone, Copy)]
 pub struct Frame<'a> {
     pub map: &'a ViewMap,
     pub view_box: Bounds,
     pub text: f64,
+    pub standard: Standard,
 }
 
 impl Frame<'_> {
@@ -831,6 +853,16 @@ pub fn measure(annotation: &ViewAnnotation, seen: &[Seen]) -> Result<Option<f64>
                 r
             }))
         }
+        // A hole's circle seen end on or its round face from the side
+        // (mitcad#2054); its words come from the hole, not the view.
+        AnnotationType::HoleCallout => match seen.first() {
+            Some(Seen::Circle { .. } | Seen::Axis { .. }) => Ok(None),
+            _ => Err(
+                "a hole callout points at a hole: a circle seen end on, or a round face seen \
+                 from the side"
+                    .to_owned(),
+            ),
+        },
         _ => Ok(None),
     }
 }
@@ -980,6 +1012,7 @@ pub fn lay_out(
         }
         AnnotationType::EdgeExtension => "edge-extension",
         AnnotationType::Note => "note",
+        AnnotationType::HoleCallout => "hole-callout",
         AnnotationType::Datum => "datum",
         AnnotationType::Frame => "feature-control-frame",
         AnnotationType::Finish => "surface-finish",
@@ -1029,6 +1062,16 @@ pub fn lay_out(
                 .lines()
                 .map(|l| l.trim_end().to_owned())
                 .collect();
+            leader_text(&mut g, tip, add2(tip, shift), &lines, h);
+        }
+        AnnotationType::HoleCallout => {
+            // Its lines as the caller wrote them (`hole_callout_text`), one
+            // to a line of `value`.
+            let tip = leader_tip(annotation, &seen[0], frame);
+            let shift = annotation.text_offset.unwrap_or(NOTE_SHIFT);
+            let lines: Vec<String> = value
+                .map(|v| v.text.lines().map(|l| l.trim_end().to_owned()).collect())
+                .unwrap_or_default();
             leader_text(&mut g, tip, add2(tip, shift), &lines, h);
         }
         AnnotationType::Datum => {
@@ -1214,13 +1257,15 @@ fn linear(
     let a = anchor_of(&seen[0], frame, toward);
     let b = anchor_of(&seen[1], frame, toward);
     let foot = |p: P2| add2(p, mul2(n, c - dot2(sub2(p, middle), n)));
-    dimension_line(g, a, b, foot(a), foot(b), n, annotation, words, frame.text);
+    dimension_line(g, a, b, foot(a), foot(b), n, annotation, words, frame);
 }
 
 /// Extension lines from `a` and `b` to the feet `fa` and `fb` on the
 /// dimension line, the line with its arrows and the text over its middle
 /// (moved along it by the text offset; the line runs on under a text
-/// moved past an end), its letters `h` high.
+/// moved past an end), its letters the frame's height. Under ASME
+/// (mitcad#2047) the text is horizontal in a break of the line, beyond an
+/// end when it does not fit between the arrows.
 #[allow(clippy::too_many_arguments)]
 fn dimension_line(
     g: &mut Group,
@@ -1231,8 +1276,9 @@ fn dimension_line(
     n: P2,
     annotation: &ViewAnnotation,
     words: &ValueText,
-    h: f64,
+    frame: &Frame<'_>,
 ) {
+    let h = frame.text;
     for (from, foot) in [(a, fa), (b, fb)] {
         let reach = len2(sub2(foot, from));
         if reach > EXTENSION_GAP {
@@ -1250,7 +1296,11 @@ fn dimension_line(
     } else {
         perp(n).map(|v| -v)
     };
-    g.line(Pen::Thin, fa, fb);
+    if frame.standard.unidirectional() {
+        unidirectional_text(g, fa, fb, towards, annotation, words, h);
+    } else {
+        g.line(Pen::Thin, fa, fb);
+    }
     if length >= 2.0 * ARROW_LENGTH + 1.0 {
         arrow(g, fa, mul2(towards, -1.0));
         arrow(g, fb, towards);
@@ -1260,6 +1310,9 @@ fn dimension_line(
         g.line(Pen::Thin, fb, add2(fb, mul2(towards, ARROW_LENGTH + 2.0)));
         arrow(g, fa, towards);
         arrow(g, fb, mul2(towards, -1.0));
+    }
+    if frame.standard.unidirectional() {
+        return;
     }
     // The text moves along the way it reads (as a drag and a place keep
     // it), whichever way the picks run.
@@ -1277,8 +1330,45 @@ fn dimension_line(
     words.write(g, at, angle, Anchor::Middle, h);
 }
 
+/// ASME's dimension line from `fa` to `fb` (mitcad#2047): its value
+/// horizontal, its box's middle on the line (in the middle, or beyond `fb`
+/// past the arrow when it does not fit between the arrows), the line
+/// broken around it. The text offset moves it as under ISO: along the
+/// line the way [`upright_along`] gives, and across it, the break
+/// following it while it sits on the line; moved past an end the line
+/// runs on to it.
+fn unidirectional_text(
+    g: &mut Group,
+    fa: P2,
+    fb: P2,
+    towards: P2,
+    annotation: &ViewAnnotation,
+    words: &ValueText,
+    h: f64,
+) {
+    let (half, _) = words.half_box(h);
+    let length = len2(sub2(fb, fa));
+    let along = upright_along(towards);
+    let across = perp(along);
+    let c = match annotation.text_offset {
+        Some([u, v]) => add2(add2(mid(fa, fb), mul2(along, u)), mul2(across, v)),
+        None => unidirectional_middle(fa, fb, towards, half),
+    };
+    broken_line(g, fa, fb, c, half);
+    // Past an end, the line runs on to the text (its foot on the line).
+    let u = dot2(sub2(c, mid(fa, fb)), along);
+    if u.abs() > length / 2.0 {
+        let fb_ahead = dot2(sub2(fb, fa), along) >= 0.0;
+        let end = if fb_ahead == (u > 0.0) { fb } else { fa };
+        let on = add2(mid(fa, fb), mul2(along, u));
+        broken_line(g, end, on, c, half);
+    }
+    words.write_level(g, c, h);
+}
+
 /// An ordinate dimension: a thin line from the point across to the level
-/// of its origin's dimension line, the value along it there.
+/// of its origin's dimension line, the value along it there (ASME,
+/// mitcad#2047: horizontal, beyond the line's end).
 fn ordinate(
     g: &mut Group,
     annotation: &ViewAnnotation,
@@ -1309,6 +1399,14 @@ fn ordinate(
         g.line(Pen::Thin, add2(p, mul2(out, EXTENSION_GAP)), end);
     }
     let shift = annotation.text_offset.unwrap_or([0.0, 0.0]);
+    if frame.standard.unidirectional() {
+        // Its box beyond the line's end, the text gap between.
+        let (half, _) = words.half_box(frame.text);
+        let reach = reach_along(out, half) + TEXT_GAP;
+        let c = add2(add2(end, mul2(out, reach)), mul2(perp(n), -shift[0]));
+        words.write_level(g, c, frame.text);
+        return;
+    }
     let at = add2(add2(end, mul2(out, 1.0)), mul2(perp(n), -shift[0]));
     let angle = upright(out);
     let anchor = if dot2([angle.cos(), angle.sin()], out) > 0.0 {
@@ -1374,13 +1472,39 @@ fn angle(
     } else {
         (t2, r2, r1)
     };
-    g.items.push(Item::Arc {
-        pen: Pen::Thin,
-        center,
-        radius,
-        start,
-        end: start + sweep,
+    // ASME (mitcad#2047): the value horizontal in a break of the arc at
+    // its middle, moved along and across it by the text offset; where it
+    // does not fit between the arrows, outside the arc as under ISO, still
+    // horizontal.
+    let level = frame.standard.unidirectional().then(|| {
+        let half_angle = start + sweep / 2.0;
+        let middle = [half_angle.cos(), half_angle.sin()];
+        let along = perp(middle);
+        let (half, _) = words.half_box(frame.text);
+        let [u, v] = annotation.text_offset.unwrap_or([0.0, 0.0]);
+        let reach = reach_along(along, half) + TEXT_GAP;
+        let room = radius * sweep - 2.0 * ARROW_LENGTH;
+        let lift = if 2.0 * reach <= room {
+            0.0
+        } else {
+            reach_along(middle, half) + TEXT_GAP
+        };
+        let c = add2(
+            add2(center, mul2(middle, radius + lift + v)),
+            mul2(along, u),
+        );
+        (c, half)
     });
+    match level {
+        Some((c, half)) => broken_arc(g, center, radius, start, sweep, c, half),
+        None => g.items.push(Item::Arc {
+            pen: Pen::Thin,
+            center,
+            radius,
+            start,
+            end: start + sweep,
+        }),
+    }
     // The rays' extension lines where the arc lies beyond an edge, or
     // short of it.
     for (ray, near, far) in [(r1, n1, f1), (r2, n2, f2)] {
@@ -1409,6 +1533,10 @@ fn angle(
     ] {
         arrow(g, tip, sub2(tip, base));
     }
+    if let Some((c, _)) = level {
+        words.write_level(g, c, frame.text);
+        return Ok(());
+    }
     // The text outside the arc's middle, across the angle's bisector: its
     // near edge (its foot where it stands on the far side, its top where
     // it hangs towards the corner) the text gap beyond the arc, whatever
@@ -1431,6 +1559,45 @@ fn angle(
     );
     words.write(g, at, angle, Anchor::Middle, frame.text);
     Ok(())
+}
+
+/// An arc about `center` from `start` through `sweep` (radians,
+/// counter-clockwise) broken where it passes a horizontal text's box
+/// (`c ± half`, the text gap around it; ASME, mitcad#2047).
+fn broken_arc(g: &mut Group, center: P2, radius: f64, start: f64, sweep: f64, c: P2, half: P2) {
+    let clear = [half[0] + TEXT_GAP, half[1] + TEXT_GAP];
+    let inside = |a: f64| {
+        let p = add2(center, mul2([a.cos(), a.sin()], radius));
+        (p[0] - c[0]).abs() <= clear[0] && (p[1] - c[1]).abs() <= clear[1]
+    };
+    // The arc's runs outside the box, found on fine steps.
+    let n = ((sweep * radius / 0.05).ceil() as usize).clamp(16, 4096);
+    let at = |i: usize| start + sweep * i as f64 / n as f64;
+    let mut run: Option<usize> = None;
+    let push = |g: &mut Group, from: usize, to: usize| {
+        if to > from {
+            g.items.push(Item::Arc {
+                pen: Pen::Thin,
+                center,
+                radius,
+                start: at(from),
+                end: at(to),
+            });
+        }
+    };
+    for i in 0..=n {
+        match (inside(at(i)), run) {
+            (false, None) => run = Some(i),
+            (true, Some(from)) => {
+                push(g, from, i.saturating_sub(1).max(from));
+                run = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = run {
+        push(g, from, n);
+    }
 }
 
 /// A radius or a diameter: of a circle seen end on, a radius's leader
@@ -1540,17 +1707,7 @@ fn round(
         None => p,
     };
     let (sa, sb) = (start(a), start(b));
-    dimension_line(
-        g,
-        sa,
-        sb,
-        foot(a),
-        foot(b),
-        n,
-        annotation,
-        words,
-        frame.text,
-    );
+    dimension_line(g, sa, sb, foot(a), foot(b), n, annotation, words, frame);
     Ok(())
 }
 
@@ -2737,7 +2894,7 @@ pub fn moved(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'_>, 
             }
             None => {}
         },
-        AnnotationType::Note | AnnotationType::Frame => {
+        AnnotationType::Note | AnnotationType::Frame | AnnotationType::HoleCallout => {
             annotation.text_offset = shift(annotation.text_offset, NOTE_SHIFT);
         }
         AnnotationType::Datum => {
@@ -2784,7 +2941,7 @@ pub fn leader_line(
     let tip = leader_tip(annotation, first, frame);
     let h = frame.text;
     match annotation.kind {
-        AnnotationType::Note => {
+        AnnotationType::Note | AnnotationType::HoleCallout => {
             Some((tip, add2(tip, annotation.text_offset.unwrap_or(NOTE_SHIFT))))
         }
         AnnotationType::Datum => {
@@ -2915,7 +3072,8 @@ pub fn placed_at(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'
         | AnnotationType::Datum
         | AnnotationType::Frame
         | AnnotationType::Finish
-        | AnnotationType::Balloon => {
+        | AnnotationType::Balloon
+        | AnnotationType::HoleCallout => {
             let tip = leader_tip(annotation, &seen[0], frame);
             annotation.text_offset = Some(sub2(at, tip));
         }
@@ -2951,7 +3109,8 @@ pub fn turned_with_view(annotation: &mut ViewAnnotation, angle: f64) {
         | AnnotationType::Finish
         | AnnotationType::Balloon
         | AnnotationType::Radius
-        | AnnotationType::Diameter => {
+        | AnnotationType::Diameter
+        | AnnotationType::HoleCallout => {
             if let Some(shift) = annotation.text_offset {
                 annotation.text_offset = Some(rotate(shift));
             }
@@ -3000,6 +3159,50 @@ pub fn turned_with_view(annotation: &mut ViewAnnotation, angle: f64) {
     }
 }
 
+/// A drawing's hole callout as the sheet writes it (mitcad#2054): the
+/// hole's `lines` (the model's callout engine's), or the drawing's own text
+/// in place of them (`format.replace`, lines split at its line breaks);
+/// then `format.before` in front of the first line and `format.after` after
+/// the last, a space between. A line break in either makes a line of its
+/// own: the lines of `before` but its last stand above the first line, the
+/// lines of `after` but its first below the last.
+pub fn hole_callout_text(lines: &[String], format: &mitcad_model::AnnotationFormat) -> Vec<String> {
+    let split = |text: &str| -> Vec<String> {
+        text.lines()
+            .map(|l| l.trim().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let mut out: Vec<String> = match format.replace.as_deref().map(str::trim) {
+        Some(replace) if !replace.is_empty() => split(replace),
+        _ => lines.to_vec(),
+    };
+    let join = |a: &str, b: &str| match (a.is_empty(), b.is_empty()) {
+        (true, _) => b.to_owned(),
+        (_, true) => a.to_owned(),
+        _ => format!("{a} {b}"),
+    };
+    let before = split(format.before.trim());
+    if let Some((last, above)) = before.split_last() {
+        match out.first_mut() {
+            Some(first) => *first = join(last, first),
+            None => out.push(last.clone()),
+        }
+        let mut lines: Vec<String> = above.to_vec();
+        lines.append(&mut out);
+        out = lines;
+    }
+    let after = split(format.after.trim());
+    if let Some((first, below)) = after.split_first() {
+        match out.last_mut() {
+            Some(last) => *last = join(last, first),
+            None => out.push(first.clone()),
+        }
+        out.extend(below.iter().cloned());
+    }
+    out.retain(|l| !l.trim().is_empty());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3042,6 +3245,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         // The two upright sides of a 40 x 20 box at the view's origin.
         let seen = [
@@ -3083,6 +3287,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let left = Seen::Line([0.0, 0.0], [0.0, 20.0]);
         let right = Seen::Line([40.0, 0.0], [40.0, 20.0]);
@@ -3144,6 +3349,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let laid = lay_out(&dia, &[circle], &frame, Some(&words("Ø10")), &[]).unwrap();
         assert_eq!(texts(&laid), ["Ø10"]);
@@ -3233,6 +3439,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let radius = 1.5;
         let c = frame.at([10.0, 10.0]);
@@ -3384,6 +3591,7 @@ mod tests {
                             map: &map,
                             view_box: view_box(),
                             text: h,
+                            standard: Standard::Iso,
                         };
                         let mut a = ViewAnnotation::new(1, AnnotationType::Angle, Vec::new());
                         a.line_offset = Some(radius);
@@ -3445,6 +3653,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: 5.0,
+            standard: Standard::Iso,
         };
         // The bisector points down: the text hangs towards the corner.
         let lines = [
@@ -3590,6 +3799,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let pattern = ViewAnnotation::new(1, AnnotationType::CenterPattern, Vec::new());
         // Six holes of 3 on a circle of 20 about (30, 10): the whole
@@ -3718,6 +3928,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let mut extension = ViewAnnotation::new(1, AnnotationType::EdgeExtension, Vec::new());
         // A corner rounded away: the bottom edge ends at x 30, the right
@@ -3761,6 +3972,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text,
+            standard: Standard::Iso,
         };
         let heights = |laid: &Laid| -> Vec<f64> {
             laid.group
@@ -4073,6 +4285,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let line = ViewAnnotation::new(1, AnnotationType::Centerline, Vec::new());
         let laid = lay_out(&line, &[side(40.0), side(50.0)], &frame, None, &[]).unwrap();
@@ -4188,6 +4401,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
         let tip = [120.0, 100.0];
@@ -4293,6 +4507,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
         let tip = [120.0, 100.0];
@@ -4340,6 +4555,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let edge = Seen::Line([0.0, 0.0], [40.0, 0.0]);
         let cells = ["".to_owned(), "0.05".to_owned()];
@@ -4434,6 +4650,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let short = Seen::Line([0.0, 0.0], [40.0, 0.0]);
         let mut d = ViewAnnotation::new(1, AnnotationType::Datum, Vec::new());
@@ -4583,6 +4800,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let pick = ViewPick {
             body: "F2.b0".parse().unwrap(),
@@ -4671,6 +4889,7 @@ mod tests {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
+            standard: Standard::Iso,
         };
         let face = ViewPick {
             body: "F2.b0".parse().unwrap(),
@@ -4740,5 +4959,118 @@ mod tests {
             assert!((mitcad_vec3::norm(x) - 1.0).abs() < 1e-12);
             assert!((mitcad_vec3::norm(y) - 1.0).abs() < 1e-12);
         }
+    }
+}
+
+#[cfg(test)]
+#[path = "annotate_asme_tests.rs"]
+mod asme_tests;
+
+#[cfg(test)]
+mod hole_callout_tests {
+    use super::hole_callout_text;
+    use crate::compose::{CalloutStyle, HoleInput, hole_callout};
+    use crate::{RoundHole, Units};
+    use mitcad_model::AnnotationFormat;
+
+    fn hole(diameter: f64, through: bool, depth: f64) -> RoundHole {
+        RoundHole {
+            face: None,
+            opening: [0.0, 0.0, 0.0],
+            direction: [0.0, 0.0, -1.0],
+            diameter,
+            through,
+            depth,
+            counterbore: None,
+            countersink: None,
+        }
+    }
+
+    /// A hole's lines as a drawing's hole callout takes them: the model's,
+    /// in symbols.
+    fn lines(input: &HoleInput, count: usize, thread_depth: Option<f64>) -> Vec<String> {
+        hole_callout(input, count, thread_depth, Units::MM, CalloutStyle::Symbols)
+    }
+
+    fn format(before: &str, after: &str, replace: Option<&str>) -> AnnotationFormat {
+        AnnotationFormat {
+            before: before.to_owned(),
+            after: after.to_owned(),
+            replace: replace.map(str::to_owned),
+            ..AnnotationFormat::default()
+        }
+    }
+
+    #[test]
+    fn a_hole_callout_writes_the_holes_lines_with_its_own_texts() {
+        // mitcad#2054: a simple hole, a counterbored, a countersunk and a
+        // tapped one, as the model's callout writes them.
+        let simple = HoleInput {
+            hole: hole(6.6, true, 0.0),
+            thread: None,
+        };
+        let mut cbore = HoleInput {
+            hole: hole(6.6, false, 20.0),
+            thread: None,
+        };
+        cbore.hole.counterbore = Some((11.0, 6.8));
+        let mut csink = HoleInput {
+            hole: hole(5.0, false, 12.0),
+            thread: None,
+        };
+        csink.hole.countersink = Some((10.0, std::f64::consts::FRAC_PI_2));
+        let tapped = HoleInput {
+            hole: hole(5.0, false, 15.0),
+            thread: Some("M6x1 - 6H".to_owned()),
+        };
+        let plain = AnnotationFormat::default();
+        assert_eq!(
+            hole_callout_text(&lines(&simple, 1, None), &plain),
+            ["Ø6.6 THRU"]
+        );
+        assert_eq!(
+            hole_callout_text(&lines(&cbore, 4, None), &plain),
+            ["4x Ø6.6 ↧ 20", "⌴ Ø11 ↧ 6.8"]
+        );
+        assert_eq!(
+            hole_callout_text(&lines(&csink, 1, None), &plain),
+            ["Ø5 ↧ 12", "⌵ Ø10 × 90°"]
+        );
+        assert_eq!(
+            hole_callout_text(&lines(&tapped, 2, Some(12.0)), &plain),
+            ["2x M6x1 - 6H ↧ 12", "Ø5 ↧ 15"]
+        );
+
+        // Before in front of the first line, after after the last.
+        let own = format("TYP", "BOTH SIDES", None);
+        assert_eq!(
+            hole_callout_text(&lines(&cbore, 4, None), &own),
+            ["TYP 4x Ø6.6 ↧ 20", "⌴ Ø11 ↧ 6.8 BOTH SIDES"]
+        );
+        assert_eq!(
+            hole_callout_text(&lines(&simple, 1, None), &own),
+            ["TYP Ø6.6 THRU BOTH SIDES"]
+        );
+        // A line break makes a line of its own.
+        let broken = format("DRILL AND\nREAM", "DEBURR\nAFTER PLATING", None);
+        assert_eq!(
+            hole_callout_text(&lines(&tapped, 1, Some(15.0)), &broken),
+            ["DRILL AND", "REAM M6x1 - 6H ↧ 15 DEBURR", "AFTER PLATING"]
+        );
+
+        // Replace: the drawing's own lines in place of the hole's, its
+        // before and after kept; empty, the hole's again.
+        let replaced = format("TYP", "", Some("Ø7 THRU\nSPOTFACE Ø12"));
+        assert_eq!(
+            hole_callout_text(&lines(&csink, 1, None), &replaced),
+            ["TYP Ø7 THRU", "SPOTFACE Ø12"]
+        );
+        let empty = format("", "", Some("  "));
+        assert_eq!(
+            hole_callout_text(&lines(&csink, 1, None), &empty),
+            ["Ø5 ↧ 12", "⌵ Ø10 × 90°"]
+        );
+        // No lines (a hole that writes nothing): its own texts alone.
+        assert_eq!(hole_callout_text(&[], &own), ["TYP BOTH SIDES"]);
     }
 }

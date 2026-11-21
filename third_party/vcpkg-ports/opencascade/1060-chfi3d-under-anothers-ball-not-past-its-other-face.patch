@@ -42,8 +42,9 @@ with a ledge's top, the slot floor's edge and the ledge's edge along the
 wall rounded with 1 at the convex corner left sharp: valid, the material
 added and each rounding's face against the two quarter cylinders running
 on past the corner into each other. Without the patch 0700 drops the
-ledge's stripe and its rounding is missing. Its failure without the patch
-is still to be shown in the port's before/after run (mitcad#1986).
+ledge's stripe and its rounding is missing. It fails without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py, reverted together with
+1726, which changes the same lines).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx

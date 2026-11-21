@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT
+# The document tabs' names in the top bar (mitcad#2060) through the real
+# UI, in the Floating layout, in a 1280 x 800 window: a tab is as wide as
+# its name drawn in the weight it is shown in (DemiBold on the shown
+# design's tab), so that "Untitled" and "Bracket" are shown whole, shown
+# or not, and only a name longer than the tab's limit is elided (in the
+# middle, "…"). The tab bar logs the names as it draws them
+# ("Document tabs shown: 'Bracket' '…' 'Untitled'"). The wrapper opens
+# ${MITCAD_TEST_WORK}/Bracket.mitcad; the script opens "A design with a
+# name far too long for its tab in the top bar" (60 characters) and adds
+# an untitled design. Run by tools/ui-document-tab-names-test.sh
+# (Linux), tools/ui-windows-document-tab-names-test.ps1 (Windows) and
+# tools/ui-macos-document-tab-names-test.sh (macOS).
+expect-ever 'View area' 30
+window-resize 1280 800
+wait-idle
+
+# 1. The long name: elided in the middle, Bracket still whole. (It is
+# opened before the untitled design, because opening a file replaces an
+# untitled design that has not been changed.)
+mark
+open-file '${MITCAD_TEST_WORK}/A design with a name far too long for its tab in the top bar.mitcad'
+wait-log '^Document window created: ' 30
+wait-idle
+expect-document-frame-tabs 2
+wait-log "^Document tabs shown: 'Bracket' 'A design[^']*\x{2026}[^']*top bar'$" 30
+expect-never "^Document tabs shown: .*'A design with a name far too long for its tab in the top bar'"
+
+# 2. An untitled design beside them, shown whole.
+mark
+command file.new_design
+wait-log '^Document window created: ' 30
+wait-idle
+expect-document-frame-tabs 3
+wait-log "^Document tabs shown: 'Bracket' 'A design[^']*\x{2026}[^']*top bar' 'Untitled'$" 30
+screenshot '${MITCAD_TEST_WORK}/document-tab-names.png'
+
+# 3. Each short name shown (DemiBold) and not shown: never elided.
+mark
+document-tab-click 0
+wait-idle
+document-tab-click 1
+wait-idle
+document-tab-click 2
+wait-idle
+expect-no-log "^Document tabs shown: ('[^']*\x{2026}|.*'[^']*\x{2026}[^']*'$)"
+expect-never 'TestDriver: FAIL'

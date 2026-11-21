@@ -13,8 +13,12 @@
 //          its designs as cards; while the search holds text the designs whose
 //          name holds it, in every project and in the recent list.
 //
-// The row and folder shown are remembered for the next start (the local
-// settings start/browseRow, start/browseRoot, start/browseFolder). A card's
+// A project is shown in one of two views (mitcad#2093): Cards walks it one
+// folder at a time (the breadcrumb, the sub-folders as buttons, the designs
+// as cards); Tree shows its folders as a tree beside the chosen folder's
+// design cards. The row and folder shown and the view are remembered for
+// the next start (the local settings start/browseRow, start/browseRoot,
+// start/browseFolder, start/browseView). A card's
 // preview is the one a save writes (recent::designPreviewPath), looked for
 // only on this computer: nothing is downloaded for it. Plain Qt Core, for
 // app.unit.
@@ -54,6 +58,29 @@ QString folderKey(); // "start/browseFolder"
 // The row remembered (Recent when none), and remembering one.
 Row loadRow();
 void saveRow(const Row& row);
+
+// How a project is shown (mitcad#2093): its folders one at a time with
+// the breadcrumb, or as a tree. The same for every project.
+enum class View { Cards, Tree };
+
+// The settings key of the view: "start/browseView", "cards" or "tree".
+QString viewKey();
+// The view remembered (Cards when none, or an unknown word), and
+// remembering one.
+View loadView();
+void saveView(View view);
+// The view's word in the settings and the logs: "cards", "tree".
+QString viewWord(View view);
+
+// The folders of a project's tree to unfold for `folder` to be shown
+// selected and unfolded: each folder above it, then itself ("parts",
+// "parts/sub" for "parts/sub"); none for the project's top.
+QStringList openFolders(const QString& folder);
+
+// The logs' line of a project's tree: "Start page tree: Shop | Shop/parts/
+// | Shop/parts/sub/ (current Shop/parts/)": the project, then every
+// folder (allFolders' order), then the folder shown.
+QString treeLine(const ProjectRow& project, const QString& projectKey, const QString& folder);
 
 // The row to show for `row` among the listed projects: a project's row with
 // the project's listed spelling, at its top when the folder is gone; Recent

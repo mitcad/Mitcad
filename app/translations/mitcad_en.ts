@@ -267,6 +267,13 @@
             <numerusform>%n degrees of freedom left</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>%n image(s) in the Comments panel</source>
+        <translation>
+            <numerusform>%n image in the Comments panel</numerusform>
+            <numerusform>%n images in the Comments panel</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>RenderReadyCheck</name>
@@ -419,10 +426,52 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>Take %n Component(s) out of their Folder</source>
+        <translation>
+            <numerusform>Take %n Component out of its Folder</numerusform>
+            <numerusform>Take %n Components out of their Folder</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Move %n Component(s) to %1</source>
+        <translation>
+            <numerusform>Move %n Component to %1</numerusform>
+            <numerusform>Move %n Components to %1</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Take %n Body(ies) out of their Folder</source>
+        <translation>
+            <numerusform>Take %n Body out of its Folder</numerusform>
+            <numerusform>Take %n Bodies out of their Folder</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Move %n Body(ies) to %1</source>
+        <translation>
+            <numerusform>Move %n Body to %1</numerusform>
+            <numerusform>Move %n Bodies to %1</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Reorder %n Component(s)</source>
+        <translation>
+            <numerusform>Reorder %n Component</numerusform>
+            <numerusform>Reorder %n Components</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>%n component(s) made of repeated parts</source>
         <translation>
             <numerusform>%n component made of repeated parts</numerusform>
             <numerusform>%n components made of repeated parts</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>The block has %n instance(s): explode or delete them first</source>
+        <translation>
+            <numerusform>The block has %n instance: explode or delete it first</numerusform>
+            <numerusform>The block has %n instances: explode or delete them first</numerusform>
         </translation>
     </message>
 </context>
@@ -454,6 +503,13 @@
         <translation>
             <numerusform>, %n degree of freedom</numerusform>
             <numerusform>, %n degrees of freedom</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Block %1: %n instance(s)</source>
+        <translation>
+            <numerusform>Block %1: %n instance</numerusform>
+            <numerusform>Block %1: %n instances</numerusform>
         </translation>
     </message>
     <message numerus="yes">
@@ -764,6 +820,13 @@ What is not sent within %n seconds is sent the next time the project opens.</num
             <numerusform>Generated %n toolpaths.</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>%n image(s): %1</source>
+        <translation>
+            <numerusform>%n image: %1</numerusform>
+            <numerusform>%n images: %1</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>mitcad::MaterialsPanel</name>
@@ -882,9 +945,9 @@ What is not sent within %n seconds is sent the next time the project opens.</num
     <name>mitcad::RenderWorkspace</name>
     <message numerus="yes">
         <source>%1 and %n more</source>
-        <translation type="unfinished">
-            <numerusform></numerusform>
-            <numerusform></numerusform>
+        <translation>
+            <numerusform>%1 and %n more</numerusform>
+            <numerusform>%1 and %n more</numerusform>
         </translation>
     </message>
 </context>
@@ -1003,7 +1066,7 @@ What is not sent within %n seconds is sent the next time the project opens.</num
     <name>mitcad::drawings::DrawingsPanel</name>
     <message numerus="yes">
         <source>%1: %n sheet(s)</source>
-        <translation type="unfinished">
+        <translation>
             <numerusform>%1: %n sheet</numerusform>
             <numerusform>%1: %n sheets</numerusform>
         </translation>
@@ -1071,6 +1134,37 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>; %n left out for naming geometry that was not copied</numerusform>
             <numerusform>; %n left out for naming geometry that was not copied</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::sketch::SketchController</name>
+    <message numerus="yes">
+        <source>Selected %n curve(s) that are not fully constrained.</source>
+        <translation>
+            <numerusform>Selected %n curve that is not fully constrained.</numerusform>
+            <numerusform>Selected %n curves that are not fully constrained.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Selected %n point(s) that are not fully constrained.</source>
+        <translation>
+            <numerusform>Selected %n point that is not fully constrained.</numerusform>
+            <numerusform>Selected %n points that are not fully constrained.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n curve(s)</source>
+        <translation>
+            <numerusform>%n curve</numerusform>
+            <numerusform>%n curves</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n point(s)</source>
+        <translation>
+            <numerusform>%n point</numerusform>
+            <numerusform>%n points</numerusform>
         </translation>
     </message>
 </context>

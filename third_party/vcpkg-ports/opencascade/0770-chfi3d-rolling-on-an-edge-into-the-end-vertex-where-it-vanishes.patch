@@ -56,8 +56,9 @@ test_rounding_rolling_into_a_vertex_where_it_vanishes (ctest
 geometry.fillet_lens_overflow): a block on a post as wide as the block, the
 post's foot rounded with 10: valid, its quarters alike, the material added
 between the torus within 30 degrees of the block's axis and the whole torus.
-Its failure without the patch, stated in its documentation, is still to be
-shown in the port's before/after run (mitcad#1986).
+Its failure without the patch is still to be shown: the patch does not
+revert at the port's tip without the more than 40 later patches that
+change the same lines (tried 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index c26ef9ba..853f7eb8 100644

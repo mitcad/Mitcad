@@ -77,6 +77,7 @@ fn main() {
                 map: &map,
                 view_box,
                 text: DIMENSION_TEXT,
+                standard: mitcad_model_drawing::Standard::Iso,
             };
             let (a, b) = (start * PI / 180.0, end * PI / 180.0);
             let r = RADIUS * SCALE;

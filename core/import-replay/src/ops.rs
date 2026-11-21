@@ -2160,15 +2160,13 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             // The faces taken away, healed by the faces around them.
             "DeleteFaceFeature" => {
                 let faces = references(get("deletedFaces"));
-                let mut by_body: Vec<(BodyUid, Vec<String>)> = Vec::new();
-                for r in &faces {
-                    let Reference::Face(fp) = r else { continue };
-                    let (b, f) = self.face_input(fp).ok_or("a face was not found")?;
-                    match by_body.iter_mut().find(|(x, _)| *x == b) {
-                        Some((_, list)) => list.push(f.to_string()),
-                        None => by_body.push((b, vec![f.to_string()])),
-                    }
-                }
+                let by_body = self.faces_by_body(
+                    faces.iter().filter_map(|r| match r {
+                        Reference::Face(fp) => Some(&**fp),
+                        _ => None,
+                    }),
+                    "a face was not found",
+                )?;
                 if by_body.is_empty() {
                     return Err("its faces were not decoded".to_owned());
                 }
@@ -2187,15 +2185,13 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             // decoded matrix (its translation in cm) as a free move's.
             "MoveFaceFeature" => {
                 let faces = references(get("faces"));
-                let mut by_body: Vec<(BodyUid, Vec<String>)> = Vec::new();
-                for r in &faces {
-                    let Reference::Face(fp) = r else { continue };
-                    let (b, f) = self.face_input(fp).ok_or("a moved face was not found")?;
-                    match by_body.iter_mut().find(|(x, _)| *x == b) {
-                        Some((_, list)) => list.push(f.to_string()),
-                        None => by_body.push((b, vec![f.to_string()])),
-                    }
-                }
+                let by_body = self.faces_by_body(
+                    faces.iter().filter_map(|r| match r {
+                        Reference::Face(fp) => Some(&**fp),
+                        _ => None,
+                    }),
+                    "a moved face was not found",
+                )?;
                 if by_body.is_empty() {
                     return Err("its faces were not decoded".to_owned());
                 }

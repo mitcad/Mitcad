@@ -41,6 +41,9 @@ QVector<DocumentSnapshot::Occurrence> occurrencesOf(const QJsonArray& values) {
     occurrence.name = text(o, "name");
     // The condition it is shown under (mitcad#800, mitcad#809).
     occurrence.visibleWhen = text(o, "visible_when");
+    occurrence.folder = text(o, "folder"); // mitcad#2103
+    // Machined in this assembly (mitcad#2131).
+    occurrence.machinedNote = o.value(QStringLiteral("machined")).toObject().value(QStringLiteral("note")).toString();
     occurrences.append(occurrence);
   }
   return occurrences;
@@ -158,6 +161,13 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   snapshot.drawings = model.queryArray(QStringLiteral("drawings"));
   // Image references (mitcad#782).
   snapshot.imageReferences = model.queryArray(QStringLiteral("image_references"));
+  // Sketch blocks (mitcad#2110).
+  try {
+    snapshot.sketchBlocks = model.queryObject({{QStringLiteral("query"), QStringLiteral("sketch_blocks")}})
+                                .value(QStringLiteral("blocks"))
+                                .toArray();
+  } catch (const std::exception&) {
+  }
   // CAM setups with their operations' states (mitcad#1013): a model
   // without CAM has none.
   try {

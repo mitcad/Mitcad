@@ -834,6 +834,16 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     }
                     None => Value::Null,
                 };
+                // A part that slides on another (a carriage on its rail,
+                // mitcad#2088): its slide drags, within its travel limits
+                // (`{min, max, default_min, default_max}` in mm from the
+                // rail's end A; null for a part that slides on no length).
+                part["slides"] = json!(self.build_part_slides(info.component));
+                part["limits"] = match mitcad_model_build::travel_of(self, info.component) {
+                    Some(t) => json!({"min": t.min, "max": t.max,
+                                      "default_min": t.default_min, "default_max": t.default_max}),
+                    None => Value::Null,
+                };
                 part
             })
             .collect();

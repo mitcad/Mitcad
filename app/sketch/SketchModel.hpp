@@ -162,6 +162,21 @@ struct PatternData {
   std::optional<V2> direction2;
 };
 
+// An instance of a design's sketch block (mitcad#2110; commands.md,
+// "Sketch blocks"): the `sketch` query's `blocks`.
+struct BlockInstanceData {
+  QString id;        // k9
+  int block = 0;     // the block's number
+  QString name;      // the block's name
+  QString base;      // its base point, p20
+  QString direction; // its direction line, c22
+  QStringList entities; // every point and curve of it
+  bool open = false;    // its block is being edited here
+  bool temporary = false; // in a sketch made for the edit, which goes with it
+  int since = 0;          // open: the entities numbered from this on joined it
+  int lost = 0;         // constraints an edit of the block took the geometry of
+};
+
 // An offset of the sketch (commands.md, `sketch.offset`).
 struct OffsetData {
   QString id; // k9
@@ -251,6 +266,8 @@ public:
   std::vector<TextData> texts;
   std::vector<PatternData> patterns;
   std::vector<OffsetData> offsets;
+  // Instances of the design's sketch blocks (mitcad#2110).
+  std::vector<BlockInstanceData> blocks;
   std::vector<ProjectionData> projections;
   std::vector<QStringList> conflicts;
   // The inactive constraints and dimensions the geometry does not meet
@@ -303,6 +320,8 @@ public:
   // The pattern an entity is an original or a copy of, and the offset that
   // made a curve.
   const PatternData* patternOf(const QString& entity) const;
+  // The block instance an entity is part of, open ones too (mitcad#2110).
+  const BlockInstanceData* instanceOf(const QString& entity) const;
   const OffsetData* offsetOf(const QString& curve) const;
   const ConstraintData* constraint(const QString& id) const;
   const DimensionData* dimension(const QString& id) const;

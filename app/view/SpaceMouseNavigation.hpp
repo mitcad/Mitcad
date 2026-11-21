@@ -292,6 +292,12 @@ inline double spaceMouseDeflection(double value) {
   return std::isfinite(value) ? std::min(std::abs(value), 1.0) : 0.0;
 }
 
+// Whether any axis is deflected past the dead zone (mitcad#1981).
+inline bool spaceMouseDeflected(const SpaceMouseAxes& axes) {
+  return std::any_of(axes.begin(), axes.end(),
+                     [](double value) { return spaceMouseDeflection(value) > kSpaceMouseDeadzone; });
+}
+
 // How far a device's cap goes (mitcad#1720): the largest deflection it has
 // shown of each kind, translation and rotation, so that axes are compared
 // as shares of their own kind's full deflection and one kind does not win
@@ -708,10 +714,13 @@ inline SpaceMousePose spaceMouseMove(const SpaceMousePose& pose, const SpaceMous
 }
 
 // The 3D mouse as Preferences shows it (set by SpaceMouseController): what
-// is connected, and how many buttons the device has used so far.
+// is connected, and how many buttons the device has used so far; whether
+// the vendor's driver runs (set as Preferences opens, mitcad#1981: its
+// tab then says to turn off the driver's emulated input).
 struct SpaceMouseStatus {
   QString text;
   int buttonsSeen = 0;
+  bool vendorDriver = false;
 };
 
 inline SpaceMouseStatus& spaceMouseStatus() {

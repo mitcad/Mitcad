@@ -20,10 +20,14 @@ the stripe failed ("no ball of the radius touches both faces there").
 
 Upstream: new.
 
-Test: pending (mitcad#1986): no synthetic body is known that reaches its
-case; it is verified on the stored design's bodies only
-(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded with
-0.86). A regression test needs such a body first.
+Test: none, because no synthetic body reached its case (mitcad#1986).
+Tried with the patch's code traced: about 100 bodies of the OCCT-only
+geometry tests and variants of their dimensions sample the spine finely
+where the coarse samples find no start, but no fine sample found one; a
+step over a floor split into a strip wide enough for the ball's contact
+along 0.4 of a spine 20 long, between two coarse samples, fails with and
+without the patch. Verified on the design's replayed body only
+(core/import/docs/f3d-rounds-3.md).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 77d17c31..df098754 100644

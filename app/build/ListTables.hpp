@@ -18,6 +18,9 @@ struct ListTable {
   QStringList columns;
   QVector<QStringList> rows;
   QVector<QString> tooltips{};
+  // The column of the names (the component, the command) that keeps its
+  // room on a printed page (build/ListPages.hpp); -1 for none.
+  int nameColumn = -1;
 };
 
 // The tables as CSV: each table's columns and rows, a blank line between

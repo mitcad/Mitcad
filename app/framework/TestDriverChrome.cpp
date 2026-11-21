@@ -507,11 +507,17 @@ void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QStrin
                          .arg(browserIcon.height());
       return false;
     }
-    // The toolbar panel's (the Mac presentation: the Floating layout, and
-    // the Docked one with the top bar of Windows and Linux, mitcad#2082) or
-    // the Classic toolbar's.
-    const int ribbonSide = scaled(ribbon->presentation() == Ribbon::Presentation::Mac ? 26 : 28);
+    // The toolbar's icons with 3 pixels around them in buttons of the old
+    // size (mitcad#2092: 26 and 28 with 5 around): 30 in the toolbar panel
+    // (the Mac presentation: the Floating layout, and the Docked one with
+    // the top bar of Windows and Linux, mitcad#2082), 32 in the Classic
+    // toolbar's.
+    // Without labels a toolbar panel's button is the icon's room, a Classic
+    // one fits its row.
+    const bool floating = ribbon->presentation() == Ribbon::Presentation::Mac;
+    const int ribbonSide = scaled(floating ? 30 : 32);
     const QSize ribbonIcon(ribbonSide, ribbonSide);
+    const int ribbonRoom = ribbonSide + 2 * 3;
     int buttons = 0;
     int quick = 0;
     for (QToolButton* button : ribbon->findChildren<QToolButton*>()) {
@@ -543,6 +549,18 @@ void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QStrin
         ++quick;
         continue;
       }
+      const bool roomWrong = !ribbon->buttonLabels() &&
+                             (floating ? button->height() != ribbonRoom : button->height() > ribbonRoom);
+      if (roomWrong) {
+        m_waitDetail = QStringLiteral("ribbon button %1 %2 high with icons %3, expected %4 (%5 pixels around)")
+                           .arg(button->objectName())
+                           .arg(button->height())
+                           .arg(ribbonSide)
+                           .arg(floating ? QStringLiteral("%1").arg(ribbonRoom)
+                                         : QStringLiteral("at most %1").arg(ribbonRoom))
+                           .arg(3);
+        return false;
+      }
       if (button->iconSize() != ribbonIcon || button->width() < ribbonSide || button->height() < ribbonSide) {
         m_waitDetail = QStringLiteral("ribbon button %1 %2x%3 with icons %4x%5, expected icons %6x%6")
                            .arg(button->objectName())
@@ -557,6 +575,20 @@ void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QStrin
     }
     if (buttons == 0) {
       m_waitDetail = QStringLiteral("no ribbon command button shown");
+      return false;
+    }
+    // The timeline's icons at 24 in the 28 cell, 2 pixels around them
+    // (mitcad#2092: 22 with 3 around); the strip as high as before at
+    // Icon size 100 %, 34 pixels: 5 above the cell, 1 under it.
+    const QWidget* strip = main->findChild<QWidget*>(QStringLiteral("timelineStrip"));
+    const int timelineIcon = scaled(24);
+    const int timelineStrip = 5 + timelineIcon + 4 + 1;
+    if (strip == nullptr || strip->property("iconSide").toInt() != timelineIcon || strip->height() != timelineStrip) {
+      m_waitDetail = QStringLiteral("the timeline's icons %1 in a strip %2 high, expected %3 in %4")
+                         .arg(strip != nullptr ? strip->property("iconSide").toInt() : 0)
+                         .arg(strip != nullptr ? strip->height() : 0)
+                         .arg(timelineIcon)
+                         .arg(timelineStrip);
       return false;
     }
     // The icons Qt's style sizes (mitcad#1561): the application's style
@@ -621,13 +653,15 @@ void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QStrin
                                    .arg(comboIcon.height())
                                    .arg(comboBase);
     qInfo().noquote() << QStringLiteral("Text and icon size layout: font %1, %2 pt; browser icons %3x%4; ribbon %5 "
-                                        "buttons, icons %6x%6; quick access %7 buttons; %8")
+                                        "buttons, icons %6x%6; timeline icons %7 in a strip %8 high; quick access %9 buttons; %10")
                              .arg(drawn)
                              .arg(font.pointSizeF())
                              .arg(browserIcon.width())
                              .arg(browserIcon.height())
                              .arg(buttons)
                              .arg(ribbonSide)
+                             .arg(timelineIcon)
+                             .arg(timelineStrip)
                              .arg(quick)
                              .arg(styleIcons);
     return true;

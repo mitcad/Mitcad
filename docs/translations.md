@@ -591,3 +591,5 @@ päätä", never "napsauta keskipiste".
 | finger joint | sormiliitos | finger: sormi; End Margin: Päätyvara; T-nut slot: T-mutteriura; Mating Plate: Vastinlevy; Flat Pack: Tasopakkaus |
 | glue flap | liimaläppä | Taper: Kavennus; End Inset: Päädyn sisennys; Standard Box: Vakiolaatikko |
 | die line | stanssikuva | Export Die Line…: Vie stanssikuva…; cut and crease lines: leikkaus- ja nuuttausviivat; engrave: kaiverrus; score: urotus; nest (parts on a sheet): sijoitella |
+| block (sketch) | lohko | block instance: lohkon ilmentymä (not esiintymä, an occurrence; not kopio, a pattern instance); base point: peruspiste; Create Block: Luo lohko; Insert Block: Lisää lohko; Explode Block: Pura lohko; Edit Block: Muokkaa lohkoa; Finish Block: Lopeta lohko; Cancel Block: Peruuta lohko; Sketch Blocks: Luonnoslohkot |
+| Break, Split at Point, Blend Curve (sketch) | Pilko, Jaa pisteessä, Liitoskäyrä | Trim stays Katkaise; break (the drawing view's) stays katkaisu |

@@ -10,10 +10,12 @@
 #include "browser/BrowserPanel.hpp"
 
 #include <cstdio>
+#include <utility>
 
 #include <QAbstractItemModel>
 #include <QApplication>
 #include <QColor>
+#include <QHash>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -21,6 +23,7 @@
 #include <QPalette>
 #include <QSize>
 #include <QStyleOptionViewItem>
+#include <QStringList>
 #include <QStyledItemDelegate>
 #include <QTreeWidget>
 
@@ -463,6 +466,143 @@ void annotationsFolderEyeTests() {
   });
 }
 
+// Folders of a component's occurrences and of its Bodies folder
+// (mitcad#2103): Rail:1 (O1) and Panel:1 (O3) in the root's folder Frame,
+// Post:1 (O2) in none; the root's bodies Pane (F1.b0) and Sash (F3.b0) in
+// the Bodies folder's Glass, Base (F2.b0) in none. The folders come before
+// the rows in no folder, each with its rows in the model's order, closed
+// when they first show; a folder's eye is on while a row in it is shown and
+// its row greyed while none is.
+DocumentSnapshot foldersDesign() {
+  DocumentSnapshot snapshot;
+  DocumentSnapshot::Component root =
+      component(QStringLiteral("C0"), QStringLiteral("Root"), QStringLiteral("F1.b0"));
+  root.bodies << QStringLiteral("F2.b0") << QStringLiteral("F3.b0");
+  snapshot.components.append(root);
+  const char* const bodies[][3] = {{"F1.b0", "Pane", "Glass"}, {"F2.b0", "Base", ""}, {"F3.b0", "Sash", "Glass"}};
+  for (const auto& entry : bodies) {
+    DocumentSnapshot::Body made =
+        body(QString::fromLatin1(entry[0]), QString::fromLatin1(entry[1]), QStringLiteral("C0"), false);
+    made.folder = QString::fromLatin1(entry[2]);
+    snapshot.bodies.insert(made.uid, made);
+  }
+  const char* const occurrences[][4] = {
+      {"O1", "Rail:1", "C1", "Frame"}, {"O2", "Post:1", "C2", ""}, {"O3", "Panel:1", "C3", "Frame"}};
+  for (const auto& entry : occurrences) {
+    DocumentSnapshot::Component placedComponent;
+    placedComponent.uid = QString::fromLatin1(entry[2]);
+    placedComponent.name = QString::fromLatin1(entry[1]).section(QLatin1Char(':'), 0, 0);
+    snapshot.components.append(placedComponent);
+    DocumentSnapshot::Occurrence placed;
+    placed.uid = QString::fromLatin1(entry[0]);
+    placed.path = placed.uid;
+    placed.name = QString::fromLatin1(entry[1]);
+    placed.component = QString::fromLatin1(entry[2]);
+    placed.folder = QString::fromLatin1(entry[3]);
+    snapshot.occurrences.append(placed);
+  }
+  snapshot.activeComponent = QStringLiteral("C0");
+  return snapshot;
+}
+
+void foldersTests() {
+  DocumentSnapshot snapshot = foldersDesign();
+  {
+    BrowserPanel panel;
+    panel.rebuild(snapshot, false);
+    // The rows under the root after its own folders, and under Bodies, in
+    // the tree's order.
+    QStringList components;
+    QStringList bodies;
+    QHash<QString, BrowserPanel::PresentationRow> rows;
+    for (const BrowserPanel::PresentationRow& row : panel.presentationRows()) {
+      rows.insert(row.node.path, row);
+      if (row.node.type == BrowserNode::Type::Component || row.node.type == BrowserNode::Type::ComponentFolder) {
+        components << row.node.path;
+      } else if (row.node.type == BrowserNode::Type::Body || row.node.type == BrowserNode::Type::BodyFolder) {
+        bodies << row.node.path;
+      }
+    }
+    CHECK(components == QStringList({QStringLiteral("Root"), QStringLiteral("Root/Frame"),
+                                     QStringLiteral("Root/Frame/Rail:1"), QStringLiteral("Root/Frame/Panel:1"),
+                                     QStringLiteral("Root/Post:1")}));
+    CHECK(bodies == QStringList({QStringLiteral("Root/Bodies/Glass"), QStringLiteral("Root/Bodies/Glass/Pane"),
+                                 QStringLiteral("Root/Bodies/Glass/Sash"), QStringLiteral("Root/Bodies/Base")}));
+    const BrowserPanel::PresentationRow frame = rows.value(QStringLiteral("Root/Frame"));
+    CHECK(frame.node.type == BrowserNode::Type::ComponentFolder);
+    CHECK(frame.node.uid == QStringLiteral("Frame") && frame.node.occurrence.isEmpty());
+    CHECK(frame.node.component == QStringLiteral("C0"));
+    CHECK(!frame.node.item().isValid()); // selecting it selects nothing in the view
+    CHECK(!frame.expanded);
+    CHECK(frame.eyeOn && frame.tone.isEmpty());
+    CHECK(rows.value(QStringLiteral("Root/Frame/Rail:1")).node.folder == QStringLiteral("Frame"));
+    const BrowserPanel::PresentationRow glass = rows.value(QStringLiteral("Root/Bodies/Glass"));
+    CHECK(glass.node.type == BrowserNode::Type::BodyFolder);
+    CHECK(!glass.expanded);
+    CHECK(glass.eyeOn);
+    CHECK(rows.value(QStringLiteral("Root/Bodies/Glass/Pane")).node.folder == QStringLiteral("Glass"));
+    CHECK(rows.value(QStringLiteral("Root/Bodies/Base")).node.folder.isEmpty());
+  }
+  // Every occurrence and body in them hidden: the folders' eyes off, their
+  // rows greyed; Post:1 and Base as they were.
+  snapshot.occurrences[0].visible = false;
+  snapshot.occurrences[2].visible = false;
+  snapshot.bodies[QStringLiteral("F1.b0")].visible = false;
+  snapshot.bodies[QStringLiteral("F3.b0")].visible = false;
+  {
+    BrowserPanel panel;
+    panel.rebuild(snapshot, false);
+    auto* tree = panel.findChild<QTreeWidget*>();
+    CHECK(tree != nullptr);
+    if (tree == nullptr) {
+      return;
+    }
+    const QColor plain = tree->palette().color(QPalette::Text);
+    QHash<QString, BrowserPanel::PresentationRow> rows;
+    for (const BrowserPanel::PresentationRow& row : panel.presentationRows()) {
+      rows.insert(row.node.path, row);
+    }
+    const BrowserPanel::PresentationRow frame = rows.value(QStringLiteral("Root/Frame"));
+    CHECK(!frame.eyeOn && frame.tone == QStringLiteral("dimmed"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Frame"))).bulb == QStringLiteral("eye-off"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Frame"))).text != plain);
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Glass"))).bulb == QStringLiteral("eye-off"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Post:1"))).bulb == QStringLiteral("eye"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Post:1"))).text == plain);
+    CHECK(rows.value(QStringLiteral("Root/Bodies/Base")).eyeOn);
+  }
+  // One of them shown again: the folder's eye on, its row plain.
+  snapshot.occurrences[2].visible = true;
+  {
+    BrowserPanel panel;
+    panel.rebuild(snapshot, false);
+    for (const BrowserPanel::PresentationRow& row : panel.presentationRows()) {
+      if (row.node.path == QStringLiteral("Root/Frame")) {
+        CHECK(row.eyeOn && row.tone.isEmpty());
+      }
+    }
+  }
+}
+
+// The rows in the model's order of the occurrences (mitcad#2104): after a
+// reorder, Panel:1 before Rail:1 in Frame and Post:1 after them; Frame
+// keeps its place before the rows in no folder.
+void reorderedRowsTests() {
+  DocumentSnapshot snapshot = foldersDesign();
+  std::swap(snapshot.occurrences[0], snapshot.occurrences[2]); // Panel:1, Post:1, Rail:1
+  BrowserPanel panel;
+  panel.rebuild(snapshot, false);
+  QStringList components;
+  for (const BrowserPanel::PresentationRow& row : panel.presentationRows()) {
+    if (row.node.type == BrowserNode::Type::Component || row.node.type == BrowserNode::Type::ComponentFolder) {
+      components << row.node.path;
+    }
+  }
+  CHECK(components == QStringList({QStringLiteral("Root"), QStringLiteral("Root/Frame"),
+                                   QStringLiteral("Root/Frame/Panel:1"), QStringLiteral("Root/Frame/Rail:1"),
+                                   QStringLiteral("Root/Post:1")}));
+}
+
 } // namespace
 
 int browserRolesTests() {
@@ -471,6 +611,8 @@ int browserRolesTests() {
   isolationEyeTests();
   folderEyeTests();
   annotationsFolderEyeTests();
+  foldersTests();
+  reorderedRowsTests();
   return failures;
 }
 MITCAD_UNIT_TEST(browserRolesTests);

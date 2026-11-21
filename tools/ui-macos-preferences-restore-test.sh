@@ -22,6 +22,7 @@ ui_init "$1" "$2"
 UI_TIMEOUT=300
 MITCAD_TEST_INPUT=$here/ui-scripts/preferences-restore.mitcad-ui MITCAD_TEST_STEP_MS=100 \
   ui_run_app preferences-restore --ui=qt --no-native-dialogs --no-recovery --no-mcp
+ui_expect_log '^Preferences: orientation cube size 150 %$' 'the Settings window keeps the cube size, saved at once (mitcad#2071)'
 ui_expect_log 'Preferences: restore defaults, current group: display' 'Display back to its defaults'
 ui_expect_log 'Kept: recent files, library sources and fetched libraries' 'the question says what is kept'
 ui_expect_log 'Preferences: restore defaults, all settings: general, navigation, display' 'every pane back to its defaults'

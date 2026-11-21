@@ -58,9 +58,11 @@ test_thread_crest_rounded_down_to_a_run_out (ctest geometry.suite.sweeps.3):
 a post whose thread runs out along a straight cut, its lower crest rounded
 down to the run-out: valid, one small face on the run-out's flank plane
 where it cuts the rounding a turn back, the crest left sharp from there down
-to the run-out against the helix's length. Its failure without the patch,
-stated in its documentation, is still to be shown in the port's before/after
-run (mitcad#1986).
+to the run-out against the helix's length. It fails with this patch and 32
+later patches that change the same lines reverted together, so the test
+does not single this patch out (shown 2026-11-20 by
+tools/occt-port-proof.py; the patches are listed in
+third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index d7724b67..28d87e50 100644

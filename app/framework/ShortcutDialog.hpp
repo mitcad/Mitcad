@@ -11,6 +11,7 @@
 class QComboBox;
 class QKeySequenceEdit;
 class QLineEdit;
+class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
 
@@ -45,6 +46,7 @@ public:
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
 
 private:
   // Every command's keys: saved, or the defaults; then the rows.
@@ -54,6 +56,13 @@ private:
   void build();
   // The reserved keys' read-only rows of the context filter's contexts.
   void addReservedRows(unsigned wanted);
+  // The Context column as wide as the longest context the rows show, and
+  // the list no narrower than the Command column's longest name needs
+  // beside it and the Shortcut column (mitcad#2096).
+  void fitColumns();
+  // "Keyboard Shortcuts columns: Command 318 (needs 236), Context 124,
+  // Shortcut 170, dialog 600 x 520", once a resize has settled.
+  void logColumns() const;
   // The row the user selected last, kept over the rows made anew
   // (mitcad#730; not replaced by the row restoreSelection() picks), and
   // selected again when its command (or reserved key) is shown.
@@ -95,6 +104,8 @@ private:
   unsigned m_selectedContexts = 0;    // and the row's contexts
   bool m_selectedReserved = false;    // a reserved key's row
   bool m_restoring = false;           // restoreSelection() selecting
+  int m_commandNeeds = 0;             // the Command column's room for its longest name
+  QTimer* m_columnsLog = nullptr;     // logColumns() after a resize
 };
 
 } // namespace mitcad

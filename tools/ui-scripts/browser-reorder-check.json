@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Saved by the UI after the reorder steps (mitcad#2104) and opened again: Lid:1 first (dragged before Arm:1; the Move Down after it undone), then Arm:1 and Base:1."},
+  {"expect": {"query": {"query": "components"},
+    "result": {"occurrences": [{"name": "Lid:1"}, {"name": "Arm:1"}, {"name": "Base:1"}]}}}
+]

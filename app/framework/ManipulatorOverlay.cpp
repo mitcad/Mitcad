@@ -69,6 +69,7 @@ constexpr double kPi = 3.14159265358979323846;
 const double kEdgeOnSine = std::sin(15.0 * kPi / 180.0);
 const double kEdgeOnCosine = std::cos(15.0 * kPi / 180.0);
 constexpr double kFaintOpacity = 0.4; // a handle seen edge-on, not hovered
+constexpr double kPointerLength = 30.0; // a pointing marker's arrow (mitcad#2048)
 
 // An arrow's or a ring's color while neither hovered nor dragged: its
 // role's (Manipulator::color; Free Move's by its axis, mitcad#1581).
@@ -423,6 +424,16 @@ ManipulatorOverlay::Drawn ManipulatorOverlay::draw(const Handle& handle) const {
     drawn.origin = m_viewer.toWidgetF(m.origin);
     drawn.handle = drawn.origin;
     drawn.tip = drawn.origin;
+    if (m.kind == Manipulator::Kind::Marker && m.pointing) {
+      // A short arrow the way it points on the screen; seen end-on (within
+      // about 15 degrees of the view direction), none: a dot or a cross
+      // where it starts (paintEvent).
+      const double along = gp_Vec(m.direction).Dot(gp_Vec(m_viewer.viewDirection()));
+      if (std::abs(along) < kEdgeOnCosine) {
+        const QPointF way = m_viewer.toWidgetF(m.origin.Translated(gp_Vec(m.direction))) - drawn.origin;
+        drawn.tip = drawn.origin + unit(way) * kPointerLength;
+      }
+    }
     drawn.valid = onScreen(drawn.origin) && onScreen(drawn.handle) && onScreen(drawn.tip);
     return drawn;
   }
@@ -902,7 +913,37 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
     // A quiet handle's line from its origin and its arc only while it or
     // its box is under the mouse or dragged (mitcad#1747).
     const bool lined = !m_handles[i].manipulator.quiet || isActive(static_cast<int>(i));
-    if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
+    if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker && m_handles[i].manipulator.pointing) {
+      // A construction plane's normal (mitcad#2048): a short arrow from a
+      // small dot; seen end-on, a dot in a ring towards the viewer, a
+      // cross in a ring away from it.
+      const QPointF at = drawn.origin;
+      painter.setBrush(Qt::NoBrush);
+      if (drawn.tip != drawn.origin) {
+        haloed(painter, QPen(kInk, 2.0, Qt::SolidLine, Qt::RoundCap),
+               [&painter, &drawn] { painter.drawLine(drawn.origin, drawn.tip); });
+        const QPointF along = unit(drawn.tip - drawn.origin);
+        const QPointF across(-along.y(), along.x());
+        QPolygonF head;
+        head << drawn.tip + along * 8.0 << drawn.tip + across * 4.5 << drawn.tip - across * 4.5;
+        painter.setPen(QPen(kHalo, 1.5));
+        painter.setBrush(kInk);
+        painter.drawPolygon(head);
+        painter.drawEllipse(at, 3.0, 3.0);
+      } else {
+        haloed(painter, QPen(kInk, 1.5), [&painter, &at] { painter.drawEllipse(at, 7.0, 7.0); });
+        const bool away = gp_Vec(m_handles[i].manipulator.direction).Dot(gp_Vec(m_viewer.viewDirection())) > 0.0;
+        if (away) {
+          painter.setPen(QPen(kInk, 1.5));
+          painter.drawLine(at + QPointF(-4.5, -4.5), at + QPointF(4.5, 4.5));
+          painter.drawLine(at + QPointF(-4.5, 4.5), at + QPointF(4.5, -4.5));
+        } else {
+          painter.setPen(Qt::NoPen);
+          painter.setBrush(kInk);
+          painter.drawEllipse(at, 2.5, 2.5);
+        }
+      }
+    } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
       const QPointF at = drawn.handle;
       painter.setPen(QPen(kInk, 2.0));
       painter.setBrush(QColor(0xff, 0xd1, 0x80));
@@ -1053,6 +1094,16 @@ void ManipulatorOverlay::logPlaces() {
       const gp_Pnt& point = handle.manipulator.origin;
       lines << QStringLiteral("Preview marker %1 %2 world %3,%4,%5 at %6,%7")
                    .arg(m_command, handle.label).arg(point.X()).arg(point.Y()).arg(point.Z()).arg(at.x()).arg(at.y());
+      if (handle.manipulator.pointing) {
+        // Which way it points in the design, for UI tests (mitcad#2048: a
+        // construction plane's normal turned over by Reverse Normal).
+        const auto rounded = [](double value) {
+          return QString::number(std::abs(value) < 5e-4 ? 0.0 : value, 'f', 3);
+        };
+        const gp_Dir& way = handle.manipulator.direction;
+        lines << QStringLiteral("Preview marker direction %1 %2: %3,%4,%5")
+                     .arg(m_command, handle.label, rounded(way.X()), rounded(way.Y()), rounded(way.Z()));
+      }
       continue;
     }
     // A pattern's instance "suppressed.2 (off)", one of an input's several

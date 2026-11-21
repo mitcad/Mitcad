@@ -311,6 +311,8 @@ impl<K: Kernel> Document<K> {
                         // (mitcad#1921).
                         looks: true,
                         given: Vec::new(),
+                        parts: None,
+                        unlinked: Vec::new(),
                     });
                     frames
                 }

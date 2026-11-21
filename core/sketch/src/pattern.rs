@@ -404,6 +404,23 @@ pub enum BindingKind {
         a: EntityUid,
         b: EntityUid,
     },
+    // Block instances (mitcad#2110, `block.rs`): rigid copies of a block.
+    /// The points are `value` apart.
+    Distance {
+        a: EntityUid,
+        b: EntityUid,
+        value: f64,
+    },
+    /// The circle's radius is `value`.
+    Radius {
+        curve: EntityUid,
+        value: f64,
+    },
+    /// The ellipse's (or elliptical arc's) minor radius is `value`.
+    MinorRadius {
+        curve: EntityUid,
+        value: f64,
+    },
 }
 
 /// A binding with the pattern (or offset) it comes from.
@@ -458,7 +475,7 @@ pub fn circular_step(count: u32, angle: f64) -> f64 {
 /// The ends of curves that their curve keeps on its circle or ellipse
 /// already, with the curve's centre: an arc's end, an elliptical arc's
 /// start and end.
-fn kept_ends(entities: &[&Entity]) -> BTreeMap<EntityUid, Vec<EntityUid>> {
+pub(crate) fn kept_ends(entities: &[&Entity]) -> BTreeMap<EntityUid, Vec<EntityUid>> {
     let mut kept: BTreeMap<EntityUid, Vec<EntityUid>> = BTreeMap::new();
     for e in entities {
         match e.kind {

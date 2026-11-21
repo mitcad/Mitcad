@@ -15,31 +15,45 @@
 #include "framework/ModelBusy.hpp"
 #include "framework/ParameterField.hpp"
 #include "framework/ParameterSuggest.hpp"
+#include "framework/Theme.hpp"
 #include "framework/ValueStep.hpp"
+#include "framework/WindowStyle.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <vector>
 
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QColor>
 #include <QContextMenuEvent>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QHelpEvent>
+#include <QImage>
+#include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QList>
 #include <QMenu>
+#include <QModelIndex>
+#include <QPainter>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPoint>
 #include <QPointF>
+#include <QRect>
 #include <QString>
 #include <QStringList>
+#include <QStyle>
+#include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QToolTip>
 #include <QTreeWidget>
@@ -1102,6 +1116,91 @@ void removeNameTests() {
   CHECK(edit->text() == QStringLiteral("gap ="));
 }
 
+// One row of the suggestion list painted by its delegate as the view
+// paints it, in `state`, over white: the colour beyond the first column's
+// text, inside the row's band.
+QColor paintedRow(QTreeWidget* list, int row, QStyle::State state) {
+  const QModelIndex index = list->model()->index(row, 0);
+  const int width = list->viewport()->width();
+  const int height = std::max(list->visualRect(index).height(), list->sizeHintForRow(row));
+  QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::white);
+  QStyleOptionViewItem option;
+  option.initFrom(list);
+  option.state = QStyle::State_Enabled | QStyle::State_Active | state;
+  option.rect = QRect(0, 0, list->columnWidth(0), height);
+  option.widget = list;
+  QPainter painter(&image);
+  list->itemDelegate()->paint(&painter, option, index);
+  painter.end();
+  return image.pixelColor(width - mitcad::panel::kRowInset - 4, height / 2);
+}
+
+bool closeTo(const QColor& a, const QColor& b, int tolerance) {
+  return std::abs(a.red() - b.red()) <= tolerance && std::abs(a.green() - b.green()) <= tolerance &&
+         std::abs(a.blue() - b.blue()) <= tolerance;
+}
+
+// The list's selected and hovered rows (mitcad#2086, GitHub
+// mitcad/Mitcad#485): Down selects the next row, which paints the panels'
+// accent band (Action, translucent); a hovered row that is not selected
+// paints HoverFill; the two differ. The style's own marks are transparent
+// and the rows keep the style's height, which the popup is sized by.
+void rowLookTests() {
+  QWidget window;
+  window.resize(640, 480);
+  setParameterSource(&window, {[] { return designParameters(); }, [](const QJsonObject&, QString*) { return true; },
+                               [] { return QStringLiteral("mm"); }});
+  auto* edit = new QLineEdit(&window);
+  edit->setGeometry(20, 20, 200, 24);
+  ParameterFieldOptions options;
+  options.create = false;
+  ParameterField* field = ParameterField::attach(edit, options);
+  window.show();
+  type(*edit, QStringLiteral("d"));
+  CHECK(field->isOpen());
+  auto* list = window.findChild<QTreeWidget*>(QStringLiteral("parameterList"));
+  CHECK(list != nullptr);
+  if (list == nullptr) {
+    press(*edit, Qt::Key_Escape);
+    return;
+  }
+  const int before = list->currentIndex().row();
+  CHECK(press(*edit, Qt::Key_Down));
+  const int selected = list->currentIndex().row();
+  CHECK(selected > before && selected >= 1);
+  CHECK(list->selectionModel()->isSelected(list->model()->index(selected, 0)));
+  const int hovered = selected - 1;
+  CHECK(!list->selectionModel()->isSelected(list->model()->index(hovered, 0)));
+
+  // No grey and no accent bar of the style's beside the band.
+  CHECK(list->palette().color(QPalette::Highlight).alpha() == 0);
+  CHECK(list->palette().color(QPalette::Accent).alpha() == 0);
+
+  const QColor band = paintedRow(list, selected, QStyle::State_Selected);
+  const QColor hover = paintedRow(list, hovered, QStyle::State_MouseOver);
+  const QColor plain = paintedRow(list, hovered, QStyle::State_None);
+  const QColor action = actionColor();
+  const QColor expected(qRound(action.red() * 0.30 + 255 * 0.70), qRound(action.green() * 0.30 + 255 * 0.70),
+                        qRound(action.blue() * 0.30 + 255 * 0.70));
+  CHECK(closeTo(band, expected, 3));
+  CHECK(closeTo(hover, themeColor(ColorRole::HoverFill), 1));
+  CHECK(closeTo(plain, QColor(Qt::white), 1));
+  CHECK(!closeTo(band, hover, 8));
+  // Selected and hovered at once: the band.
+  CHECK(closeTo(paintedRow(list, selected, QStyle::State_Selected | QStyle::State_MouseOver), expected, 3));
+
+  // The style's own row height, not the panels' kRowHeight.
+  QStyleOptionViewItem option;
+  option.initFrom(list);
+  option.widget = list;
+  const QModelIndex index = list->model()->index(selected, 0);
+  CHECK(list->itemDelegate()->sizeHint(option, index).height() ==
+        QStyledItemDelegate().sizeHint(option, index).height());
+  press(*edit, Qt::Key_Escape);
+  CHECK(!field->isOpen());
+}
+
 int parameterSuggestTests() {
   failures = 0;
   fragmentTests();
@@ -1115,6 +1214,7 @@ int parameterSuggestTests() {
   tableTests();
   stepTests();
   removeNameTests();
+  rowLookTests();
   return failures;
 }
 MITCAD_UNIT_TEST(parameterSuggestTests);

@@ -1,0 +1,18 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The order of components in the Browser (mitcad#2104): three components placed in the root, Arm:1, Base:1 and Lid:1, each with a 10 mm box of its own."},
+  {"cmd": "create_component", "name": "Arm"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "create_component", "name": "Base"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [20, 0], "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "create_component", "name": "Lid"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [40, 0], "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"expect": {"query": {"query": "components"},
+    "result": {"occurrences": [{"name": "Arm:1"}, {"name": "Base:1"}, {"name": "Lid:1"}]}}}
+]

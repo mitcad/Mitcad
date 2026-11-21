@@ -39,8 +39,9 @@ test_slot_rounded_to_a_full_round_into_a_floor;
 geometry/tests/test_fillet_occt_cases.cpp (ctest
 geometry.fillet_occt_cases),
 test_box_top_full_round_with_rounded_vertical_edges. Its failure without
-the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+the patch is still to be shown: the patch does not revert at the port's
+tip without the more than 40 later patches that change the same lines
+(tried 2026-11-20 by tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index a7da6776..21dd214b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

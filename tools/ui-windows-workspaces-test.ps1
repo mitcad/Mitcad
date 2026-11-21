@@ -118,10 +118,10 @@ Write-Host 'ok   the project and assistant indicators are compact icon buttons'
 Ui-ExpectLog 'Menu bar hidden: Floating' "the window's menu bar hidden"
 if ($cards -notmatch '; titleRow 0,0 ') { Ui-Fail "the title row is not at the window's top: '$cards'" }
 Write-Host 'ok   no menu bar above the title row'
-# No quick-access group in the top bar: it has no commands by default and
-# is hidden while empty (mitcad#1990).
-Ui-ExpectLog 'Quick access group hidden: no commands' 'the empty quick-access group hidden'
-Ui-QuickAccessPlace 'the title row' $cards -None
+# The top bar's one left group (mitcad#2129): its default items, at the
+# row's left end with the menu button first in it.
+Ui-ExpectLog 'Quick access: menu.file, file.new_design, file.open, file.save' "the left group's default items"
+Ui-QuickAccessPlace 'the title row' $cards
 foreach ($picture in @('start', 'solid', 'list', 'make-print', 'make-laser', 'make-cnc', 'render', 'drawing', 'narrow')) {
   $path = Join-Path $pictures "workspaces-$picture.png"
   if (-not (Test-Path $path) -or (Get-Item $path).Length -eq 0) { Ui-Fail "no picture workspaces-$picture.png in $pictures" }

@@ -528,6 +528,8 @@ private:
   // last (mitcad#1546).
   QString m_loggedLines;
   QString m_loggedPens;
+  // The dimensions' values and angles last logged (mitcad#2047).
+  QString m_loggedDimensions;
   bool m_updatingTabs = false;
   // A cut sheet is open (mitcad#853): its row instead of the tools'.
   bool m_cutSheet = false;

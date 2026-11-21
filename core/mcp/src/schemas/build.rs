@@ -99,7 +99,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "spacing": object("The member repeated as a spacing set; the reference's Spacing sets"),
                 "grade": text("The part's own grade (a timber member's)"),
                 "along": object("A member along a straight edge, lying on a face beside it, or along one sketch line; the reference's Members along an edge"),
-                "lines": object("One member along each picked sketch line ({\"curves\": [sketch lines or sketches], \"chain\", \"align\", \"corners\"}), the corners mitered and butted; the reference's Along sketch lines")
+                "lines": object("One member along each picked sketch line ({\"curves\": [sketch lines or sketches], \"chain\", \"align\", \"corners\"}), the corners mitered and butted; the reference's Along sketch lines"),
+                "limits": {"type": "object", "description": "A part that slides on another (a carriage on its rail): its travel limits", "properties": {"min": value_input("Min: where its frame may slide to nearest the rail's end A, from end A; null or left out: flush with end A"), "max": value_input("Max: the farthest, from end A; null or left out: flush with end B, following the rail's length")}, "additionalProperties": false}
             },
             "required": ["part"],
             "examples": [
@@ -109,7 +110,7 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "restrictions": [SOURCE_ONLY]
         }),
         "build_edit" => json!({
-            "description": format!("Edits a placed part. Result: changed (offset, from, rotate, flip, detached, length, bound, tilt, ends, config, parameters, machining). {REFERENCE}."),
+            "description": format!("Edits a placed part. Result: changed (offset, from, rotate, flip, detached, length, bound, tilt, ends, config, parameters, machining, limits). {REFERENCE}."),
             "properties": {
                 "component": id("The part's component (uid or name)"),
                 "at": {"type": "object", "description": "Its place again: offset, from (a, b, middle, gap), point (a member by two points: its start)", "properties": {"offset": value_input("The offset"), "from": {"type": "string", "enum": ["a", "b", "middle", "gap"]}, "point": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}}}, "additionalProperties": false},
@@ -128,7 +129,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "lie": object("A member by two points: its lie again"),
                 "frame": object("The timber frame it is in, laid out again with these fields"),
                 "along": object("A member along an edge: its edge, face and offsets; along a sketch line also its align"),
-                "shared_mitre": {"type": "string", "enum": ["a", "b"], "description": "On its own: the shared miter at this end with the profile end it meets, as a corner placement makes"}
+                "shared_mitre": {"type": "string", "enum": ["a", "b"], "description": "On its own: the shared miter at this end with the profile end it meets, as a corner placement makes"},
+                "limits": {"type": "object", "description": "A part that slides on another (a carriage on its rail): its travel limits again, both sent (each null for its default)", "properties": {"min": value_input("Min: where its frame may slide to nearest the rail's end A, from end A; null or left out: flush with end A"), "max": value_input("Max: the farthest, from end A; null or left out: flush with end B, following the rail's length")}, "additionalProperties": false}
             },
             "required": ["component"],
             "examples": [

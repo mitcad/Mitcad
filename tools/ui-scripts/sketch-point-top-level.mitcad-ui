@@ -24,7 +24,7 @@ expect-never '^Ribbon split SKETCH/CREATE/Point '
 # 1. The Create menu: Point at its top level, after Lines.
 mark
 click-logged '^Ribbon SKETCH/CREATE at '
-expect-popup-entries '^Lines \| Point \| Rectangles \| Circles \| Arcs \| Other Geometry \| Text \| Patterns \| Project / Include \| Sketch Dimension$'
+expect-popup-entries '^Lines \| Point \| Rectangles \| Circles \| Arcs \| Other Geometry \| Text \| Blocks \| Patterns \| Project / Include \| Sketch Dimension$'
 expect-log '^Ribbon menu SKETCH/CREATE: Lines > \[Line \| Midpoint Line\] \| Point \| Rectangles > '
 expect-log '^Ribbon menu SKETCH/CREATE: .* \| Other Geometry > \[Ellipse \| [^]]* \| Control Point Spline\] \| Text > '
 popup Point

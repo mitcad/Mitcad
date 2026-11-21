@@ -212,6 +212,17 @@
 //! comment support treat both as unknown top-level fields: builds with
 //! mitcad#1132 ignore them with a warning; earlier builds refuse them.
 //!
+//! The images of comments and replies (mitcad#2011), when there are any:
+//! `comment_attachments` (`comment` `C<n>`, `reply` the reply's number
+//! from 1, left out for the comment's own, `id` `A<n>`, `name` the file's
+//! name, `image` {`format` `png` or `jpeg`, `width`, `height`, `data` the
+//! file in base64}, each checked against its fields on reading, as image
+//! references' are), in the comments' order; `next_comment_attachment`,
+//! the number the next id takes, only where it is not one past the largest
+//! listed. They are kept apart from `comments` so that builds without
+//! them open the design, ignoring both with the warning of a newer MitCad
+//! (and saving over it drops the images).
+//!
 //! Purge volumes set by hand (mitcad#705), when there are any:
 //! `purge_volumes` (`[{"from", "to", "volume"}]`: material ids and mm³),
 //! see [`crate::print_purge`]; a pair of a material the design no longer

@@ -58,6 +58,9 @@ struct ViewSettings {
   // The orientation cube's projection (mitcad#774, `view/cubeProjection`
   // by its id): as the view's by default (owner 27.10.2026).
   CubeProjection cubeProjection = CubeProjection::FollowView;
+  // The orientation cube's size in percent (mitcad#2071, `view/cubeSize`):
+  // 75, 100 (the default), 125 or 150; any other value reads as 100.
+  int cubeSize = 100;
   // The navigation bar at the bottom of the view (mitcad#1086,
   // `view/navigationBar`): shown by default.
   bool navigationBar = true;
@@ -164,6 +167,9 @@ public:
   static CameraState cameraOf(const QJsonObject& view);
   // The cube's right-click menu.
   void showOrientationCubeMenu(const QPoint& globalPosition);
+  // The orientation cube's size in percent (mitcad#2071): applied to the
+  // view and saved at once (the cube's menu, Preferences' Settings window).
+  void setCubeSize(int percent);
   void showShortcutOverview();
   // Preferences on a page (`general`, `navigation`, `display`, `cache`,
   // `cloud`, `updates`, `print`); the last one shown when empty. `query`

@@ -44,8 +44,9 @@ tongue's edge rounded with 1 so that its contact runs off it: the OnSame end
 cut along its side by the face beyond, against a tongue wide enough for the
 contact; and
 test_rounding_walked_again_past_an_onsame_end_generated_by_its_edge, the
-same rounding with 0.3. Its failure without the patch is still to be shown
-in the port's before/after run (mitcad#1986).
+same rounding with 0.3. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py, reverted together with 0900, 0990, 1311, which
+change the same lines).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index 085bb4e6..2d690e92 100644

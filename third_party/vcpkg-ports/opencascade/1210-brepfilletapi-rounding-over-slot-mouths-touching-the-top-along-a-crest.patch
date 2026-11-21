@@ -77,9 +77,14 @@ eight half widths kept): margins that hold the blend's end and its
 prolonged piece, not values read off the case; they are not derived
 further. The search's containers are OCCT's (NCollection_DynamicArray and
 NCollection_List).
-Test: pending (mitcad#2003): the port test written for this patch does not
-reach its case yet. Existing: geometry/tests/test_fillet_slot_mouths.cpp
-(the case's body).
+Test: geometry/tests/port/p1210-slot-mouths-on-a-rounded-lip.cpp (ctest
+geometry.port.1210): a lip of radius 93.5, its lower outer edge rounded
+with 5, eight fins 1.5 thick standing out 1.5 round it, each one's top a
+cylinder of radius 0.75 whose crest touches the rim at one point; the rim
+rounded with 2.5: built, valid, one solid, taking off the rounding's
+section round the rim and at most 5 % more (without the patch: not
+built). The boundary: rounded with 0.5 and 0.7, smaller than the fins'
+tops: not a mouth, OCCT's corners as before.
 
 On the stored design's body before the item: valid, 304 faces, the faces
 of each body on the other's within 2 micrometres (OCCT's walked blend

@@ -197,6 +197,7 @@ QString linearType(const QHash<QString, QString>& /*options*/) { return QStringL
 QString centerMarkType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("center_mark"); }
 QString centerlineType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("centerline"); }
 QString noteType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("note"); }
+QString holeCalloutType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("hole_callout"); }
 QString datumType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("datum"); }
 QString frameType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("frame"); }
 QString finishType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("finish"); }
@@ -353,6 +354,13 @@ QJsonObject leaderNote(const QString& drawing, int /*sheet*/, const ToolPicks& p
   QJsonObject command = annotationOn(drawing, picks, QStringLiteral("note"));
   command.insert(QStringLiteral("text"), text);
   return command;
+}
+
+// A hole callout (mitcad#2054): the hole picked, then where its text goes;
+// its lines are the hole's, worked out by the model.
+QJsonObject holeCallout(const QString& drawing, int /*sheet*/, const ToolPicks& picks,
+                        const QHash<QString, QString>& /*options*/) {
+  return picked(picks, 1, true) ? annotationOn(drawing, picks, QStringLiteral("hole_callout")) : QJsonObject();
 }
 
 QJsonObject datumLabel(const QString& drawing, int /*sheet*/, const ToolPicks& picks,
@@ -571,6 +579,10 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                 Text::tr("Writes a note on a leader to an edge or a point"), SheetPick::Picks,
                 Text::tr("Click the edge or point the note's arrow points at"), {text(QStringLiteral("text"), Text::tr("Text"))},
                 &leaderNote, true, Text::tr("Click where the note's text goes"), &onePick, &noteType, true});
+  tools.append({QStringLiteral("drawing.hole_callout"), Text::tr("Hole Callout"), QStringLiteral("hole"),
+                Text::tr("Writes a hole's size, depth or thread on a leader to it"), SheetPick::Picks,
+                Text::tr("Click a hole: its circle, or its round face seen from the side"), {}, &holeCallout, true,
+                Text::tr("Click where the callout's text goes"), &onePick, &holeCalloutType, true});
   tools.append({QStringLiteral("drawing.datum"), Text::tr("Datum Label"), QStringLiteral("drawing-datum"),
                 Text::tr("Labels a face or an axis as a datum"), SheetPick::Picks,
                 Text::tr("Click the edge of the face, the round face, or inside a face seen face on, that is the datum"),
@@ -697,7 +709,8 @@ int toolGroup(const DrawingToolDef& tool) {
       id == QStringLiteral("drawing.baseline") || id == QStringLiteral("drawing.model_items")) {
     return 2;
   }
-  if (id == QStringLiteral("drawing.text") || id == QStringLiteral("drawing.note")) {
+  if (id == QStringLiteral("drawing.text") || id == QStringLiteral("drawing.note") ||
+      id == QStringLiteral("drawing.hole_callout")) {
     return 3;
   }
   if (id == QStringLiteral("drawing.datum") || id == QStringLiteral("drawing.frame") ||
@@ -758,6 +771,9 @@ QStringList toolKeywords(const QString& id) {
     out << QStringLiteral("virtual sharp") << QStringLiteral("intersection");
   } else if (id == QStringLiteral("drawing.model_items")) {
     out << QStringLiteral("model annotations") << QStringLiteral("retrieve dimensions");
+  } else if (id == QStringLiteral("drawing.hole_callout")) {
+    out << QStringLiteral("leader") << QStringLiteral("thread") << QStringLiteral("counterbore")
+        << QStringLiteral("countersink");
   }
   return out;
 }
@@ -1207,6 +1223,9 @@ QString annotationName(const QString& type) {
   if (type == QStringLiteral("edge_extension")) {
     return Text::tr("Edge Extension");
   }
+  if (type == QStringLiteral("hole_callout")) {
+    return Text::tr("Hole Callout");
+  }
   return Text::tr("Dimension");
 }
 
@@ -1237,6 +1256,14 @@ QJsonObject drawingDefaultsEdit(const QString& drawing, const QString& field, co
       return {};
     }
     command.insert(field, height);
+    return command;
+  }
+  // The drawing's dimensioning standard (mitcad#2047).
+  if (field == QStringLiteral("standard")) {
+    if (text != QStringLiteral("iso") && text != QStringLiteral("asme")) {
+      return {};
+    }
+    command.insert(field, text);
     return command;
   }
   return {};

@@ -16,6 +16,8 @@
 
 #include <utility>
 
+#include "ShortcutBindings.hpp"
+
 namespace mitcad {
 namespace {
 
@@ -86,6 +88,7 @@ const SettingsRule kRules[] = {
     // Display.
     {"view/perspective", "preferences", PathKind::None},
     {"view/cubeProjection", "preferences", PathKind::None},
+    {"view/cubeSize", "preferences", PathKind::None},
     {"view/focalLength", "preferences", PathKind::None},
     {"view/anaglyph", "preferences", PathKind::None},
     {"view/anaglyphFocalLength", "preferences", PathKind::None},
@@ -171,6 +174,10 @@ const SettingsRule kRules[] = {
     // commands sit, as a difference from the default.
     {"commandLayout/user", "pins", PathKind::None},
     {"quickAccess/commands", "pins", PathKind::None},
+    // The top bar's left group (mitcad#2129): its ordered items, and that
+    // the old choice was migrated into them.
+    {"quickAccess/items", "pins", PathKind::None},
+    {"quickAccess/itemsMigrated", "pins", PathKind::None},
 
     // The ribbon's and panels' layout: the left column's split, the panels'
     // and cards' widths, the command panels' lists of picks (mitcad#2064),
@@ -482,7 +489,14 @@ SettingsImportPlan planSettingsImport(const SettingsFileContents& contents, cons
     }
     switch (kindOf(key)) {
     case PathKind::None:
-      plan.write.insert(key, it.value());
+      if (group == QLatin1String("shortcuts") && it.value().typeId() == QMetaType::QStringList) {
+        // A key sequence written by hand without its quotes ("E, X, C",
+        // mitcad#2095) reads as a list of its combinations: kept as the
+        // text the Keyboard Shortcuts window saves.
+        plan.write.insert(key, shortcutTextFromList(it.value().toStringList()));
+      } else {
+        plan.write.insert(key, it.value());
+      }
       break;
     case PathKind::Folders: {
       const QStringList folders = listOf(it.value());

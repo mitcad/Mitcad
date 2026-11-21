@@ -14,6 +14,14 @@
 // longest input report and where its report descriptor puts the rotation;
 // the report ids it sends as each new one comes; while it moves, its raw
 // reports, at most ten lines a second (SpaceMouseRawLog).
+//
+// The driver's emulated input (mitcad#1981): its profile can turn a cap's
+// motion into wheel steps or keys, sent through its "KMJ Emulator" device.
+// Only the mouse's own Raw Input would name that device for a wheel step
+// (WM_MOUSEWHEEL names none): registering for every mouse's raw input
+// would bring a message per mouse move and take over the process's mouse
+// registration, so the view does not tell the emulator apart; it ignores
+// the wheel during a motion instead (OcctViewer::wheelEvent).
 
 #include "../SpaceMouseDevice.hpp"
 #include "SpaceMouse3DxWare.hpp"
@@ -35,6 +43,7 @@
 #include <windows.h>
 #include <hidsdi.h>
 #include <hidpi.h>
+#include <tlhelp32.h>
 
 namespace mitcad {
 namespace {
@@ -430,6 +439,23 @@ private:
 
 std::unique_ptr<SpaceMouseBackend> createSpaceMouseBackend() {
   return std::make_unique<WindowsBackend>();
+}
+
+// The driver's processes by name (mitcad#1981): a snapshot of the running
+// processes, read once each time Preferences opens.
+bool spaceMouseVendorDriverRunning() {
+  const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+  bool found = false;
+  PROCESSENTRY32W entry{};
+  entry.dwSize = sizeof(entry);
+  for (BOOL more = Process32FirstW(snapshot, &entry); more && !found; more = Process32NextW(snapshot, &entry)) {
+    found = isSpaceMouseDriverProcess(QString::fromWCharArray(entry.szExeFile));
+  }
+  CloseHandle(snapshot);
+  return found;
 }
 
 } // namespace mitcad

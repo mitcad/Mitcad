@@ -27,7 +27,7 @@ set(cases
   "github-353:39896406:d2414f5a:fillet_exact_reported3.json" # a cube, 4.999
   "github-353:39896406:d2414f5a:fillet_exact_reported3_half.json" # the cube at 5
   "github-375:92354767:38e97e9a:fillet_exact_reported375.json" # then a chamfer
-  "github-375:db2f0aa4:81de8088:fillet_exact_reported375b.json" # the inner corner, a chamfer
+  "github-375:db2f0aa4:81de8088:fillet_exact_reported375b.json" # the inner corner, a chamfer (mitcad#2068)
   "github-403:253bc9b5:7f5fa5c4:fillet_exact_reported403_ball.json" # a cube at 5
   "github-403:d4663f27:c72ac063:fillet_exact_reported403_step.json" # corners meet
   "github-403:dfdf80d2:ebdd0f2c:fillet_exact_reported403_inner.json") # and the inner corner

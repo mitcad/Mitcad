@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# The Controller list of Machines and Tools… > Edit Machine (mitcad#2119,
+# app/COMMANDS.md "Machines and Tools…"), the shared input script of
+# tools/ui-cam-machine-controllers-test.sh (Linux),
+# tools/ui-windows-cam-machine-controllers-test.ps1 and
+# tools/ui-macos-cam-machine-controllers-test.sh, on
+# tools/ui-scripts/cam-machine-controllers.json (a router on grbl and a
+# lathe on the Fanuc turning dialect, put by model commands):
+#
+#   1. Machines and Tools… shows both machines, the router first;
+#   2. the router's Edit Machine offers the milling dialects only;
+#   3. the lathe's Edit Machine offers the lathe dialects only.
+wait-idle
+
+mark
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+
+# 1. Machines and Tools…: the router shown first.
+mark
+command make.cam_machines
+focus-dialog '^Machines and Tools$'
+wait-log '^CAM machines dialog: 2 machine\(s\): router 0 tool\(s\), lathe 0 tool\(s\)$'
+wait-log '^CAM machine shown: router: no tools$'
+
+# 2. The router's controllers: every milling dialect, no lathe dialect.
+mark
+button '.*' camEditMachine
+focus-dialog '^Edit Machine$'
+wait-log '^CAM machine controllers: router: grbl, grblhal, reprapfirmware, millenniumos, mach3, mach4, linuxcnc$'
+key Escape
+focus-dialog '^Machines and Tools$'
+
+# 3. The lathe's controllers: the lathe dialects only.
+mark
+focus-widget camMachineList
+key Down
+wait-log '^CAM machine shown: lathe: no tools$'
+mark
+button '.*' camEditMachine
+focus-dialog '^Edit Machine$'
+wait-log '^CAM machine controllers: lathe: fanuc_turning$'
+key Escape
+focus-dialog '^Machines and Tools$'
+key Escape
+wait-log '^CAM machines dialog closed$'

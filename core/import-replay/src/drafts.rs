@@ -70,10 +70,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             let (b, f) = self
                 .face_input(fp)
                 .ok_or("a draft: a drafted face was not found")?;
-            match by_body.iter_mut().find(|(x, _)| *x == b) {
-                Some((_, list)) => list.push(f.to_string()),
-                None => by_body.push((b, vec![f.to_string()])),
-            }
+            crate::sweeps::group_face(&mut by_body, b, f.to_string());
         }
         let neutral = self.draft_neutral(d)?;
         let chain = d.is_tangent_chain.unwrap_or(true);

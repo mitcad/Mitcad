@@ -456,6 +456,8 @@ The live catalogue has these tools:
 - `document_open`
 - The application's own tools `ui_state`, `ui_log`, `ui_screenshot`,
   `ui_select`, `ui_command` and `ui_camera`
+- `ui_guide` (a guide step shown to the user, mitcad#2012;
+  [Guided tutorials](#guided-tutorials))
 - `document_new` (a new design beside the open ones, mitcad#1266)
 - In an application started with `--mcp-folder` only: `ui_click`,
   `ui_type` and `ui_dialog` (mitcad#1735,
@@ -775,6 +777,7 @@ A new bridge can connect again to the same document. `--workspace`,
 | `ui_screenshot` | `window` (default false). `max_size` (default 1280, 64 to 4096). `max_bytes` (the encoded image's bytes, 4096 to 5 MiB; default 5 MiB inline, none for a file). `format` (`png` default, `jpeg`), `quality` (JPEG, default 90). `width` and `height`, or `aspect`. `path`, `overwrite`. | An MCP image block, after the text: `format`, `mime_type`, `of`, `width`, `height`, `full_width`, `full_height`, `bytes`, `downscaled_for_bytes`, `max_bytes`; of the window, `windows`. With `path`, also `path` and no image. Refer to the text below the table. |
 | `ui_select` | `document`. `items` (entities) or `comment` (a comment's id). `reveal` (`none`, `pan` default, `fit`). | `document`, `selected`, `selection`, `view` (`none`, `pan`, `zoom`), `camera`. With a command panel open, also `picked`, `into_command` and `command`. With `comment`, also `comment`. Refer to the text below the table. |
 | `ui_command` | `document`. `id` or `edit`. `inputs`. `finish` (`ok` default, `cancel`, `keep_open`). Or `search` alone (words, `""` for all) to list the commands. | `document`, `command`, `panel`, `committed`, `open`, `mode`, `sketch`, `undo`, `previews`, `log`, `hint`. For a `view.*` command, also `camera`. A listing: `document`, `mode`, `search`, `commands` (`id`, `name`, `kind`, `agents`, `why`, `available`), `count`, `total`, and `note` when there was nothing to finish. Refer to the text below the table. |
+| `ui_guide` | `action` (`start`, `end`, `state` default). `step` with `start` ([docs/tutorials.md](tutorials.md#guide-steps)). | `active`, `sequence`, `step`, `last_event`, `target_shown` while active, `document`. Refer to [Guided tutorials](#guided-tutorials). |
 | `ui_camera` | `eye`, `target`, `up`, `height`, `fov`, `projection`. `box`, `frame` (`none` default, `shown`, `selection`) or `comment` (a comment's id), optional `aspect` with them. | `camera`, `framed` (`none`, `box`, `shown`, `selection`, `comment`), `changed`, `aspect` when given, `comment` with it. Refer to the text below the table. |
 
 **`document_save`** without `path` saves to the document's own path, as
@@ -1187,13 +1190,15 @@ change. Both are then one undo step.
   `resources/list` on a live connection) is the `comments` query's
   answer for every status: `comments` (each with `id`, `text`, `target`,
   `status`, `orphaned`, `author`, `resolution`, `replies`, `created`,
-  `label`, `place`), `open` and `revision`. MitCad reads it again after
+  `label`, `place`, and `attachments` where it has images), `open` and
+  `revision`. MitCad reads it again after
   every change of the document (commands, undo, redo, Open, the user's
   own edits) once the model is idle, and before it answers each request.
 - `resources/subscribe` with `{"uri": "mitcad://comments"}` asks for
   `notifications/resources/updated` (`{"uri": "mitcad://comments"}`)
   whenever the comments change: one is added, edited, answered,
-  addressed, resolved, reopened, deleted or orphaned. Read the resource
+  addressed, resolved, reopened, deleted or orphaned, or an image is
+  attached or removed. Read the resource
   again then. `resources/unsubscribe` stops them. The live server's
   `initialize` result says `"resources": {"subscribe": true}`; the
   headless server has neither the resource nor subscriptions (its
@@ -1214,6 +1219,21 @@ change. Both are then one undo step.
   `applied: false`; in an array it names the `entry`, and nothing of the
   array runs. The headless server has no such preference and always
   refuses. Reopening and the other comment commands are allowed.
+- **Images** (mitcad#2011). A comment and each reply may carry images:
+  the user's capture of the view, marked up with lines, arcs, arrows and
+  text, or a photo. The `comments` answer and `mitcad://comments` list
+  each image's fields in the comment's or the reply's `attachments`
+  (`id` `A1`, `media_type` `image/png` or `image/jpeg`, `width`,
+  `height`, `bytes`, `sha256`, `name`), never its bytes. `model_query`
+  with `{"query": "comment_attachment", "comment": "C1", "id": "A1"}`
+  returns the picture as an MCP image block with its `mimeType` after the
+  text, as `ui_screenshot` does; the JSON keeps the fields. A new image
+  grows `revision` and notifies the subscribers. Agents attach their own
+  (a picture of the result, a `model_render` or `ui_screenshot` image) to
+  `add_comment` and `reply_comment` with `attachments`, `[{"data":
+  "<base64>", "name": "result.png"}]`: PNG or JPEG, at most 4 MB each;
+  `remove_comment_attachment` removes one. The headless server does the
+  same.
 
 **An external agent's loop** (mitcad#2010). Any MCP client can use the
 comments as its conversation with the user, without an adapter of its
@@ -1228,6 +1248,48 @@ Comment's **Whole Design**), also before there is any geometry.
 
 The chat panel sends the open comments with a message when its
 **Comments** toggle is on ([AI chat](ai-chat.md)).
+
+### Guided tutorials
+
+`ui_guide` (mitcad#2012) shows the user a **guide step** in the
+application, through the same engine as a MitCad tutorial's pages
+([docs/tutorials.md](tutorials.md)). The step names its target as the UI
+names it: a command id at its button, an input of the open panel by its
+key (as `ui_state`'s `command.inputs` lists them), a Browser row by its
+name, or the view with the kinds of picks it takes; never pixels. MitCad
+outlines the target and shows the step's text beside it. Until the step
+is done, the commands it does not allow are refused (from the user's
+keys, buttons, menus and the command search, and from `ui_command`, whose
+error then says so), and the window's other input is held back with a
+short note. View navigation stays free unless the step says
+`"navigation": false`. Escape with no command open and Leave Tutorial end
+it.
+
+```json
+{"name": "ui_guide", "arguments": {"action": "start", "step": {"id": "extrude", "text": "Open Extrude.", "target": {"command": "solid.extrude"}, "done": {"started": "solid.extrude"}}}}
+```
+
+- `action: "start"` with `step` shows it, replacing one shown; a step
+  that is not valid, or names a command MitCad does not have, is refused
+  with the reason. `action: "end"` ends it. Without `action` (`state`) the
+  tool only reads.
+- The result is the guide's state: `active`, `sequence` (one per step
+  started), `step` (as given, with its defaults), `last_event` and, while
+  active, `target_shown` (whether its target is on the screen now).
+- `last_event` is `{"event": "step_done", "done": …}` (what completed it:
+  `{"started": <id>}`, `{"command": <id>, "committed": true}`,
+  `{"input": <key>, "value": <text>}`, `{"pick": <kind>}`, `{"mode":
+  <mode>}`), `{"event":
+  "step_left", "reason": …}` (`escape`, `leave`, `ended`, `replaced`,
+  `closed`) or `{"event": "refused", "command": <id>}`, each with `step`
+  and `sequence`.
+- **The resource** `mitcad://ui-guide` (`application/json`, listed on a
+  live connection) is the same state. `resources/subscribe` with its URI
+  asks for `notifications/resources/updated` whenever it changes: a step
+  started, done, left, a command refused. Read it then instead of
+  polling. The headless server has neither the tool nor the resource.
+- The chat panel's agent may read it freely; a start or an end is an edit
+  for its approvals.
 
 ## Tools and results
 
@@ -2339,7 +2401,17 @@ computations can still use much time and memory.
   (mitcad#714), queries, `sketch.add_line` with the sketch open and
   undo, `ui_state` with the warning of the Sketch Palette and its
   entities, `ui_select`, `ui_screenshot`, `ui_command` Clean Up Stale
-  Projections and Finish Sketch, `document_save` and `ui_log`.
+  Projections and Finish Sketch, `document_save` and `ui_log`; and
+  `ui_guide` (mitcad#2012): a step of no command refused, another
+  command held back while a step is shown, a step done by Extrude's panel
+  opening and one by its distance typed, both heard through the
+  subscribed `mitcad://ui-guide`, and a step ended; the Windows MCP test
+  (`tools/ui-windows-mcp-test.ps1`) takes the same steps.
+- [tools/ui-tutorials-test.py](../tools/ui-tutorials-test.py)
+  (`app.ui-linux-tutorials`, `app.ui-windows-tutorials`,
+  `app.ui-macos-tutorials`, where the web browser component is built)
+  takes the same steps through a tutorial page's bridge
+  ([docs/tutorials.md](tutorials.md)).
 - [tools/ui-mcp-test.sh](../tools/ui-mcp-test.sh) runs the same flow on
   Linux (Xvfb).
 - [tools/mcp-eval](../tools/mcp-eval/README.md) (mitcad#1507) measures

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <QHash>
+#include <QIcon>
 #include <QList>
 #include <QPoint>
 #include <QPointer>
@@ -678,6 +679,9 @@ public:
   // A ˅ beside the icon for a button whose click opens its menu
   // (QToolButton::InstantPopup; Ribbon::createContentButton).
   void setMenuArrow(bool arrow);
+  // A button of the toolbar panel (mitcad#2092): its icon with the thin
+  // outline (commandButtonIcon) and 3 pixels around it instead of 5.
+  void setToolbarIcon();
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -689,9 +693,17 @@ private:
   int arrowWidth() const;
 
   int m_iconSize;
+  // The room around the icon: 5 pixels, 3 on the toolbar panel.
+  int m_margin = 5;
   bool m_labelShown = false;
   bool m_menuArrow = false;
 };
+
+// The icon a command button draws (mitcad#2092): a button of the toolbar
+// panel its icon with the thin outline (kThinOutlineWeight), any other
+// button its icon. The action keeps its icon for the menus and the command
+// search.
+QIcon commandButtonIcon(const QToolButton* button);
 
 // A rounded panel in the palette's material (the group capsules, the Undo and
 // Redo pair): fill, hairline border and a faint shadow below.

@@ -4,6 +4,7 @@
   "name": "ANSI",
   "size": "ANSI_B",
   "projection": "third_angle",
+  "standard": "asme",
   "margins": [12.7, 12.7, 12.7, 12.7],
   "title_block": {
     "width": 178,

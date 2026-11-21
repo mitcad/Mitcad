@@ -47,8 +47,8 @@ test_rounding_past_an_end_piece_it_consumes (ctest
 geometry.fillet_corner_cases): a bar with a tilted rod standing out of its
 end, its top front edge rounded with 14 past the end's corner piece: valid,
 the volume removed against the bar's and the rod's within the rounding's
-corner. Its failure without the patch, stated in its documentation, is still
-to be shown in the port's before/after run (mitcad#1986).
+corner. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 6f92d33..c891277 100644

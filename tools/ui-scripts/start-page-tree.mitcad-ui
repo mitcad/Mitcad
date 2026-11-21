@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# The Start page's Tree / Cards toggle (mitcad#2093), first start: one
+# Local project, Shop, with plate at its top, parts/gear and parts/sub/pin
+# (made by the test), and the Start page at launch.
+#   1. Shop in Cards (the default): its top, the toggle in its breadcrumb row.
+#   2. Tree: the project's folders as a tree, the top selected; parts
+#      chosen in the tree shows its cards and unfolds it, then parts/sub
+#      chosen shows pin's card, remembered as the folder shown.
+#   3. pin's card opens it; on the Start tab again the tree at parts/sub.
+#   4. Cards: the breadcrumb view at the same folder; Tree again, the
+#      choice start-page-tree-again.mitcad-ui finds after the restart.
+# Run with MITCAD_START_PAGE=1 by tools/ui-start-page-tree-test.sh (Linux),
+# tools/ui-windows-start-page-tree-test.ps1 (Windows) and
+# tools/ui-macos-start-page-tree-test.sh (macOS).
+expect-ever '^Start page at launch: shown$' 30
+expect-ever '^Start page shown$' 30
+wait-idle
+sleep 500
+
+# 1. Shop in Cards.
+expect-ever '^Start page projects: Shop \(local\)$' 30
+expect-ever '^Start page project Shop at ' 10
+sleep 300
+mark
+click-logged '^Start page project Shop at '
+expect-log '^Start page browse view: cards$'
+expect-log '^Start page place: Shop \(1 folders, 1 designs\)$'
+wait-log '^Start page browse Tree at ' 10
+wait-log '^Start page folder Shop/parts/ at ' 10
+wait-idle
+
+# 2. Tree: the folders, then parts and its sub-folder chosen in it.
+sleep 300
+mark
+click-logged '^Start page browse Tree at '
+expect-log '^Start page browse view: tree$'
+expect-log '^Start page tree: Shop \| Shop/parts/ \| Shop/parts/sub/ \(current Shop\)$'
+expect-setting start/browseView tree
+wait-log '^Start page tree folder Shop/parts/ at ' 10
+wait-idle
+sleep 300
+mark
+click-logged '^Start page tree folder Shop/parts/ at '
+expect-log '^Start page place: Shop/parts/ \(1 folders, 1 designs\)$'
+wait-log '^Start page cards: Shop/parts/gear\.mitcad \(no preview\)$' 10
+wait-log '^Start page tree folder Shop/parts/sub/ at ' 10
+wait-idle
+sleep 300
+mark
+click-logged '^Start page tree folder Shop/parts/sub/ at '
+expect-log '^Start page place: Shop/parts/sub/ \(0 folders, 1 designs\)$'
+expect-log '^Start page tree: Shop \| Shop/parts/ \| Shop/parts/sub/ \(current Shop/parts/sub/\)$'
+wait-log '^Start page cards: Shop/parts/sub/pin\.mitcad \(no preview\)$' 10
+expect-setting start/browseFolder parts/sub
+wait-idle
+
+# 3. The card opens its design; the Start tab again shows the same tree.
+sleep 300
+mark
+click-logged '^Start page card Shop/parts/sub/pin\.mitcad at '
+expect-log '^Start page chosen: open pin\.mitcad$'
+wait-log '^Opened .*parts/sub/pin\.mitcad$' 60
+wait-log '^Ribbon tab shown: SOLID$' 10
+expect-log '^Start page hidden$'
+wait-idle
+mark
+click-logged '^Ribbon tab START at '
+expect-log '^Ribbon tab shown: START$'
+expect-log '^Start page shown$'
+expect-log '^Start page browse view: tree$'
+expect-log '^Start page place: Shop/parts/sub/ \(0 folders, 1 designs\)$'
+wait-log '^Start page browse Cards at ' 10
+wait-idle
+
+# 4. Cards: the breadcrumb at the same folder; then Tree again.
+sleep 300
+mark
+click-logged '^Start page browse Cards at '
+expect-log '^Start page browse view: cards$'
+expect-log '^Start page place: Shop/parts/sub/ \(0 folders, 1 designs\)$'
+wait-log '^Start page crumb Shop/parts/sub/ at ' 10
+expect-setting start/browseView cards
+expect-setting start/browseFolder parts/sub
+wait-idle
+sleep 300
+mark
+click-logged '^Start page browse Tree at '
+expect-log '^Start page browse view: tree$'
+expect-setting start/browseView tree
+wait-idle
+expect-never 'TestDriver: FAIL'

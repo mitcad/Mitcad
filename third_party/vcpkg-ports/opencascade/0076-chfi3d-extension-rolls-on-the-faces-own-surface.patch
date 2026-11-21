@@ -16,13 +16,27 @@ made the face builder drop part of a planar face with the rolling ball of
 made into a face without edges, continues exactly; other surfaces keep the
 tangent plane (their natural bounds could stop the walk).
 
-Test: geometry/tests/test_fillet_rolling_ball.cpp (ctest
-geometry.suite.fillet_rolling_ball),
-test_rounding_between_a_plate_and_a_tilted_rod_is_a_rolling_ball,
-test_rounding_of_a_tilted_rods_top_is_a_rolling_ball,
-test_rounding_between_a_plate_and_a_tilted_cone_is_a_rolling_ball: the
-tests written with 0075 to 0077. Its failure without the patch is still to
-be shown in the port's before/after run (mitcad#1986).
+Test:
+geometry/tests/port/p0076-extension-rolls-on-the-faces-own-surface.cpp
+(ctest geometry.port.0076),
+test_cut_of_the_extension_past_the_sphere_is_a_rolling_ball: a cap of a
+sphere of radius 5 on a plate, cut by a flat face leaning over the plate,
+its foot rounded with 2 (walked): at both ends the sphere contact leaves
+the sphere across the cap's edge past the spine's end (at 5.8 degrees)
+before the plate contact reaches the flat face (13.2), so the blend's cut
+on the flat face is made of the extension's sections; valid with its
+tolerances raised to the tests' 1e-6 (the cap's edge on the trimmed
+sphere keeps 1e-7 for a curve 1.17e-7 off), and the
+cuts and the blend lie within 2e-4 of the ball's radius from the circle
+its centre runs on (on the tangent plane the extension's centre leaves
+that circle by up to 0.057).
+test_cut_before_the_sphere_edge_is_a_rolling_ball, the boundary: the flat
+face leaning further, the plate contact reaching it first, the cut made
+of sections on the sphere face. (The tests of
+0075 to 0077 in geometry/tests/test_fillet_rolling_ball.cpp round closed
+edges, whose blends have no ends and never come here.) Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 25eb8c8..5e6b1d6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

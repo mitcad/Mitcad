@@ -4,7 +4,8 @@
 # (the 40 x 30 sheet F3.b0 of Sketch1 F2, t = 1):
 #   1. Flange; the side faces y = 0, x = 40 and y = 30 picked into its
 #      Edge input: Miter, Own Corner Gap and Corners are shown, Hem,
-#      Corner and Width hidden.
+#      Corner and Width hidden; the keyboard is in Length (mitcad#2098), a
+#      number typed without a click goes there, Angle keeps its 90 deg.
 #   2. Own Corner Gap on, Corner Gap 1 mm, Position Inside, Length 10 mm
 #      (tangent): the preview is ok.
 #   3. One corner's own Miter (mitcad#1877): Add Corner, the corner edge
@@ -46,6 +47,14 @@ expect-ever '^Panel Flange input custom_gap at (?!.*[(]hidden[)])'
 expect-ever '^Panel Flange input corner_miters at (?!.*[(]hidden[)])'
 expect-ever '^Panel Flange input hem at .*[(]hidden[)]'
 expect-ever '^Panel Flange input width_type at .*[(]hidden[)]'
+# The keyboard went to Length when the edges were picked (mitcad#2098),
+# not to Angle above it: a number typed without a click is the length.
+mark
+type 12
+wait-log '^Panel field length: ' 30
+wait-idle
+expect-input-text length '^12$'
+expect-input-text angle '^90'
 
 # 2. The gap, the position and the length.
 mark

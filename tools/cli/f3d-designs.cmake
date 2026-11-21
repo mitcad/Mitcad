@@ -221,7 +221,18 @@ set(designs
     # A rounding of three edges (#30) gives a self-intersecting wire, and the
     # circular pattern after it (#31) none of the material the file's
     # removes: they fall back.
-    "49ccc315|#34,#35,#36|#30,#31")
+    "49ccc315|#34,#35,#36|#30,#31"
+    # A segment of a ring with a manifold and a lid on it (38 items, three
+    # components placed by occurrences, mitcad#2094). Holes drill up from
+    # the segment's flat face into passages along it: a hole of the
+    # passage's diameter ends 0.000015 mm short of the passage's axis, 0.0097
+    # mm beside it (#22), where OCCT's exact cut lost the section and cut
+    # the whole hole; the cut is retried with a fuzzy value. A rectangular
+    # pattern of a circular pattern of the dimples (#17) comes in from its
+    # own start where it has the time, else on the file's state before it.
+    # The dimples' drill dent is placed where the history removes material
+    # (#15, inferred). Nothing falls back.
+    "f43a378e|#1,#2,#3,#4,#5,#6,#7,#8,#9,#10,#11,#12,#13,#14,#15,#16,#17,#18,#19,#20,#21,#22,#23,#25,#26,#27,#28,#29,#30,#31,#33,#34,#35,#36,#37||#15|||1e-4")
 
 # Seconds as the trace gives them (two decimals) in hundredths.
 function(hundredths seconds out)

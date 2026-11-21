@@ -183,13 +183,18 @@ public:
   // Logs "Sketch badge '<text>' at x,y WxH, pointer place x,y WxH, view
   // x,y WxH" (window coordinates; the pointer's place as it is kept free
   // above the badge, also while the pointer is outside the view) when it
-  // changes, for the UI tests (mitcad#1756: clear of the floating cards).
+  // changes, for the UI tests (mitcad#1756: clear of the floating cards),
+  // and "Sketch badge middle at x,y", where a click on it is (mitcad#2026).
   void logBadge(const QString& status, const QRect& badge, const QRect& place);
   // In a window Qt never exposes, which never paints the overlay (Windows
   // session 0, mitcad#1787): places the badge as the paint would, gives the
   // view the room it takes (the navigation bar keeps right of it) and logs
   // it. Nothing in an exposed window, where the paint does it.
   void placeBadge();
+  // Whether a place in the view (view pixels) is on the degrees of freedom
+  // badge: a click there is Show Unconstrained (mitcad#2026). The overlay
+  // stays transparent to the mouse; the controller asks it.
+  bool badgeAt(const QPointF& position) const;
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -202,6 +207,9 @@ private:
     QString type;       // constraint type, or "fix"
     QRectF rect;
     bool inactive = false; // an inactive constraint's (mitcad#721), drawn pink
+    // A place of its own instead of beside `entity`: a Perpendicular with a
+    // circle or an arc, where the curves meet (mitcad#2114).
+    std::optional<V2> at;
   };
   struct DimensionLayout {
     QString id;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The SHEET METAL group of the SOLID tab (mitcad#210; the model's side in
 // commands.md, "Sheet rules and base Face" to "Sheet Unfold, Refold and Flat
-// Pattern"): Sheet Rules, Face, Flange, Convert to Sheet Metal, Bend, Fold,
+// Pattern"): Sheet Rules, Face, Flange, Hem, Convert to Sheet Metal, Bend, Fold,
 // Corner Round, Corner Chamfer, Unfold, Refold, Sheet Cut and Flat Pattern. Picks on a sheet body
 // are faces and edges; the model's `sheet_reference` and `sheet_seam`
 // queries turn them into the semantic references (panels, bends,
@@ -9,13 +9,21 @@
 // into the faces and edges that carry their names.
 #include <cmath>
 #include <cstddef>
+#include <functional>
+#include <initializer_list>
 #include <limits>
+#include <optional>
 #include "framework/ModelMessages.hpp"
 #include "framework/UserText.hpp"
 
 #include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QStringList>
+
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 
 #include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
@@ -51,11 +59,26 @@ const Choices kFlangePositions = {{QStringLiteral("bend_line"), QStringLiteral("
                                   {QStringLiteral("edge"), QStringLiteral("At Edge")},
                                   {QStringLiteral("side_tangent"), QStringLiteral("Tangent to Side")}};
 // A flange's hem form (mitcad#1383; the model's `hem`, mitcad#1378): None is
-// a plain flange.
+// a plain flange. Flat, Open and Rolled (mitcad#2112) follow, so that the
+// earlier forms keep their places in the list.
 const Choices kHemForms = {{QStringLiteral("none"), QStringLiteral("None")},
                            {QStringLiteral("teardrop"), QStringLiteral("Teardrop")},
                            {QStringLiteral("rope"), QStringLiteral("Rope")},
-                           {QStringLiteral("double"), QStringLiteral("Double")}};
+                           {QStringLiteral("double"), QStringLiteral("Double")},
+                           {QStringLiteral("flat"), QStringLiteral("Flat")},
+                           {QStringLiteral("open"), QStringLiteral("Open")},
+                           {QStringLiteral("rolled"), QStringLiteral("Rolled")}};
+// The Hem command's forms (mitcad#2112), Flat first.
+const Choices kHemCommandForms = {{QStringLiteral("flat"), QStringLiteral("Flat")},
+                                  {QStringLiteral("open"), QStringLiteral("Open")},
+                                  {QStringLiteral("teardrop"), QStringLiteral("Teardrop")},
+                                  {QStringLiteral("rolled"), QStringLiteral("Rolled")},
+                                  {QStringLiteral("rope"), QStringLiteral("Rope")},
+                                  {QStringLiteral("double"), QStringLiteral("Double")}};
+// Where a hem's edge ends up (mitcad#2112): its bend starting at the edge,
+// or its bend's outer surface touching the side plane through the edge.
+const Choices kHemPositions = {{QStringLiteral("edge"), QStringLiteral("At Edge")},
+                               {QStringLiteral("side_tangent"), QStringLiteral("Tangent to Side")}};
 // The corner joint of a flange whose wall closes against another wall of
 // the sheet (the model's `corner`, mitcad#1410); None is a free end. The
 // list takes further joints (flush, overlap) as they come.
@@ -234,6 +257,10 @@ bool isHem(const CommandState& state) {
   const QString form = state.choice(QStringLiteral("hem"));
   return !form.isEmpty() && form != QStringLiteral("none");
 }
+
+// Whether a flange's panel makes a rolled hem (mitcad#2112): one bend of the
+// Angle and no wall, so the Angle shows and the Length does not.
+bool isRolledHem(const CommandState& state) { return state.choice(QStringLiteral("hem")) == QStringLiteral("rolled"); }
 
 // Whether a flange's panel makes a corner joint (Corner not None).
 bool isCornerJoint(const CommandState& state) {
@@ -449,6 +476,23 @@ void loadOverrides(const QJsonObject& def, CommandState& state, const CommandCon
 void loadAngle(const QJsonObject& def, CommandState& state, const CommandContext& context) {
   loadValue(state, QStringLiteral("angle"), def.value(QStringLiteral("angle")), def, context);
   state.setChecked(QStringLiteral("flip"), false);
+}
+
+// A rolled hem's angle and radius (mitcad#2112) into the inputs `angle`,
+// `custom_radius` and `radius`: its angle shown as typed, Flip on where the
+// flange folds to the back (its angle negative), its own radius, if any,
+// in place of the flange's.
+void loadRolledHem(const QJsonObject& def, const QJsonObject& hem, CommandState& state,
+                   const CommandContext& context) {
+  const QString side = state.expression(QStringLiteral("angle")).trimmed();
+  const double angle = state.value(QStringLiteral("angle"));
+  const bool back = std::isfinite(angle) ? angle < 0.0 : side.startsWith(QLatin1Char('-'));
+  loadValue(state, QStringLiteral("angle"), hem.value(QStringLiteral("angle")), def, context);
+  state.setChecked(QStringLiteral("flip"), back);
+  if (hem.contains(QStringLiteral("radius"))) {
+    state.setChecked(QStringLiteral("custom_radius"), true);
+    loadValue(state, QStringLiteral("radius"), hem.value(QStringLiteral("radius")), def, context);
+  }
 }
 
 // The process profiles and allowance methods of sheet rules (mitcad#1939;
@@ -859,8 +903,13 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
   // and corner are the sketch's, and their inputs are hidden.
   // Several edges (mitcad#1872): plain walls, so the profile, hem,
   // corner joint and width are hidden and Corner Gap and Miter shown.
-  const auto rectangular = [](const CommandState& s) { return severalEdges(s) || !hasProfile(s); };
-  const auto plain = [](const CommandState& s) { return severalEdges(s) || hasProfile(s) || !isHem(s); };
+  // A rolled hem (mitcad#2112) has the Angle of its bend and no Length.
+  const auto rectangular = [](const CommandState& s) {
+    return severalEdges(s) || (!hasProfile(s) && !isRolledHem(s));
+  };
+  const auto plain = [](const CommandState& s) {
+    return severalEdges(s) || hasProfile(s) || !isHem(s) || isRolledHem(s);
+  };
   const auto measured = [](const CommandState& s) {
     return severalEdges(s) || (!hasProfile(s) && !isHem(s) && !isCornerJoint(s));
   };
@@ -868,7 +917,9 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     return !severalEdges(s) && !hasProfile(s) && !isCornerJoint(s);
   };
   const auto cornerShown = [](const CommandState& s) { return !severalEdges(s) && !hasProfile(s) && !isHem(s); };
-  const auto hemShown = [](const CommandState& s) { return !severalEdges(s) && !hasProfile(s) && isHem(s); };
+  const auto hemShown = [](const CommandState& s) {
+    return !severalEdges(s) && !hasProfile(s) && isHem(s) && !isRolledHem(s);
+  };
   const auto doubleHem = [](const CommandState& s) {
     return !severalEdges(s) && !hasProfile(s) && s.choice(QStringLiteral("hem")) == QStringLiteral("double");
   };
@@ -912,7 +963,10 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
       valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("10 mm"))
           .withStepMinimum(0.0)
           .withTooltip(QObject::tr("0 with no hem: the bend alone, without a wall (a rolled hem)"))
-          .withVisible(rectangular),
+          .withVisible(rectangular)
+          // The keyboard goes to Length when the picks are done: Angle's
+          // 90 deg is rarely changed (mitcad#2098).
+          .withKeyboardFirst(),
       choiceInput(QStringLiteral("length_mode"), QObject::tr("Measured"), kLengthModes, QStringLiteral("tangent"))
           .withRemembered()
           .withTooltip(QObject::tr("Where the length is measured from: tangent line, virtual sharp or outer surface"))
@@ -1037,8 +1091,16 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
                   {QStringLiteral("position"), state.choice(QStringLiteral("position"))}};
     if (hem) {
       const QString form = state.choice(QStringLiteral("hem"));
-      QJsonObject hemDef{{QStringLiteral("form"), form},
-                         {QStringLiteral("gap"), state.expression(QStringLiteral("hem_gap"))}};
+      QJsonObject hemDef{{QStringLiteral("form"), form}};
+      if (form == QStringLiteral("rolled")) {
+        // A rolled hem (mitcad#2112): the Angle is its bend's, the
+        // flange's only its side; its radius the flange's; no wall.
+        hemDef.insert(QStringLiteral("angle"), state.expression(QStringLiteral("angle")));
+        result.def.insert(QStringLiteral("length"),
+                          QJsonObject{{QStringLiteral("mode"), mode}, {QStringLiteral("value"), QStringLiteral("0 mm")}});
+      } else {
+        hemDef.insert(QStringLiteral("gap"), state.expression(QStringLiteral("hem_gap")));
+      }
       if (form == QStringLiteral("double")) {
         hemDef.insert(QStringLiteral("setback"), state.expression(QStringLiteral("hem_setback")));
       }
@@ -1121,7 +1183,9 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     const QJsonObject hem = feature.value(QStringLiteral("hem")).toObject();
     if (!hem.isEmpty()) {
       state.setChoice(QStringLiteral("hem"), str(hem, "form"));
-      loadValue(state, QStringLiteral("hem_gap"), hem.value(QStringLiteral("gap")), feature, model);
+      if (hem.contains(QStringLiteral("gap"))) {
+        loadValue(state, QStringLiteral("hem_gap"), hem.value(QStringLiteral("gap")), feature, model);
+      }
       loadValue(state, QStringLiteral("hem_setback"), hem.value(QStringLiteral("setback")), feature, model);
     }
     state.setChoice(QStringLiteral("corner"), feature.value(QStringLiteral("corner")).toString(QStringLiteral("none")));
@@ -1142,6 +1206,9 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     }
     state.setText(QStringLiteral("profile"), feature.value(QStringLiteral("profile")).toString());
     loadOverrides(feature, state, model);
+    if (str(hem, "form") == QStringLiteral("rolled")) {
+      loadRolledHem(feature, hem, state, model);
+    }
   };
   // Edit Profile (mitcad#1648): the profile sketch made on the wall from
   // the flange as the panel defines it (or the one it has, moved back onto
@@ -1193,6 +1260,9 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
       return QStringLiteral("Added flange with the profile %1, angle %2%3")
           .arg(state.text(QStringLiteral("profile")), text(state, "angle"), flipped);
     }
+    if (isRolledHem(state)) {
+      return QStringLiteral("Added flange, rolled hem, angle %1%2").arg(text(state, "angle"), flipped);
+    }
     if (isHem(state)) {
       const QString form = state.choice(QStringLiteral("hem"));
       const QString setback = form == QStringLiteral("double")
@@ -1207,6 +1277,332 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     }
     return QStringLiteral("Added flange, length %1 (%2), angle %3%4")
         .arg(text(state, "length"), state.choice(QStringLiteral("length_mode")), text(state, "angle"), flipped);
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Hem (mitcad#2112): an edge folded back on itself in one step, of a form
+// (Flat, Open, Teardrop, Rolled, Rope, Double) and the sizes that form
+// uses. It makes a `sheet_flange` with `hem` (commands.md, "Hem forms of a
+// flange"), which Flange edits too; a flange with a hem opens here.
+
+namespace {
+
+QString hemForm(const CommandState& state) { return state.choice(QStringLiteral("form")); }
+
+bool hemFormIn(const CommandState& state, std::initializer_list<const char*> forms) {
+  const QString form = hemForm(state);
+  for (const char* one : forms) {
+    if (form == QLatin1String(one)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether the flange's own radius makes the hem's bends: a flat or open
+// hem's radius is half its gap, a rolled hem's is in its `hem`.
+bool hemTakesFlangeRadius(const QString& form) {
+  return form == QStringLiteral("teardrop") || form == QStringLiteral("rope") || form == QStringLiteral("double");
+}
+
+// Whether the Hem panel holds all of a definition: a flange with a hem on
+// one edge, at the edge or tangent to the side, with no profile or corner
+// joint (Flange edits the others).
+bool hemPanelHolds(const QJsonObject& def) {
+  const QString position = def.value(QStringLiteral("position")).toString(QStringLiteral("bend_line"));
+  return !def.value(QStringLiteral("hem")).toObject().isEmpty() && !def.contains(QStringLiteral("profile")) &&
+         !def.contains(QStringLiteral("corner")) && def.value(QStringLiteral("boundaries")).toArray().isEmpty() &&
+         !def.contains(QStringLiteral("corner_gap")) && !def.contains(QStringLiteral("miter")) &&
+         def.value(QStringLiteral("corner_miters")).toArray().isEmpty() &&
+         (position == QStringLiteral("edge") || position == QStringLiteral("side_tangent"));
+}
+
+// The plane of the side face along the hem's edge, where the length handle
+// starts (the hidden object `edge_frame`: origin and outward normal), read
+// while the sheet still has that face (on the pick, or as an edit loads).
+QJsonObject hemEdgeFrame(const SelectionItem& item, const CommandContext& context) {
+  SelectionItem wall = item;
+  if (item.kind != SelectKind::Face) {
+    QJsonObject query{{QStringLiteral("query"), QStringLiteral("sheet_reference")},
+                      {QStringLiteral("body"), item.owner},
+                      {QStringLiteral("edge"), item.name}};
+    if (item.at) {
+      query.insert(QStringLiteral("at"), QJsonArray{(*item.at)[0], (*item.at)[1], (*item.at)[2]});
+    }
+    try {
+      const QJsonObject boundary = context.queryObject(query).value(QStringLiteral("boundary")).toObject();
+      if (boundary.isEmpty()) {
+        return {};
+      }
+      wall = wallFace(item.owner, boundary);
+    } catch (const std::exception&) {
+      return {};
+    }
+  }
+  const std::optional<PlaneFrame> frame = frameOf(wall, context);
+  if (!frame) {
+    return {};
+  }
+  const gp_Pnt& o = frame->origin;
+  const gp_Dir& n = frame->normal;
+  return {{QStringLiteral("origin"), QJsonArray{o.X(), o.Y(), o.Z()}},
+          {QStringLiteral("normal"), QJsonArray{n.X(), n.Y(), n.Z()}}};
+}
+
+// The hem's length handle: an arrow from the side plane through the edge
+// back over the panel, its tip at the hem's end (Tangent to Side, where
+// the length is measured from that plane); none for a rolled hem.
+std::optional<Manipulator> hemLengthHandle(const CommandState& state, const CommandContext&) {
+  if (hemFormIn(state, {"rolled"}) || state.choice(QStringLiteral("position")) != QStringLiteral("side_tangent")) {
+    return std::nullopt;
+  }
+  const QJsonObject frame = state.object(QStringLiteral("edge_frame"));
+  const QJsonArray origin = frame.value(QStringLiteral("origin")).toArray();
+  const QJsonArray normal = frame.value(QStringLiteral("normal")).toArray();
+  if (origin.size() != 3 || normal.size() != 3) {
+    return std::nullopt;
+  }
+  const gp_Vec inward(-normal.at(0).toDouble(), -normal.at(1).toDouble(), -normal.at(2).toDouble());
+  if (inward.Magnitude() < 1e-9) {
+    return std::nullopt;
+  }
+  Manipulator handle =
+      arrow(gp_Pnt(origin.at(0).toDouble(), origin.at(1).toDouble(), origin.at(2).toDouble()), gp_Dir(inward));
+  handle.minimum = 0.0;
+  handle.valueBox = true;
+  handle.boxAtTip = true;
+  return handle;
+}
+
+// Shown for the hem forms listed.
+std::function<bool(const CommandState&)> hemShownFor(std::initializer_list<const char*> forms) {
+  QStringList list;
+  for (const char* form : forms) {
+    list << QString::fromLatin1(form);
+  }
+  return [list](const CommandState& s) { return list.contains(hemForm(s)); };
+}
+
+} // namespace
+
+CommandDef sheetHemCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("sheet.hem");
+  def.name = QObject::tr("Hem");
+  def.icon = QStringLiteral("sheet-hem");
+  def.tooltip = QObject::tr("Folds a sheet edge back on itself: flat, open, teardrop, rolled, rope or double");
+  def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("fold back"), QStringLiteral("hem"),
+                  QStringLiteral("flange")};
+  def.featureType = QStringLiteral("sheet_flange");
+  def.keyInputs = {QStringLiteral("form")};
+  const auto gapShown = [](const CommandState& s) {
+    return hemFormIn(s, {"open", "teardrop", "rope", "double"}) ||
+           (hemFormIn(s, {"flat"}) && s.checked(QStringLiteral("own_gap")));
+  };
+  const auto ownRadius = [](const CommandState& s) {
+    return hemFormIn(s, {"rolled", "teardrop", "rope", "double"}) && s.checked(QStringLiteral("custom_radius"));
+  };
+  const auto offsets = [](const CommandState& s) {
+    return s.choice(QStringLiteral("width_type")) == QStringLiteral("offsets");
+  };
+  const auto middle = [](const CommandState& s) {
+    return s.choice(QStringLiteral("width_type")) == QStringLiteral("middle");
+  };
+  const auto ownRoot = [](const CommandState& s) {
+    return s.choice(QStringLiteral("width_type")) == QStringLiteral("middle") &&
+           s.checked(QStringLiteral("custom_root"));
+  };
+  // The rules' radius and relief overrides: the radius for the forms whose
+  // bends take it, after the sizes.
+  QVector<InputDef> overrides = overrideInputs(true);
+  InputDef customRadius = overrides.takeFirst();
+  InputDef radius = overrides.takeFirst();
+  customRadius.withVisible(hemShownFor({"rolled", "teardrop", "rope", "double"}));
+  radius.withVisible(ownRadius);
+  def.inputs = {
+      selectionInput(QStringLiteral("edge"), QObject::tr("Edge"), SelectKind::Edge | SelectKind::Face, 1, 1)
+          .withTooltip(QObject::tr("A straight edge or side face of the sheet"))
+          .withAccepts(isWall)
+          .withOnPick([](const SelectionItem& item, CommandState& state, const CommandContext& model) {
+            state.setObject(QStringLiteral("edge_frame"), hemEdgeFrame(item, model));
+          }),
+      choiceInput(QStringLiteral("form"), QObject::tr("Form"), kHemCommandForms, QStringLiteral("flat"))
+          .withTooltip(QObject::tr("How the edge folds back: flat on the face, open with a gap, teardrop, rolled, "
+                                   "rope or double")),
+      valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("From the plane touching the bend's outer surface to the hem's end"))
+          .withVisible([](const CommandState& s) { return !hemFormIn(s, {"rolled"}); })
+          .withManipulator(hemLengthHandle),
+      checkInput(QStringLiteral("own_gap"), QObject::tr("Own Gap"), false)
+          .withTooltip(QObject::tr("Off: a tenth of the sheet's thickness, the smallest gap a flat hem keeps"))
+          .withVisible(hemShownFor({"flat"})),
+      valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("1 mm"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("The gap between the hem and the face"))
+          .withVisible(gapShown),
+      customRadius,
+      radius,
+      valueInput(QStringLiteral("hem_angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("270 deg"))
+          .withTooltip(QObject::tr("How far the rolled bend turns: more than 180 degrees, less than a full turn"))
+          .withVisible(hemShownFor({"rolled"})),
+      valueInput(QStringLiteral("setback"), QObject::tr("Setback"), ValueKind::Length, QStringLiteral("1 mm"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("How far the folded-back wall ends short of the hem's first wall"))
+          .withVisible(hemShownFor({"double"})),
+      flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
+      choiceInput(QStringLiteral("position"), QObject::tr("Position"), kHemPositions, QStringLiteral("side_tangent"))
+          .withTooltip(QObject::tr("Where the edge ends up: the bend starting at it, or its outer surface "
+                                   "on the side plane")),
+      choiceInput(QStringLiteral("width_type"), QObject::tr("Width"), kFlangeWidths, QStringLiteral("whole"))
+          .withTooltip(QObject::tr("How much of the edge the hem covers")),
+      valueInput(QStringLiteral("start"), QObject::tr("Start Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withStepMinimum(0.0)
+          .withVisible(offsets),
+      valueInput(QStringLiteral("end"), QObject::tr("End Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withStepMinimum(0.0)
+          .withVisible(offsets),
+      valueInput(QStringLiteral("before"), QObject::tr("Before the Middle"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withTooltip(QObject::tr("From the edge's middle towards the end the Start Offset is measured from"))
+          .withVisible(middle),
+      valueInput(QStringLiteral("after"), QObject::tr("After the Middle"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withTooltip(QObject::tr("From the edge's middle towards the other end"))
+          .withVisible(middle),
+      checkInput(QStringLiteral("custom_root"), QObject::tr("Own Overhang Root"), false)
+          .withTooltip(QObject::tr("Off: past the edge's ends the wall is cut back at its root by the relief depth"))
+          .withVisible(middle),
+      valueInput(QStringLiteral("root"), QObject::tr("Overhang Root"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("How far the wall past the edge's ends is cut back; 0: from the bend's end"))
+          .withVisible(ownRoot),
+      // The side the hem folds to as loaded (only its sign counts; Flip
+      // turns it), as Flange's hidden Angle with a hem.
+      valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("180 deg"))
+          .withVisible([](const CommandState&) { return false; }),
+  };
+  def.inputs += overrides;
+  def.enabled = [&context] { return hasSheets(context) && processAllows(context, QStringLiteral("sheet.hem")); };
+  def.disabledReason = [&context] { return processReason(context, QStringLiteral("sheet.hem")); };
+  def.canEdit = hemPanelHolds;
+  def.build = [&context](const CommandState& state, const CommandContext&) {
+    Built result;
+    const SelectionItem item = state.items(QStringLiteral("edge")).first();
+    const QJsonObject pick = sheetPick(item, context, result, QStringLiteral("edge"));
+    if (!result.error.isEmpty()) {
+      return result;
+    }
+    const QJsonValue boundary = pick.value(QStringLiteral("boundary"));
+    if (!boundary.isObject() || !pick.value(QStringLiteral("straight")).toBool()) {
+      return Built::failure(QObject::tr("A hem goes only on a straight edge of the sheet."), QStringLiteral("edge"));
+    }
+    const QString form = hemForm(state);
+    const bool rolled = form == QStringLiteral("rolled");
+    QJsonObject hem{{QStringLiteral("form"), form}};
+    if (rolled) {
+      hem.insert(QStringLiteral("angle"), state.expression(QStringLiteral("hem_angle")));
+      if (state.checked(QStringLiteral("custom_radius"))) {
+        hem.insert(QStringLiteral("radius"), state.expression(QStringLiteral("radius")));
+      }
+    } else if (form != QStringLiteral("flat") || state.checked(QStringLiteral("own_gap"))) {
+      hem.insert(QStringLiteral("gap"), state.expression(QStringLiteral("gap")));
+    }
+    if (form == QStringLiteral("double")) {
+      hem.insert(QStringLiteral("setback"), state.expression(QStringLiteral("setback")));
+    }
+    // The length from the plane touching the first bend's outer surface,
+    // the angle only the side (commands.md, "Hem forms of a flange"); a
+    // rolled hem has no wall.
+    const QJsonValue length =
+        rolled ? QJsonValue(QStringLiteral("0 mm")) : QJsonValue(state.expression(QStringLiteral("length")));
+    result.def = {{QStringLiteral("type"), QStringLiteral("sheet_flange")},
+                  {QStringLiteral("body"), item.owner},
+                  {QStringLiteral("boundary"), boundary},
+                  {QStringLiteral("angle"), hemAngleOf(state)},
+                  {QStringLiteral("length"), QJsonObject{{QStringLiteral("mode"), QStringLiteral("outer_tangent")},
+                                                         {QStringLiteral("value"), length}}},
+                  {QStringLiteral("position"), state.choice(QStringLiteral("position"))},
+                  {QStringLiteral("hem"), hem}};
+    const QString widthType = state.choice(QStringLiteral("width_type"));
+    if (widthType == QStringLiteral("offsets")) {
+      result.def.insert(QStringLiteral("offsets"),
+                        QJsonObject{{QStringLiteral("start"), state.expression(QStringLiteral("start"))},
+                                    {QStringLiteral("end"), state.expression(QStringLiteral("end"))}});
+    } else if (widthType == QStringLiteral("middle")) {
+      QJsonObject width{{QStringLiteral("type"), QStringLiteral("middle")},
+                        {QStringLiteral("before"), state.expression(QStringLiteral("before"))},
+                        {QStringLiteral("after"), state.expression(QStringLiteral("after"))}};
+      if (state.checked(QStringLiteral("custom_root"))) {
+        width.insert(QStringLiteral("root"), state.expression(QStringLiteral("root")));
+      }
+      result.def.insert(QStringLiteral("width"), width);
+    }
+    addOverrides(result.def, state);
+    // A flat, open or rolled hem sets its bends' radius itself.
+    if (!hemTakesFlangeRadius(form)) {
+      result.def.remove(QStringLiteral("radius"));
+    }
+    return result;
+  };
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
+    const SelectionItem edge = wallFace(str(feature, "body"), feature.value(QStringLiteral("boundary")).toObject());
+    state.setItems(QStringLiteral("edge"), Selection{edge});
+    state.setObject(QStringLiteral("edge_frame"), hemEdgeFrame(edge, model));
+    loadAngle(feature, state, model);
+    const QJsonObject hem = feature.value(QStringLiteral("hem")).toObject();
+    const QString form = str(hem, "form");
+    state.setChoice(QStringLiteral("form"), form);
+    if (form != QStringLiteral("rolled")) {
+      const QJsonObject length = feature.value(QStringLiteral("length")).toObject();
+      loadValue(state, QStringLiteral("length"), length.value(QStringLiteral("value")), feature, model);
+    }
+    if (hem.contains(QStringLiteral("gap"))) {
+      state.setChecked(QStringLiteral("own_gap"), true);
+      loadValue(state, QStringLiteral("gap"), hem.value(QStringLiteral("gap")), feature, model);
+    }
+    if (hem.contains(QStringLiteral("setback"))) {
+      loadValue(state, QStringLiteral("setback"), hem.value(QStringLiteral("setback")), feature, model);
+    }
+    if (hem.contains(QStringLiteral("angle"))) {
+      loadValue(state, QStringLiteral("hem_angle"), hem.value(QStringLiteral("angle")), feature, model);
+    }
+    state.setChoice(QStringLiteral("position"),
+                    feature.value(QStringLiteral("position")).toString(QStringLiteral("side_tangent")));
+    const QJsonObject offsets = feature.value(QStringLiteral("offsets")).toObject();
+    const QJsonObject width = feature.value(QStringLiteral("width")).toObject();
+    if (!offsets.isEmpty()) {
+      state.setChoice(QStringLiteral("width_type"), QStringLiteral("offsets"));
+      loadValue(state, QStringLiteral("start"), offsets.value(QStringLiteral("start")), feature, model);
+      loadValue(state, QStringLiteral("end"), offsets.value(QStringLiteral("end")), feature, model);
+    } else if (!width.isEmpty()) {
+      state.setChoice(QStringLiteral("width_type"), QStringLiteral("middle"));
+      loadValue(state, QStringLiteral("before"), width.value(QStringLiteral("before")), feature, model);
+      loadValue(state, QStringLiteral("after"), width.value(QStringLiteral("after")), feature, model);
+      if (width.contains(QStringLiteral("root"))) {
+        state.setChecked(QStringLiteral("custom_root"), true);
+        loadValue(state, QStringLiteral("root"), width.value(QStringLiteral("root")), feature, model);
+      }
+    }
+    loadOverrides(feature, state, model);
+    // A rolled hem's own radius in place of the flange's.
+    if (hem.contains(QStringLiteral("radius"))) {
+      state.setChecked(QStringLiteral("custom_radius"), true);
+      loadValue(state, QStringLiteral("radius"), hem.value(QStringLiteral("radius")), feature, model);
+    }
+  };
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    const QString flipped = state.checked(QStringLiteral("flip")) ? QStringLiteral(" flipped") : QString();
+    const QString form = hemForm(state);
+    if (form == QStringLiteral("rolled")) {
+      return QStringLiteral("Added rolled hem, angle %1%2").arg(text(state, "hem_angle"), flipped);
+    }
+    const QString gap = form == QStringLiteral("flat") && !state.checked(QStringLiteral("own_gap"))
+                            ? QStringLiteral("a tenth of the thickness")
+                            : text(state, "gap");
+    const QString setback =
+        form == QStringLiteral("double") ? QStringLiteral(", setback %1").arg(text(state, "setback")) : QString();
+    return QStringLiteral("Added %1 hem, length %2, gap %3%4%5").arg(form, text(state, "length"), gap, setback, flipped);
   };
   return def;
 }
@@ -2046,6 +2442,9 @@ void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext&
   registry.add(sheetRulesCommand(context));
   registry.add(editRules);
   registry.add(sheetFaceCommand(context));
+  // Hem before Flange: a flange with a hem opens in Hem (mitcad#2112), the
+  // first command whose canEdit takes it.
+  registry.add(sheetHemCommand(context));
   registry.add(sheetFlangeCommand(context));
   registry.add(sheetConvertCommand(context));
   registry.add(sheetBendCommand(context));

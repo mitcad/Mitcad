@@ -11,6 +11,14 @@
 #      preview is the tangent_circle_distance 28 - 10 - 5 = 13 in
 #      parentheses, and the click that places it adds it driven, measuring
 #      13 (which also shows the first dimension held its 18).
+#   The tool's prompts name the right-click's Driven (mitcad#2055): Pick
+#   "... then right-click for Driven.", Place "... Right-click: Driven."
+#   3. With the tool ended, the 18 dimension's context menu offers Make
+#      Driven: it becomes driven, measuring 18, and one Undo ("Make Driven
+#      in Sketch1") takes it back (mitcad#2055).
+#   4. The driven 13 dimension's context menu offers Make Driving: it drives
+#      at its measured 13, and one Undo ("Make Driving in Sketch1") takes it
+#      back.
 # Run by tools/ui-sketch-tangent-dimension-test.sh (Linux) and
 # tools/ui-windows-sketch-tangent-dimension-test.ps1 (Windows).
 expect-ever 'View area'
@@ -26,12 +34,14 @@ wait-idle
 mark
 command sketch.dimension
 wait-log '^Sketch tool Sketch Dimension$'
+wait-log '^Sketch Dimension prompt: pick .*, then right-click for Driven[.]$'
 sketch-click -10 0 right
 wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
 wait-log '^Context menu: Center [|] Tangent [|] Driving \(current\) [|] Driven [|] Cancel$'
 popup 'Tangent'
 wait-log '^Sketch Dimension: c[0-9]+ by its tangent side$'
 sketch-click 35 0
+wait-log '^Sketch Dimension prompt: click where the value goes .*[.] Right-click: Driven[.]$'
 sketch-click 15 15 right
 wait-log '^Sketch Dimension menu for c[0-9]+ \(picked\)$'
 wait-log '^Context menu: Center \(current\) [|] Tangent [|] Driving \(current\) [|] Driven [|] Cancel$'
@@ -65,7 +75,39 @@ wait-log '^Sketch Dimension preview: tangent_circle_distance [(]13[.]00[)]$'
 sketch-click 15 -15
 wait-log '^Added driven dimension k[0-9]+ tangent_circle_distance = 13[.]00$'
 
+# 3. Make Driven on the driving 18, from its context menu (mitcad#2055).
+mark
 key Escape
+wait-log '^Sketch tool ended: Sketch Dimension$'
+wait-idle
+mark
+sketch-click 15 15 right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Make Driven'
+expect-no-log '^Context menu: .*Make Driving'
+popup 'Make Driven'
+wait-log '^Dimension k[0-9]+ made driven: .*18[.]00'
+wait-idle
+mark
+command edit.undo
+wait-log '^Undo: Make Driven in Sketch1$'
+wait-idle
+
+# 4. Make Driving on the driven 13: driving at its measured value.
+mark
+sketch-click 15 -15 right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Make Driving'
+expect-no-log '^Context menu: .*Make Driven'
+popup 'Make Driving'
+wait-log '^Dimension k[0-9]+ made driving: .*13[.]00'
+wait-idle
+mark
+command edit.undo
+wait-log '^Undo: Make Driving in Sketch1$'
+wait-idle
+expect-never 'not made driv'
+
 command sketch.finish
 wait-log '^Sketch finished'
 expect-never 'TestDriver: FAIL'

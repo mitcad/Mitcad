@@ -625,6 +625,13 @@ pub struct HoleDef<P = ParamId> {
     /// they are.
     #[serde(default, skip_serializing_if = "PrintBridging::is_none")]
     pub print_bridging: PrintBridging,
+    /// The bodies the holes cut across components, as an extrusion's
+    /// `cut_scope` (mitcad#2131): made in an assembly, they may drill the
+    /// occurrences of linked and multiply placed components it includes,
+    /// there only. None: the bodies of its own component
+    /// (`participants`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_scope: Option<super::extrude_scope::CutScope>,
 }
 
 type Mapper<'a, P, Q, E> = dyn FnMut(&str, &P) -> Result<Q, E> + 'a;
@@ -804,6 +811,7 @@ impl<P> HoleDef<P> {
             roof_sag: map_option("roof_sag", &self.roof_sag, f)?,
             insert: self.insert.clone(),
             print_bridging: self.print_bridging,
+            cut_scope: self.cut_scope.clone(),
         })
     }
 
@@ -1118,6 +1126,20 @@ impl FeatureInfo for HoleDef {
                 );
             }
             super::hole_sizes::insert(&insert.size)?;
+        }
+        // Holes across components (mitcad#2131), as an extrusion's cut.
+        if let Some(scope) = &self.cut_scope {
+            if !self.participants.is_empty() {
+                return Err("cut_scope requires no legacy participant list".to_owned());
+            }
+            if self
+                .thread
+                .as_ref()
+                .is_some_and(|t| t.modeled || t.tapers())
+            {
+                return Err("holes with a cut_scope cut no modelled or taper thread; make the thread cosmetic".to_owned());
+            }
+            scope.check()?;
         }
         check_participants(ctx, Operation::Cut, &self.participants)
     }
@@ -1652,7 +1674,15 @@ fn offset_point(
 impl<K: Kernel> Evaluate<K> for HoleDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let positions = self.positions(ctx)?;
-        let participants = participant_bodies(ctx, Operation::Cut, &self.participants)?;
+        // Holes with a scope find their bodies across components
+        // (mitcad#2131): every body the scope may reach, in the holes'
+        // coordinates, sizes them (Through All) as an extrusion's.
+        let scope = self.cut_scope.as_ref();
+        let discovery = scope.map(|scope| scope.discover(ctx)).transpose()?;
+        let participants = match &discovery {
+            Some(discovery) => discovery.in_source_frame(ctx)?,
+            None => participant_bodies(ctx, Operation::Cut, &self.participants)?,
+        };
         // The size: the table's, or a custom thread's (mitcad#893).
         let thread = match &self.thread {
             Some(thread) => {
@@ -1797,6 +1827,9 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             bridging,
         };
         let tool = ctx.kernel.hole_tool(&spec).map_err(|e| e.to_string())?;
+        if let (Some(scope), Some(discovery)) = (scope, discovery) {
+            return scope.apply(ctx, discovery, tool);
+        }
         if let (Some(depth), Some(body)) = (sheet_depth, sheet_body)
             && let Some(mut output) =
                 crate::sheet::folded::cut::hole_cut(ctx, body, &positions, diameter, depth)?

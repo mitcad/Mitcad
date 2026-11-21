@@ -616,6 +616,14 @@ fn redirect(
                 opened.stationary = Some(to);
             }
         }
+        // A corner gap beside the united panel (mitcad#2098).
+        for gap in &mut state.gaps {
+            for panel in &mut gap.panels {
+                if *panel == from {
+                    *panel = to;
+                }
+            }
+        }
     }
     remap_lineage(&mut state.lineage, old, &regions, map);
     for record in &mut state.lineage {
@@ -747,6 +755,7 @@ pub(crate) fn joined<K: Kernel>(
     state.opened.extend(copy.opened.iter().cloned());
     state.lineage.extend(copy.lineage.iter().cloned());
     state.overlays.extend(copy.overlays.iter().cloned());
+    state.gaps.extend(copy.gaps.iter().cloned());
     // Each copy panel united with a panel of the sheet in its plane that it
     // touches along a seam, and each copy bend with a bend of the sheet on
     // its cylinder (mitcad#1558: a bend across the mirror plane).

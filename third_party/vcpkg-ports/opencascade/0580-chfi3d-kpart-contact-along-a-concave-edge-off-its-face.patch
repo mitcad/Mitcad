@@ -30,8 +30,8 @@ test_rounding_ending_at_a_block_flush_with_its_contact (ctest
 geometry.suite.fillet_corners): a pocket rounded over ribs up to blocks
 whose sides lie where the rounding touches the ceiling, the contact past the
 end along the block's concave edge: the volume added against the rounding's
-section. Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+section. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 index 691d31e..a5c0d7b 100644

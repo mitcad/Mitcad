@@ -27,14 +27,21 @@ file stored, whose vertices there are tight.
 
 Test: geometry.port.1730
 (geometry/tests/port/p1730-contact-end-at-a-vertex-within-its-own-tolerance.cpp):
-a cube whose top corner at the far end of the top's end edge has a
-tolerance of 0.7, its edge chamfered and rounded with 0.5: valid, the
-contact's end 0.5 from the near vertex kept on the arc, no vertex left at
-the corner, the exact volume (without the patch the end is drawn to the
-near vertex); the same cube with every vertex tight. Also
-cli.f3d_edit_reported (the reported design's Chamfer3 on the kernel's
-Fillet1 result). Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+test_chamfer_crossing_an_arc_beside_a_wide_vertex_stays_on_it and
+test_rounding_crossing_an_arc_beside_a_wide_vertex_stays_on_it: a 10
+cube made of two halves fused at x = 5, the far end W of the arc S
+between the two tops of tolerance 0.7, the front's top edge chain
+chamfered or rounded with 0.5: one analytic piece per edge, the contact
+on the top crossing S 0.5 from the spine's vertex V there, inside S
+(without the patch both pieces' ends were drawn to V, 0.5 <= 0.7): valid,
+a vertex at the crossing, none at V, the exact volume.
+test_crossing_an_arc_beside_a_vertex_under_the_distance: the boundary, W
+of tolerance 0.45, the same result.
+test_chamfer_and_rounding_ending_beside_a_wide_vertex: the same at the
+spine's end of a plain cube, where the corner builds the end anew (a
+witness that such ends stay as they were). Also cli.f3d_edit_reported
+(the reported design's Chamfer3 on the kernel's Fillet1 result). It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 index f97d2eb2..d5144d30 100644

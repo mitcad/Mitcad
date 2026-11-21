@@ -75,6 +75,7 @@ const ANNOTATIONS: &[&str] = &[
     "balloon",
     "center_pattern",
     "edge_extension",
+    "hole_callout",
 ];
 
 const PEN_WIDTHS: &[&str] = &["thin", "thick", "extra_thick"];
@@ -121,6 +122,16 @@ fn projection() -> Value {
     choice(
         &["third_angle", "first_angle"],
         "The projection method (ISO 5456-2)",
+    )
+}
+
+/// A drawing's dimensioning standard (mitcad#2047).
+fn standard(default: &str) -> Value {
+    choice(
+        &["iso", "asme"],
+        &format!(
+            "The dimensioning standard: iso (ISO 129-1, values along their dimension lines) or asme (ASME Y14.5, values horizontal in a break of the line; inch values without a leading zero or the unit){default}"
+        ),
     )
 }
 
@@ -267,7 +278,8 @@ fn drawings(name: &str) -> Option<Value> {
                 "layout": described("export_drawing's options and bodies: its sheets laid out as File > Export Drawing does (the root's drawings only)", "Drawings in the design"),
                 "template": template(),
                 "decimals": {"type": "integer", "minimum": 0, "description": "The decimals of its dimensions and annotations without their own"},
-                "text_height": number("The letters' height of its annotations without their own, mm")
+                "text_height": number("The letters' height of its annotations without their own, mm"),
+                "standard": standard("; the template's when left out (ANSI's asme), else iso")
             },
             "required": [],
             "examples": [
@@ -281,10 +293,11 @@ fn drawings(name: &str) -> Option<Value> {
                 "drawing": drawing(),
                 "name": text("Its new name"),
                 "decimals": nullable("The decimals of its dimensions and annotations without their own", "integer"),
-                "text_height": nullable("The letters' height of its annotations without their own, mm", "number")
+                "text_height": nullable("The letters' height of its annotations without their own, mm", "number"),
+                "standard": standard("; every dimension of the drawing follows")
             },
             "required": ["drawing"],
-            "examples": [{"cmd": "edit_drawing", "drawing": "D1", "name": "Bracket", "decimals": 1}]
+            "examples": [{"cmd": "edit_drawing", "drawing": "D1", "name": "Bracket", "decimals": 1}, {"cmd": "edit_drawing", "drawing": "D1", "standard": "asme"}]
         }),
         "delete_drawing" => json!({
             "description": "Deletes a drawing (or a cut sheet). Result: drawing.",

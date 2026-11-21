@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# Show Unconstrained (mitcad#2026, GitHub mitcad/Mitcad#413) on
+# sketch-show-unconstrained.json: Sketch1 with two fully constrained lines
+# (their points fixed) and one free line, whose two points are free too.
+#   1. The Sketch Palette's Show Unconstrained button selects exactly the
+#      free line and its two points.
+#   2. Esc clears the selection; a click on the degrees of freedom badge
+#      selects the same three again, and the view does not take the click
+#      (no window, the selection stays). A drag from the badge stays the
+#      view's window (tools/ui-sketch-select-test.sh starts one there).
+#   3. The sketch's context menu offers Show Unconstrained, which does the
+#      same.
+# Run by tools/ui-sketch-show-unconstrained-test.sh (Linux),
+# tools/ui-windows-sketch-show-unconstrained-test.ps1 (Windows) and
+# tools/ui-macos-sketch-show-unconstrained-test.sh (macOS).
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-idle
+expect-selection 0 0
+
+# 1. The palette's button.
+mark
+click-logged '^Palette Show Unconstrained at '
+wait-log '^Palette: Show Unconstrained$'
+wait-log '^Show Unconstrained: 1 curve\(s\), 2 point\(s\): c[0-9]+, p[0-9]+, p[0-9]+$'
+wait-idle
+expect-selection 3 0
+
+# 2. Cleared, then the badge.
+mark
+key Escape
+wait-idle
+expect-selection 0 0
+mark
+click-logged '^Sketch badge middle at '
+wait-log '^Sketch badge clicked$'
+wait-log '^Show Unconstrained: 1 curve\(s\), 2 point\(s\): c[0-9]+, p[0-9]+, p[0-9]+$'
+wait-idle
+expect-selection 3 0
+
+# 3. The context menu, on empty space with nothing selected.
+mark
+key Escape
+wait-idle
+expect-selection 0 0
+mark
+sketch-click 5 5 right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Show Unconstrained [|] Finish Sketch'
+popup 'Show Unconstrained'
+wait-log '^Show Unconstrained: 1 curve\(s\), 2 point\(s\): c[0-9]+, p[0-9]+, p[0-9]+$'
+wait-idle
+expect-selection 3 0
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

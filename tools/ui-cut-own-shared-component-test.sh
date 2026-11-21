@@ -91,7 +91,9 @@ if [ "$downs" -gt 0 ]; then
 fi
 ui_expect_log "Cut target C1@O1: eligible, checked, intersects, own definition" \
   "Ring listed once, eligible and checked, as the component being edited"
-ui_expect_log "Cut target C2@O2: unavailable, unchecked, intersects" "Other's shared definition stays disabled"
+# Other's shared definition is left out; it could be machined at this
+# occurrence only when checked (mitcad#2131).
+ui_expect_log "Cut target C2@O2: machinable here, unchecked, intersects" "Other's shared definition left out"
 ui_expect_log "Preview Extrude: ok" "the cut previews"
 ui_expect_log "Cut target row C1@O1 at " "Ring's row laid out"
 ui_sync

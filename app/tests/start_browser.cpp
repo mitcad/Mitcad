@@ -5,8 +5,9 @@
 // or project gone falls back), a place's folders and design cards with
 // their project and folder, the pins of a project's designs, the search
 // over every project and the recent list (a recent design in a project
-// listed once, by its project key), a preview found on this computer, and
-// the logs' lines.
+// listed once, by its project key), a preview found on this computer, the
+// Tree / Cards view remembered and a project's tree (mitcad#2093), and the
+// logs' lines.
 #include "UnitTests.hpp"
 #include "files/StartBrowser.hpp"
 
@@ -170,6 +171,50 @@ void placeTests(const QString& top) {
   CHECK(start::projectsLine({}) == QStringLiteral("Start page projects: none"));
 }
 
+void viewTests(const QString& top) {
+  // Cards when nothing is remembered, or an unknown word.
+  CHECK(start::loadView() == start::View::Cards);
+  QSettings().setValue(start::viewKey(), QStringLiteral("columns"));
+  CHECK(start::loadView() == start::View::Cards);
+  // Tree, remembered as its word beside the row's keys.
+  start::saveView(start::View::Tree);
+  CHECK(start::viewKey() == QStringLiteral("start/browseView"));
+  CHECK(QSettings().value(start::viewKey()).toString() == QStringLiteral("tree"));
+  CHECK(start::loadView() == start::View::Tree);
+  // The view is every project's: choosing another row keeps it.
+  start::Row place;
+  place.kind = start::Row::Kind::Project;
+  place.root = top + QStringLiteral("/Team");
+  start::saveRow(place);
+  start::saveRow(start::Row());
+  CHECK(start::loadView() == start::View::Tree);
+  start::saveView(start::View::Cards);
+  CHECK(QSettings().value(start::viewKey()).toString() == QStringLiteral("cards"));
+  CHECK(start::loadView() == start::View::Cards);
+  CHECK(start::viewWord(start::View::Tree) == QStringLiteral("tree"));
+  CHECK(start::viewWord(start::View::Cards) == QStringLiteral("cards"));
+  QSettings().remove(start::viewKey());
+  // The folders unfolded for the folder shown.
+  CHECK(start::openFolders(QString()).isEmpty());
+  CHECK(start::openFolders(QStringLiteral("parts")) == QStringList{QStringLiteral("parts")});
+  CHECK(start::openFolders(QStringLiteral("parts/sub")) ==
+        (QStringList{QStringLiteral("parts"), QStringLiteral("parts/sub")}));
+  // A project's tree: the project, every folder, the folder shown.
+  const QVector<ProjectRow> projects = fixture(top);
+  const QHash<QString, QString> keys = projectKeys(projects);
+  const ProjectRow* shop = findProject(projects, top + QStringLiteral("/Shop"));
+  const ProjectRow* team = findProject(projects, top + QStringLiteral("/Team"));
+  CHECK(shop != nullptr && team != nullptr);
+  if (shop == nullptr || team == nullptr) {
+    return;
+  }
+  CHECK(start::treeLine(*shop, keys.value(shop->root), QStringLiteral("parts")) ==
+        QStringLiteral("Start page tree: Shop | Shop/parts/ | Shop/parts/sub/ (current Shop/parts/)"));
+  // A folder only its designs name is in the tree too.
+  CHECK(start::treeLine(*team, keys.value(team->root), QString()) ==
+        QStringLiteral("Start page tree: Team | Team/bolts/ (current Team)"));
+}
+
 RecentDesign recentDesign(const QString& path) {
   RecentDesign design;
   design.path = path;
@@ -264,6 +309,7 @@ int startBrowserTests() {
 
   rowTests(top);
   placeTests(top);
+  viewTests(top);
   searchTests(top);
   previewTests(QDir(top));
 

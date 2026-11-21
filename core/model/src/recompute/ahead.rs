@@ -327,7 +327,7 @@ fn role<S>(
                 // A Flex item measures its length (mitcad#1713).
                 | FeatureDef::Flex(_)
         )
-        || matches!(def, FeatureDef::Extrude(e) if e.active_cut_scope().is_some())
+        || def.active_cut_scope().is_some()
         || matches!(def, FeatureDef::Sketch(s) if s.dimensions.iter().any(|d| d.reference.is_some()))
         || newest.is_some_and(|output| {
             !output.placements.is_empty()

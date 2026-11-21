@@ -1231,7 +1231,8 @@ hems:
 
 The Flange panel edits what the `.f3d` and `.ipt` imports give a flange:
 
-- **Hem form.** Hem (None, Teardrop, Rope, Double) with Gap and a double
+- **Hem form.** Hem (None, Teardrop, Rope, Double; Flat, Open and Rolled
+  since mitcad#2112) with Gap and a double
   hem's Setback reads and writes `hem`. With a hem the panel hides Angle
   and Measured and writes the length mode `outer_tangent` and an angle of
   180 degrees to the side of the loaded angle and Flip (the model takes
@@ -1605,6 +1606,66 @@ several edges"). `sheet/folded/flange_edges.rs`:
   refusal, the corners found); the UI
   `tools/ui-sheet-flange-edges-test.sh` and the ctest
   `app.ui-windows-sheet-flange-edges`.
+
+### The Hem command (mitcad#2112)
+
+A hem in one step: **Hem** (Sheet Metal, Create, after Flange) folds a
+straight edge back on itself in a form and its sizes, and makes a
+`sheet_flange` with `hem`, which Flange edits too.
+
+- **Forms in the model.** `hem.form` adds `flat` (an optional gap, 0.1
+  times the thickness by default), `open` (its gap) and `rolled` (its
+  angle, past 180 degrees and short of a full turn, and an optional
+  radius). Flat and open are one bend of 180 degrees whose inside radius is
+  half the gap and a wall back over the panel to the length from the
+  outer tangent plane; rolled is one bend of its angle and no wall
+  (`hem_steps`, `folded_back`). They give the same bends and walls as the
+  flanges the imports made of these hems before (a flange of 180 degrees
+  of half the gap; a flange of the rolled angle with a length of 0), so
+  the imported bodies do not change; the imports now write the forms
+  (a rolled hem of 180 degrees or less stays the plain flange), and an
+  edit shows the hem. The flange's own radius is not used by these forms.
+- **Refusals.** A hem's refusal (these forms' and the teardrop's, rope's
+  and double's) is a failure in words whose place is the wall of the
+  hem's edge in the input sheet, painted on hover (`hem_refusal`): a gap
+  of 0, a length short of the bend's outer radius, a rolled angle out of
+  its range or a radius of 0, a gap the teardrop's or rope's radius cannot
+  make, an edge that is not straight.
+- **Command.** Hem's panel: Edge (a straight edge or side face of one
+  sheet), Form (Flat, Open, Teardrop, Rolled, Rope, Double; Flat by
+  default), Length (not for Rolled) with a handle on the view from the
+  side plane through the edge (Tangent to Side), Own Gap and Gap (Flat:
+  off, the default gap; Open, Teardrop, Rope, Double: the Gap), Own Bend
+  Radius and Bend Radius (Rolled, Teardrop, Rope, Double; off: the rules'
+  radius; Rolled writes it into `hem.radius`), Angle (Rolled, 270 degrees
+  by default), Setback (Double), Flip (the side it folds to), Position (At
+  Edge, Tangent to Side; Tangent to Side by default), Width as Flange's,
+  and Own Bend Relief. The length is measured from the outer tangent
+  (`outer_tangent`) and the angle is 180 degrees to the side of Flip.
+  Hem is registered before Flange with `canEdit`: a flange with a hem on
+  one edge, at the edge or tangent to the side, without profile or corner,
+  opens in Hem (double-click, Edit Feature); Flange edits the others and
+  offers the six forms in its Hem choice (Flat, Open and Rolled after the
+  earlier ones; with Rolled its Angle is the bend's and its Length hidden).
+  The sheet process profiles offer Hem for metal (`sheet.hem`,
+  `process.rs`).
+- **One edge.** A hem goes on one edge: a flange on several edges is the
+  mitred plain walls of mitcad#1872, which take no hem.
+- **Tests.** Model: `bends.rs`
+  (`flat_open_and_rolled_hems_are_the_imports_flanges`: the steps equal
+  the imports' flanges', the default gap, the refusals, the forms read
+  back, the slots), `process.rs` (Hem metal's). OCCT: CLI
+  `sheet_hem_forms` (the open, flat and rolled hems and the flanges the
+  imports made of them give the same volumes, bends and flat areas on the
+  35 x 20 panel; an edit through all six forms; refusals). Import:
+  `import-sheet` `an_open_hem_is_the_flanges_open_hem` and
+  `hems_past_half_a_turn_are_flanges_with_their_form`. UI:
+  `tools/ui-sheet-hem-test.sh` with the ctests `app.ui-windows-sheet-hem`
+  and `app.ui-macos-sheet-hem` (all `tools/ui-scripts/sheet-hem.mitcad-ui`:
+  a Flat hem made on a side face, changed to Open, Rolled and Double by
+  Edit Feature, the volumes, Unfold's flat volume and Refold), and
+  `tools/ui-sheet-flange-hem-test.sh` (Flange's Hem makes a teardrop,
+  which then opens in Hem).
 
 ## Kernel seam
 

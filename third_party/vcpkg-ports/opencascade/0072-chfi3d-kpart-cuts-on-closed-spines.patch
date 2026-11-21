@@ -30,7 +30,9 @@ geometry.suite.fillet_overflow),
 test_chamfer_round_a_ring_past_the_side_is_cut_by_it;
 geometry/tests/test_dressup.cpp (ctest geometry.suite.dressup),
 test_dressups_of_circles_built_as_rings. Its failure without the patch is
-still to be shown in the port's before/after run (mitcad#1986).
+still to be shown: the patch does not revert at the port's tip without the
+more than 40 later patches that change the same lines (tried 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 890ed2a..11ba5b6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

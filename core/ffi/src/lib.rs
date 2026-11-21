@@ -231,6 +231,9 @@ mod ffi {
         /// (the notification to send, or empty) and the resolve policy.
         fn set_mcp_comments(self: &mut LiveMcpSession, comments: &str) -> Result<String>;
         fn set_mcp_comment_policy(self: &mut LiveMcpSession, may_resolve: bool);
+        /// Guided tutorials (mitcad#2012): the live guide step resource (the
+        /// notification to send, or empty).
+        fn set_mcp_guide(self: &mut LiveMcpSession, state: &str) -> Result<String>;
         /// Live MCP's input tools (mitcad#1735): ui_click, ui_type and
         /// ui_dialog listed and accepted, only in a run started with
         /// --mcp-folder and never for the chat's own connection.

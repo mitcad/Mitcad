@@ -43,8 +43,9 @@ diagonal with OCCT alone: one contour of five edges, valid and closed,
 symmetric about the plate's plane, the volume removed pinned; it fails
 without the patch in TopoDS_Builder::Add (the port's notes). The other
 caller: test_facade_chamfers_ending_against_a_chamfer, the same through
-MitCad's chamfer and a corner of two chamfers. Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+MitCad's chamfer and a corner of two chamfers. It fails without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py, reverted together with
+1440, 1601, 1790, which change the same lines).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 865a08f3..6e8099da 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

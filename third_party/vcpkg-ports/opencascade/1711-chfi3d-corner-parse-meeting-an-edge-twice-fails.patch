@@ -20,11 +20,31 @@ not return (no result within 15 minutes).
   parse's construction error, so that the corner fails at its vertex
   (Failure_Corner, the vertex a faulty one) at once.
 
-Test: geometry/tests/test_fillet_top_chains.cpp, test_reported_body (ctest
-geometry.fillet_top_chains): on the stored case `fillet-wall-run-on`, the
-top's chains with the foot's rounding of 3 as well: the fillet returns,
-valid (without the patch it does not return). Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+Test: none, because no small body reaches the parse's repeat. The parse
+starts from the face that the first stripe's surfdata at the vertex
+holds on its second side (SurfIndex FACE2) and goes on round the vertex
+with ChFi3d_cherche_edge, which leaves Enext as it was where the face has
+no edge at the vertex not met yet. An edge is met twice only where that
+starting face is a face at the vertex that is not a face of the stripe's
+own edge: the stripe's end leans on a face beyond one its blend consumed,
+which the run-on of patch 1700 makes (a rounding of 3 over a curved wall's
+flat stretch lower than the radius). Every face round the vertex then
+takes the parse once at most, and it stops short. Tried by reading the
+code (mitcad#2121), not by runs: a box corner of three roundings, whose
+stripes' ends lean on the faces of their own edges, so the parse closes;
+a corner with a face narrower than the radius, whose stripe would lean
+on the face beyond only through the overflow and ride routes (0013, the
+tangent rides of 1720-1729, the corners of three stripes of 1781), which
+reach the corner by other code first, so a small body there cannot be
+said to reach the repeat. Patch 1700 itself has no synthetic body (a U
+of cubic B-spline sides went another way at its ends), and at the port's
+tip the reported body's corner no longer reaches the repeat either:
+geometry.fillet_top_chains (test_reported_body, the stored case
+`fillet-wall-run-on` of MITCAD_GEOMETRY_CASES, the top's chains with the
+foot's rounding of 3: the fillet returns, valid) passes without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py). The patch stays as a guard:
+without it such a parse reads past a stripe's surfdata and does not
+return.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 index cadeacc3..4308830a 100644

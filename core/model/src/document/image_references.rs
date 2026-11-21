@@ -104,7 +104,7 @@ pub struct EmbeddedImage {
 
 impl EmbeddedImage {
     /// Why the bytes are not the image the fields say, if they are not.
-    fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let bytes = crate::base64::decode(self.data.base64())
             .map_err(|e| format!("the image is no base64 data: {e}"))?;
         let header = image_header::read(&bytes)?;

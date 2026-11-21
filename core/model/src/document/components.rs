@@ -82,6 +82,9 @@ pub struct InsertOptions {
     /// follows them. None: its bodies as they are (or as its row makes
     /// them).
     pub parameters: Option<BTreeMap<String, crate::features::ValueInput>>,
+    /// Linked parts of the design only (mitcad#2130): the occurrences and
+    /// root bodies chosen. None: the whole design.
+    pub parts: Option<super::link_parts::LinkPartsInput>,
 }
 
 impl Default for InsertOptions {
@@ -93,6 +96,7 @@ impl Default for InsertOptions {
             base: None,
             mount: None,
             parameters: None,
+            parts: None,
         }
     }
 }
@@ -331,18 +335,27 @@ impl<K: Kernel> Document<K> {
     pub fn instances(&self) -> Vec<InstanceView> {
         let a = self.state.assembly.at_placements(&self.result.placements);
         let placement = |o: OccurrenceUid| self.placement(o).unwrap_or(Transform::IDENTITY);
-        let bodies = |c: ComponentUid| self.component_bodies(c);
+        // A machined occurrence shows its pieces in place of the bodies
+        // they stand for (mitcad#2131).
+        let machined = &self.result.machined;
+        let bodies = |path: &[OccurrenceUid], c: ComponentUid| {
+            machined.shown(path, self.component_bodies(c))
+        };
         // The bodies' names at once: a name per instance would be
         // quadratic in the bodies (mitcad#413: an imported building).
         let names = super::display_names(&self.state, &self.result);
-        a.instances_flexed(&placement, &self.result.joints.flexed, &bodies)
+        a.instances_at(&placement, &self.result.joints.flexed, &bodies)
             .into_iter()
             .map(|i| {
-                let attributes = self.state.body_attributes.get(&i.body);
+                // A piece goes by the body it stands for: its name, look
+                // and visibility (mitcad#2131).
+                let source = machined.replaced_by(i.body).unwrap_or(i.body);
+                let attributes = self.state.body_attributes.get(&source);
                 InstanceView {
                     path_name: a.path_name(&i.path),
                     name: names
-                        .get(&i.body)
+                        .get(&source)
+                        .or_else(|| names.get(&i.body))
                         .cloned()
                         .unwrap_or_else(|| i.body.to_string()),
                     // A component's Bodies folder hidden by its eye hides
@@ -1381,6 +1394,11 @@ impl<K: Kernel> Document<K> {
         options: &InsertOptions,
     ) -> Result<super::mounts::Inserted, ModelError> {
         if let Some(parameters) = &options.parameters {
+            if options.parts.is_some() {
+                return Err(invalid(
+                    "a design linked with options takes the whole design, not chosen parts",
+                ));
+            }
             return self.insert_file_with_options(path, options, parameters);
         }
         check_transform(&options.transform)?;
@@ -1399,9 +1417,23 @@ impl<K: Kernel> Document<K> {
             .unwrap_or("Inserted")
             .to_owned();
         let wanted = options.name.clone().unwrap_or(stem);
+        if options.parts.is_some() && !options.link {
+            return Err(invalid(
+                "only a linked design takes chosen parts; a copy takes the whole design",
+            ));
+        }
+        // Chosen parts of the design only (mitcad#2130).
+        let mut chosen = None;
         // Its mount frames (mitcad#525): a linked part's are joint origins
         // of its own where the design has them; a copy has the design's.
-        let (bodies, mounts) = if options.link {
+        let (bodies, mounts) = if let (true, Some(input)) = (options.link, &options.parts) {
+            let parts = super::link_parts::resolve_parts(&source, input)?;
+            let origin = CopySource::Document(resolved.parent());
+            let read = self.chosen_parts(&source, path, &origin, &parts, None)?;
+            super::link_parts::check_found(&read.parts, path)?;
+            chosen = Some(read.parts);
+            (Some((read.bodies, read.looks)), read.mounts)
+        } else if options.link {
             // With the materials and appearances the design gives its
             // bodies (mitcad#1921).
             let origin = CopySource::Document(resolved.parent());
@@ -1450,6 +1482,8 @@ impl<K: Kernel> Document<K> {
                         // (mitcad#1921).
                         looks: true,
                         given: Vec::new(),
+                        parts: chosen,
+                        unlinked: Vec::new(),
                     });
                     frames
                 }
@@ -1614,6 +1648,24 @@ impl<K: Kernel> Document<K> {
         path: &str,
         origin: Option<&CopySource<'_>>,
     ) -> Result<(DesignShapes<K::Shape>, Vec<SourceLook>), ModelError> {
+        let shapes = self.design_shapes_chosen(source, path, origin, None)?;
+        if shapes.bodies.is_empty() {
+            return Err(invalid(format!("{path} has no bodies to show")));
+        }
+        Ok(((shapes.bodies, shapes.mounts), shapes.looks))
+    }
+
+    /// [`Document::design_shapes_looked`] of the chosen parts of the
+    /// design only when `chosen` is given (mitcad#2130,
+    /// `link_parts.rs`): each body with the part it comes from, and which
+    /// parts the design still has. No bodies is not an error here.
+    pub(super) fn design_shapes_chosen(
+        &self,
+        source: &DocState,
+        path: &str,
+        origin: Option<&CopySource<'_>>,
+        chosen: Option<&[crate::assembly::LinkPart]>,
+    ) -> Result<super::link_parts::ChosenShapes<K::Shape>, ModelError> {
         let kernel = &self.kernel;
         // A cancel (P7) stops this too.
         let monitor = self.monitor.as_ref();
@@ -1638,6 +1690,28 @@ impl<K: Kernel> Document<K> {
         };
         let mut bodies = Vec::new();
         let mut looks = Vec::new();
+        let mut part_of = Vec::new();
+        let root_bodies = owned(ComponentUid::ROOT);
+        let found: Vec<bool> = chosen.map_or_else(Vec::new, |parts| {
+            parts
+                .iter()
+                .map(|p| super::link_parts::part_in(&source.assembly, &root_bodies, p))
+                .collect()
+        });
+        let part_names: Vec<String> = chosen.map_or_else(Vec::new, |parts| {
+            parts
+                .iter()
+                .zip(&found)
+                .map(|(p, found)| match (found, p.body, p.occurrence.last()) {
+                    (false, _, _) => p.name.clone(),
+                    (true, Some(body), _) => names.get(&body).cloned().unwrap_or_default(),
+                    (true, None, Some(o)) => source.assembly.occurrence_name(*o),
+                    (true, None, None) => p.name.clone(),
+                })
+                .collect()
+        });
+        let mut whole_index = Vec::new();
+        let mut next_index = 0u32;
         for instance in a.instances(&placement, &owned) {
             let shown = source
                 .body_attributes
@@ -1648,6 +1722,18 @@ impl<K: Kernel> Document<K> {
             }
             let Some(shape) = result.bodies.get(&instance.body) else {
                 continue;
+            };
+            // Its place among the bodies the whole design gives.
+            let index = next_index;
+            next_index += 1;
+            // Only the chosen parts (mitcad#2130): the most particular one
+            // it lies in.
+            let part = match chosen {
+                None => 0,
+                Some(parts) => match super::link_parts::part_of(parts, &found, &instance) {
+                    Some(part) => part,
+                    None => continue,
+                },
             };
             let shape = if instance.transform.is_identity() {
                 shape.value.clone()
@@ -1664,11 +1750,18 @@ impl<K: Kernel> Document<K> {
             if let Some(origin) = origin {
                 looks.push(super::linked_looks::source_look(source, &instance, origin));
             }
+            part_of.push(part);
+            whole_index.push(index);
         }
-        if bodies.is_empty() {
-            return Err(invalid(format!("{path} has no bodies to show")));
-        }
-        Ok(((bodies, mounts), looks))
+        Ok(super::link_parts::ChosenShapes {
+            bodies,
+            mounts,
+            looks,
+            part_of,
+            whole_index,
+            found,
+            names: part_names,
+        })
     }
 
     /// The design of a file to insert and the name its component takes

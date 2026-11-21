@@ -10,7 +10,9 @@
 # mitcad#1990), Icons only in Docked; Labels under icons in Settings makes the rows
 # higher and puts Sketch, Extrude, Revolve and Hole under the SOLID tab's
 # Create buttons, Create and Modify stay whole in a wide window and the
-# groups fold from the right in a narrow one; Icons only again.
+# groups fold from the right in a narrow one; Icons only again. The
+# toolbar is lower with Icons only than with labels, also after another
+# tab and the Render workspace (mitcad#2092).
 # Usage: tools/ui-macos-ribbon-labels-test.sh <app> [output directory]
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

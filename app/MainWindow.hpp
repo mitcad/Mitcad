@@ -19,6 +19,7 @@
 #include <QMainWindow>
 #include <QPointF>
 #include <QPointer>
+#include <QRect>
 #include <QString>
 #include <QStringList>
 
@@ -46,6 +47,7 @@
 #include "rust/cxx.h"
 #include "sketch/SketchController.hpp"
 #include "view/CommandSketches.hpp"
+#include "view/CommentImages.hpp"
 #include "view/DatumHandles.hpp"
 #include "view/ImageReferences.hpp"
 #include "view/OriginPreference.hpp"
@@ -126,6 +128,9 @@ class StartPage;
 class CamSimulateDialog;
 class FormCageOverlay; // a Form's cage over the view (mitcad#1757)
 class RenderWorkspace; // the Render tab's workspace (mitcad#2013)
+class TutorialGuide;   // the in-app tutorials' guide step (mitcad#2012)
+struct GuideStep;
+class TutorialPage;    // the tutorial pane's page, of the browser component's module
 #ifdef MITCAD_MACOS_NATIVE_UI
 namespace mac {
 class NativeMacWindow;
@@ -255,6 +260,11 @@ public:
   // mcp::Refusal (busy, with when to retry) or another std::exception with
   // the reason when it is refused.
   QJsonObject mcpTool(const QString& name, const QJsonObject& arguments);
+  // The in-app tutorials' guide step in this window (mitcad#2012,
+  // tutorials/TutorialGuide.hpp), made on first use: a tutorial page's
+  // bridge and live MCP's ui_guide show it, its state is the resource
+  // mitcad://ui-guide.
+  TutorialGuide* guide();
   // The agents connected through MCP (initialized sessions): the agent
   // indicator (mitcad#710) names them and its menu disconnects them all,
   // Connect AI Assistant those of the assistant chosen (mitcad#706), through
@@ -419,6 +429,8 @@ public:
   // lose its error; logged `Status error source: <source>` and `Status line
   // cleared (<source> closed)`.
   void showSourceError(const QString& message, const QString& source) override;
+  void showSourceAction(const QString& message, NoticeLevel level, const QString& source, const QString& action,
+                        const QString& tooltip, std::function<void()> run) override;
   void closeMessageSource(const QString& source) override;
   bool sketchClickable(const SelectionItem& item, bool expanded) const override; // mitcad#217
   bool sketchAxesPickable() const override;                                      // mitcad#876
@@ -509,6 +521,8 @@ public:
   // design written to the cache and opened read-only.
   void openLibrarySource(const QString& source) override;
   void updateLink(const QString& component) override;
+  // Choose Linked Parts… (mitcad#2130, files/MainWindowLinks.cpp).
+  void chooseLinkedParts(const QString& component) override;
   // Drawings kept in the design (mitcad#707; drawings/MainWindowDrawings.cpp):
   // one opened over the 3D view, a new one in a component's Drawings folder
   // (the root's: "C0") opened at once.
@@ -537,6 +551,8 @@ public:
   // a typed distance (when `name` is empty, the shown image the first click
   // lands on).
   void editImageReference(const QString& name) override;
+  // Sketch blocks (mitcad#2110, MainWindowSketchBlocks.cpp).
+  void editSketchBlock(const QString& name) override;
   void calibrateImageReference(const QString& name) override;
 
 protected:
@@ -663,7 +679,7 @@ private:
   void createDockedTopBar(TitleBar* titleBar);
   // The Docked top bar's parts in the window's coordinates, for UI tests,
   // when they changed: "Docked top bar: window 1280x800, view top 180;
-  // titleRow 6,0 1268x36; titleMenu 14,3 30x30; titleFile ...; ribbon
+  // titleRow 6,0 1268x36; titleQuickAccess 8,1 330x34; titleMenu 12,3 28x30; ...; ribbon
   // 12,44 1256x128; ribbonWorkspace ...; ribbonTabs ...; ribbonSearch ...;
   // ribbonGroup_SOLID/CREATE ..." (the title row's and the panel's part
   // names, as the Floating layout's "Floating cards: ..." has them).
@@ -1708,9 +1724,57 @@ private:
   // the installed one's window, the first download (asked once, with its
   // size), and the check for a newer one of this MitCad's interface.
   bool showComponentBrowser(const BrowserComponentInfo& component);
-  void downloadBrowserComponent(const QString& why);
+  // The installed component of this MitCad's interface handed to `then`
+  // (Component from Web, the tutorials' pane, mitcad#2012), or downloaded
+  // first when the user agrees: `title` the dialogs' title, `question` the
+  // download's question with the CEF version (%1) and the size (%2). `then`
+  // answers whether it used the component (a newer one is then fetched in
+  // the background).
+  void withBrowserComponent(const QString& title, const QString& question,
+                            const std::function<bool(const BrowserComponentInfo&)>& then);
+  void downloadBrowserComponent(const QString& why, const QString& title, const QString& question,
+                                const std::function<bool(const BrowserComponentInfo&)>& then);
   void updateBrowserComponent(const BrowserComponentInfo& component);
   QPointer<QObject> m_browserDownload;
+  // In-app tutorials (mitcad#2012, tutorials/MainWindowGuide.cpp,
+  // docs/tutorials.md): the guide step shown in this window, one engine for
+  // a tutorial page's bridge (window.mitcad) and live MCP's ui_guide; Help ›
+  // Leave Tutorial. trigger() refuses the commands its step does not allow,
+  // onCommandFinished() and the actions run complete its step.
+  void registerTutorialCommands();
+  // Starts the step of `json` (GuideStep), replacing one shown: false with
+  // the reason when it is not one or names a command MitCad does not have.
+  bool startGuideStep(const QJsonObject& json, QString* error);
+  // Ends the step shown and the tutorial (its pane).
+  void leaveTutorial();
+  // The step's target in this window's coordinates; null when not shown.
+  QRect guideTargetRect(const GuideStep& step) const;
+  TutorialGuide* m_guide = nullptr;
+  // The tutorial pane (tutorials/MainWindowTutorials.cpp): a tutorial
+  // package's pages on the web browser component (downloaded first when it
+  // is missing), docked at the left in both chrome styles; `folder` is the
+  // package's, whose pages alone get the bridge window.mitcad, `page` the
+  // one shown first.
+  void openTutorialPane(const QString& folder, const QString& page, const QString& title);
+  // Help › Tutorials… (TutorialsDialog): the sources' tutorials listed, the
+  // chosen one installed (or updated) into the user's data folder, checked
+  // against its oldest MitCad, and opened in the pane.
+  void showTutorials();
+  void openListedTutorial(const QString& url, const QJsonObject& tutorial);
+  bool showTutorialPane(const BrowserComponentInfo& component, const QString& folder, const QString& page,
+                        const QString& title);
+  void ensureTutorialPane();
+  bool tutorialOpen() const;
+  void closeTutorialPane();
+  // A call of window.mitcad (docs/tutorials.md "The bridge"): the answer's
+  // JSON, or false with the reason.
+  bool tutorialBridgeCall(const QString& request, QString* answer, QString* error);
+  QPointer<QWidget> m_tutorialContainer; // its dock or card, made once
+  QWidget* m_tutorialPane = nullptr;      // the dock's or card's content
+  QLabel* m_tutorialTitle = nullptr;
+  QPointer<QWidget> m_tutorialPageWidget; // the page shown, null when none
+  TutorialPage* m_tutorialPage = nullptr; // the same object, while it lives
+  QString m_tutorialFolder;
   // `rerun`: the options of an .f3d import run again with the items whose
   // deviating results the user keeps (mitcad#379); empty for a new import.
   // `ask`: the import asks its choices (File > Open and Import: an .iam
@@ -2266,6 +2330,7 @@ private:
   // The button the next status message posts with (showActionStatus,
   // mitcad#1416): its label and what it does.
   QString m_statusActionLabel;
+  QString m_statusActionTooltip; // its button's (mitcad#2090)
   std::function<void()> m_statusActionRun;
   // The Docked status bar's button of the message shown (mitcad#1416),
   // what it does, and its place last logged (logStatusActionPlace).
@@ -2276,8 +2341,12 @@ private:
   // Linked designs (mitcad#1416; files/MainWindowLinks.cpp): a message with
   // a button in the band (and the status line), and the files of the
   // design's linked designs watched for changes.
+  // `source`: what raised it (mitcad#2090), which closing takes the
+  // message and its button away (closeMessageSource); `tooltip`: the
+  // button's.
   void showActionStatus(const QString& message, NoticeLevel level, const QString& action,
-                        std::function<void()> run);
+                        std::function<void()> run, const QString& source = QString(),
+                        const QString& tooltip = QString());
   // An edit refused because the component is linked: the notice with Open
   // Linked Design instead of the bare failure; false for any other error.
   bool showLinkedRefusal(const QString& message);
@@ -2821,6 +2890,13 @@ private:
   void showCommentTarget(const QString& id);
   void retargetComment(const QString& id);
   void setCommentPinsShown(bool shown);
+  // Images on comments and replies (mitcad#2011): Capture and Annotate over
+  // the view as it is shown, and an image's bytes, read once per file.
+  std::optional<CommentImageFile> captureCommentImage(QWidget* parent);
+  QByteArray commentImageBytes(const QString& comment, const QString& image);
+  // The images Add Comment's panel attaches, cleared when it starts.
+  QVector<CommentImageFile> m_commentImages;
+  QHash<QString, QByteArray> m_commentImageBytes; // by the file's SHA-256
   QJsonObject m_commentsAnswer; // the `comments` query's, as last read
   QPointer<QDialog> m_commentsWindow;
   QPointer<QWidget> m_commentPins; // view/CommentPinOverlay
@@ -2965,6 +3041,9 @@ private:
   // Refuses an input tool outside such a run, in the AppKit window, and
   // while a dialog or a panel opened for viewing is open.
   void mcpRequireInput(bool whileDialog) const;
+  // ui_guide (mitcad#2012, tutorials/MainWindowGuide.cpp): a guide step
+  // started, ended or read; the result is the guide's state.
+  QJsonObject mcpGuide(const QJsonObject& arguments);
   // The window ui_dialog shows: the one it opened, else the active modal
   // dialog; null when none is open.
   QWidget* mcpShownDialog() const;

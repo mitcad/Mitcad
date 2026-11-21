@@ -76,6 +76,111 @@ double polygon_area(const std::vector<V2>& p) {
   return 0.5 * twice;
 }
 
+bool inside_polygon(V2 p, const std::vector<V2>& polygon) {
+  bool inside = false;
+  for (std::size_t k = 0, j = polygon.size() - 1; k < polygon.size(); j = k++) {
+    const V2 a = polygon[k];
+    const V2 b = polygon[j];
+    if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// The disc of radius `R` that fills the notch of an inner corner `p` of the
+// core polygon, between its edges from `p0` to `p` (direction t1) and from
+// `p` to `p1` (direction t2): of the discs that touch both edges, each on
+// the edge or at its far end, and lie outside the core (no closer than R to
+// any of its edges), the one nearest `p`. Its contacts `a` on the first edge
+// and `b` on the second bound the arc that replaces the corner: the core
+// closed by the disc, as the ball rolled between the roundings of the two
+// sides rounds the inner corner's edge. None where no disc is such.
+struct Notch {
+  V2 centre;
+  V2 a;
+  V2 b;
+};
+
+std::optional<Notch> notch(V2 p0, V2 p, V2 p1, double R, const std::vector<V2>& polygon, double tol) {
+  const V2 e1 = p - p0;
+  const V2 e2 = p1 - p;
+  const double l1 = length(e1);
+  const double l2 = length(e2);
+  if (!(l1 > tol) || !(l2 > tol)) {
+    return std::nullopt;
+  }
+  const V2 t1 = e1 * (1.0 / l1);
+  const V2 t2 = e2 * (1.0 / l2);
+  const V2 n1{t1.y, -t1.x};
+  const V2 n2{t2.y, -t2.x};
+  std::vector<Notch> candidates;
+  // Touching both edges' lines.
+  if (1.0 + dot(n1, n2) > 1.0e-9) {
+    const V2 c = p + (n1 + n2) * (R / (1.0 + dot(n1, n2)));
+    candidates.push_back({c, c - n1 * R, c - n2 * R});
+  }
+  // The first edge's line and the second edge's far end: c = p + t1 s + n1 R
+  // with |c - p1| = R.
+  {
+    const V2 w = p + n1 * R - p1;
+    const double half_b = dot(w, t1);
+    const double disc = half_b * half_b - (dot(w, w) - R * R);
+    if (disc >= 0.0) {
+      for (const double s : {-half_b - std::sqrt(disc), -half_b + std::sqrt(disc)}) {
+        const V2 c = p + t1 * s + n1 * R;
+        candidates.push_back({c, c - n1 * R, p1});
+      }
+    }
+  }
+  // The first edge's far end and the second edge's line: c = p + t2 s + n2 R
+  // with |c - p0| = R.
+  {
+    const V2 w = p + n2 * R - p0;
+    const double half_b = dot(w, t2);
+    const double disc = half_b * half_b - (dot(w, w) - R * R);
+    if (disc >= 0.0) {
+      for (const double s : {-half_b - std::sqrt(disc), -half_b + std::sqrt(disc)}) {
+        const V2 c = p + t2 * s + n2 * R;
+        candidates.push_back({c, p0, c - n2 * R});
+      }
+    }
+  }
+  // Both far ends.
+  {
+    const V2 chord = p1 - p0;
+    const double half = 0.5 * length(chord);
+    if (half > tol && half <= R) {
+      const V2 m = p0 + chord * 0.5;
+      const V2 across{-chord.y / (2.0 * half), chord.x / (2.0 * half)};
+      const double h = std::sqrt(std::max(0.0, R * R - half * half));
+      candidates.push_back({m + across * h, p0, p1});
+      candidates.push_back({m - across * h, p0, p1});
+    }
+  }
+  std::optional<Notch> best;
+  for (Notch& c : candidates) {
+    const double sa = dot(c.a - p0, t1);
+    const double sb = dot(c.b - p, t2);
+    if (sa < -tol || sa > l1 + tol || sb < -tol || sb > l2 + tol) {
+      continue;
+    }
+    c.a = p0 + t1 * std::clamp(sa, 0.0, l1);
+    c.b = p + t2 * std::clamp(sb, 0.0, l2);
+    if (inside_polygon(c.centre, polygon) || cross(c.a - c.centre, c.b - c.centre) >= 0.0) {
+      continue;
+    }
+    bool clear = true;
+    for (std::size_t k = 0; k < polygon.size() && clear; ++k) {
+      clear = segment_distance(c.centre, polygon[k], polygon[(k + 1) % polygon.size()]) >= R - tol;
+    }
+    if (clear && (!best || length(c.centre - p) < length(best->centre - p))) {
+      best = c;
+    }
+  }
+  return best;
+}
+
 using AncestorMap = NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
 
 // The prism's frame: u and v across it, d along it (u x v = d); a point p
@@ -161,8 +266,8 @@ std::optional<Profile> profile(const Frame& frame, V2 c, V2 outward, double c0, 
 
 // The faces of a sweep of the ball's section named by the part of the
 // section they come from (the wire the section's face was made of holds
-// copies of its edges, so they are told apart by their surfaces): a sphere
-// or a cylinder across the prism about c0 `low`, about c1 `high`, a
+// copies of its edges, so they are told apart by their surfaces): a sphere,
+// a torus or a cylinder across the prism about c0 `low`, about c1 `high`, a
 // cylinder along the prism `outer`. Planes stay unnamed.
 std::vector<Shape::NamedFace> named_sweep(const TopoDS_Shape& sweep, const Frame& frame, double c0, double c1,
                                           double tol, const NameList& low, const NameList& high,
@@ -176,6 +281,8 @@ std::vector<Shape::NamedFace> named_sweep(const TopoDS_Shape& sweep, const Frame
     const NameList* names = nullptr;
     if (surface.GetType() == GeomAbs_Sphere) {
       names = &about(surface.Sphere().Location());
+    } else if (surface.GetType() == GeomAbs_Torus) {
+      names = &about(surface.Torus().Location());
     } else if (surface.GetType() == GeomAbs_Cylinder) {
       const gp_Ax1 axis = surface.Cylinder().Axis();
       names = std::abs(axis.Direction().Dot(frame.d)) > 1.0 - 1.0e-9 ? &outer : &about(axis.Location());
@@ -369,7 +476,8 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
   }
   // The selection: the ends are rounded; every side the fillet does not
   // leave alone has its edges on the ends rounded, every outer corner
-  // between two such sides too, no inner one.
+  // between two such sides too (an inner one may be, closed by its notch
+  // below).
   for (const int end : ends) {
     bool any = false;
     for (TopExp_Explorer it(body.face(end), TopAbs_EDGE); it.More() && !any; it.Next()) {
@@ -384,6 +492,7 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
       return out;
     }
   }
+  std::vector<char> inner(n, 0);
   for (std::size_t k = 0; k < n; ++k) {
     const bool rounded = !sides[(k + n - 1) % n].alone && !sides[k].alone;
     if (!rounded) {
@@ -393,11 +502,9 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
       return out;
     }
     if (!corners[k].convex && selected(corners[k].edge)) {
+      inner[k] = 1;
       out.inner.push_back(corners[k].edge);
     }
-  }
-  if (!out.inner.empty()) {
-    return out;
   }
   // A side left alone cuts the result by its plane: the whole section lies
   // on its inner side.
@@ -429,17 +536,17 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
     const double a = cross(moved[k] - moved[(k + n - 1) % n], after.t) / turn;
     core[k] = moved[(k + n - 1) % n] + before.t * a;
   }
-  std::vector<double> run(n);
   for (std::size_t k = 0; k < n; ++k) {
-    const double l = dot(core[(k + 1) % n] - core[k], sides[k].t);
-    if (l < -tol) {
+    if (dot(core[(k + 1) % n] - core[k], sides[k].t) < -tol) {
       return out;
     }
-    run[k] = l < tol ? 0.0 : l;
   }
-  for (const V2& c : core) {
+  for (std::size_t k = 0; k < n; ++k) {
+    if (inner[k]) {
+      continue;
+    }
     for (std::size_t j = 0; j < n; ++j) {
-      if (!sides[j].alone && segment_distance(c, q[j], q[(j + 1) % n]) < r - tol) {
+      if (!sides[j].alone && segment_distance(core[k], q[j], q[(j + 1) % n]) < r - tol) {
         return out;
       }
     }
@@ -467,6 +574,83 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
     }
     group[k] = g;
   }
+  const std::size_t none = centre.size();
+  const auto group_at = [&](V2 p) {
+    for (std::size_t g = 0; g < centre.size(); ++g) {
+      if (length(centre[g] - p) <= tol) {
+        return g;
+      }
+    }
+    return none;
+  };
+  // Where the fillet rounds an inner corner's edge too (between two rounded
+  // sides), the ball rolls between the two sides' roundings: the core is
+  // closed there by a disc of 2r (notch), its corner an arc of 2r.
+  std::vector<Notch> notches(n);
+  for (std::size_t k = 0; k < n; ++k) {
+    if (!inner[k]) {
+      continue;
+    }
+    const std::optional<Notch> made = notch(centre[group[(k + n - 1) % n]], centre[group[k]],
+                                            centre[group[(k + 1) % n]], 2.0 * r, core, tol);
+    if (!made) {
+      return out;
+    }
+    notches[k] = *made;
+  }
+  // The core's outline, counterclockwise: each side's core edge (from where
+  // a rounded inner corner's arc ends to where the next begins) and the
+  // arcs. Tangents along it; its outward normal is the tangent turned
+  // clockwise.
+  struct Run {
+    std::size_t side = 0;
+    bool arc = false;
+    V2 a;
+    V2 b;
+    V2 ta;
+    V2 tb;
+    std::size_t ga = 0;
+    std::size_t gb = 0;
+  };
+  const auto outward_of = [](V2 t) { return V2{t.y, -t.x}; };
+  const auto arc_tangent = [](V2 p, V2 c) {
+    const V2 w = p - c;
+    return V2{w.y, -w.x} * (1.0 / length(w));
+  };
+  std::vector<Run> runs;
+  std::vector<std::size_t> zero_at(n, none);
+  for (std::size_t k = 0; k < n; ++k) {
+    const std::size_t next = (k + 1) % n;
+    Run line;
+    line.side = k;
+    line.a = inner[k] ? notches[k].b : centre[group[k]];
+    line.b = inner[next] ? notches[next].a : centre[group[next]];
+    line.ta = line.tb = sides[k].t;
+    line.ga = group_at(line.a);
+    line.gb = group_at(line.b);
+    const double l = dot(line.b - line.a, sides[k].t);
+    if (l < -tol) {
+      return out;
+    }
+    if (l > tol) {
+      runs.push_back(line);
+    } else if (!sides[k].alone) {
+      zero_at[k] = line.ga;
+    }
+    if (inner[next]) {
+      const Notch& corner = notches[next];
+      Run arc;
+      arc.side = next;
+      arc.arc = true;
+      arc.a = corner.a;
+      arc.b = corner.b;
+      arc.ta = arc_tangent(corner.a, corner.centre);
+      arc.tb = arc_tangent(corner.b, corner.centre);
+      arc.ga = group_at(corner.a);
+      arc.gb = group_at(corner.b);
+      runs.push_back(arc);
+    }
+  }
   // The names: a side's edges on the ends rounded, a corner's edge along the
   // prism rounded, the corners of the ends.
   const auto fillet_of = [&](int e) {
@@ -481,44 +665,69 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
   const auto add_piece = [&](const TopoDS_Shape& shape, std::vector<Shape::NamedFace> faces) {
     pieces.push_back(std::make_shared<Shape>(shape, faces));
   };
-  // Each core edge of a rounded side: the ball's section swept along it.
-  for (std::size_t k = 0; k < n; ++k) {
-    const Side& one = sides[k];
-    if (one.alone || run[k] <= 0.0) {
+  // Each run of a rounded side: the ball's section swept along it; each arc:
+  // the section turned about the arc's centre, its names the inner
+  // corner's.
+  for (const Run& one : runs) {
+    if (one.arc) {
+      const Notch& corner = notches[one.side];
+      const V2 wa = one.a - corner.centre;
+      const V2 wb = one.b - corner.centre;
+      const double angle = std::atan2(cross(wb, wa), dot(wa, wb));
+      const std::optional<Profile> made = profile(frame, one.b, outward_of(one.tb), c0, c1, r);
+      if (!made || !(angle > 1.0e-9)) {
+        return out;
+      }
+      BRepPrimAPI_MakeRevol turn(made->face, gp_Ax1(frame.point(corner.centre, 0.0), frame.d), angle);
+      if (!turn.IsDone()) {
+        return out;
+      }
+      NameList low = corner_of(corners[one.side].vertex[0]);
+      NameList high = corner_of(corners[one.side].vertex[1]);
+      NameList outer = fillet_of(corners[one.side].edge);
+      if (!thick) {
+        append(low, high);
+        append(low, outer);
+        high.clear();
+        outer.clear();
+      }
+      add_piece(turn.Shape(), named_sweep(turn.Shape(), frame, c0, c1, tol, low, high, outer));
       continue;
     }
-    const V2 a = centre[group[k]];
-    const V2 b = centre[group[(k + 1) % n]];
-    const double l = length(b - a);
-    const std::optional<Profile> made = profile(frame, a, one.inward * -1.0, c0, c1, r);
+    const Side& side_k = sides[one.side];
+    if (side_k.alone) {
+      continue;
+    }
+    const double l = length(one.b - one.a);
+    const std::optional<Profile> made = profile(frame, one.a, side_k.inward * -1.0, c0, c1, r);
     if (!made || !(l > tol)) {
       return out;
     }
-    BRepPrimAPI_MakePrism sweep(made->face, frame.across(one.t) * l);
+    BRepPrimAPI_MakePrism sweep(made->face, frame.across(side_k.t) * l);
     if (!sweep.IsDone()) {
       return out;
     }
-    NameList low = fillet_of(one.end_edge[0]);
-    NameList high = fillet_of(one.end_edge[1]);
+    NameList low = fillet_of(side_k.end_edge[0]);
+    NameList high = fillet_of(side_k.end_edge[1]);
     if (!thick) {
       append(low, high);
       high.clear();
     }
-    add_piece(sweep.Shape(), named_sweep(sweep.Shape(), frame, c0, c1, tol, low, high, body.face_names(one.face)));
+    add_piece(sweep.Shape(), named_sweep(sweep.Shape(), frame, c0, c1, tol, low, high, body.face_names(side_k.face)));
   }
   // Each outer corner of the core: the section turned about it. Its names:
   // the corners of the ends there, the corner edges' roundings, and the
   // roundings of the sides whose core edges shrank to it.
   const auto names_at = [&](std::size_t g, NameList& low, NameList& high, NameList& outer) {
     for (std::size_t k = 0; k < n; ++k) {
-      if (group[k] == g) {
+      if (group[k] == g && !inner[k]) {
         append(low, corner_of(corners[k].vertex[0]));
         append(high, corner_of(corners[k].vertex[1]));
         if (selected(corners[k].edge)) {
           append(outer, fillet_of(corners[k].edge));
         }
       }
-      if (group[k] == g && run[k] <= 0.0 && !sides[k].alone) {
+      if (zero_at[k] == g) {
         append(low, fillet_of(sides[k].end_edge[0]));
         append(high, fillet_of(sides[k].end_edge[1]));
       }
@@ -538,16 +747,10 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
     }
     return false;
   };
-  std::vector<std::size_t> running;
-  for (std::size_t k = 0; k < n; ++k) {
-    if (run[k] > 0.0) {
-      running.push_back(k);
-    }
-  }
-  if (running.empty() && centre.size() != 1) {
+  if (runs.empty() && centre.size() != 1) {
     return out;
   }
-  if (running.empty()) {
+  if (runs.empty()) {
     // The core is one point (the ball) or a segment along the prism.
     NameList low;
     NameList high;
@@ -572,52 +775,78 @@ CoredFillet cored_along(const std::string& feature, const Shape& body, const std
       add_piece(turn.Shape(), named_sweep(turn.Shape(), frame, c0, c1, tol, low, high, outer));
     }
   }
-  for (std::size_t i = 0; i < running.size(); ++i) {
-    const std::size_t k = running[i];
-    const std::size_t j = running[(i + 1) % running.size()];
-    const std::size_t g = group[j];
-    const double c = cross(sides[k].t, sides[j].t);
-    const double o = dot(sides[k].t, sides[j].t);
+  for (std::size_t i = 0; i < runs.size(); ++i) {
+    const Run& before = runs[i];
+    const Run& after = runs[(i + 1) % runs.size()];
+    const std::size_t g = after.ga;
+    const double c = cross(before.tb, after.ta);
+    const double o = dot(before.tb, after.ta);
     double angle = std::atan2(c, o);
     if (std::abs(c) < 1.0e-12 && o < 0.0) {
       angle = kPi;
     }
-    if (angle <= 1.0e-9 || touches_alone(g)) {
+    if ((before.arc || after.arc) && angle < -1.0e-9) {
+      // The arc of an inner corner meets the outline at an inner corner.
+      return out;
+    }
+    if (angle <= 1.0e-9 || (g != none && touches_alone(g))) {
       continue;
     }
-    const std::optional<Profile> made = profile(frame, centre[g], sides[k].inward * -1.0, c0, c1, r);
+    const std::optional<Profile> made = profile(frame, after.a, outward_of(before.tb), c0, c1, r);
     if (!made) {
       return out;
     }
-    BRepPrimAPI_MakeRevol turn(made->face, gp_Ax1(frame.point(centre[g], 0.0), frame.d), angle);
+    BRepPrimAPI_MakeRevol turn(made->face, gp_Ax1(frame.point(after.a, 0.0), frame.d), angle);
     if (!turn.IsDone()) {
       return out;
     }
     NameList low;
     NameList high;
     NameList outer;
-    names_at(g, low, high, outer);
+    if (g != none) {
+      names_at(g, low, high, outer);
+    }
     add_piece(turn.Shape(), named_sweep(turn.Shape(), frame, c0, c1, tol, low, high, outer));
   }
-  // The core polygon thickened by r along the prism, where it has an area.
+  // The core's outline thickened by r along the prism, where it has an area.
   {
-    std::vector<V2> outline;
-    for (std::size_t k = 0; k < n; ++k) {
-      const V2 p = centre[group[k]];
-      if (outline.empty() || length(outline.back() - p) > tol) {
-        outline.push_back(p);
+    // Its points, each with the centre of the arc to the next (or none).
+    std::vector<std::pair<V2, std::optional<V2>>> outline;
+    for (const Run& one : runs) {
+      if (outline.empty() || length(outline.back().first - one.a) > tol) {
+        outline.push_back({one.a, std::nullopt});
+      }
+      if (one.arc) {
+        outline.back().second = notches[one.side].centre;
       }
     }
-    while (outline.size() > 1 && length(outline.back() - outline.front()) <= tol) {
+    while (outline.size() > 1 && length(outline.back().first - outline.front().first) <= tol &&
+           !outline.back().second) {
       outline.pop_back();
     }
-    if (outline.size() >= 3 && polygon_area(outline) > tol * tol) {
-      BRepBuilderAPI_MakePolygon polygon;
-      for (const V2& p : outline) {
-        polygon.Add(frame.point(p, c0 - r));
+    std::vector<V2> points;
+    for (const auto& p : outline) {
+      points.push_back(p.first);
+    }
+    if (outline.size() >= 2 && (outline.size() >= 3 || outline.front().second || outline.back().second) &&
+        polygon_area(points) > tol * tol) {
+      BRepBuilderAPI_MakeWire wire;
+      for (std::size_t k = 0; k < outline.size(); ++k) {
+        const V2 a = outline[k].first;
+        const V2 b = outline[(k + 1) % outline.size()].first;
+        if (outline[k].second) {
+          const V2 c = *outline[k].second;
+          const V2 w = (a - c) + (b - c);
+          const V2 m = c + w * (2.0 * r / length(w));
+          wire.Add(arc(frame.point(a, c0 - r), frame.point(m, c0 - r), frame.point(b, c0 - r)));
+        } else {
+          wire.Add(BRepBuilderAPI_MakeEdge(frame.point(a, c0 - r), frame.point(b, c0 - r)).Edge());
+        }
       }
-      polygon.Close();
-      BRepBuilderAPI_MakeFace face(polygon.Wire(), true);
+      if (!wire.IsDone()) {
+        return out;
+      }
+      BRepBuilderAPI_MakeFace face(wire.Wire(), true);
       if (!face.IsDone()) {
         return out;
       }

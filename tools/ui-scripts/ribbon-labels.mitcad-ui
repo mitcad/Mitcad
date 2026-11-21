@@ -14,6 +14,12 @@
 #   3. A narrow window: the groups fold from the right, as without labels
 #      (a group whose name is not narrower than its buttons stays whole).
 #   4. Icons only again: the rows as high as the buttons.
+#   The toolbar's height (the Floating panel's, the Docked toolbar's;
+#   mitcad#2092, GitHub mitcad/Mitcad#478) is recorded with Icons only at
+#   the start (after a restart with Icons only kept, where the wrapper
+#   keeps it) and with labels: Icons only is lower, again when chosen
+#   anew, after another tab and back, and after the Render workspace and
+#   back, where it is as high as at the start.
 # Preferences is a dialog on Windows and Linux (applied with OK) and the
 # Settings window on macOS (applied as it changes).
 wait-idle
@@ -33,6 +39,7 @@ key Return
 focus-main
 wait-idle
 sleep 300
+capture-toolbar-height iconsHeight
 
 # 2. Labels under icons.
 mark
@@ -55,6 +62,8 @@ sleep 300
 # than asked (the Windows VM's 1024 x 768 desktop): which groups collapse
 # is not fixed.
 wait-log '^Ribbon collapsed SOLID: (none|(?!CREATE, (?!MODIFY)).*)$'
+capture-toolbar-height labelsHeight
+expect-less ${iconsHeight} ${labelsHeight}
 
 # 3. Narrow: at least Insert, the first group from the right whose name is
 # narrower than its buttons, has collapsed. No mark: where the window was
@@ -77,3 +86,35 @@ focus-main
 wait-log '^Preferences: ribbon labels icons$'
 wait-log '^Ribbon labels: icons [(]rows [0-9]+ px high[)]$'
 wait-idle
+sleep 300
+capture-toolbar-height iconsAgain
+expect-less ${iconsAgain} ${labelsHeight}
+expect-near ${iconsAgain} ${iconsHeight} 0 0.5
+
+# 5. Another tab and back, then the Render workspace and back: Icons only
+# still lower than the labels, as high as before.
+mark
+click-logged '^Ribbon tab MANAGE at '
+wait-log '^Ribbon tab shown: MANAGE$'
+wait-idle
+mark
+click-logged '^Ribbon tab SOLID at '
+wait-log '^Ribbon tab shown: SOLID$'
+wait-idle
+sleep 300
+capture-toolbar-height iconsAfterTab
+expect-less ${iconsAfterTab} ${labelsHeight}
+expect-near ${iconsAfterTab} ${iconsHeight} 0 0.5
+mark
+show-workspace RENDER
+wait-log '^Render workspace opened$' 30
+wait-idle
+sleep 300
+mark
+show-workspace DESIGN
+wait-log '^Render workspace closed$' 30
+wait-idle
+sleep 300
+capture-toolbar-height iconsAfterRender
+expect-less ${iconsAfterRender} ${labelsHeight}
+expect-near ${iconsAfterRender} ${iconsHeight} 0 0.5

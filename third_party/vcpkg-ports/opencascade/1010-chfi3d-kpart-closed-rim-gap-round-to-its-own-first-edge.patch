@@ -50,8 +50,8 @@ taken within 1e-6 of the body's part outside the chamfer's revolved
 section, the pocket's ceiling cut back to 84.5 from the axis; the two-arc
 chamfers fail without the patch (the port's notes). The rim as one closed
 edge, which builds without the patch as well, is the boundary case beside
-it. Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+it. It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 2104a91c..bc411e4f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

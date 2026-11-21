@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MIT
+# Sketch Scale (mitcad#2109) on sketch-scale.json's Sketch1 (two framing
+# points at (-40, -30) and (40, 30), a circle c3 of radius 5 about p4 at
+# (-10, 0) with its diameter dimensioned 10 mm, a line c5 from p6 at
+# (5, 10) to p7 at (15, 10) with its length dimensioned 10 mm):
+#   1. The circle and the line selected, Sketch Scale by 1.5 about the
+#      circle's center picked with the sketch's snaps: the radius 7.5 mm,
+#      the line 15 mm from (12.5, 15) to (27.5, 15), both dimensions
+#      15 mm. OK is one undo step; undone.
+#   2. Again with Keep Values and Create Copy: the circle and the line
+#      with their dimensions as they were (also the undo's check), the
+#      copies scaled, the circle's radius 7.5 mm and the line 15 mm long.
+# The clicks stay within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit also in session 0's 1024x768 window on Windows. Run
+# by tools/ui-sketch-scale-test.sh (Linux),
+# tools/ui-windows-sketch-scale-test.ps1 (Windows) and
+# tools/ui-macos-sketch-scale-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+command view.fit
+wait-idle
+capture-undo-depth baseline
+
+# 1. Scaled with their dimensions about the circle's center.
+mark
+sketch-click -10 -5
+sketch-click 7 10 ctrl
+expect-selection 2 0
+mark
+command sketch.scale
+wait-log '^Command Sketch Scale started'
+expect-log '^Sketch Scale Objects: 2 sketch curves'
+wait-log '^Preview Sketch Scale: ok'
+mark
+click-logged '^Panel Sketch Scale input center at '
+wait-idle
+mark
+sketch-click -10 0
+wait-log '^Sketch point picked for the command: p4 at \(-10\.000, 0\.000\), (center|point) p4$'
+wait-log '^Sketch Scale Base Point: '
+mark
+type-in '^Panel Sketch Scale input factor at ' '1.5'
+wait-log '^Preview Sketch Scale sizes: c3 radius 7\.500, c5 length 15\.000, k[0-9]+ 15\.000, k[0-9]+ 15\.000$'
+expect-log '^Preview Sketch Scale positions: p4 \(-10\.000, 0\.000\), p6 \(12\.500, 15\.000\), p7 \(27\.500, 15\.000\)$'
+expect-no-log '^Preview Sketch Scale: failed'
+screenshot '${MITCAD_TEST_WORK}/sketch-scale.png'
+mark
+key Return
+wait-log '^Added Sketch Scale'
+wait-idle
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+expect-undo-depth ${baseline} 0
+wait-idle
+
+# 2. Keep Values and Create Copy: the copies scaled, the originals and
+# their dimensions as they were.
+mark
+sketch-click -10 -5
+sketch-click 7 10 ctrl
+expect-selection 2 0
+mark
+command sketch.scale
+wait-log '^Command Sketch Scale started'
+wait-log '^Preview Sketch Scale sizes: c3 radius 5\.000, c5 length 10\.000, k[0-9]+ 10\.000, k[0-9]+ 10\.000$'
+mark
+click-logged '^Panel Sketch Scale input center at '
+wait-idle
+mark
+sketch-click -10 0
+wait-log '^Sketch point picked for the command: p4 at \(-10\.000, 0\.000\), (center|point) p4$'
+wait-log '^Sketch Scale Base Point: '
+mark
+qt-choice input_dimensions 'Keep Values'
+wait-idle
+mark
+click-logged '^Panel Sketch Scale input copy at '
+wait-log '^Sketch Scale: Create Copy = on'
+wait-idle
+mark
+type-in '^Panel Sketch Scale input factor at ' '1.5'
+wait-log '^Preview Sketch Scale copies: c[0-9]+ radius 7\.500, c[0-9]+ length 15\.000$'
+expect-log '^Preview Sketch Scale sizes: c3 radius 5\.000, c5 length 10\.000, k[0-9]+ 10\.000, k[0-9]+ 10\.000$'
+expect-no-log '^Preview Sketch Scale: failed'
+screenshot '${MITCAD_TEST_WORK}/sketch-scale-copy.png'
+mark
+key Return
+wait-log '^Added Sketch Scale'
+wait-idle
+expect-undo-depth ${baseline} 1
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

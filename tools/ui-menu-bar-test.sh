@@ -50,19 +50,22 @@ view_top() { grep -o "^View area [0-9-]* [0-9-]*" "$UI_LOG" | tail -1 | awk '{ p
 # parts_line: the top bar's parts as logged last, in either layout.
 parts_line() { grep -oE "^(Floating cards|Docked top bar): .*" "$UI_LOG" | tail -1; }
 
-# title_menu layout: the title row's ☰ part, waited for, before Undo and
-# Redo.
+# title_menu layout: the title row's ☰ part, waited for, first in the left
+# group (mitcad#2129), before Undo and Redo, which stay in the group while
+# the added commands are hidden.
 title_menu() {
-  local line="" menu history
+  local line="" menu undo
   for _ in $(seq 1 25); do
     line=$(parts_line)
     grep -qF "; titleMenu " <<< "$line" && break
     sleep 0.2
   done
   grep -qF "; titleMenu " <<< "$line" || ui_fail "$1: the title row has no ☰ part: '$line'"
+  ui_quick_access_place "$1" "$line"
+  ui_sync
   menu=$(grep -o "; titleMenu [0-9-]*" <<< "$line" | awk '{ print $3 }' | cut -d, -f1)
-  history=$(grep -o "; titleHistory [0-9-]*" <<< "$line" | awk '{ print $3 }' | cut -d, -f1)
-  [ -n "$history" ] && [ "$menu" -lt "$history" ] || ui_fail "$1: the ☰ part is not before Undo and Redo: '$line'"
+  undo=$(grep -o "^Quick access edit.undo at [0-9]*" "$UI_LOG" | tail -1 | awk '{ print $5 }')
+  [ -n "$undo" ] && [ "$menu" -lt "$undo" ] || ui_fail "$1: the ☰ part ($menu) is not before Undo ($undo): '$line'"
   echo "ok   $1: the title row's ☰ part is there, before Undo and Redo"
 }
 

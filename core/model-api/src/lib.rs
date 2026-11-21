@@ -210,6 +210,8 @@ mod sketch_auto_constrain;
 // Mesh tools for reverse engineering: mesh_section and mesh_stats
 // (mitcad#1871).
 mod mesh_tools;
+// Sketch blocks: Create, Insert, Explode and Edit Block (mitcad#2110).
+mod sketch_blocks;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -1249,6 +1251,8 @@ named_enum! {
         // Comments pinned to the model for an AI agent, with the number of
         // open ones and a revision (mitcad#1119, `comments.rs`).
         "comments" => Comments(Box<comments::CommentsQuery>),
+        // An image of a comment or a reply, with its bytes (mitcad#2011).
+        "comment_attachment" => CommentAttachment(comments::AttachmentQuery),
         // The top-level fields of the design file a newer MitCad wrote
         // and this build did not read, and whether saving to `path` drops
         // them (mitcad#1132).
@@ -1397,6 +1401,18 @@ named_enum! {
         // What a print job sends to a slicer, before Send: geometry only or
         // a print project (mitcad#2008, `print_job.rs`).
         "print_job" => PrintJob(print_job::PrintJobQuery),
+        // The design's sketch blocks (mitcad#2110, `sketch_blocks.rs`).
+        "sketch_blocks" => SketchBlocks(sketch_blocks::BlocksQuery),
+        // A design's occurrences and root bodies to link parts of, and the
+        // parts a linked component holds (mitcad#2130, `components.rs`).
+        "link_parts" => LinkParts {
+            #[serde(default)]
+            component: Option<String>,
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            base: Option<String>,
+        },
     }
 }
 
@@ -2056,6 +2072,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::DesignProperties => self.design_properties_json(),
             // Comments (mitcad#1119).
             Query::Comments(query) => self.comments_json(&query)?,
+            Query::CommentAttachment(query) => self.comment_attachment_json(&query)?,
             // The fields of a newer MitCad's design that were not read
             // (mitcad#1132).
             Query::UnknownFields { path } => unknown_fields_json(self, path.as_deref()),
@@ -2162,6 +2179,19 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::MeshStats(query) => self.mesh_stats_json(&query)?,
             // What a print job sends (mitcad#2008).
             Query::PrintJob(query) => print_job::query(self, &query)?,
+            // The design's sketch blocks (mitcad#2110).
+            Query::SketchBlocks(_) => sketch_blocks::blocks_json(self),
+            // Linked parts of a design (mitcad#2130).
+            Query::LinkParts {
+                component,
+                path,
+                base,
+            } => components::link_parts_json(
+                self,
+                component.as_deref(),
+                path.as_deref(),
+                base.as_deref(),
+            )?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

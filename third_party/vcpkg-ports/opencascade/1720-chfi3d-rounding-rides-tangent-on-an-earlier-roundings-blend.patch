@@ -69,8 +69,10 @@ geometry.fillet_tangent_ride): test_wall (2.9, 2.5 and 2.127 wide),
 test_tower_foot (2.9, 2.5 and 2.2) and test_step (1.45 and 1.3 high), each
 in both orders: valid, the volume of the section within a millionth;
 without the patch the wall's result has more material and the other two
-fail. Its failure without the patch is still to be shown in the port's
-before/after run (mitcad#1986).
+fail. It fails with this patch and 9 later patches that change the same
+lines reverted together, so the test does not single this patch out (shown
+2026-11-20 by tools/occt-port-proof.py; the patches are listed in
+third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 Failures (mitcad#1986): the two stripes' computations again for the ride
 fail with OCCT's reports of a computation it cannot make

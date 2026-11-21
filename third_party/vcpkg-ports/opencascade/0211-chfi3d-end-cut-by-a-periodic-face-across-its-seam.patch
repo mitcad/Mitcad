@@ -28,9 +28,8 @@ geometry.suite.fillet_corners),
 test_rounding_cut_by_a_cylinder_across_its_seam;
 geometry/tests/test_fillet_occt_cases.cpp (ctest
 geometry.fillet_occt_cases),
-test_axis_edge_rounded_up_to_the_pole_of_a_partial_revolve. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+test_axis_edge_rounded_up_to_the_pole_of_a_partial_revolve. It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 26d14987..46c13a33 100644

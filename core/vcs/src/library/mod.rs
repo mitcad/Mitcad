@@ -45,6 +45,8 @@ mod publish;
 // left out (mitcad#1436).
 pub mod sources;
 pub use sources::{ClonesRead, repository_key};
+// In-app tutorials in git repositories, fetched as libraries are (mitcad#2012).
+pub mod tutorials;
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -76,6 +78,8 @@ pub const MAX_LIBRARY_SIZE: u64 = 200 << 20;
 pub enum RepoKind {
     Library,
     Index,
+    /// In-app tutorials (mitcad#2012, [`tutorials`]).
+    Tutorials,
     Unknown,
 }
 
@@ -322,6 +326,11 @@ impl LibraryRepo {
             RepoKind::Library
         } else if matches!(self.read(commit, INDEX_MANIFEST), Ok(Some(_))) {
             RepoKind::Index
+        } else if matches!(
+            self.read(commit, tutorials::TUTORIALS_MANIFEST),
+            Ok(Some(_))
+        ) {
+            RepoKind::Tutorials
         } else {
             RepoKind::Unknown
         }
@@ -936,8 +945,9 @@ impl LibraryCache {
                 return Err(RemoteError::new(
                     ErrorClass::NotAProject,
                     format!(
-                        "{shown} is not a MitCad library or index ({LIBRARY_MANIFEST} or \
-                         {INDEX_MANIFEST} at its root)"
+                        "{shown} is not a MitCad library, index or tutorials repository \
+                         ({LIBRARY_MANIFEST}, {INDEX_MANIFEST} or {} at its root)",
+                        tutorials::TUTORIALS_MANIFEST
                     ),
                 )
                 .into());
@@ -967,6 +977,17 @@ impl LibraryCache {
                 (
                     String::new(),
                     index.name,
+                    manifest::Problems {
+                        errors: Vec::new(),
+                        warnings: problems,
+                    },
+                )
+            }
+            (RepoKind::Tutorials, Some(head)) => {
+                let (tutorials, _, problems) = repo.tutorials(head)?;
+                (
+                    String::new(),
+                    tutorials.name,
                     manifest::Problems {
                         errors: Vec::new(),
                         warnings: problems,

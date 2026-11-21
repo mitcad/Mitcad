@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the Offset Plane Reverse Normal UI test (mitcad#2048; tools/ui-construct-reverse-normal-test.sh): a 40 x 20 x 30 box (F1, its body F1.b0) on the XY plane at the origin, its top face at z = 30. All geometry is synthetic."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+   "corner": [0, 0], "length": 40, "width": 20, "height": 30, "operation": "new_body"}},
+  {"expect": {"bodies": 1}}
+]

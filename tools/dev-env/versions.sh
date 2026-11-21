@@ -31,6 +31,12 @@ SCCACHE_MACOS_ARM64_SHA256=308184519b646f5125289e8515b36f6ca65a13a041923994aebe7
 # Linux x86_64, the same release (setup-user.sh; musl, a static binary):
 SCCACHE_LINUX_VERSION=0.18.0
 SCCACHE_LINUX_X86_64_SHA256=45f1447fbe231e3037bde351ef70677dd212216c8d62ae7ca409fecc4d6acc89
+# ccache's size limit, set by the setup scripts where the user's ccache
+# configuration has none (setup-ccache-windows.ps1's default mirrors it).
+# Large enough for OCCT's debug and release objects, which vcpkg's port
+# builds put in the cache beside MitCad's own (docs/development.md, "The
+# compiler cache of the vcpkg ports").
+CCACHE_MAX_SIZE=20G
 # A standalone CPython for aqtinstall (python-build-standalone), since the
 # Command Line Tools' python3 is too old; the digest is GitHub's for the asset.
 PYTHON_VERSION=3.12.15

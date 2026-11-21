@@ -5,10 +5,12 @@
 
 #include <QObject>
 #include <QPoint>
+#include <QHash>
 #include <QPointer>
 #include <QRect>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 #include "../framework/HybridAssembly.hpp"
 #include "BindingList.hpp"
@@ -318,6 +320,43 @@ private:
   // the selected items of the row's kind when the row is one of them, else
   // the row's item alone.
   Selection menuMoveItems(const BrowserNode& node) const;
+  // Folders in the Browser (mitcad#2103, BrowserOrder.hpp). What a
+  // component row's Move to Folder is for: the occurrences (paths) of the
+  // selected component rows placed where the row's occurrence is, when the
+  // row is one of them, else the row's alone.
+  QStringList menuOccurrences(const BrowserNode& node) const;
+  // Occurrences (paths, of one parent) moved into `folder` of their
+  // parent's occurrences, or out of their folders with an empty one; bodies
+  // (uids, of `component`) into a folder of its Bodies folder or out. One
+  // undo step (`Move 2 Components to Frame`, `Take 3 Bodies out of their
+  // Folder`; one occurrence or body: the model's own name), logged
+  // ("Moved 2 components to Frame", "Took 3 bodies out of their folder").
+  // With `renameNext`, the folder's row is renamed in place next (New Folder,
+  // its proposed name selected); `at` is the occurrence path of the rows
+  // the folder's row is under.
+  void moveOccurrencesToFolder(const QStringList& paths, const QString& folder, bool renameNext = false);
+  void moveBodiesToFolder(const QString& component, const QString& at, const QStringList& bodies,
+                          const QString& folder, bool renameNext = false);
+  // Ungroup on a folder's row: everything in it out of it, nothing
+  // deleted; one undo step `Ungroup Frame`, logged "Ungrouped Frame".
+  void ungroupFolder(const BrowserNode& folder);
+  // The occurrences of a folder's row (ComponentFolder), by path, and every
+  // body's folder in the component of a body folder's row, by uid.
+  QStringList folderOccurrences(const BrowserNode& folder) const;
+  QHash<QString, QString> bodyFoldersOf(const QString& component) const;
+  // Body or component rows dragged onto a row that takes them
+  // (BrowserPanel::dropFor): into its folder, or out of their folders;
+  // component rows before or after a sibling's row (mitcad#2104).
+  void rowsDropped(const QVector<BrowserNode>& sources, const BrowserNode& target, BrowserDrop place);
+  // The order of components among their siblings (mitcad#2104,
+  // BrowserOrder.hpp): occurrences (paths, of one parent) put into the
+  // group `folder` of their siblings (empty: no folder) before `anchor`
+  // (after it with `after`; at the group's end without one), one undo step
+  // (`Reorder Rail:1`, `Reorder 2 Components`; with a change of folder its
+  // name), logged "Reordered Rail:1 before Post:1". Move Up and Move Down
+  // of a component's row: before the row above it in its group, after the
+  // one below.
+  void reorderOccurrences(const QStringList& paths, const QString& folder, const QString& anchor, bool after);
   void timelineMenu(const QString& uid, const QPoint& at);
   // A feature's menu, the same in the timeline and on its rows under
   // sketches in the browser (mitcad#177): `row` is the browser's row, or

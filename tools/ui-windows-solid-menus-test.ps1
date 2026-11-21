@@ -38,7 +38,7 @@ Add-Content -Encoding ascii (Join-Path $script:UiSettings 'Mitcad\Mitcad.ini') @
 # the menus show it: this file stays ASCII for Windows PowerShell).
 $e = [string][char]0x2026
 $construct = 'Offset Plane | Plane at Angle | Tangent Plane | Midplane | Plane Through Two Edges' +
-  ' | Plane Through Three Points | Plane Tangent to Face at Point | Plane Along Path' +
+  ' | Plane Through Three Points | Plane Tangent to Face at Point | Plane Perpendicular to Face at Point | Plane Along Path' +
   ' | Plane Through Edge and Point | Plane Normal to Path at Point | Offset Plane Through Point' +
   ' | - | Axis Through Cylinder/Cone/Torus | Axis Perpendicular at Point' +
   ' | Axis Through Two Planes | Axis Through Two Points | Axis Through Edge' +
@@ -68,7 +68,7 @@ $menus = [ordered]@{
   'SURFACE/MODIFY' = 'Trim | Untrim | Extend | - | Stitch | Unstitch | Reverse Normal | - | Match Surface | Fair Surface' +
     ' | - | Thicken'
   'SURFACE/CONSTRUCT' = $construct
-  'SHEET METAL/CREATE' = 'Create Sketch | - | Face | Flange | Convert to Sheet Metal | - | Bend | Fold | - | Sheet Cut'
+  'SHEET METAL/CREATE' = 'Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | - | Bend | Fold | - | Sheet Cut'
   'SHEET METAL/MODIFY' = ('Corner Relief | Corner Round | Corner Chamfer | - | Unfold | Refold | Flat Pattern | Show Flat Pattern' +
     ' | - | Export Flat Pattern...').Replace('...', $e)
   'SHEET METAL/RULES' = $rules

@@ -12,6 +12,7 @@
 #include <QStringList>
 
 #include "../browser/DocumentSnapshot.hpp"
+#include "ModelMessages.hpp"
 
 namespace mitcad {
 
@@ -23,6 +24,9 @@ QString selectionOwnerText(const SelectionItem& item, const DocumentSnapshot& sn
   QStringList lines;
   if (!item.occurrence.isEmpty()) {
     QStringList names;
+    // What the occurrence's row says of it being machined by cuts made in
+    // an assembly (mitcad#2131), when the whole path is in the snapshot.
+    QString machined;
     const QVector<DocumentSnapshot::Occurrence>* level = &snapshot.occurrences;
     for (const QString& uid : item.occurrence.split(QLatin1Char('/'))) {
       const auto found = std::find_if(level->cbegin(), level->cend(), [&](const auto& occurrence) {
@@ -31,14 +35,19 @@ QString selectionOwnerText(const SelectionItem& item, const DocumentSnapshot& sn
       // A level not in the snapshot ends the path: never its uid
       // (mitcad#1741).
       if (found == level->cend() || found->name.isEmpty()) {
+        machined.clear();
         break;
       }
       names << found->name;
+      machined = found->machinedNote;
       level = &found->children;
     }
     if (!names.isEmpty()) {
       lines << QCoreApplication::translate("Selection", "Component: %1")
                    .arg(names.join(QStringLiteral(" › ")).toHtmlEscaped());
+    }
+    if (!machined.isEmpty()) {
+      lines << modelMessage(machined).toHtmlEscaped();
     }
   }
   // A body not in the snapshot (yet) is named by its kind, never by its uid.

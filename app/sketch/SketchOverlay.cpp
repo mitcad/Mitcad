@@ -1093,6 +1093,44 @@ std::vector<SketchOverlay::DimensionLayout> SketchOverlay::dimensions() const {
   return result;
 }
 
+namespace {
+
+// Where a Perpendicular with a circle or an arc shows its symbol
+// (mitcad#2114): where the curves meet, the meeting nearest the middle of
+// the two curves; else, for a line, at the foot of the center on the line,
+// and for two circles or arcs where their circles cross. None for two
+// lines (their symbols stay beside each line) and for other constraints.
+std::optional<V2> perpendicularAt(const SketchModel& model, const ConstraintData& k) {
+  if (k.type != QStringLiteral("perpendicular") || k.refs.size() != 2) {
+    return std::nullopt;
+  }
+  const CurveData* a = model.curve(k.refs[0]);
+  const CurveData* b = model.curve(k.refs[1]);
+  if (a == nullptr || b == nullptr || (!a->isCircular() && !b->isCircular())) {
+    return std::nullopt;
+  }
+  const V2 middle = (a->curve.middle() + b->curve.middle()) / 2.0;
+  const auto nearest = [&middle](const std::vector<V2>& points) -> std::optional<V2> {
+    const auto best = std::min_element(points.begin(), points.end(), [&middle](const V2& p, const V2& q) {
+      return dist(p, middle) < dist(q, middle);
+    });
+    return best == points.end() ? std::nullopt : std::optional<V2>(*best);
+  };
+  if (const auto meet = nearest(intersections(a->curve, b->curve))) {
+    return meet;
+  }
+  if (a->isLine() || b->isLine()) {
+    const Curve2& line = a->isLine() ? a->curve : b->curve;
+    const V2 center = a->isLine() ? b->curve.center : a->curve.center;
+    const V2 u = unit(line.b - line.a);
+    return line.a + u * dot(center - line.a, u);
+  }
+  return nearest(intersections(Curve2::circle(a->curve.center, a->curve.radius),
+                               Curve2::circle(b->curve.center, b->curve.radius)));
+}
+
+} // namespace
+
 std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
   const SketchModel& model = m_c.model();
   // Glyphs per entity, in order, then laid out in a row beside it.
@@ -1115,12 +1153,12 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
         return g.entity == entity && g.type == type && g.inactive == inactive;
       });
       if (!shown) {
-        all.push_back({constraint, entity, type, QRectF(), inactive});
+        all.push_back({constraint, entity, type, QRectF(), inactive, std::nullopt});
         kept = true;
       }
     }
     if (!kept && !entities.isEmpty()) {
-      all.push_back({constraint, entities.first(), type, QRectF(), inactive});
+      all.push_back({constraint, entities.first(), type, QRectF(), inactive, std::nullopt});
     }
   };
   for (const ConstraintData& k : model.constraints) {
@@ -1137,6 +1175,9 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
       // Beside the point it applies at (mitcad#783): a curve tangent at
       // both ends shows both.
       add(k.id, QStringList{k.json.value(QStringLiteral("at")).toString()}, t, off);
+    } else if (const std::optional<V2> at = perpendicularAt(model, k)) {
+      // One symbol where the curves meet (mitcad#2114).
+      all.push_back({k.id, k.refs.first(), t, QRectF(), off, at});
     } else {
       add(k.id, k.refs, t, off);
     }
@@ -1176,7 +1217,15 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
   // (mitcad#1578).
   std::map<QString, QString> rowOf;
   std::vector<std::pair<QPointF, QString>> pointRows;
+  // A symbol at a place of its own (mitcad#2114) has a row of its own.
+  const auto rowEntity = [](const Glyph& g) -> QString {
+    return g.at ? QStringLiteral("@") + g.constraint : g.entity;
+  };
   for (const Glyph& g : all) {
+    if (g.at) {
+      rowOf.emplace(rowEntity(g), rowEntity(g));
+      continue;
+    }
     if (rowOf.count(g.entity) != 0) {
       continue;
     }
@@ -1199,18 +1248,20 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
   std::map<QString, QPointF> rowOffsets;
   std::map<QString, int> counts;
   for (const Glyph& g : all) {
-    ++counts[rowOf[g.entity]];
+    ++counts[rowOf[rowEntity(g)]];
   }
   std::map<QString, int> placed;
   std::vector<Glyph> result;
   for (Glyph g : all) {
-    const QString& rowKey = rowOf[g.entity];
+    const QString& rowKey = rowOf[rowEntity(g)];
     const int index = placed[rowKey]++;
     const int count = counts[rowKey];
     QPointF center;
     QPointF along(1.0, 0.0);
     QPointF normal(0.0, -1.0);
-    if (const auto p = model.pointAt(g.entity)) {
+    if (g.at) {
+      center = m_c.toScreen(*g.at) + QPointF(12.0 + index * kGlyphStep, -12.0);
+    } else if (const auto p = model.pointAt(g.entity)) {
       center = m_c.toScreen(*p) + QPointF(12.0 + index * kGlyphStep, -12.0);
     } else if (const CurveData* c = model.curve(g.entity)) {
       double t = (c->curve.t0() + c->curve.t1()) / 2.0;
@@ -1248,7 +1299,9 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
         return QRectF(at.x() - kGlyphSize / 2, at.y() - kGlyphSize / 2, kGlyphSize, kGlyphSize);
       };
       const QRectF row = box(first).united(box(last));
-      offset->second = glyphRowOffset(row, normal, dimensionRects, placedRows, curves, entityOutline(g.entity));
+      const std::vector<QPointF> own =
+          g.at ? std::vector<QPointF>{m_c.toScreen(*g.at)} : entityOutline(g.entity);
+      offset->second = glyphRowOffset(row, normal, dimensionRects, placedRows, curves, own);
       placedRows.push_back(row.translated(offset->second));
     }
     center += offset->second;
@@ -1525,12 +1578,26 @@ std::vector<std::pair<QString, QColor>> SketchOverlay::idleHighlights() const {
   for (const QString& entity : m_c.conflictEntities()) {
     highlighted.emplace_back(entity, conflict);
   }
+  // A block open for an edit in place (mitcad#2110): its geometry in the
+  // block's colour, apart from the rest of the sketch.
+  if (const BlockInstanceData* open = m_c.openInstance()) {
+    const QColor block = sketchRole(ColorRole::SelectLine);
+    for (const QString& member : open->entities) {
+      highlighted.emplace_back(member, block);
+    }
+  }
   // What a picking tool points at and has picked.
   for (const QString& entity : m_c.picked()) {
     highlighted.emplace_back(entity, kPickColor);
   }
   if (!m_c.hover().isEmpty()) {
     highlighted.emplace_back(m_c.hover(), kHoverColor);
+    // A block's instance is hovered as one (mitcad#2110).
+    for (const QString& member : m_c.instanceMembers(m_c.hover())) {
+      if (member != m_c.hover()) {
+        highlighted.emplace_back(member, kHoverColor);
+      }
+    }
   }
   return highlighted;
 }
@@ -1823,9 +1890,34 @@ void SketchOverlay::paintPreview(QPainter& painter, const ToolPreview& preview) 
 }
 
 void SketchOverlay::paintSnap(QPainter& painter) const {
+  // The lines a drawing tool acquired for their extensions (mitcad#2035):
+  // a small cross at each one's middle, while the tool runs.
+  if (m_c.tool() != nullptr) {
+    painter.setPen(QPen(kGuideColor, 1.5));
+    for (const QString& id : m_c.acquiredLines()) {
+      const CurveData* line = m_c.model().curve(id);
+      if (line == nullptr || !line->isLine()) {
+        continue;
+      }
+      const QPointF m = m_c.toScreen(line->curve.middle());
+      constexpr double arm = 4.0;
+      painter.drawLine(QPointF(m.x() - arm, m.y()), QPointF(m.x() + arm, m.y()));
+      painter.drawLine(QPointF(m.x(), m.y() - arm), QPointF(m.x(), m.y() + arm));
+    }
+  }
   const Snap& snap = m_c.snapped();
   if (!snap.onGeometry() || !m_c.cursorInView()) {
     return;
+  }
+  // On an acquired line's extension: dashed guides from the line's nearer
+  // end to the snapped point, in the tools' Guide style.
+  const auto guides = extensionGuides(m_c.model(), snap);
+  if (!guides.empty()) {
+    ToolPreview preview;
+    for (const auto& [from, to] : guides) {
+      preview.line(from, to, ToolPreview::Style::Guide);
+    }
+    paintPreview(painter, preview);
   }
   const QPointF c = m_c.toScreen(snap.at);
   painter.setPen(QPen(kSnapColor, 1.8));
@@ -2228,7 +2320,15 @@ void SketchOverlay::logBadge(const QString& status, const QRect& badge, const QR
   if (line != m_loggedBadge) {
     m_loggedBadge = line;
     qDebug().noquote() << line;
+    // Where a click on it selects what is not fully constrained
+    // (mitcad#2026), for UI tests.
+    const QPoint middle = GlassCard::mapToHost(this, badge.center());
+    qDebug().noquote() << QStringLiteral("Sketch badge middle at %1,%2").arg(middle.x()).arg(middle.y());
   }
+}
+
+bool SketchOverlay::badgeAt(const QPointF& position) const {
+  return m_c.isActive() && isVisible() && badgeLayout().badge.contains(position);
 }
 
 SketchOverlay::AxesShape SketchOverlay::axesShape() const {

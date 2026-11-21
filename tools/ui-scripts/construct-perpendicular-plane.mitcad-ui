@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: MIT
+# Plane Perpendicular to Face at Point (mitcad#2111) through the real UI, on
+# construct-perpendicular-plane.json (a cylinder of diameter 20 on XY about
+# the origin, F1, its side F1:side0; Sketch1, F2, on XZ with one point at
+# (20, 0, 10) beside it):
+#   1. The sketch point and the cylinder's side selected: the view's
+#      context menu offers the plane first in Construct, and it starts with
+#      the face and the point.
+#   2. OK: Plane1 (F3) stands on the side where it is nearest to the point,
+#      (10, 0, 10), containing the radial direction X; with no reference,
+#      angle 0 lies along Y, so the plane is level (normal -Z).
+#   3. Edited from the timeline, Angle 90 deg: the plane turns about the
+#      side's normal and contains the cylinder's axis (normal +Y).
+#   4. A sketch on Plane1 (picked in the browser) lies in it: origin
+#      (10, 0, 10), normal +Y; Create Sketch's upright frame (mitcad#692)
+#      has +Z up, so its x is -X.
+# Run by tools/ui-construct-perpendicular-plane-test.sh (Linux),
+# tools/ui-windows-construct-perpendicular-plane-test.ps1 (Windows) and
+# tools/ui-macos-construct-perpendicular-plane-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-model-bodies 1 9424.77796
+command view.fit
+wait-idle 30
+
+# 1. The point and the face selected; the context menu's Construct.
+# The point by its place: the view's candidate probes take faces, edges,
+# vertices and profiles, not sketch points.
+mark
+click-view-point 20,0,10
+wait-log '^Selected: 1 sketch point' 20
+wait-idle
+mark
+idle-pick-places
+wait-log '^Pick face F1[.]b0/F1:side0 at ' 20
+click-pick 'face F1[.]b0/F1:side0 at ' ctrl
+wait-log '^Selected: .*; face F1:side0 of F1[.]b0\]$' 20
+wait-idle
+mark
+# The view opens its menu on a right click's release (not on a Qt
+# context-menu event); the click on the selected face keeps the selection.
+click-logged '^Pick face F1[.]b0/F1:side0 at ' right
+wait-log '^Context menu: ' 20
+expect-log '^Context menu Construct: Plane Perpendicular to Face at Point( [|] .*)?$'
+popup 'Construct/Plane Perpendicular to Face at Point'
+wait-log '^Command Plane Perpendicular to Face at Point started' 20
+wait-log '^Preview Plane Perpendicular to Face at Point: ok' 30
+wait-idle 30
+
+# 2. OK: level, through the side's point nearest to the sketch point.
+mark
+button '^OK$'
+wait-log '^Added plane Plane1: origin \(10, 0, 10\), normal \(0, 0, -1\)$' 30
+wait-idle 30
+capture-model-number level_x '{"query":"datum","uid":"F3"}' x_axis.1
+expect-near ${level_x} 1 0 0.000001
+capture-model-number level_y '{"query":"datum","uid":"F3"}' y_axis.0
+expect-near ${level_y} 1 0 0.000001
+
+# 3. Angle 90 deg: through the cylinder's axis.
+mark
+dblclick-logged '^Timeline Plane1 at '
+wait-log ' with Plane Perpendicular to Face at Point$' 30
+wait-idle 30
+mark
+type-in '^Panel Plane Perpendicular to Face at Point input angle at ' '90 deg'
+wait-log '^Preview Plane Perpendicular to Face at Point: ok' 30
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Edited F3' 30
+wait-idle 30
+capture-model-number turned_ny '{"query":"datum","uid":"F3"}' normal.1
+expect-near ${turned_ny} 1 0 0.000001
+capture-model-number turned_ox '{"query":"datum","uid":"F3"}' origin.0
+expect-near ${turned_ox} 10 0 0.000001
+capture-model-number turned_oz '{"query":"datum","uid":"F3"}' origin.2
+expect-near ${turned_oz} 10 0 0.000001
+
+# 4. A sketch on Plane1 lies in it, upright.
+command view.fit
+wait-idle 30
+mark
+command sketch.create
+expect-log '^Create Sketch: select a plane' 10
+# Plane1 from the browser: in the view it lies through the cylinder, whose
+# side is picked in front of it.
+click-logged '^Browser Root/Construction/Plane1 at '
+wait-log '^Sketch started on ' 30
+wait-log '^Sketch frame in the design: origin \(10\.000000, 0\.000000, 10\.000000\), normal \(0\.000000, 1\.000000, 0\.000000\), x axis \(-1\.000000, 0\.000000, 0\.000000\)$' 30
+wait-idle 30
+command sketch.finish
+wait-log '^Sketch finished' 30
+wait-idle 30
+expect-never 'TestDriver: FAIL'

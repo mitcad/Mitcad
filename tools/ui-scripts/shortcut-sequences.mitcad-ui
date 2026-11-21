@@ -1,0 +1,137 @@
+# SPDX-License-Identifier: MIT
+# Key sequences in Keyboard Shortcuts and the Keyboard and Mouse Overview's
+# cheat sheet (mitcad#2095), on shortcut-sequences.json:
+#   1. Keyboard Shortcuts: the Command column's room at the default and
+#      the smallest size; G, L recorded for Keyboard and Mouse Overview,
+#      the recording ended by Qt's pause after L; X then Esc keeps G, L;
+#      G, L then Enter keeps G, L at once; OK saves it.
+#   2. In the 3D view G alone starts nothing; G then L opens the overview.
+#   3. The overview's Save as PDF… offers "MitCad keyboard shortcuts.pdf"
+#      and writes it (the paper File › Print remembers: A4), and Print…
+#      prints the same pages (MITCAD_TEST_PRINT_PDF in place of the
+#      system's dialog).
+#   4. E, X for the overview: OK says that E (Extrude) is the start of
+#      E, X and selects the overview's row; nothing is saved.
+# Run by tools/ui-shortcut-sequences-test.sh (Linux),
+# tools/ui-windows-shortcut-sequences-test.ps1 (Windows) and
+# tools/ui-macos-shortcut-sequences-test.sh (macOS), which give the folder
+# for the files in MITCAD_TEST_WORK.
+wait-idle 30
+command view.fit
+wait-idle
+set-setting print/paper A4
+
+# 1. G, L for Keyboard and Mouse Overview.
+mark
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+# The Command column keeps the room its longest name needs at the default
+# size and at the smallest (mitcad#2096; the Linux test compares the logged
+# widths).
+wait-log '^Keyboard Shortcuts columns: Command [0-9]+ \(needs [0-9]+\)'
+mark
+dialog-resize 300 200
+wait-log '^Keyboard Shortcuts columns: Command [0-9]+ \(needs [0-9]+\)'
+dialog-resize 600 520
+focus-widget shortcutSearch
+type Overview
+key Down
+wait-log '^Keyboard Shortcuts row: Keyboard and Mouse Overview \| [^|]+ \| \(none\)$'
+key Return
+wait-log '^Keyboard Shortcuts recording: Keyboard and Mouse Overview \| '
+key g
+key l
+# No Enter: the pause after L ends the recording.
+wait-log '^Keyboard Shortcuts key: Keyboard and Mouse Overview \| [^|]+ = G, L$'
+expect-no-log '^Keyboard Shortcuts recording ended by Enter$'
+# Esc while recording keeps the key the row had.
+mark
+key Return
+wait-log '^Keyboard Shortcuts recording: Keyboard and Mouse Overview \| '
+key x
+key Escape
+wait-log '^Keyboard Shortcuts recording cancelled$'
+wait-log '^Keyboard Shortcuts row: Keyboard and Mouse Overview \| [^|]+ \| G, L$'
+expect-no-log '^Keyboard Shortcuts key: '
+# Enter while recording keeps what was recorded, at once.
+mark
+key Return
+wait-log '^Keyboard Shortcuts recording: Keyboard and Mouse Overview \| '
+key g
+key l
+key Return
+wait-log '^Keyboard Shortcuts recording ended by Enter$'
+wait-log '^Keyboard Shortcuts key: Keyboard and Mouse Overview \| [^|]+ = G, L$'
+mark
+focus-widget shortcutSearch
+key Return
+wait-log '^Keyboard Shortcuts saved$'
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+expect-no-log '^Keyboard Shortcuts conflict'
+
+# 2. G alone starts nothing; G then L opens the overview.
+focus-widget modelView
+mark
+key g
+sleep 1500
+wait-idle
+expect-no-log '^Shortcut overview: '
+key Escape
+wait-idle
+focus-widget modelView
+mark
+key g
+key l
+wait-log '^Shortcut overview: [0-9]+ command shortcuts$'
+focus-dialog '^Keyboard and Mouse Overview$'
+
+# 3. The cheat sheet: Save as PDF… and Print….
+mark
+button '.*' shortcutOverviewSavePdf
+focus-dialog '^Save Keyboard and Mouse Overview as PDF$'
+expect-widget-property fileNameEdit text 'MitCad keyboard shortcuts.pdf'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/MitCad keyboard shortcuts.pdf"
+key Return
+expect-dialog-gone '^Save Keyboard and Mouse Overview as PDF$'
+focus-dialog '^Keyboard and Mouse Overview$'
+wait-log '^Shortcut overview PDF written: .*MitCad keyboard shortcuts[.]pdf \([0-9]+ page\(s\), A4\)$'
+expect-file "${MITCAD_TEST_WORK}/MitCad keyboard shortcuts.pdf"
+mark
+button '.*' shortcutOverviewPrint
+wait-log '^Print dialog skipped \(test\): '
+wait-log '^Printed Keyboard and Mouse Overview: [0-9]+ page\(s\) to '
+key Escape
+expect-dialog-gone '^Keyboard and Mouse Overview$'
+focus-main
+
+# 4. E, X clashes with Extrude's E: OK says so and selects the row.
+mark
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+focus-widget shortcutSearch
+type Overview
+key Down
+wait-log '^Keyboard Shortcuts row: Keyboard and Mouse Overview \| [^|]+ \| G, L$'
+key Return
+wait-log '^Keyboard Shortcuts recording: Keyboard and Mouse Overview \| '
+key e
+key x
+key Return
+wait-log '^Keyboard Shortcuts key: Keyboard and Mouse Overview \| [^|]+ = E, X$'
+focus-widget shortcutSearch
+key Return
+wait-log '^Keyboard Shortcuts conflict: E \(Extrude\) is the start of E, X \(Keyboard and Mouse Overview\) .+[.] Change one of them[.]$'
+wait-log '^Keyboard Shortcuts conflict at: Keyboard and Mouse Overview \| '
+# The message (titled as the window), then the window again.
+focus-dialog '^Keyboard Shortcuts$'
+button '^OK$'
+wait-idle
+focus-dialog '^Keyboard Shortcuts$'
+key Escape
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+expect-no-log '^Keyboard Shortcuts saved$'
+expect-never 'TestDriver: FAIL|Shortcut overview PDF not written|Shortcut overview not printed'

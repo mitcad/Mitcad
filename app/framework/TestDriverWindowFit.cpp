@@ -13,7 +13,9 @@
 #include <cstdlib>
 
 #include <QAbstractButton>
+#include <QCoreApplication>
 #include <QDialogButtonBox>
+#include <QEvent>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QPoint>
@@ -262,23 +264,40 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
       const int lowest = top->minimumSizeHint().expandedTo(top->minimumSize()).height() + margins;
       return QSize(width, std::max(height, lowest));
     };
+    // The screen's own available area, logical: on a real desktop the window
+    // server may keep a window's frame within it, below the window's minimum.
+    const auto screenRoom = [](const QWidget* top) {
+      const QScreen* screen = top->screen();
+      const QSize room = screen != nullptr ? screen->availableGeometry().size() : QSize();
+      return QStringLiteral("screen available %1x%2").arg(room.width()).arg(room.height());
+    };
     if (name == QLatin1String("fit-main-frame")) {
       // A process-local available-frame scenario: use this window's real
       // titlebar/border size, without changing the display or user settings.
+      // Layouts still pending (the Docked top bar's panel after the last
+      // resize) count in the window's minimum that `least` reads.
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
       QWidget* top = topWindow();
       const QSize frame = top->frameGeometry().size() - top->size();
-      top->resize(wanted(top) - frame);
+      const QSize asked = wanted(top);
+      qInfo().noquote() << QStringLiteral("TestDriver: fit-main-frame: frame %1x%2 asked, window minimum %3x%4, "
+                                          "frame margins %5x%6, %7")
+                               .arg(asked.width()).arg(asked.height())
+                               .arg(top->minimumSizeHint().expandedTo(top->minimumSize()).width())
+                               .arg(top->minimumSizeHint().expandedTo(top->minimumSize()).height())
+                               .arg(frame.width()).arg(frame.height()).arg(screenRoom(top));
+      top->resize(asked - frame);
       m_notBefore = std::max(m_notBefore, m_clock.elapsed() + 300);
     } else {
-      whenReady([this, wanted] {
+      whenReady([this, wanted, screenRoom] {
         const QWidget* top = topWindow();
         if (top == nullptr) return false;
         const QSize available = wanted(top);
         const QSize frame = top->frameGeometry().size();
-        m_waitDetail = QStringLiteral("actual frame %1x%2, client %3x%4, minimum %5x%6, available %7x%8")
+        m_waitDetail = QStringLiteral("actual frame %1x%2, client %3x%4, minimum %5x%6, available %7x%8, %9")
             .arg(frame.width()).arg(frame.height()).arg(top->width()).arg(top->height())
             .arg(top->minimumSizeHint().width()).arg(top->minimumSizeHint().height())
-            .arg(available.width()).arg(available.height());
+            .arg(available.width()).arg(available.height()).arg(screenRoom(top));
         qInfo().noquote() << QStringLiteral("Compact main frame: %1").arg(m_waitDetail);
         return frame.width() <= available.width() && frame.height() <= available.height();
       }, 6, QStringLiteral("the main window does not fit the requested available frame"));

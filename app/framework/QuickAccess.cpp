@@ -37,10 +37,8 @@ QStringList idsOf(const QVariant& value) {
 
 QStringList QuickAccessSettings::defaults() {
   if (g_topBarDefaults) {
-    // The top bar has buttons of its own for New, Save and Preferences, and
-    // the File menu for the rest (the owner, 18.11.2026): the group starts
-    // empty there, as a place for the commands the user adds (mitcad#1990).
-    return {};
+    // The top bar's one left group (mitcad#2129).
+    return topBarItems();
   }
   // Print comes with mitcad#1089, Design Properties with mitcad#1088: a
   // build without them shows the other four.
@@ -55,20 +53,101 @@ bool QuickAccessSettings::topBarDefaults() { return g_topBarDefaults; }
 
 QString QuickAccessSettings::settingsKey() { return QStringLiteral("quickAccess/commands"); }
 
+QStringList QuickAccessSettings::topBarItems() {
+  return {fileMenuId(),
+          QStringLiteral("file.new_design"),
+          QStringLiteral("file.open"),
+          QStringLiteral("file.save"),
+          QStringLiteral("file.design_properties"),
+          QStringLiteral("file.print"),
+          QStringLiteral("edit.undo"),
+          QStringLiteral("edit.redo")};
+}
+
+QString QuickAccessSettings::fileMenuId() { return QStringLiteral("menu.file"); }
+
+bool QuickAccessSettings::isTopBarItem(const QString& id) { return topBarItems().contains(id); }
+
+QString QuickAccessSettings::itemsKey() { return QStringLiteral("quickAccess/items"); }
+
+QString QuickAccessSettings::migratedKey() { return QStringLiteral("quickAccess/itemsMigrated"); }
+
+QStringList QuickAccessSettings::migratedItems(const QStringList& defaults, const QStringList& old) {
+  QStringList items = defaults;
+  for (const QString& id : old) {
+    if (!id.isEmpty() && !items.contains(id)) {
+      items.append(id);
+    }
+  }
+  return items;
+}
+
+QStringList QuickAccessSettings::withDefaultItem(const QStringList& items, const QString& id) {
+  if (items.contains(id)) {
+    return items;
+  }
+  const QStringList order = topBarItems();
+  const qsizetype rank = order.indexOf(id);
+  QStringList result = items;
+  if (rank < 0) {
+    result.append(id);
+    return result;
+  }
+  qsizetype at = result.size();
+  for (qsizetype i = 0; i < result.size(); ++i) {
+    const qsizetype other = order.indexOf(result.at(i));
+    if (other < 0 || other > rank) {
+      at = i;
+      break;
+    }
+  }
+  result.insert(at, id);
+  return result;
+}
+
 QuickAccessSettings QuickAccessSettings::load() {
   QuickAccessSettings loaded;
-  const QSettings settings;
-  loaded.chosen = settings.contains(settingsKey()) ? idsOf(settings.value(settingsKey())) : defaults();
+  QSettings settings;
+  if (!g_topBarDefaults) {
+    loaded.chosen = settings.contains(settingsKey()) ? idsOf(settings.value(settingsKey())) : defaults();
+    return loaded;
+  }
+  // The top bar's left group (mitcad#2129): its own ordered list.
+  if (settings.contains(itemsKey())) {
+    loaded.chosen = idsOf(settings.value(itemsKey()));
+    return loaded;
+  }
+  loaded.chosen = topBarItems();
+  if (settings.value(migratedKey(), false).toBool() || !settings.contains(settingsKey())) {
+    return loaded;
+  }
+  // The commands chosen before the one group: after the defaults, once.
+  const QStringList old = idsOf(settings.value(settingsKey()));
+  if (old.isEmpty()) {
+    return loaded;
+  }
+  loaded.chosen = migratedItems(loaded.chosen, old);
+  settings.setValue(itemsKey(), loaded.chosen.join(QLatin1Char(',')));
+  settings.setValue(migratedKey(), true);
+  qDebug().noquote() << QStringLiteral("Quick access migrated: %1 commands (%2)")
+                            .arg(old.size())
+                            .arg(old.join(QStringLiteral(", ")));
   return loaded;
 }
 
 void QuickAccessSettings::save() const {
   QSettings settings;
-  settings.setValue(settingsKey(), chosen.join(QLatin1Char(',')));
+  settings.setValue(g_topBarDefaults ? itemsKey() : settingsKey(), chosen.join(QLatin1Char(',')));
 }
 
 void QuickAccessSettings::reset() {
   QSettings settings;
+  if (g_topBarDefaults) {
+    settings.remove(itemsKey());
+    // The old choice is not migrated again after the reset.
+    settings.setValue(migratedKey(), true);
+    return;
+  }
   settings.remove(settingsKey());
 }
 
@@ -76,7 +155,10 @@ bool QuickAccessSettings::setChosen(const QString& id, bool on) {
   if (id.isEmpty() || chosen.contains(id) == on) {
     return false;
   }
-  if (on) {
+  if (on && g_topBarDefaults) {
+    // At the end, a default item back at its default place (mitcad#2129).
+    chosen = withDefaultItem(chosen, id);
+  } else if (on) {
     chosen.append(id);
   } else {
     chosen.removeAll(id);
@@ -123,6 +205,16 @@ QStringList quickAccessShown(const QStringList& chosen, const QStringList& avail
   QStringList shown;
   for (const QString& id : available) {
     if (chosen.contains(id) && !shown.contains(id)) {
+      shown.append(id);
+    }
+  }
+  return shown;
+}
+
+QStringList quickAccessItems(const QStringList& items, const QStringList& available, const QStringList& rowCommands) {
+  QStringList shown;
+  for (const QString& id : items) {
+    if (available.contains(id) && !rowCommands.contains(id) && !shown.contains(id)) {
       shown.append(id);
     }
   }

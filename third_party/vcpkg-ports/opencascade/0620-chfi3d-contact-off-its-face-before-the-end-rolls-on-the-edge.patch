@@ -54,8 +54,10 @@ rounding's section and the rolling ball's. Another caller:
 geometry/tests/test_fillet_occt_cases.cpp,
 test_cone_edge_rounded_from_its_apex_on_a_partial_revolve (ctest
 geometry.fillet_occt_cases), a contact on a cone's rim not taken for an edge
-the ball rolls on. Its failure without the patch is still to be shown in the
-port's before/after run (mitcad#1986).
+the ball rolls on. Its failure without the patch is still to be shown: the
+patch does not revert at the port's tip without the more than 40 later
+patches that change the same lines (tried 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 4c26d653..12e03057 100644

@@ -1,0 +1,406 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Lines wider than 1 pixel in an OpenGL core profile: the standard line
+programs get a geometry stage that draws each segment as a screen-space
+quad of the line's width (mitcad#2063, GitHub mitcad/Mitcad#440).
+
+Expected: a line aspect of width w is drawn w pixels wide (times the
+context's line width scale), as in a compatibility profile.
+Actual: in a core profile every line is 1 pixel wide, whatever its width.
+OpenGl_Context::SetLineWidth calls glLineWidth only on OpenGL ES or when
+core11ffp is set, and core11ffp is null in a core profile; a
+forward-compatible core context (the only one with shaders on macOS)
+does not draw lines wider than 1 pixel through glLineWidth in any case.
+Reproducer: an OpenGl_GraphicDriver with contextCompatible off (a core
+profile), an edge displayed with a Prs3d_LineAspect of width 4, the view
+dumped: the edge is 1 pixel wide (observed with Mesa llvmpipe, OpenGL 4.5
+core, on a virtual X display, and in MitCad's macOS view, OpenGL 4.1
+core).
+
+- Graphic3d_ShaderFlags_WideLine (0x4000, so Graphic3d_ShaderFlags_NB is
+  0x8000; Graphic3d_ShaderFlags_NeedsGeomShader includes it): a program
+  that draws lines as quads.
+- Graphic3d_ShaderManager: the geometry stage of such a program takes a
+  line segment (layout lines in, a triangle strip of 4 vertices out:
+  Graphic3d_ShaderObject::CreateFromSource with 2 input vertices). It
+  clips the segment by the near plane and draws a quad occLineWidth
+  pixels wide around it in window coordinates, extended by half the
+  width at each end so that the segments of a polyline join without
+  gaps, counter-clockwise. The quad's z and w are the segment's, so its
+  depth is the line's. Each corner passes on the vertex outputs of its
+  end of the segment; the fragment stage is the line program's (colour,
+  the stipple pattern from gl_FragCoord along the line's major axis,
+  clipping planes). The lit programs take the same stage.
+- OpenGl_ShaderManager::ToExpandWideLines(width): desktop OpenGL without
+  the fixed-function pipeline (core11ffp null, ffpEnable off) and with a
+  geometry stage, and the width times LineWidthScale above 1 pixel.
+  BindLineProgram takes the width (1 by default) and sets the flag then.
+  Custom programs, width 1, compatibility profiles and OpenGL ES are
+  unchanged.
+- OpenGl_Context::SetLineWidth sets occLineWidth (the width times the
+  line width scale) on the active program where it does not call
+  glLineWidth.
+- OpenGl_PrimitiveArray::Render passes the aspect's line width to
+  BindLineProgram for GL_LINES and GL_LINE_STRIP. While a wide line
+  program draws, it turns polygon offset off (a line aspect's default
+  Aspect_POM_Fill would push the quads back as it pushes faces, level
+  with the faces the line lies on), face culling off and the polygon
+  mode to filled, and restores them after.
+- Edges of faces drawn with the polygon mode GL_LINE (drawEdges: dashed
+  mesh edges, no geometry stage, or usePolygonMode) stay 1 pixel wide in
+  a core profile; the mesh edges' geometry stage already draws solid ones
+  at their width.
+
+Test: none in geometry/tests, because the defect exists only in a
+core-profile context, which the OCCT-only tests do not create. The test
+is app.ui-macos-selection-look (tools/ui-scripts/selection-look.mitcad-ui,
+its view-line-width steps): it reads the macOS view's pixels back, a
+selected edge at least 3 logical pixels wide at Normal and wider at
+Thick, a sketch line at least 2 (less the driver's half pixel). Checked
+with OCCT alone in a core profile (Mesa llvmpipe, OpenGL 4.5 core):
+widths 4 and 6 drawn 4 and 6 pixels wide (1 without the patch), width 1
+unchanged, a dashed line of width 4 dashed, a line on a shaded face at
+its depth drawn over it and one under the face hidden.
+
+Upstream: new; changes only lines wider than 1 pixel in a desktop core
+profile, which were drawn 1 pixel wide; their ends are extended by half
+the width.
+
+diff --git a/src/Visualization/TKOpenGl/OpenGl/OpenGl_Context.cxx b/src/Visualization/TKOpenGl/OpenGl/OpenGl_Context.cxx
+index 4692b75..3b9520e 100644
+--- a/src/Visualization/TKOpenGl/OpenGl/OpenGl_Context.cxx
++++ b/src/Visualization/TKOpenGl/OpenGl/OpenGl_Context.cxx
+@@ -2518,6 +2518,15 @@ void OpenGl_Context::SetLineWidth(const float theWidth)
+     // glLineWidth() is still defined within Core Profile, but has no effect with values != 1.0f
+     core11fwd->glLineWidth(theWidth * myLineWidthScale);
+   }
++  else if (!myActiveProgram.IsNull())
++  {
++    // the wide line program (Graphic3d_ShaderFlags_WideLine) draws the width itself
++    if (const OpenGl_ShaderUniformLocation aLocLineWidth =
++          myActiveProgram->GetStateLocation(OpenGl_OCCT_LINE_WIDTH))
++    {
++      myActiveProgram->SetUniform(this, aLocLineWidth, theWidth * myLineWidthScale);
++    }
++  }
+ }
+ 
+ //=================================================================================================
+diff --git a/src/Visualization/TKOpenGl/OpenGl/OpenGl_PrimitiveArray.cxx b/src/Visualization/TKOpenGl/OpenGl/OpenGl_PrimitiveArray.cxx
+index a8d512f..5dab1c6 100644
+--- a/src/Visualization/TKOpenGl/OpenGl/OpenGl_PrimitiveArray.cxx
++++ b/src/Visualization/TKOpenGl/OpenGl/OpenGl_PrimitiveArray.cxx
+@@ -993,7 +993,8 @@ void OpenGl_PrimitiveArray::Render(const occ::handle<OpenGl_Workspace>& theWorks
+                                                aShadingModel,
+                                                Graphic3d_AlphaMode_Opaque,
+                                                hasVertColor,
+-                                               anAspectFace->ShaderProgramRes(aCtx));
++                                               anAspectFace->ShaderProgramRes(aCtx),
++                                               anAspectFace->Aspect()->LineWidth());
+         break;
+       }
+       default: {
+@@ -1051,6 +1052,23 @@ void OpenGl_PrimitiveArray::Render(const occ::handle<OpenGl_Workspace>& theWorks
+     aCtx->SetColor4fv(anInteriorColor, aBackInteriorColor);
+     if (!myIsFillType)
+     {
++      // lines drawn as quads by the wide line program keep the depth and visibility of lines:
++      // no polygon offset, no face culling, filled
++      const bool isWideLine = (myDrawMode == GL_LINES || myDrawMode == GL_LINE_STRIP)
++                              && anAspectFace->ShaderProgramRes(aCtx).IsNull()
++                              && aCtx->ShaderManager()->ToExpandWideLines(
++                                anAspectFace->Aspect()->LineWidth());
++      const Graphic3d_PolygonOffset         aPolygonOffsetOld = aCtx->PolygonOffset();
++      const Graphic3d_TypeOfBackfacingModel aFaceCullingOld   = aCtx->FaceCulling();
++      int                                   aPolygonModeOld   = GL_FILL;
++      if (isWideLine)
++      {
++        Graphic3d_PolygonOffset aNoOffset;
++        aNoOffset.Mode = Aspect_POM_Off;
++        aCtx->SetPolygonOffset(aNoOffset);
++        aCtx->SetFaceCulling(Graphic3d_TypeOfBackfacingModel_DoubleSided);
++        aPolygonModeOld = aCtx->SetPolygonMode(GL_FILL);
++      }
+       if (myDrawMode == GL_LINES || myDrawMode == GL_LINE_STRIP)
+       {
+         aCtx->SetLineStipple((float)anAspectFace->Aspect()->LineStippleFactor(),
+@@ -1063,6 +1081,12 @@ void OpenGl_PrimitiveArray::Render(const occ::handle<OpenGl_Workspace>& theWorks
+                 aBackInteriorColor,
+                 hasColorAttrib,
+                 anAspectFace->Aspect()->ToUseVertexColorForBackFaces());
++      if (isWideLine)
++      {
++        aCtx->SetPolygonMode(aPolygonModeOld);
++        aCtx->SetFaceCulling(aFaceCullingOld);
++        aCtx->SetPolygonOffset(aPolygonOffsetOld);
++      }
+       if (isForcedBlend)
+       {
+         aCtx->core11fwd->glDisable(GL_BLEND);
+diff --git a/src/Visualization/TKOpenGl/OpenGl/OpenGl_ShaderManager.hxx b/src/Visualization/TKOpenGl/OpenGl/OpenGl_ShaderManager.hxx
+index 5ced685..bb25d15 100644
+--- a/src/Visualization/TKOpenGl/OpenGl/OpenGl_ShaderManager.hxx
++++ b/src/Visualization/TKOpenGl/OpenGl/OpenGl_ShaderManager.hxx
+@@ -145,13 +145,29 @@ public:
+     return bindProgramWithState(aProgram, aShadeModelOnFace);
+   }
+ 
++  //! Return true if the standard line programs draw lines of the given width (in pixels, before
++  //! the context's line width scale) as screen-space quads (Graphic3d_ShaderFlags_WideLine):
++  //! in a desktop OpenGL context without the fixed-function pipeline (a core profile), where
++  //! glLineWidth() draws no line wider than 1 pixel, for a scaled width above 1 pixel.
++  bool ToExpandWideLines(const float theLineWidth) const
++  {
++    return myContext->GraphicsLibrary() == Aspect_GraphicsLibrary_OpenGL
++           && myContext->core11ffp == nullptr && !myContext->caps->ffpEnable
++           && myContext->hasGeometryStage != OpenGl_FeatureNotAvailable
++           && theLineWidth * myContext->LineWidthScale() > 1.0f;
++  }
++
+   //! Bind program for line rendering
++  //! @param theLineWidth width of the lines in pixels, before the context's line width scale;
++  //!                     selects the wide line program where ToExpandWideLines() is true.
++  //!                     The width itself is passed by OpenGl_Context::SetLineWidth()
+   bool BindLineProgram(const occ::handle<OpenGl_TextureSet>&    theTextures,
+                        const Aspect_TypeOfLine                  theLineType,
+                        const Graphic3d_TypeOfShadingModel       theShadingModel,
+                        const Graphic3d_AlphaMode                theAlphaMode,
+                        const bool                               theHasVertColor,
+-                       const occ::handle<OpenGl_ShaderProgram>& theCustomProgram)
++                       const occ::handle<OpenGl_ShaderProgram>& theCustomProgram,
++                       const float                              theLineWidth = 1.0f)
+   {
+     if (!theCustomProgram.IsNull() || myContext->caps->ffpEnable)
+     {
+@@ -169,6 +185,10 @@ public:
+     {
+       aBits |= Graphic3d_ShaderFlags_StippleLine;
+     }
++    if (ToExpandWideLines(theLineWidth))
++    {
++      aBits |= Graphic3d_ShaderFlags_WideLine;
++    }
+ 
+     occ::handle<OpenGl_ShaderProgram>& aProgram = getStdProgram(theShadingModel, aBits);
+     return bindProgramWithState(aProgram, theShadingModel);
+diff --git a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderFlags.hxx b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderFlags.hxx
+index 884d240..a3050b3 100644
+--- a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderFlags.hxx
++++ b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderFlags.hxx
+@@ -45,14 +45,17 @@ enum Graphic3d_ShaderFlags
+   Graphic3d_ShaderFlags_OitDepthPeeling = 0x1000, //!< handle Depth Peeling OIT
+   Graphic3d_ShaderFlags_VertColorFrontOnly =
+     0x2000, //!< apply per-vertex color only to front-facing fragments
++  Graphic3d_ShaderFlags_WideLine =
++    0x4000, //!< expand each line segment into a screen-space quad of the line width
+   //
+-  Graphic3d_ShaderFlags_NB      = 0x4000, //!< overall number of combinations
++  Graphic3d_ShaderFlags_NB      = 0x8000, //!< overall number of combinations
+   Graphic3d_ShaderFlags_IsPoint = Graphic3d_ShaderFlags_PointSimple
+                                   | Graphic3d_ShaderFlags_PointSprite
+                                   | Graphic3d_ShaderFlags_PointSpriteA,
+   Graphic3d_ShaderFlags_HasTextures =
+     Graphic3d_ShaderFlags_TextureRGB | Graphic3d_ShaderFlags_TextureEnv,
+-  Graphic3d_ShaderFlags_NeedsGeomShader = Graphic3d_ShaderFlags_MeshEdges,
++  Graphic3d_ShaderFlags_NeedsGeomShader =
++    Graphic3d_ShaderFlags_MeshEdges | Graphic3d_ShaderFlags_WideLine,
+ };
+ 
+ #endif // _Graphic3d_ShaderFlags_HeaderFile
+diff --git a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderManager.cxx b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderManager.cxx
+index ed87c7f..9f991d4 100644
+--- a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderManager.cxx
++++ b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderManager.cxx
+@@ -762,6 +762,90 @@ TCollection_AsciiString Graphic3d_ShaderManager::pointSpriteShadingSrc(
+   return aSrcFragGetColor;
+ }
+ 
++//! Return the number of vertices the geometry shader takes in for the given program bits:
++//! 2 (a line segment) for wide lines, 3 (a triangle) for mesh edges, 0 without a geometry stage.
++static int geomInputVerts(int theBits)
++{
++  if ((theBits & Graphic3d_ShaderFlags_WideLine) != 0)
++  {
++    return 2;
++  }
++  return (theBits & Graphic3d_ShaderFlags_NeedsGeomShader) != 0 ? 3 : 0;
++}
++
++//! Prepare GLSL source passing the outputs of the vertex stage, which the fragment stage reads,
++//! through the geometry stage for the given input vertex.
++static TCollection_AsciiString passStageInOutsSrc(
++  const Graphic3d_ShaderObject::ShaderVariableList& theStageInOuts,
++  const TCollection_AsciiString&                    theVertIndex)
++{
++  TCollection_AsciiString aSrc;
++  for (Graphic3d_ShaderObject::ShaderVariableList::Iterator aVarListIter(theStageInOuts);
++       aVarListIter.More();
++       aVarListIter.Next())
++  {
++    if (aVarListIter.Value().Stages == (Graphic3d_TOS_VERTEX | Graphic3d_TOS_FRAGMENT))
++    {
++      const TCollection_AsciiString aVarName = aVarListIter.Value().Name.Token(" ", 2);
++      // an array is copied whole
++      const TCollection_AsciiString aVarName2 =
++        aVarName.Value(aVarName.Length()) == ']' ? aVarName.Token("[", 1) : aVarName;
++      aSrc += TCollection_AsciiString() + EOL "  geomOut." + aVarName2 + " = geomIn["
++              + theVertIndex + "]." + aVarName2 + ";";
++    }
++  }
++  return aSrc;
++}
++
++//! Prepare GLSL source of the geometry shader drawing a line segment occLineWidth pixels wide,
++//! for a context whose rasterizer draws lines only 1 pixel wide (an OpenGL core profile).
++//! The segment, clipped by the near plane, becomes a screen-space quad of that width, extended
++//! by half the width at each end so that the segments of a polyline join without gaps. The quad
++//! keeps the depth of the segment along its middle (its z and w are the segment's), faces the
++//! viewer, and passes on the stage outputs of the segment's ends; the fragment stage of the
++//! line program (colour, stipple pattern from gl_FragCoord, clipping) runs on it unchanged.
++static TCollection_AsciiString prepareWideLineGeomSrc(
++  Graphic3d_ShaderObject::ShaderVariableList&       theUnifoms,
++  const Graphic3d_ShaderObject::ShaderVariableList& theStageInOuts)
++{
++  theUnifoms.Append(
++    Graphic3d_ShaderObject::ShaderVariable("vec4 occViewport", Graphic3d_TOS_GEOMETRY));
++  theUnifoms.Append(
++    Graphic3d_ShaderObject::ShaderVariable("float occLineWidth", Graphic3d_TOS_GEOMETRY));
++
++  TCollection_AsciiString aSrc =
++    EOL "void main()" EOL "{" EOL "  vec4 aPos0 = gl_in[0].gl_Position;" EOL
++        "  vec4 aPos1 = gl_in[1].gl_Position;"
++    // distances to the near clipping plane (z = -w); a point behind it has no window position
++    EOL "  float aNear0 = aPos0.z + aPos0.w;" EOL "  float aNear1 = aPos1.z + aPos1.w;" EOL
++        "  if (aNear0 < 0.0 && aNear1 < 0.0)" EOL "  {" EOL "    return;" EOL "  }" EOL
++        "  if (aNear0 < 0.0)" EOL "  {" EOL
++        "    aPos0 = mix (aPos0, aPos1, aNear0 / (aNear0 - aNear1));" EOL "  }" EOL
++        "  else if (aNear1 < 0.0)" EOL "  {" EOL
++        "    aPos1 = mix (aPos1, aPos0, aNear1 / (aNear1 - aNear0));" EOL "  }"
++    // the direction in window pixels; half the width along and across it in NDC units
++    EOL "  vec2 aHalfView = 0.5 * occViewport.zw;" EOL
++        "  vec2 aDir = (aPos1.xy / aPos1.w - aPos0.xy / aPos0.w) * aHalfView;" EOL
++        "  float aLen = length (aDir);" EOL
++        "  aDir = aLen > 0.0 ? aDir / aLen : vec2 (1.0, 0.0);" EOL
++        "  vec2 anAlong  = aDir * (0.5 * occLineWidth) / aHalfView;" EOL
++        "  vec2 anAcross = vec2 (-aDir.y, aDir.x) * (0.5 * occLineWidth) / aHalfView;";
++  // counter-clockwise in window coordinates: the left side of the start first
++  const char* const aCorners[4] = {
++    "  gl_Position = aPos0 + vec4 ((anAcross - anAlong) * aPos0.w, 0.0, 0.0);",
++    "  gl_Position = aPos0 - vec4 ((anAcross + anAlong) * aPos0.w, 0.0, 0.0);",
++    "  gl_Position = aPos1 + vec4 ((anAcross + anAlong) * aPos1.w, 0.0, 0.0);",
++    "  gl_Position = aPos1 - vec4 ((anAcross - anAlong) * aPos1.w, 0.0, 0.0);"};
++  for (int aCornerIter = 0; aCornerIter < 4; ++aCornerIter)
++  {
++    const TCollection_AsciiString aVertIndex(aCornerIter / 2);
++    aSrc += passStageInOutsSrc(theStageInOuts, aVertIndex);
++    aSrc += TCollection_AsciiString() + EOL + aCorners[aCornerIter] + EOL "  EmitVertex();";
++  }
++  aSrc += EOL "  EndPrimitive();" EOL "}";
++  return aSrc;
++}
++
+ //! Prepare GLSL source for geometry shader according to parameters.
+ static TCollection_AsciiString prepareGeomMainSrc(
+   Graphic3d_ShaderObject::ShaderVariableList& theUnifoms,
+@@ -772,6 +856,10 @@ static TCollection_AsciiString prepareGeomMainSrc(
+   {
+     return TCollection_AsciiString();
+   }
++  if ((theBits & Graphic3d_ShaderFlags_WideLine) != 0)
++  {
++    return prepareWideLineGeomSrc(theUnifoms, theStageInOuts);
++  }
+ 
+   TCollection_AsciiString aSrcMainGeom = EOL "void main()" EOL "{";
+ 
+@@ -820,27 +908,7 @@ static TCollection_AsciiString prepareGeomMainSrc(
+   {
+     const TCollection_AsciiString aVertIndex(aVertIter);
+     // pass variables from Vertex shader to Fragment shader through Geometry shader
+-    for (Graphic3d_ShaderObject::ShaderVariableList::Iterator aVarListIter(theStageInOuts);
+-         aVarListIter.More();
+-         aVarListIter.Next())
+-    {
+-      if (aVarListIter.Value().Stages == (Graphic3d_TOS_VERTEX | Graphic3d_TOS_FRAGMENT))
+-      {
+-        const TCollection_AsciiString aVarName = aVarListIter.Value().Name.Token(" ", 2);
+-        if (aVarName.Value(aVarName.Length()) == ']')
+-        {
+-          // copy the whole array
+-          const TCollection_AsciiString aVarName2 = aVarName.Token("[", 1);
+-          aSrcMainGeom += TCollection_AsciiString() + EOL "  geomOut." + aVarName2 + " = geomIn["
+-                          + aVertIndex + "]." + aVarName2 + ";";
+-        }
+-        else
+-        {
+-          aSrcMainGeom += TCollection_AsciiString() + EOL "  geomOut." + aVarName + " = geomIn["
+-                          + aVertIndex + "]." + aVarName + ";";
+-        }
+-      }
+-    }
++    aSrcMainGeom += passStageInOutsSrc(theStageInOuts, aVertIndex);
+ 
+     if ((theBits & Graphic3d_ShaderFlags_MeshEdges) != 0)
+     {
+@@ -1100,7 +1168,7 @@ occ::handle<Graphic3d_ShaderProgram> Graphic3d_ShaderManager::getStdProgramUnlit
+   aProgramSrc->SetNbShadowMaps(0);
+   aProgramSrc->SetNbClipPlanesMax(aNbClipPlanes);
+   aProgramSrc->SetAlphaTest((theBits & Graphic3d_ShaderFlags_AlphaTest) != 0);
+-  const int aNbGeomInputVerts = !aSrcGeom.IsEmpty() ? 3 : 0;
++  const int aNbGeomInputVerts = geomInputVerts(theBits);
+   aProgramSrc->AttachShader(Graphic3d_ShaderObject::CreateFromSource(aSrcVert,
+                                                                      Graphic3d_TOS_VERTEX,
+                                                                      aUniforms,
+@@ -1488,7 +1556,7 @@ occ::handle<Graphic3d_ShaderProgram> Graphic3d_ShaderManager::getStdProgramGoura
+   aProgramSrc->SetNbShadowMaps(0);
+   aProgramSrc->SetNbClipPlanesMax(aNbClipPlanes);
+   aProgramSrc->SetAlphaTest((theBits & Graphic3d_ShaderFlags_AlphaTest) != 0);
+-  const int aNbGeomInputVerts = !aSrcGeom.IsEmpty() ? 3 : 0;
++  const int aNbGeomInputVerts = geomInputVerts(theBits);
+   aProgramSrc->AttachShader(Graphic3d_ShaderObject::CreateFromSource(aSrcVert,
+                                                                      Graphic3d_TOS_VERTEX,
+                                                                      aUniforms,
+@@ -1753,7 +1821,7 @@ occ::handle<Graphic3d_ShaderProgram> Graphic3d_ShaderManager::getStdProgramPhong
+   aProgramSrc->SetNbClipPlanesMax(aNbClipPlanes);
+   aProgramSrc->SetAlphaTest((theBits & Graphic3d_ShaderFlags_AlphaTest) != 0);
+ 
+-  const int aNbGeomInputVerts = !aSrcGeom.IsEmpty() ? 3 : 0;
++  const int aNbGeomInputVerts = geomInputVerts(theBits);
+   aProgramSrc->AttachShader(Graphic3d_ShaderObject::CreateFromSource(aSrcVert,
+                                                                      Graphic3d_TOS_VERTEX,
+                                                                      aUniforms,
+diff --git a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.cxx b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.cxx
+index 1ad92ac..4bcfd9e 100644
+--- a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.cxx
++++ b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.cxx
+@@ -184,7 +184,14 @@ occ::handle<Graphic3d_ShaderObject> Graphic3d_ShaderObject::CreateFromSource(
+     }
+   }
+ 
+-  if (theType == Graphic3d_TOS_GEOMETRY)
++  if (theType == Graphic3d_TOS_GEOMETRY && theNbGeomInputVerts == 2)
++  {
++    // a line segment in, a quad of two triangles out
++    aSrcUniforms.Prepend(TCollection_AsciiString()
++                         + "\nlayout (lines) in;"
++                           "\nlayout (triangle_strip, max_vertices = 4) out;");
++  }
++  else if (theType == Graphic3d_TOS_GEOMETRY)
+   {
+     aSrcUniforms.Prepend(TCollection_AsciiString()
+                          + "\nlayout (triangles) in;"
+diff --git a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.hxx b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.hxx
+index 1b77d17..40c6578 100644
+--- a/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.hxx
++++ b/src/Visualization/TKService/Graphic3d/Graphic3d_ShaderObject.hxx
+@@ -75,7 +75,8 @@ public:
+   //! @param theOutName     name of output variables block;
+   //!                       can be empty for accessing each variable without block prefix
+   //!                       (mandatory for stages accessing both inputs and outputs)
+-  //! @param theNbGeomInputVerts number of geometry shader input vertexes
++  //! @param theNbGeomInputVerts number of geometry shader input vertexes:
++  //!                       3 for triangles in and out, 2 for a line segment in and a quad out
+   Standard_EXPORT static occ::handle<Graphic3d_ShaderObject> CreateFromSource(
+     TCollection_AsciiString&       theSource,
+     Graphic3d_TypeOfShaderObject   theType,

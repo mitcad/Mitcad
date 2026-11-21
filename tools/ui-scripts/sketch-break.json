@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Break and Split at Point (mitcad#2108): two free points that frame the view's fit (p1, p2); a fixed point p3 at (-25, 0) and a fixed point p4 at the origin; a line c5 from p3 to (25, 0) (p6); a circle c7 about p4 with a radius of 10, dimensioned, that crosses the line at (-10, 0) and (10, 0); and an arc c8 about (0, -20) from (6, -20) over (0, -14) to (-6, -20), its radius 6 dimensioned."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-25,0],"fixed":true},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[0,0],"fixed":true},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p3","end":[25,0]},
+  {"cmd":"sketch.circle","sketch":"F1","mode":"center","center":"p4","radius":10},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"radius","curve":"c7"},"value":10},
+  {"cmd":"sketch.arc","sketch":"F1","mode":"three_point","start":[6,-20],"through":[0,-14],"end":[-6,-20]},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"radius","curve":"c8"},"value":6}
+]

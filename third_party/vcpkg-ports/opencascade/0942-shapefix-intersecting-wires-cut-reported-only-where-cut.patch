@@ -40,8 +40,12 @@ Test: geometry/tests/test_shapefix.cpp, test_arcs_meeting_in_two_wires
 (ctest geometry.suite.shapefix): a planar face of two wires whose arcs of
 one circle meet end to end at a vertex the wires share, at three placements:
 the repair of intersecting wires returns with nothing to repair (it never
-returns without the patch by its documentation). Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+returns without the patch by its documentation). Its ctest timed out
+without the patch on 2026-11-20, but the run of the named test alone
+selected no test (the runner's MITCAD_TEST_ONLY matches the guarded()
+label, not the function's name; tools/occt-port-proof.py now maps one to
+the other). It fails without the patch (shown 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx

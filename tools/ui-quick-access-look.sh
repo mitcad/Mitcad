@@ -2,20 +2,21 @@
 # SPDX-License-Identifier: MIT
 # The quick-access group (mitcad#1090): a one-off visual check, not a
 # recurring test (its name is not ui-*-test.sh, so no check picks it up).
-# The screen is saved with the group in the Floating layout's title row
-# (at the free part's right end, before the indicators and the search
-# field: mitcad#1989) and in the Docked layout's top bar, the same title
-# row (mitcad#2082),
-# on the light and the dark theme (Qt's GTK platform theme,
-# MITCAD_TEST_COLOR_SCHEME), with the default commands and View > Look At
-# added (quickAccess/commands in the settings), on a saved plate whose Save
-# is disabled:
+# The screen is saved with the top bar's one left group (mitcad#2129: ☰,
+# Home, File, New Design, Open, Save, Design Properties, Undo, Redo and the
+# added commands, at the row's left end) in the Floating layout's title row
+# and in the Docked layout's top bar, the same title row (mitcad#2082), on
+# the light and the dark theme (Qt's GTK platform theme,
+# MITCAD_TEST_COLOR_SCHEME), with View > Look At added (an earlier version's
+# quickAccess/commands in the settings, migrated after the defaults), on a
+# saved plate whose Save is disabled:
 #   <dir>/quick-access-floating-light.png  <dir>/quick-access-floating-dark.png
 #   <dir>/quick-access-docked-light.png    <dir>/quick-access-docked-dark.png
 #   <dir>/quick-access-menu-<layout>-light.png  the group's menu open, its
 #                                          View submenu shown
 #   <dir>/quick-access-folded-light.png    Floating in a 600 px wide window:
-#                                          the group folded into its ⋮
+#                                          the group's last items folded
+#                                          into its ⋮
 # and the app's logs as <dir>/<name>.log.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -72,8 +73,9 @@ picture() {
     ui_mark
     ui_step "the group's menu"             ui_click_logged "Quick access menu"
     ui_expect_new "Context menu: " "$layout: the menu"
-    # The View submenu open (Down to View, Right).
-    ui_key Down Down Down Right
+    # The View submenu open (Down past File Menu, File and Edit to View,
+    # Right).
+    ui_key Down Down Down Down Right
     ui_sync
     sleep 1
     ui_capture "$DIR/quick-access-menu-$layout-$theme.png"

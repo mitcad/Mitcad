@@ -25,6 +25,8 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "preferences restore driver failed (exit code $exitCode)"
 }
+Ui-ExpectLog 'Orientation cube size 100 %' 'Cancel put the orientation cube size back (mitcad#2071)'
+if ("$(Ui-LogText)".Contains('Preferences: orientation cube size ')) { Ui-Fail 'the cancelled cube size was saved' }
 Ui-ExpectLog 'Preferences: small circles full' 'preferences changed on Display'
 Ui-ExpectLog 'Preferences: click adds to the selection in sketches on' 'and on Sketch'
 Ui-ExpectLog 'Preferences restore defaults asked: Restore the defaults of the Display settings?' 'Current Group asks first, naming the page'

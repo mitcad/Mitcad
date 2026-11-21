@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Sketch Scale (mitcad#2109): two free points that frame the view's fit at (-40, -30) and (40, 30); c3, a circle of radius 5 about its center p4 at (-10, 0), its diameter dimensioned 10 mm; c5, a line from p6 at (5, 10) to p7 at (15, 10), its length dimensioned 10 mm. The dimensions' values stand off the curves, clear of the clicks on them."},
+  {"cmd":"sketch.create","plane":"xy"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.circle","sketch":"F1","mode":"center","center":[-10,0],"radius":5},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[5,10],"end":[15,10]},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"diameter","curve":"c3"},"value":10,"text":[-20,-12]},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"length","line":"c5"},"value":10,"text":[10,18]}
+]

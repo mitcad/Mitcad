@@ -90,6 +90,63 @@ pub struct ExternalLink {
     /// (`BaseBody::material`, `BaseBody::appearance`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub given: Vec<LinkLook>,
+    /// Linked parts of the design only (mitcad#2130,
+    /// `document/link_parts.rs`): the occurrences and root bodies chosen,
+    /// in the order they were chosen. None: the whole design.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<LinkPart>>,
+    /// Joint origins on parts no longer chosen (mitcad#2130): the frames
+    /// they had when their part was last linked, which they keep, with a
+    /// warning.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unlinked: Vec<EnvelopeFrame>,
+}
+
+/// One chosen part of a linked design (mitcad#2130): an occurrence, by its
+/// path from the design's root, with the components in it, or a body of
+/// the design's root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkPart {
+    /// The occurrence's path from the linked design's root (uids); empty
+    /// for a body of the root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub occurrence: Vec<OccurrenceUid>,
+    /// A body of the linked design's root (with no `occurrence`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyUid>,
+    /// Its name in the linked design when it was last read: the words of
+    /// the message when it is gone from there.
+    #[serde(default)]
+    pub name: String,
+    /// The numbers of the base feature's bodies it gave when it was last
+    /// read (`<feature>.b<number>`): kept when it is gone, and given to its
+    /// bodies again when it is read again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bodies: Vec<u32>,
+    /// While the design is read again: it is gone from the design and its
+    /// bodies are the saved ones. Not saved.
+    #[serde(skip)]
+    pub gone: bool,
+}
+
+impl LinkPart {
+    /// Whether it names the same occurrence or body as `other`.
+    pub fn same_part(&self, other: &LinkPart) -> bool {
+        self.occurrence == other.occurrence && self.body == other.body
+    }
+}
+
+/// Whether two links choose the same parts of their design (None: the
+/// whole design).
+pub fn same_parts(a: Option<&[LinkPart]>, b: Option<&[LinkPart]>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            a.len() == b.len() && a.iter().all(|p| b.iter().any(|q| p.same_part(q)))
+        }
+        _ => false,
+    }
 }
 
 // The detail size is checked finite and positive before it is stored, and
@@ -144,6 +201,10 @@ pub struct Occurrence {
     /// parent's solve, for this occurrence alone, with its own values of
     /// them; None: rigid there (the default).
     pub flexible: Option<Flex>,
+    /// The folder of its parent's occurrences the browser lists it in
+    /// (mitcad#2103), by name; None: among them, in no folder.
+    /// Organization only, like its name.
+    pub folder: Option<String>,
 }
 
 /// A flexible occurrence's own values of its component's joints
@@ -491,6 +552,7 @@ impl Assembly {
             number,
             pattern: None,
             flexible: None,
+            folder: None,
         });
         uid
     }
@@ -536,6 +598,18 @@ impl Assembly {
         flexed: &crate::joints::Flexed,
         bodies: &dyn Fn(ComponentUid) -> Vec<BodyUid>,
     ) -> Vec<Instance> {
+        self.instances_at(placement, flexed, &|_, component| bodies(component))
+    }
+
+    /// [`Assembly::instances_flexed`] with `bodies` giving the bodies of
+    /// each occurrence by its path from the root and its component: a
+    /// machined occurrence shows its own (mitcad#2131).
+    pub fn instances_at(
+        &self,
+        placement: &dyn Fn(OccurrenceUid) -> Transform,
+        flexed: &crate::joints::Flexed,
+        bodies: &dyn Fn(&[OccurrenceUid], ComponentUid) -> Vec<BodyUid>,
+    ) -> Vec<Instance> {
         let mut out = Vec::new();
         let mut path = Vec::new();
         self.walk(
@@ -560,10 +634,10 @@ impl Assembly {
         visible: bool,
         path: &mut Vec<OccurrenceUid>,
         placement: &dyn Fn(&[OccurrenceUid], OccurrenceUid) -> Transform,
-        bodies: &dyn Fn(ComponentUid) -> Vec<BodyUid>,
+        bodies: &dyn Fn(&[OccurrenceUid], ComponentUid) -> Vec<BodyUid>,
         out: &mut Vec<Instance>,
     ) {
-        for body in bodies(component) {
+        for body in bodies(path, component) {
             out.push(Instance {
                 path: path.clone(),
                 component,

@@ -66,9 +66,9 @@ the flat side's edges rounded with 1 and its top rim rounded with 1
 through both corners' mitres, and the lid's half with its cone and post,
 both rims rounded: valid, each corner one new face on the ball's sphere
 within 1e-4, the top corner's area pi / 2 + asin(1 / 22) within 2e-3; the
-port's notes record each rounding failing without 1520 and 1521. Its
-failure without the patch is still to be shown in the port's before/after
-run (mitcad#1986).
+port's notes record each rounding failing without 1520 and 1521. It fails
+without the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted
+together with 1523, 1760, which change the same lines).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
 index d188e8fb..454c0d8e 100644

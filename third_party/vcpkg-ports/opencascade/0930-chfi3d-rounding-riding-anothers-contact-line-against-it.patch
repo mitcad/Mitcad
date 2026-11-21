@@ -46,8 +46,10 @@ test_rims_turning_opposite_ways_upper_first (ctest
 geometry.fillet_ride_against): a disc 2.5 thick whose rims' circles turn
 opposite ways, rounded with 1.5 on both rims in either order: valid, the
 volume the section's revolution has within 1e-6 (invalid without the patch
-by its documentation). Its failure without the patch is still to be shown in
-the port's before/after run (mitcad#1986).
+by its documentation). Its failure without the patch is still to be shown:
+the patch does not revert at the port's tip without the more than 40 later
+patches that change the same lines (tried 2026-11-20 by
+tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index f517a95c..2104b967 100644

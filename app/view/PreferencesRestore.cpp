@@ -138,6 +138,7 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     }
     m_settings.perspective = fresh.perspective;
     m_settings.cubeProjection = fresh.cubeProjection;
+    m_settings.cubeSize = fresh.cubeSize; // mitcad#2071
     m_settings.focalLength = fresh.focalLength;
     m_settings.anaglyphFocalLength = fresh.anaglyphFocalLength;
     m_settings.stereoDepth = fresh.stereoDepth;

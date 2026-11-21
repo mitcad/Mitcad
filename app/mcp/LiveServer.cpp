@@ -29,6 +29,7 @@
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
 #include "framework/TitleBar.hpp"
+#include "tutorials/TutorialGuide.hpp"
 #include "AgentFolders.hpp"
 #include "AgentIndicator.hpp"
 #include "AssistantSetup.hpp"
@@ -86,6 +87,8 @@ struct LiveServer::State {
     // The comments this session was last given (mitcad#1119).
     QByteArray commentsGiven;
     QString commentsDocument;
+    // The guide step's state this session was last given (mitcad#2012).
+    QByteArray guideGiven;
     // The designs a chat agent made with document_new (mitcad#1266): it
     // may use them beside its own design.
     QList<QPointer<MainWindow>> made;
@@ -157,6 +160,9 @@ struct LiveServer::State {
             {QStringLiteral("error"), QStringLiteral("The document has closed or been replaced")}}).toJson(QJsonDocument::Compact));
         continue;
       }
+      // The guide step's state (mitcad#2012), busy or not: it is the
+      // window's, not the model's.
+      giveGuide(*client, target);
       if (target->modelBusy() || target->viewerWidget()->isPainting()) {
         // Never answer a newly selected design with another design's resource.
         if (client->commentsDocument != target->mcpDocumentId()) {
@@ -202,6 +208,20 @@ struct LiveServer::State {
     }
   }
 
+  void giveGuide(Client& client, MainWindow* target) {
+    QJsonObject state = target->guide()->state();
+    state.insert(QStringLiteral("document"), target->mcpDocumentId());
+    const QByteArray text = QJsonDocument(state).toJson(QJsonDocument::Compact);
+    if (client.guideGiven == text) return;
+    try {
+      const std::string notification(client.session->set_mcp_guide(rust::Str(text.constData(), size_t(text.size()))));
+      client.guideGiven = text;
+      if (!notification.empty()) write(client, QByteArray::fromStdString(notification) + '\n');
+    } catch (const std::exception& failure) {
+      qWarning().noquote() << QStringLiteral("MCP: the guide step not given to a client: %1").arg(QString::fromUtf8(failure.what()));
+    }
+  }
+
   void scheduleComments(int delay) {
     if (commentsPosted || !manager || authenticatedClients() == 0) return;
     commentsPosted = true;
@@ -212,6 +232,8 @@ struct LiveServer::State {
     target->installEventFilter(owner);
     QObject::connect(target, &QWidget::windowTitleChanged, owner, [this] { publishWindow(); });
     QObject::connect(&target->documentSession(), &DocumentSession::changed, owner, [this] { scheduleComments(0); });
+    // The guide step's events (mitcad#2012) go out as its resource changes.
+    QObject::connect(target->guide(), &TutorialGuide::changed, owner, [this] { scheduleComments(0); });
     if (published) target->setMcpListener(endpoint.instance, endpoint.port);
     else if (!unavailable.isEmpty()) target->setMcpUnavailable(unavailable);
   }

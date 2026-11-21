@@ -57,6 +57,10 @@ public:
     // Whether the associated window is active.
     std::function<bool()> acceptsInput;
     std::function<std::uintptr_t()> nativeWindow;
+    // At every input, whether the cap is deflected past the dead zone on
+    // any axis, switched off, locked or not (mitcad#1981: the view ignores
+    // the wheel then, which the driver may emulate from the cap).
+    std::function<void(bool deflected)> deflected;
   };
   using Factory = std::function<std::unique_ptr<SpaceMouseBackend>()>;
 

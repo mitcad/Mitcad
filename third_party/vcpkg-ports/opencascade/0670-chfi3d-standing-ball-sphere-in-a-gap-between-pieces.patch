@@ -47,8 +47,9 @@ test_bowl_topped_boss_rounded_past_corners_of_the_balls_radius (ctest
 geometry.suite.fillet_results): a boss topped by a steep bowl, its top's
 outline rounded with 0.2 past corners of the ball's radius: each corner one
 face on the ball's sphere, its area the spherical triangle's. Its failure
-without the patch is still to be shown in the port's before/after run
-(mitcad#1986).
+without the patch is still to be shown: the patch does not revert at the
+port's tip without the 47 later patches that change the same lines (tried
+2026-11-20 by tools/occt-port-proof.py).
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

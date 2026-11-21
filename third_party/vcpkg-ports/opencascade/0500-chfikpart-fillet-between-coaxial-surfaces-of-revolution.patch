@@ -38,9 +38,8 @@ sweep about the axis; OCCT walked it as a B-spline before); another caller:
 geometry/tests/test_fillet_cutouts.cpp,
 test_rounding_over_flats_is_the_poles_with_the_flats_cut_again (ctest
 geometry.suite.fillet_cutouts), MitCad's fillet of the pole with flats built
-by the kernel itself, with no note. Its failure without the patch, stated in
-its documentation, is still to be shown in the port's before/after run
-(mitcad#1986).
+by the kernel itself, with no note. It fails without the patch (shown
+2026-11-20 by tools/occt-port-proof.py).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 08b22a2..575db83 100644

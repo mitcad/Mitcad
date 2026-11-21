@@ -183,13 +183,13 @@ file beside it); `--no-record` leaves it alone.
       "memory_kills": 0,
       "ui_room": 1
     }
-  },
-  "ui_caps": { "windows": { "cap": 3, "clean_runs": 1 } }
+  }
 }
 ```
 
-`beside` (a UI entry's runs only), `ui_room`, `room_passes` and
-`ui_caps` are left out where they are not set
+`beside` (a UI entry's runs only), `ui_room` and `room_passes` are left
+out where they are not set (an older file's `ui_caps` is not read, and
+its next save drops it)
 ([UI entries at once](#ui-entries-at-once)). A corpus test keeps its
 files' last runs too, `"files": { "<key>": { "wall": 41.3, "peak":
 805306368, "when": 1793000000 } }` ([below](#corpus-tests)), left out
@@ -271,7 +271,7 @@ Whenever a test ends, and every 0.5 s:
    at most `--sensitive-max` (2) at once; `--sensitive 'app.ui-*'` marks
    tests sensitive from the start. With a bound for the UI entries
    (`--ui-max` or `MITCAD_UI_JOBS`), **UI entries** start only while fewer
-   than the machine's learnt cap run, and only where neither they nor a
+   than that bound run, and only where neither they nor a
    running UI entry would have more UI entries beside them than their room
    ([below](#ui-entries-at-once)); a UI entry that failed beside others
    runs again alone, after the others. Without a bound they start as other
@@ -347,40 +347,43 @@ itself and hands over (`--record-ui`, below).
   may have beside it. A contention failure beside `b` halves it to `b / 2`
   (0: no other UI entry beside it); 3 passes with the room full (at least
   that many beside it) grow it by one. `--dry-run` shows it (`UI room N`).
-- **The machine's cap** (`ui_caps`, per platform, `std::env::consts::OS`):
-  UI entries at once. Bounded by `--ui-max`, else `MITCAD_UI_JOBS` (4 for
-  the learning when neither is given), it starts at the bound (Linux
-  with `MITCAD_UI_JOBS=12`: 12, as before), drops
-  by one (at least 1) after a run with contention failures of two or more
-  UI entries (`CAP_DROP_TESTS`, mitcad#872: one test's contention failure
-  lowers only its room, which the scheduler and check-all keep; ui-pick
-  and ui-sweep alone held Linux's 196 UI tests at 7 or 8 at once of the
-  bound 12, since check-all did not keep the rooms), and grows by
-  one after 2 clean runs that reached it (no UI entry failed beside
-  others), never above the bound. A run with fewer UI entries at once, or
-  with a UI failure that failed alone too, leaves it. The end report gives
-  the run's line (`UI entries at once: cap 6 -> 7; this run at most 6,
-  ...`). Measuring mode records and learns too, but neither reruns nor
-  holds UI entries to the cap.
+- **The machine's cap:** UI entries at once. It is the bound, `--ui-max`,
+  else `MITCAD_UI_JOBS`, else 4, one number for the scheduler, `--ui-cap`
+  and the end report, and exists for the memory budget only: the scheduler admits a UI entry, as
+  any test, only while its predicted memory fits the budget beside the
+  tests running. Contention failures never lower it, however many UI
+  entries fail so in one run: each lowers only its own test's room
+  (mitcad#872, mitcad#2124; the earlier rule dropped the cap by one after
+  a run with two or more of them and grew it back only after two clean
+  runs at it, so a few tests sensitive to load held a 12-core 30 GB VM
+  with `MITCAD_UI_JOBS=6` at 2 for good). A profile file in which an older
+  runner learnt a lower cap (`ui_caps`) needs no hand edit: that field is
+  not read, and the file's next save drops it. The end report gives the
+  run's line (`UI entries at once: cap 6; this run at most 6, 2 failed
+  beside others and passed alone (their rooms lowered), ...`). Measuring
+  mode records and learns the rooms too, but neither reruns nor holds UI
+  entries to the cap.
 
-**A machine opts in by giving the bound** (`--ui-max N` or
-`MITCAD_UI_JOBS`). Only then does the scheduler start a UI entry only
-while the UI entries running are fewer than the cap and its room and every
-running UI entry's room allow one more beside them (non-UI tests are not
-counted), and rerun a UI entry alone after a failure beside others.
-Without a bound the runs still record `beside` and learn the cap and the
-rooms (within 4), but UI entries are scheduled as before: no cap, no
-rooms, no rerun. With a bound the fixed `MITCAD_UI_JOBS` is no longer the
-number at once but its ceiling: the runner starts there, goes below it
-only after contention failures and back up as clean runs show, never
-above it. `--dry-run` and the run's first
-lines say which applies.
+**The scheduler holds UI entries to the cap on every machine**: it starts
+a UI entry only while the UI entries running are fewer than the cap
+(non-UI tests are not counted), 4 without a bound (a follow-up of
+mitcad#2124: the Windows VM, with neither `--ui-max` nor
+`MITCAD_UI_JOBS`, ran 15 at once while its report named the cap 4).
+**A machine opts in to the rooms by giving the bound** (`--ui-max N` or
+`MITCAD_UI_JOBS`). Only then does the scheduler also wait until its room
+and every running UI entry's room allow one more beside them, and rerun a
+UI entry alone after a failure beside others. Without a bound the runs
+still record `beside` and learn the rooms, but no room applies and none
+is rerun. With a bound, `MITCAD_UI_JOBS` is the number at once, held
+lower only by the memory budget and, for a test that failed beside
+others, by its room. `--dry-run` and the run's first lines say which
+applies.
 
 `tools/check-all.sh` runs the Linux UI tests (`tools/ui-*-test.sh`) itself,
 not as ctests. For such a caller:
 
 ```sh
-# The cap to run at (within the bound; MITCAD_UI_JOBS when --ui-max is not given):
+# The cap to run at (the bound; MITCAD_UI_JOBS when --ui-max is not given):
 build/dev/core/mitcad-testrun --ui-cap --ui-max "$MITCAD_UI_JOBS"
 # Each UI entry's learnt room, a line each: name, the most other UI entries
 # beside it (check-all starts such a test only while few enough run, and
@@ -393,8 +396,8 @@ build/dev/core/mitcad-testrun --record-ui ui-runs.tsv --ui-max "$MITCAD_UI_JOBS"
 ```
 
 `--record-ui` adds the runs to the profiles (exit status 0 passed, 124 and
-137 timed out, 77 skipped, others failed), learns the cap from them and
-prints what it learnt; neither needs `--build`.
+137 timed out, 77 skipped, others failed), which lowers or grows their
+rooms, and prints what the run taught; neither needs `--build`.
 
 ## Corpus tests
 

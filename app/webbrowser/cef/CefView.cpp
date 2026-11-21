@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -24,12 +26,15 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QResizeEvent>
+#include <QTimer>
 #include <QScreen>
 #include <QShowEvent>
 #include <QWheelEvent>
 #include <QWindow>
 #include <QtLogging>
 
+#include "CefBridge.hpp"
+#include "CefBridgeConfig.hpp"
 #include "CefEngine.hpp"
 #include "webbrowser/BrowserDiagnostics.hpp"
 #include "webbrowser/BrowserKeys.hpp"
@@ -63,6 +68,19 @@ class BrowserClient : public CefClient,
 public:
   explicit BrowserClient(CefView* view) : m_view(view) {}
   void detach() { m_view = nullptr; }
+  // The tutorials' bridge (mitcad#2012): the router of a tutorial page's
+  // browser, told of its messages, navigations and end.
+  void setRouter(CefRefPtr<CefMessageRouterBrowserSide> router) { m_router = router; }
+
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source,
+                                CefRefPtr<CefProcessMessage> message) override {
+    return m_router && m_router->OnProcessMessageReceived(browser, frame, source, message);
+  }
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus, int, const CefString&) override {
+    if (m_router) {
+      m_router->OnRenderProcessTerminated(browser);
+    }
+  }
 
   CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
@@ -74,8 +92,11 @@ public:
 
   // CefRequestHandler: every navigation of the main frame, for the log (a
   // link that ends in neither a page nor a download shows there).
-  bool OnBeforeBrowse(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool userGesture,
-                      bool redirect) override {
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request,
+                      bool userGesture, bool redirect) override {
+    if (m_router) {
+      m_router->OnBeforeBrowse(browser, frame);
+    }
     if (frame->IsMain()) {
       qDebug().noquote() << QStringLiteral("Component browser navigates to %1 (%2%3)")
                                 .arg(QString::fromStdString(request->GetURL().ToString()),
@@ -210,6 +231,9 @@ public:
     }
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    if (m_router) {
+      m_router->OnBeforeClose(browser);
+    }
     if (m_view != nullptr) {
       m_view->browserClosing();
     }
@@ -274,6 +298,7 @@ public:
 
 private:
   CefView* m_view;
+  CefRefPtr<CefMessageRouterBrowserSide> m_router;
   IMPLEMENT_REFCOUNTING(BrowserClient);
 };
 
@@ -410,7 +435,28 @@ CefRange noRange() { return CefRange(UINT32_MAX, UINT32_MAX); }
 
 } // namespace
 
-CefView::CefView(QWidget* parent) : QWidget(parent), m_scale(devicePixelRatioF()) {
+CefView::CefView(QWidget* parent) : CefView(parent, QString()) {}
+
+CefView::CefView(QWidget* parent, const QString& bridgeFolder)
+    : QWidget(parent), m_bridgeFolder(bridgeFolder), m_scale(devicePixelRatioF()) {
+  if (!m_bridgeFolder.isEmpty()) {
+    // The bridge's calls answered from the event loop, while this view
+    // lives (mitcad#2012).
+    m_bridge = std::make_unique<cef::BridgeHandler>(
+        m_bridgeFolder, [this](const QString& request, cef::BridgeHandler::Reply reply) {
+          QTimer::singleShot(0, this, [this, request, reply] {
+            QString answer;
+            QString error;
+            if (bridgeCall && bridgeCall(request, &answer, &error)) {
+              reply(true, answer);
+            } else {
+              reply(false, error.isEmpty() ? QStringLiteral("The tutorial's call was not answered") : error);
+            }
+          });
+        });
+    m_router = CefMessageRouterBrowserSide::Create(cef::bridgeRouterConfig());
+    m_router->AddHandler(m_bridge.get(), false);
+  }
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
   setAttribute(Qt::WA_InputMethodEnabled, true);
@@ -421,7 +467,17 @@ CefView::CefView(QWidget* parent) : QWidget(parent), m_scale(devicePixelRatioF()
 
 CefView::~CefView() {
   closeBrowser();
+  if (m_router) {
+    m_bridge->clear();
+    m_router->RemoveHandler(m_bridge.get());
+  }
   cef::removeView(this);
+}
+
+void CefView::sendBridgeEvent(const QString& json) {
+  if (m_bridge) {
+    m_bridge->send(json);
+  }
 }
 
 void CefView::createBrowser() {
@@ -430,6 +486,14 @@ void CefView::createBrowser() {
   }
   m_creating = true;
   m_client = new cef::BrowserClient(this);
+  // A tutorial's page: the renderer makes the bridge in the frames of its
+  // folder only (mitcad#2012).
+  CefRefPtr<CefDictionaryValue> extra;
+  if (m_router) {
+    m_client->setRouter(m_router);
+    extra = CefDictionaryValue::Create();
+    extra->SetString(cef::kBridgePrefixKey, cef::bridgePrefix(m_bridgeFolder));
+  }
   CefWindowInfo info;
   info.SetAsWindowless(kNullWindowHandle);
   // Painted from OnPaint's buffer, never a shared GPU texture.
@@ -437,7 +501,7 @@ void CefView::createBrowser() {
   CefBrowserSettings settings;
   settings.windowless_frame_rate = 30;
   settings.background_color = CefColorSetARGB(255, 255, 255, 255);
-  if (!CefBrowserHost::CreateBrowser(info, m_client, CefString("about:blank"), settings, nullptr,
+  if (!CefBrowserHost::CreateBrowser(info, m_client, CefString("about:blank"), settings, extra,
                                      cef::requestContext())) {
     qWarning().noquote() << QStringLiteral("Component browser: CEF did not make the browser");
     m_creating = false;
@@ -529,7 +593,10 @@ void CefView::applyZoom() {
   const double level = zoomLevelOf(m_scale);
   if (std::abs(browserHost->GetZoomLevel() - level) > 1e-6) {
     browserHost->SetZoomLevel(level);
-    const QString address = QString::fromStdString(m_browser->GetMainFrame()->GetURL().ToString()).left(60);
+    // A browser without its main frame yet (or no more) has no address.
+    const CefRefPtr<CefFrame> mainFrame = m_browser->GetMainFrame();
+    const QString address =
+        mainFrame ? QString::fromStdString(mainFrame->GetURL().ToString()).left(60) : QString();
     qDebug().noquote() << QStringLiteral("Component browser zoom: %1 for %2")
                               .arg(m_scale, 0, 'f', 2)
                               .arg(address.isEmpty() ? QStringLiteral("the new browser") : address);
@@ -805,8 +872,33 @@ void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, D
 // --- Qt's events ----------------------------------------------------------------
 
 void CefView::screenChanged() {
-  qDebug().noquote() << QStringLiteral("Component browser scale: %1").arg(devicePixelRatioF(), 0, 'f', 2);
-  applyScale(true);
+  // A screen change never ends MitCad (mitcad#2125): it comes when the
+  // system announces its screens again, as after a graphics driver reset,
+  // when the design view's own attach to the graphics card may fail at the
+  // same moment; an exception that left here would leave Qt's event
+  // handler. The failure is logged once, the browser goes on with the
+  // screen it was last told of.
+  try {
+    qDebug().noquote() << QStringLiteral("Component browser scale: %1").arg(devicePixelRatioF(), 0, 'f', 2);
+    // MITCAD_TEST_GL_FAILURE=throw (tests only): the screen change throws
+    // here too, as the design view's attach does.
+    if (qEnvironmentVariable("MITCAD_TEST_GL_FAILURE") == QLatin1String("throw")) {
+      throw std::runtime_error("a screen change that throws (MITCAD_TEST_GL_FAILURE)");
+    }
+    applyScale(true);
+  } catch (const std::exception& failure) {
+    screenChangeFailed(QString::fromUtf8(failure.what()));
+  } catch (...) {
+    screenChangeFailed(QStringLiteral("an exception of an unknown type"));
+  }
+}
+
+void CefView::screenChangeFailed(const QString& reason) {
+  if (m_screenChangeFailureLogged) {
+    return;
+  }
+  m_screenChangeFailureLogged = true;
+  qWarning().noquote() << QStringLiteral("Component browser: a screen change failed: %1").arg(reason);
 }
 
 bool CefView::event(QEvent* event) {

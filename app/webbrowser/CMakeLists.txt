@@ -214,7 +214,13 @@ add_library(mitcad-webbrowser MODULE
   ../files/FileFormats.cpp
   ../files/FileFormats.hpp
   BrowserDiagnostics.cpp
-  BrowserDiagnostics.hpp)
+  BrowserDiagnostics.hpp
+  # The in-app tutorials' pane and its bridge (mitcad#2012).
+  TutorialPageView.cpp
+  TutorialPageView.hpp
+  cef/CefBridge.cpp
+  cef/CefBridge.hpp
+  cef/CefBridgeConfig.hpp)
 target_include_directories(mitcad-webbrowser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # CEF's headers as the system's: MitCad's warning flags are for its own code.
 target_include_directories(mitcad-webbrowser SYSTEM PRIVATE "${CEF_INCLUDE_PATH}")

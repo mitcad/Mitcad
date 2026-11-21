@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "CommentsWindow.hpp"
 
+#include <algorithm>
+#include <functional>
 #include <utility>
 
 #include <QCheckBox>
@@ -14,15 +16,24 @@
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QImage>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QTextEdit>
+#include <QTextFragment>
+#include <QTextImageFormat>
 #include <QTextOption>
+#include <QUrl>
+#include <QVariant>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -54,26 +65,99 @@ QString oneLine(QString text) {
   return text.replace(QLatin1Char('\n'), QStringLiteral(" / "));
 }
 
+// A thumbnail's largest size in the details pane (mitcad#2011).
+constexpr int kThumbnailWidth = 160;
+constexpr int kThumbnailHeight = 120;
+
+// The scheme of a thumbnail's resource and link in the details pane:
+// "commentimage:A2".
+constexpr const char* kImageScheme = "commentimage";
+
+// The size a thumbnail of an image takes: within the largest, never larger
+// than the image.
+QSize thumbnailSize(const CommentImage& image) {
+  const QSize full(std::max(1, image.width), std::max(1, image.height));
+  if (full.width() <= kThumbnailWidth && full.height() <= kThumbnailHeight) {
+    return full;
+  }
+  return full.scaled(kThumbnailWidth, kThumbnailHeight, Qt::KeepAspectRatio);
+}
+
 // The parts of a thread as rich text: each heading in bold over its text,
-// whose lines and paragraphs stay as written and wrap at the width.
-QString entriesHtml(const QVector<CommentEntry>& entries) {
+// whose lines and paragraphs stay as written and wrap at the width, and
+// with `images` its images' thumbnails under it, each a link to its viewer.
+QString entriesHtml(const QVector<CommentEntry>& entries, bool images = false) {
   QString html;
   for (const CommentEntry& entry : entries) {
     html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:2px\"><b>%1</b></p>")
                 .arg(entry.heading.toHtmlEscaped());
     html += QStringLiteral("<p style=\"white-space:pre-wrap; margin-top:0px\">%1</p>").arg(entry.text.toHtmlEscaped());
+    if (images && !entry.images.isEmpty()) {
+      QString row;
+      for (const CommentImage& image : entry.images) {
+        const QSize size = thumbnailSize(image);
+        const QString url = QStringLiteral("%1:%2").arg(QLatin1String(kImageScheme), image.id);
+        row += QStringLiteral("<a href=\"%1\"><img src=\"%1\" width=\"%2\" height=\"%3\" alt=\"%4\"></a> ")
+                   .arg(url)
+                   .arg(size.width())
+                   .arg(size.height())
+                   .arg(image.name.toHtmlEscaped());
+      }
+      html += QStringLiteral("<p style=\"margin-top:2px\">%1</p>").arg(row);
+    }
   }
   return html;
 }
 
+// The thread's text: its thumbnails come from `image` (by image id), a
+// click on one goes to `clicked`.
+class ThreadText : public QTextEdit {
+public:
+  explicit ThreadText(QWidget* parent) : QTextEdit(parent) {}
+
+  std::function<QImage(const QString& image)> image;
+  std::function<void(const QString& image)> clicked;
+
+protected:
+  QVariant loadResource(int type, const QUrl& name) override {
+    if (type == QTextDocument::ImageResource && name.scheme() == QLatin1String(kImageScheme) && image) {
+      const QImage found = image(name.path());
+      if (!found.isNull()) {
+        return found;
+      }
+    }
+    return QTextEdit::loadResource(type, name);
+  }
+
+  void mousePressEvent(QMouseEvent* event) override {
+    m_pressedOn = anchorAt(event->position().toPoint());
+    QTextEdit::mousePressEvent(event);
+  }
+
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    const QString anchor = anchorAt(event->position().toPoint());
+    QTextEdit::mouseReleaseEvent(event);
+    const QString prefix = QStringLiteral("%1:").arg(QLatin1String(kImageScheme));
+    if (event->button() == Qt::LeftButton && !anchor.isEmpty() && anchor == m_pressedOn &&
+        anchor.startsWith(prefix) && clicked) {
+      clicked(anchor.mid(prefix.size()));
+    }
+    m_pressedOn.clear();
+  }
+
+private:
+  QString m_pressedOn;
+};
+
 // A read-only, selectable text that wraps at its width: the details pane
 // and the reply dialog's quote.
 QTextEdit* threadText(QWidget* parent, const QString& name, const QString& accessible) {
-  auto* text = new QTextEdit(parent);
+  auto* text = new ThreadText(parent);
   text->setObjectName(name);
   text->setAccessibleName(accessible);
   text->setReadOnly(true);
-  text->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+  text->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard |
+                                Qt::LinksAccessibleByMouse);
   text->setLineWrapMode(QTextEdit::WidgetWidth);
   text->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
   text->setTabChangesFocus(true);
@@ -163,6 +247,18 @@ CommentsWindow::CommentsWindow(QWidget* parent) : QDialog(parent) {
   m_details = threadText(this, QStringLiteral("commentsDetails"), tr("Selected comment or reply"));
   m_details->setAccessibleDescription(tr("The selected comment or reply in full, to read and copy"));
   m_details->setPlaceholderText(tr("Select a comment or a reply to read it in full here."));
+  if (auto* thread = dynamic_cast<ThreadText*>(m_details)) {
+    // The thumbnails (mitcad#2011): the selected comment's images.
+    thread->image = [this](const QString& image) {
+      const CommentShown* comment = commentById(m_comments, m_detailsComment);
+      const CommentImage* found = comment != nullptr ? commentImageById(*comment, image) : nullptr;
+      if (found == nullptr || !m_actions.imageBytes) {
+        return QImage();
+      }
+      return commentThumbnail(m_actions.imageBytes(m_detailsComment, image), thumbnailSize(*found));
+    };
+    thread->clicked = [this](const QString& image) { openImage(image); };
+  }
   m_splitter = new QSplitter(Qt::Vertical, this);
   m_splitter->setObjectName(QStringLiteral("commentsSplitter"));
   m_splitter->setChildrenCollapsible(false);
@@ -423,22 +519,67 @@ void CommentsWindow::followSelection() {
 }
 
 void CommentsWindow::showDetails(const CommentShown* comment, int reply, const QString& row) {
+  QStringList images;
   if (comment == nullptr) {
+    m_detailsComment.clear();
     m_details->clear();
   } else {
+    m_detailsComment = comment->id;
     const CommentDetails details = commentDetails(*comment, reply);
     const QColor muted = palette().color(QPalette::Disabled, QPalette::Text);
+    // Its images' thumbnails read again (mitcad#2011): an image removed
+    // and another attached may take the place of one shown.
+    m_details->document()->clear();
     m_details->setHtml(QStringLiteral("<p style=\"color:%1\">%2</p>").arg(muted.name(), details.summary.toHtmlEscaped()) +
-                       entriesHtml(details.entries));
+                       entriesHtml(details.entries, true));
+    for (const CommentEntry& entry : details.entries) {
+      for (const CommentImage& image : entry.images) {
+        images << QStringLiteral("%1 %2").arg(image.id, image.name);
+      }
+    }
   }
-  // For UI tests: what the pane holds, as its text reads.
+  // For UI tests: what the pane holds, as its text reads; a line of
+  // thumbnails only is left out (they are logged apart).
+  QStringList lines;
+  for (const QString& line : m_details->toPlainText().trimmed().split(QLatin1Char('\n'))) {
+    if (!line.contains(QChar::ObjectReplacementCharacter)) {
+      lines << line;
+      continue;
+    }
+    QString words = line;
+    words.remove(QChar::ObjectReplacementCharacter);
+    if (!words.trimmed().isEmpty()) {
+      lines << words;
+    }
+  }
   const QString logged =
       QStringLiteral("Comments details: %1: %2")
-          .arg(row, comment == nullptr ? QStringLiteral("none") : oneLine(m_details->toPlainText().trimmed()));
+          .arg(row, comment == nullptr ? QStringLiteral("none") : oneLine(lines.join(QLatin1Char('\n')).trimmed()));
   if (logged != m_loggedDetails) {
     m_loggedDetails = logged;
     qDebug().noquote() << logged;
   }
+  const QString loggedImages =
+      QStringLiteral("Comments details images: %1: %2")
+          .arg(row, images.isEmpty() ? QStringLiteral("none") : images.join(QStringLiteral(", ")));
+  if (loggedImages != m_loggedImages) {
+    m_loggedImages = loggedImages;
+    qDebug().noquote() << loggedImages;
+  }
+}
+
+void CommentsWindow::openImage(const QString& image) {
+  const CommentShown* comment = commentById(m_comments, m_detailsComment);
+  const CommentImage* found = comment != nullptr ? commentImageById(*comment, image) : nullptr;
+  qDebug().noquote() << QStringLiteral("Comments image clicked: %1 %2").arg(m_detailsComment, image);
+  if (found == nullptr || !m_actions.imageBytes) {
+    return;
+  }
+  const QByteArray bytes = m_actions.imageBytes(comment->id, image);
+  if (bytes.isEmpty()) {
+    return;
+  }
+  showCommentImage(this, bytes, tr("Comment %1: %2").arg(comment->number).arg(found->name), found->name);
 }
 
 void CommentsWindow::clickedButton(const char* name, const std::function<void(const QString&)>& action) {
@@ -507,6 +648,29 @@ void CommentsWindow::logLayout() {
       logRow(item->child(reply), QStringLiteral("%1 reply %2").arg(id).arg(reply + 1));
     }
   }
+  // The thumbnails in the details pane (mitcad#2011): "Comments image C1
+  // A2 at x,y", where each is shown.
+  const QString imagePrefix = QStringLiteral("%1:").arg(QLatin1String(kImageScheme));
+  for (QTextBlock block = m_details->document()->begin(); block.isValid(); block = block.next()) {
+    for (auto fragment = block.begin(); !fragment.atEnd(); ++fragment) {
+      const QTextFragment piece = fragment.fragment();
+      if (!piece.isValid() || !piece.charFormat().isImageFormat()) {
+        continue;
+      }
+      const QTextImageFormat format = piece.charFormat().toImageFormat();
+      if (!format.name().startsWith(imagePrefix)) {
+        continue;
+      }
+      QTextCursor cursor(m_details->document());
+      cursor.setPosition(piece.position());
+      const QRect caret = m_details->cursorRect(cursor);
+      const QPoint centre(caret.left() + qRound(format.width() / 2.0), caret.bottom() - qRound(format.height() / 2.0));
+      if (m_details->viewport()->rect().contains(centre)) {
+        lines << QStringLiteral("Comments image %1 %2 at %3")
+                     .arg(m_detailsComment, format.name().mid(imagePrefix.size()), at(m_details->viewport(), centre));
+      }
+    }
+  }
   // The details pane: where it is and how large.
   lines << QStringLiteral("Comments details at %1 size %2x%3")
                .arg(at(m_details, m_details->rect().center()))
@@ -522,7 +686,7 @@ void CommentsWindow::logLayout() {
 }
 
 std::optional<QString> askCommentText(QWidget* parent, const QString& title, const QString& what, bool optional,
-                                      const CommentEntry& answers) {
+                                      const CommentEntry& answers, CommentImageChoice* images) {
   QDialog dialog(parent);
   dialog.setWindowTitle(title);
   dialog.setObjectName(QStringLiteral("commentDialog"));
@@ -562,6 +726,58 @@ std::optional<QString> askCommentText(QWidget* parent, const QString& title, con
   layout->addWidget(text, 3);
   if (answering) {
     dialog.resize(560, 460);
+  }
+  // Images (mitcad#2011): a file, or a capture of the view marked up.
+  if (images != nullptr) {
+    auto* row = new QHBoxLayout;
+    auto* chosen = new QLabel(&dialog);
+    chosen->setObjectName(QStringLiteral("commentImages"));
+    chosen->setWordWrap(true);
+    auto* attach = new QPushButton(QObject::tr("Attach Image…"), &dialog);
+    attach->setObjectName(QStringLiteral("commentAttachImage"));
+    attach->setToolTip(QObject::tr("Attaches a PNG or JPEG image to the comment"));
+    auto* capture = new QPushButton(QObject::tr("Capture and Annotate…"), &dialog);
+    capture->setObjectName(QStringLiteral("commentCaptureImage"));
+    capture->setToolTip(QObject::tr("Captures part of the view and marks it up"));
+    auto* remove = new QPushButton(QObject::tr("Remove Images"), &dialog);
+    remove->setObjectName(QStringLiteral("commentRemoveImages"));
+    for (QPushButton* button : {attach, capture, remove}) {
+      button->setAutoDefault(false);
+      row->addWidget(button);
+    }
+    row->addStretch(1);
+    layout->addLayout(row);
+    layout->addWidget(chosen);
+    const auto show = [images, chosen, remove] {
+      QStringList names;
+      for (const CommentImageFile& image : std::as_const(images->chosen)) {
+        names << QObject::tr("%1, %2 × %3").arg(image.name).arg(image.width).arg(image.height);
+      }
+      chosen->setText(names.isEmpty() ? QString() : QObject::tr("Images: %1").arg(names.join(QStringLiteral("; "))));
+      chosen->setVisible(!names.isEmpty());
+      remove->setEnabled(!names.isEmpty());
+    };
+    show();
+    const auto take = [images, show](const std::optional<CommentImageFile>& image) {
+      if (!image) {
+        return;
+      }
+      images->chosen.append(*image);
+      qDebug().noquote()
+          << QStringLiteral("Comment dialog image: %1, %2 x %3").arg(image->name).arg(image->width).arg(image->height);
+      show();
+    };
+    QObject::connect(attach, &QPushButton::clicked, &dialog, [images, take, &dialog] {
+      if (images->attachFile) take(images->attachFile(&dialog));
+    });
+    QObject::connect(capture, &QPushButton::clicked, &dialog, [images, take, &dialog] {
+      if (images->capture) take(images->capture(&dialog));
+    });
+    QObject::connect(remove, &QPushButton::clicked, &dialog, [images, show] {
+      images->chosen.clear();
+      qDebug().noquote() << QStringLiteral("Comment dialog images: none");
+      show();
+    });
   }
   auto* message = new QLabel(&dialog);
   message->setObjectName(QStringLiteral("commentValidation"));

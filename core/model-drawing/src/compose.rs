@@ -25,7 +25,8 @@ use super::def::Annotations;
 use super::sheet::{Anchor, Group, Item, Pen, Sheet, text_width};
 use super::{
     CutPlane, DrawingOptions, Orientation, P2, Projection, RoundHole, ScaleChoice, SheetSize,
-    Units, ViewCurve, ViewEdgeKind, ViewName, ViewProjection, ViewSpec, ViewSpline, scale_text,
+    Standard, Units, ViewCurve, ViewEdgeKind, ViewName, ViewProjection, ViewSpec, ViewSpline,
+    scale_text,
 };
 use mitcad_model::datum::Vec3;
 use mitcad_model::internal::drawing::DIMENSION_TEXT;
@@ -512,10 +513,81 @@ pub(crate) fn upright(direction: P2) -> f64 {
     angle
 }
 
+/// How far a horizontal text's box, `half` its half width and half
+/// height, reaches from its middle along the unit direction `d`.
+pub(crate) fn reach_along(d: P2, half: P2) -> f64 {
+    d[0].abs() * half[0] + d[1].abs() * half[1]
+}
+
+/// Where the segment from `a` to `b` runs through the box `c ± half`: its
+/// parameters (0 at `a`, 1 at `b`) in and out; None when it misses.
+pub(crate) fn box_crossing(a: P2, b: P2, c: P2, half: P2) -> Option<(f64, f64)> {
+    let d = sub2(b, a);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for k in 0..2 {
+        let (lo, hi) = (c[k] - half[k], c[k] + half[k]);
+        if d[k].abs() < 1e-12 {
+            if a[k] < lo || a[k] > hi {
+                return None;
+            }
+        } else {
+            let (s0, s1) = ((lo - a[k]) / d[k], (hi - a[k]) / d[k]);
+            t0 = t0.max(s0.min(s1));
+            t1 = t1.min(s0.max(s1));
+            if t0 > t1 {
+                return None;
+            }
+        }
+    }
+    Some((t0, t1))
+}
+
+/// A thin line from `a` to `b` broken where it passes a horizontal text
+/// (its box `c ± half`, the text gap around it): ASME's dimension line with
+/// its value in a break (mitcad#2047).
+pub(crate) fn broken_line(g: &mut Group, a: P2, b: P2, c: P2, half: P2) {
+    let clear = [half[0] + TEXT_GAP, half[1] + TEXT_GAP];
+    match box_crossing(a, b, c, clear) {
+        None => g.line(Pen::Thin, a, b),
+        Some((t0, t1)) => {
+            let d = sub2(b, a);
+            if t0 > 1e-9 {
+                g.line(Pen::Thin, a, add2(a, mul2(d, t0)));
+            }
+            if t1 < 1.0 - 1e-9 {
+                g.line(Pen::Thin, add2(a, mul2(d, t1)), b);
+            }
+        }
+    }
+}
+
+/// Where a horizontal text (`half` its half extents) of a dimension line
+/// from `fa` to `fb` (`length` long, along the unit `towards`) has its
+/// middle under ASME (mitcad#2047): in the line's middle when it fits
+/// between the arrows with the text gap on each side, else beyond `fb`,
+/// past an arrow outside.
+pub(crate) fn unidirectional_middle(fa: P2, fb: P2, towards: P2, half: P2) -> P2 {
+    let length = len2(sub2(fb, fa));
+    let reach = reach_along(towards, half) + TEXT_GAP;
+    if length >= 2.0 * ARROW_LENGTH + 1.0 && 2.0 * reach <= length - 2.0 * ARROW_LENGTH {
+        mul2(add2(fa, fb), 0.5)
+    } else {
+        add2(fb, mul2(towards, ARROW_LENGTH + 2.0 + reach))
+    }
+}
+
 /// A linear dimension between `a` and `b` (sheet points) measured along
 /// `direction`, its dimension line `offset` away on the side of
-/// `perp(direction)` (negative: the other side).
-fn linear_dimension(a: P2, b: P2, direction: P2, offset: f64, text: &str) -> Group {
+/// `perp(direction)` (negative: the other side); its value written to
+/// `standard` (mitcad#2047).
+fn linear_dimension(
+    a: P2,
+    b: P2,
+    direction: P2,
+    offset: f64,
+    text: &str,
+    standard: Standard,
+) -> Group {
     let mut g = Group::new("dimension");
     let d = unit2(direction);
     let n = perp(d);
@@ -535,9 +607,27 @@ fn linear_dimension(a: P2, b: P2, direction: P2, offset: f64, text: &str) -> Gro
             );
         }
     }
-    g.line(Pen::Thin, fa, fb);
     let length = along.abs();
     let towards = unit2(sub2(fb, fa));
+    if standard.unidirectional() {
+        // ASME: the value horizontal in a break of the line, or beyond its
+        // end with the line run on to it.
+        let half = [text_width(text, DIMENSION_TEXT) / 2.0, DIMENSION_TEXT / 2.0];
+        let c = unidirectional_middle(fa, fb, towards, half);
+        broken_line(&mut g, fa, fb, c, half);
+        if len2(sub2(c, mul2(add2(fa, fb), 0.5))) > 1e-9 {
+            broken_line(&mut g, fb, c, c, half);
+        }
+        g.text(
+            [c[0], c[1] - DIMENSION_TEXT / 2.0],
+            DIMENSION_TEXT,
+            0.0,
+            Anchor::Middle,
+            text,
+        );
+    } else {
+        g.line(Pen::Thin, fa, fb);
+    }
     if length >= 2.0 * ARROW_LENGTH + 1.0 {
         arrow(&mut g, fa, mul2(towards, -1.0));
         arrow(&mut g, fb, towards);
@@ -547,6 +637,9 @@ fn linear_dimension(a: P2, b: P2, direction: P2, offset: f64, text: &str) -> Gro
         g.line(Pen::Thin, fb, add2(fb, mul2(towards, ARROW_LENGTH + 2.0)));
         arrow(&mut g, fa, towards);
         arrow(&mut g, fb, mul2(towards, -1.0));
+    }
+    if standard.unidirectional() {
+        return g;
     }
     let angle = upright(towards);
     let up = [-angle.sin(), angle.cos()];
@@ -1355,6 +1448,7 @@ pub fn render(
                 [1.0, 0.0],
                 -DIMENSION_OFFSET,
                 &units.length(view.bounds.width()),
+                units.standard,
             ));
             groups.push(linear_dimension(
                 lo,
@@ -1362,6 +1456,7 @@ pub fn render(
                 [0.0, 1.0],
                 DIMENSION_OFFSET,
                 &units.length(view.bounds.height()),
+                units.standard,
             ));
             dimensions += 2;
         }
@@ -1489,8 +1584,13 @@ pub fn render(
             let Some(view) = target else {
                 continue;
             };
-            if let Some(g) = sketch_dimension(dim, &view.spec, &view.map, &sketch_text(dim, units))
-            {
+            if let Some(g) = sketch_dimension(
+                dim,
+                &view.spec,
+                &view.map,
+                &sketch_text(dim, units),
+                units.standard,
+            ) {
                 groups.push(g);
                 dimensions += 1;
             }
@@ -1743,13 +1843,14 @@ pub(crate) fn sketch_text(dim: &SketchDimension, units: Units) -> String {
 }
 
 /// A dimension of a sketch in a view that looks along its normal, its
-/// value written `text`.
+/// value written `text` to `standard` (mitcad#2047).
 #[doc(hidden)]
 pub fn sketch_dimension(
     dim: &SketchDimension,
     spec: &ViewSpec,
     place: &ViewMap,
     text: &str,
+    standard: Standard,
 ) -> Option<Group> {
     let to_sheet = |p: Vec3| place.at(spec.project(p));
     match dim {
@@ -1779,7 +1880,7 @@ pub fn sketch_dimension(
             if offset.abs() < 6.0 {
                 offset = if offset < 0.0 { -6.0 } else { 6.0 };
             }
-            let mut g = linear_dimension(pa, pb, d, offset, text);
+            let mut g = linear_dimension(pa, pb, d, offset, text, standard);
             g.class = "sketch-dimension";
             Some(g)
         }
@@ -1927,37 +2028,59 @@ fn title_block(
     g
 }
 
-/// ISO 5456-2's symbol of the projection method: a truncated cone's side
-/// view and its end view (the end view to the right of the side view in
-/// third angle, to the left in first angle), from `at` (its left end, on
-/// its axis) about 17 mm to the right.
+/// The symbol of the projection method (ISO 5456-2, drawn as ISO 128-3
+/// Figures 5 and 7): a truncated cone's side view, its small end on the
+/// left, and its end view, two concentric circles. First angle puts the
+/// end view right of the side view (the cone's small end away from it),
+/// third angle left of it (the small end towards it). The outlines are
+/// wide lines, the title block's own (its frame pen, so that they stay off
+/// the views' layer in a DXF file); the cone's axis and the end view's two
+/// center lines are narrow chain lines reaching a little past them. `at` is the symbol's
+/// reference on its axis: the outlines run from 3 mm to 17 mm right of it
+/// and the center lines from 2 mm to 18 mm.
 pub(crate) fn projection_symbol(g: &mut Group, projection: Projection, at: P2) {
+    // The cone's large and small radius, its length, and how far a center
+    // line reaches past the outline it crosses.
+    const R_BIG: f64 = 2.2;
+    const R_SMALL: f64 = 1.2;
+    const LENGTH: f64 = 6.0;
+    const OVER: f64 = 1.0;
+    // The title block's wide line: `Pen::Thick` is the views' visible
+    // edges (the DXF layer `VISIBLE`, mitcad#2120).
+    const OUTLINE: Pen = Pen::Frame;
     let cy = at[1];
+    // The left end of the cone's side view and the center of its end view.
     let (cone_x, circles_x) = match projection {
-        Projection::ThirdAngle => (at[0] + 3.0, at[0] + 12.0),
-        Projection::FirstAngle => (at[0] + 11.0, at[0] + 3.0),
+        Projection::FirstAngle => (at[0] + 3.0, at[0] + 17.0 - R_BIG),
+        Projection::ThirdAngle => (at[0] + 17.0 - LENGTH, at[0] + 3.0 + R_BIG),
     };
-    let r_big = 2.2;
-    let r_small = 1.2;
     g.items.push(Item::Polyline {
-        pen: Pen::Thin,
+        pen: OUTLINE,
         points: vec![
-            [cone_x, cy - r_big],
-            [cone_x + 6.0, cy - r_small],
-            [cone_x + 6.0, cy + r_small],
-            [cone_x, cy + r_big],
+            [cone_x, cy - R_SMALL],
+            [cone_x + LENGTH, cy - R_BIG],
+            [cone_x + LENGTH, cy + R_BIG],
+            [cone_x, cy + R_SMALL],
         ],
         closed: true,
     });
-    for r in [r_big, r_small] {
+    for r in [R_BIG, R_SMALL] {
         g.items.push(Item::Arc {
-            pen: Pen::Thin,
-            center: [circles_x + r_big, cy],
+            pen: OUTLINE,
+            center: [circles_x, cy],
             radius: r,
             start: 0.0,
             end: TAU,
         });
     }
+    g.line(
+        Pen::Chain,
+        [cone_x - OVER, cy],
+        [cone_x + LENGTH + OVER, cy],
+    );
+    let reach = R_BIG + OVER;
+    g.line(Pen::Chain, [circles_x - reach, cy], [circles_x + reach, cy]);
+    g.line(Pen::Chain, [circles_x, cy - reach], [circles_x, cy + reach]);
 }
 
 /// The axes of a section view of the plane.
@@ -2046,5 +2169,128 @@ mod tests {
             hole_callout(&tapped, 1, None, Units::MM, CalloutStyle::Words),
             ["M6x1 - 6H 15"]
         );
+    }
+
+    #[test]
+    fn projection_symbols_as_iso_128_3_draws_them() {
+        // mitcad#2073: first angle has the cone left of the circles, third
+        // angle right of them; the cone narrows to the left in both; wide
+        // outlines and narrow chain center lines.
+        const TOL: f64 = 1e-6;
+        let at = [100.0, 50.0];
+        for projection in [Projection::FirstAngle, Projection::ThirdAngle] {
+            let mut g = Group::new("title-block");
+            projection_symbol(&mut g, projection, at);
+            let cones: Vec<(&Vec<P2>, Pen)> = g
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Polyline { pen, points, .. } => Some((points, *pen)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(cones.len(), 1, "{projection:?}");
+            let (cone, cone_pen) = cones[0];
+            let circles: Vec<(P2, f64, Pen)> = g
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Arc {
+                        pen,
+                        center,
+                        radius,
+                        start,
+                        end,
+                    } => {
+                        assert!((end - start - TAU).abs() < TOL, "a whole circle");
+                        Some((*center, *radius, *pen))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(circles.len(), 2, "{projection:?}");
+            let center = circles[0].0;
+            assert!(
+                (circles[1].0[0] - center[0]).abs() < TOL
+                    && (circles[1].0[1] - center[1]).abs() < TOL,
+                "concentric"
+            );
+            assert!((center[1] - at[1]).abs() < TOL, "on the axis");
+            let min_x = cone.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+            let max_x = cone.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+            match projection {
+                Projection::FirstAngle => assert!(center[0] > max_x + TOL, "circles right"),
+                Projection::ThirdAngle => assert!(center[0] < min_x - TOL, "circles left"),
+            }
+            // The cone's short side is its left side.
+            let height = |x: f64| {
+                let ys: Vec<f64> = cone
+                    .iter()
+                    .filter(|p| (p[0] - x).abs() < TOL)
+                    .map(|p| p[1])
+                    .collect();
+                assert_eq!(ys.len(), 2, "two corners at x = {x}");
+                (ys[0] - ys[1]).abs()
+            };
+            assert!(height(min_x) + TOL < height(max_x), "{projection:?}");
+            // The end view's circles are the cone's ends.
+            let mut radii: Vec<f64> = circles.iter().map(|c| c.1).collect();
+            radii.sort_by(f64::total_cmp);
+            assert!((2.0 * radii[0] - height(min_x)).abs() < TOL);
+            assert!((2.0 * radii[1] - height(max_x)).abs() < TOL);
+            // Center lines: the cone's axis and the end view's two.
+            let chains: Vec<(P2, P2, Pen)> = g
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Line { pen, a, b } => Some((*a, *b, *pen)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(chains.len(), 3, "{projection:?}");
+            // The outlines on the title block's layer, not the views'
+            // (mitcad#2120: a DXF's `VISIBLE` holds the views only).
+            assert_ne!(cone_pen.layer(), Pen::Thick.layer());
+            for (_, _, circle_pen) in &circles {
+                assert_ne!(circle_pen.layer(), Pen::Thick.layer());
+            }
+            for (_, _, pen) in &chains {
+                assert_eq!(*pen, Pen::Chain);
+                assert!(cone_pen.width() > pen.width() + TOL);
+                for (_, _, circle_pen) in &circles {
+                    assert!(circle_pen.width() > pen.width() + TOL);
+                }
+            }
+            let horizontal =
+                |a: P2, b: P2| (a[1] - at[1]).abs() < TOL && (b[1] - at[1]).abs() < TOL;
+            assert!(
+                chains.iter().any(|(a, b, _)| horizontal(*a, *b)
+                    && a[0].min(b[0]) < min_x - TOL
+                    && a[0].max(b[0]) > max_x + TOL),
+                "the cone's axis past both ends, {projection:?}"
+            );
+            let r = radii[1];
+            assert!(
+                chains.iter().any(|(a, b, _)| horizontal(*a, *b)
+                    && a[0].min(b[0]) < center[0] - r - TOL
+                    && a[0].max(b[0]) > center[0] + r + TOL),
+                "the end view's horizontal center line, {projection:?}"
+            );
+            assert!(
+                chains.iter().any(|(a, b, _)| (a[0] - center[0]).abs() < TOL
+                    && (b[0] - center[0]).abs() < TOL
+                    && a[1].min(b[1]) < center[1] - r - TOL
+                    && a[1].max(b[1]) > center[1] + r + TOL),
+                "the end view's vertical center line, {projection:?}"
+            );
+            // Its anchor and width as before: from `at` about 18 mm right,
+            // no lower than the cell's bottom it sits 3.5 mm above.
+            for (a, b, _) in &chains {
+                for p in [a, b] {
+                    assert!(p[0] > at[0] - TOL && p[0] < at[0] + 18.0 + TOL, "{p:?}");
+                    assert!((p[1] - at[1]).abs() < 3.5, "{p:?}");
+                }
+            }
+        }
     }
 }

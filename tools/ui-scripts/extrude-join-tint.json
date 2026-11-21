@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/extrude-join-tint.mitcad-ui (mitcad#2069): a block 40 x 40 x 20 mm under the XY plane (F1.b0, x and y from -20 to 20, z from -20 to 0; its top face lies in XY) and Sketch1 (F2) on XY with a 20 x 20 square from (-10, -10) on the block's top face."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"origin": [0, 0, -20], "normal": [0, 0, 1]},
+    "corner": [-20, -20], "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F2", "corner": [-10, -10], "width": 20, "height": 20},
+  {"expect": {"instances": 1, "world_volume": 32000}}
+]

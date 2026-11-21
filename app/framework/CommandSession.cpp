@@ -1983,6 +1983,10 @@ void CommandSession::updateHighlights() {
       if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge) {
         shown.body = m_host.bodyShape(item.owner);
       }
+      // A whole body or component: a faint tint outlined in the input's
+      // colour, with no copy through the bodies over the preview
+      // (mitcad#2069: a Join's target read as red). Failed: as before.
+      shown.faintWhole = !m_failed && (item.kind == SelectKind::Body || item.kind == SelectKind::Component);
       // On a component the preview moves, where the preview puts it, not
       // also where the design has it (mitcad#1813); where the design has
       // it while no preview is drawn.
@@ -2256,10 +2260,22 @@ void CommandSession::updateManipulators() {
   if ((m_def.previewMarkers || m_def.previewMarkersIn) && !m_shownReport.isEmpty()) {
     const std::vector<PreviewMarker> markers =
         m_def.previewMarkersIn ? m_def.previewMarkersIn(m_shownReport, m_state) : m_def.previewMarkers(m_shownReport);
+    // A datum's markers where the view shows the datum (mitcad#1029,
+    // mitcad#2048: a construction plane's normal).
+    const bool datum = m_shownReport.contains(QStringLiteral("datum"));
+    const gp_Trsf placed = datum ? m_host.datumPlacement(m_editUid) : gp_Trsf();
     for (const PreviewMarker& marker : markers) {
       Manipulator point;
       point.kind = Manipulator::Kind::Marker;
       point.origin = marker.point;
+      if (marker.direction) {
+        point.direction = *marker.direction;
+        point.pointing = true;
+      }
+      if (datum) {
+        point.origin.Transform(placed);
+        point.direction.Transform(placed);
+      }
       handles.push_back({QStringLiteral("preview_anchor"), marker.label, point, 0.0});
     }
   }

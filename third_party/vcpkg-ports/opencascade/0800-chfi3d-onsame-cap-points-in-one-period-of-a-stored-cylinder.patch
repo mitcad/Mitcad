@@ -19,13 +19,20 @@ intersection"). ChFi3d_Recale now brings the point not taken for reference
 within half a period of the other by as many periods as they lie apart; for
 points less than one and a half periods apart nothing changes.
 
-Test: geometry/tests/test_fillet_crest_corners.cpp,
+Test: geometry/tests/port/p0800-onsame-cap-points-turns-apart.cpp (ctest
+geometry.port.0800): test_cap_points_two_turns_apart, the post with a rib
+under a chamfer cone, its cylinder trimmed two turns below its basis's
+parameters, the rib's side whose cap runs toward smaller u rounded with
+0.5 up to it: valid, the cone's face and the volume removed as on the plain
+post (without the patch the points stay a period apart and the box of the
+cap's intersection holds a tenth of the cap at either end); and
+test_cap_points_one_turn_apart, the boundary, the cylinder one turn down,
+which the one-period shift already handled. It fails without the patch
+(shown 2026-11-20 by tools/occt-port-proof.py). The earlier test,
+geometry/tests/test_fillet_crest_corners.cpp,
 test_end_on_a_cylinder_stored_turns_down (ctest
-geometry.fillet_crest_corners): a post with a rib under a chamfer cone whose
-cylinder is trimmed two turns below its basis's parameters, the rib's side
-rounded up to it: the cone's face and the volume removed as on the plain
-post. Its failure without the patch, stated in its documentation, is still
-to be shown in the port's before/after run (mitcad#1986).
+geometry.fillet_crest_corners), rounds the rib's other side, whose cap
+runs toward larger u and lies in that box: it passes without the patch.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 6abc67a..66780ac 100644

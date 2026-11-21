@@ -134,16 +134,17 @@ void MessageCenter::post(const QString& text, NoticeLevel level, const QString& 
 }
 
 void MessageCenter::postAction(const QString& text, NoticeLevel level, const QString& action,
-                               std::function<void()> run) {
+                               std::function<void()> run, const QString& source, const QString& tooltip) {
   if (text.isEmpty() || action.isEmpty()) {
-    post(text, level);
+    post(text, level, QString(), source);
     return;
   }
   m_actionText = text;
+  m_actionTooltip = tooltip;
   m_actionRun = std::move(run);
   qDebug().noquote() << QStringLiteral("Message band: %1 %2").arg(noticeLevelName(level), text);
   qDebug().noquote() << QStringLiteral("Message band action: %1").arg(action);
-  if (m_log.add(text, level, QString(), QDateTime::currentDateTime(), action)) {
+  if (m_log.add(text, level, QString(), QDateTime::currentDateTime(), action, source)) {
     qDebug().noquote() << QStringLiteral("Message band full: %1 %2").arg(noticeLevelName(level), text);
     restartTimer();
   }
@@ -209,6 +210,12 @@ void MessageCenter::closeSource(const QString& source) {
   if (m_log.sourceClosed(source)) {
     qDebug().noquote() << QStringLiteral("Message band source closed: %1 %2 (%3)")
                               .arg(noticeLevelName(level), text, source);
+    if (text == m_actionText) {
+      // Its button goes with it (mitcad#2090).
+      m_actionText.clear();
+      m_actionTooltip.clear();
+      m_actionRun = nullptr;
+    }
     m_timer.stop();
     toStub("cleared");
     emit changed();
@@ -390,6 +397,7 @@ void MessageBand::refresh() {
     m_text->setProperty("noticeLevel", noticeLevelName(entry.level));
     m_action->setText(entry.action);
     m_action->setAccessibleName(entry.action);
+    m_action->setToolTip(m_center.actionTooltip(entry.text));
     m_action->setVisible(!entry.action.isEmpty());
     m_stub->hide();
     m_fullRow->show();

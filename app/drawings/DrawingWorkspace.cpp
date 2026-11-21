@@ -34,6 +34,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
 #include <QSizePolicy>
@@ -41,6 +42,7 @@
 #include <QTabBar>
 #include <QTimer>
 #include <QToolButton>
+#include <QtMath>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
@@ -177,7 +179,12 @@ protected:
       return false;
     }
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
-      auto* field = qobject_cast<QLineEdit*>(watched);
+      // A line edit, or a box of lines whose viewport takes the press (a
+      // hole callout's own texts, mitcad#2054).
+      QWidget* field = qobject_cast<QLineEdit*>(watched);
+      if (field == nullptr) {
+        field = qobject_cast<QPlainTextEdit*>(watched->parent());
+      }
       if (field != nullptr && field->isEnabled() && !field->hasFocus() &&
           (field->focusPolicy() & Qt::ClickFocus) != 0 && m_panel->isAncestorOf(field)) {
         field->setFocus(Qt::MouseFocusReason);
@@ -201,9 +208,34 @@ private:
     for (QLineEdit* field : fields) {
       field->installEventFilter(this);
     }
+    const QList<QPlainTextEdit*> boxes = m_panel->findChildren<QPlainTextEdit*>();
+    for (QPlainTextEdit* box : boxes) {
+      box->viewport()->installEventFilter(this);
+    }
   }
 
   QWidget* m_panel;
+};
+
+// A box of a few lines in the panel that sends its text when it is left
+// (a hole callout's own texts, mitcad#2054: a line break in one makes a
+// line of its own on the sheet). Tab leaves it, as it leaves a line edit.
+class LinesEdit : public QPlainTextEdit {
+public:
+  explicit LinesEdit(const QString& text) : QPlainTextEdit(text) {
+    setTabChangesFocus(true);
+    setFixedHeight(fontMetrics().lineSpacing() * 3 + 2 * frameWidth() + 8);
+  }
+
+  std::function<void(const QString&)> left;
+
+protected:
+  void focusOutEvent(QFocusEvent* event) override {
+    QPlainTextEdit::focusOutEvent(event);
+    if (left) {
+      left(toPlainText());
+    }
+  }
 };
 
 // A base view's Shows row's body uid (empty for an occurrence) and its
@@ -310,9 +342,11 @@ bool spacedType(const QString& type) {
 }
 
 // The annotations whose drag snaps their leader to multiples of 45 degrees
-// (mitcad#1294): a note's text, a datum's square, a frame.
+// (mitcad#1294): a note's text, a datum's square, a frame, a hole
+// callout's text (mitcad#2054).
 bool leaderType(const QString& type) {
-  return type == QStringLiteral("note") || type == QStringLiteral("datum") || type == QStringLiteral("frame");
+  return type == QStringLiteral("note") || type == QStringLiteral("datum") || type == QStringLiteral("frame") ||
+         type == QStringLiteral("hole_callout");
 }
 
 // A tool whose clicks snap to a view's points (mitcad#1272): a line or an
@@ -1312,6 +1346,21 @@ void DrawingWorkspace::fillPanel() {
       QTimer::singleShot(0, this, [this, command] { run(command); });
     });
     m_form->addRow(tr("Text Height (mm)"), textHeight);
+    // The standard its dimensions are written to (mitcad#2047): every
+    // dimension of the drawing follows, in one undo step.
+    const QString ownStandard = m_answer.value(QStringLiteral("standard")).toString(QStringLiteral("iso"));
+    QComboBox* standard =
+        comboOf({{QStringLiteral("iso"), tr("ISO")}, {QStringLiteral("asme"), tr("ASME")}}, ownStandard);
+    standard->setObjectName(QStringLiteral("drawingDefaultStandard"));
+    standard->setToolTip(tr("ISO: values along the line. ASME: horizontal in a break, inches without leading zero"));
+    connect(standard, &QComboBox::currentIndexChanged, this, [this, standard] {
+      const QJsonObject command =
+          drawingDefaultsEdit(m_drawing, QStringLiteral("standard"), standard->currentData().toString());
+      if (!command.isEmpty()) {
+        QTimer::singleShot(0, this, [this, command] { run(command); });
+      }
+    });
+    m_form->addRow(tr("Standard"), standard);
     // The revision table (mitcad#707 phase 4): a row per revision, the
     // latest last; a click edits or deletes it.
     for (const QJsonValue& value : m_answer.value(QStringLiteral("revisions")).toArray()) {
@@ -2690,6 +2739,42 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
       qDebug().noquote() << QStringLiteral("Drawing panel Replace Value: empty, placeholder %1").arg(measured);
     }
   }
+  // A hole callout's own texts (mitcad#2054), as a dimension's: before and
+  // after the hole's lines, and in place of them, the hole's lines as they
+  // are now its placeholder and, while replaced, beside it. Each a box of
+  // lines: a line break makes a line of its own on the sheet.
+  if (type == QStringLiteral("hole_callout")) {
+    const QJsonObject format = json.value(QStringLiteral("format")).toObject();
+    const QString measured = json.value(QStringLiteral("measured")).toString();
+    const auto lines = [this, field, &named](const QString& name, const QString& text, const QString& label,
+                                             const char* object, const QString& placeholder) {
+      auto* box = new LinesEdit(text);
+      box->setPlaceholderText(placeholder);
+      box->left = [field, name, text](const QString& now) {
+        if (now.trimmed() != text) {
+          field(name, now, QJsonObject());
+        }
+      };
+      m_form->addRow(label, named(box, object));
+    };
+    lines(QStringLiteral("before"), format.value(QStringLiteral("before")).toString(), tr("Text Before"),
+          "drawingAnnotationBefore", QString());
+    lines(QStringLiteral("after"), format.value(QStringLiteral("after")).toString(), tr("Text After"),
+          "drawingAnnotationAfter", QString());
+    const QJsonValue replaceValue = format.value(QStringLiteral("replace"));
+    const QString replaced = replaceValue.isString() ? replaceValue.toString() : QString();
+    lines(QStringLiteral("replace"), replaced, tr("Replace Value"), "drawingAnnotationReplace", measured);
+    if (replaceValue.isString() && !measured.isEmpty()) {
+      auto* measuredLabel = new QLabel(measured);
+      measuredLabel->setWordWrap(true);
+      m_form->addRow(tr("Measured"), named(measuredLabel, "drawingAnnotationMeasured"));
+    }
+    qDebug().noquote() << QStringLiteral("Drawing panel hole callout: before %1, after %2, replace %3, measured %4")
+                              .arg(format.value(QStringLiteral("before")).toString(),
+                                   format.value(QStringLiteral("after")).toString(),
+                                   replaceValue.isString() ? replaced : QStringLiteral("none"),
+                                   QString(measured).replace(QLatin1Char('\n'), QStringLiteral(" / ")));
+  }
   if (type == QStringLiteral("note") || type == QStringLiteral("text")) {
     auto* change = new QPushButton(tr("Text…"));
     connect(change, &QPushButton::clicked, this, [this, id] { editNoteText(id); });
@@ -3380,6 +3465,32 @@ void DrawingWorkspace::logLines(const QJsonObject& sheet) {
   if (used != m_loggedPens) {
     m_loggedPens = used;
     qDebug().noquote() << used;
+  }
+  // The dimensions' values and the angles they are written at, with the
+  // drawing's standard (mitcad#2047: horizontal under ASME).
+  QStringList dimensions;
+  for (const QJsonValue& value : sheet.value(QStringLiteral("groups")).toArray()) {
+    const QJsonObject group = value.toObject();
+    if (group.value(QStringLiteral("class")).toString() != QStringLiteral("dimension")) {
+      continue;
+    }
+    for (const QJsonValue& item : group.value(QStringLiteral("items")).toArray()) {
+      const QJsonObject entry = item.toObject();
+      if (entry.contains(QStringLiteral("text"))) {
+        const long degrees = std::lround(qRadiansToDegrees(entry.value(QStringLiteral("angle")).toDouble()));
+        dimensions << QStringLiteral("%1 %2 at %3°")
+                          .arg(group.value(QStringLiteral("id")).toString(), entry.value(QStringLiteral("text")).toString())
+                          .arg(degrees);
+        break;
+      }
+    }
+  }
+  const QString written = QStringLiteral("Drawing dimension texts (%1): %2")
+                              .arg(m_answer.value(QStringLiteral("standard")).toString(QStringLiteral("iso")),
+                                   dimensions.isEmpty() ? QStringLiteral("none") : dimensions.join(QStringLiteral(", ")));
+  if (written != m_loggedDimensions) {
+    m_loggedDimensions = written;
+    qDebug().noquote() << written;
   }
 }
 
