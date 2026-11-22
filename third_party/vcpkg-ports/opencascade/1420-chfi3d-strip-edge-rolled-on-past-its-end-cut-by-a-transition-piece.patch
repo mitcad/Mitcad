@@ -55,8 +55,8 @@ narrower than the radius is the case's example, not a condition. Only the
 sizes are margins, not derived: ten times the spine's tolerance for the
 pieces' ends at V and max(1e-4, twice A's tolerance) for A on the faces.
 
-Test: geometry/tests/test_fillet_fin_end_strips.cpp, on the case
-`fin-end-strips` of MITCAD_GEOMETRY_CASES.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1420.
 
 Upstream: new.
 

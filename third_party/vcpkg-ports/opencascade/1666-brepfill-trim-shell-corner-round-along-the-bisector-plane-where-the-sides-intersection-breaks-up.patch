@@ -102,8 +102,8 @@ The round's samples, crossings, breaks and edges are held in OCCT's
 containers (NCollection_DynamicArray, sorted with 1663's SortArray;
 mitcad#1986).
 
-Test: geometry/tests/test_pipe_square_section.cpp
-(geometry.pipe_square_section: the pipes with rounded corners).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1666.
 
 Failures (mitcad#1986): the round's cut along the bisector plane fails
 with OCCT's reports of a construction it cannot make (1663's

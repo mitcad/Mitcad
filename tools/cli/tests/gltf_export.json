@@ -1,0 +1,26 @@
+[
+  {"comment": "mitcad-cli export to .glb and .gltf (mitcad#2210, gltf-export-test.cmake). Plate (C1): a 40 x 20 x 5 block (Body1) with Pin (C2) placed in it at (10, 10, 5), a cylinder of diameter 4 and height 10 (Body2); the plate placed three times: two bodies, six placements."},
+  {"cmd": "create_component", "name": "Plate"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+  {"cmd": "create_component", "name": "Pin", "transform": {"translation": [10, 10, 5]}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+    "diameter": 4, "height": 10, "operation": "new_body"}},
+  {"expect": {"bodies": 2, "instances": 2}},
+
+  {"comment": "Two copies of the plate in the root, then each placement set: Plate:1 at x = 100, Plate:2 at y = 50, Plate:3 at y = 100 (mm)."},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "copy_occurrence", "occurrence": "Plate:1"},
+  {"cmd": "copy_occurrence", "occurrence": "Plate:1"},
+  {"cmd": "set_occurrence_transform", "occurrence": "Plate:1", "transform": {"translation": [100, 0, 0]}},
+  {"cmd": "set_occurrence_transform", "occurrence": "Plate:2", "transform": {"translation": [0, 50, 0]}},
+  {"cmd": "set_occurrence_transform", "occurrence": "Plate:3", "transform": {"translation": [0, 100, 0]}},
+  {"expect": {"bodies": 2, "instances": 6}},
+  {"expect": {"occurrence": "Plate:1", "body": "Body1", "bbox": {"min": [100, 0, 0], "max": [140, 20, 5]}, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Plate:2", "body": "Body1", "bbox": {"min": [0, 50, 0], "max": [40, 70, 5]}, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Plate:3", "body": "Body1", "bbox": {"min": [0, 100, 0], "max": [40, 120, 5]}, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Plate:3/Pin:1", "body": "Body2", "center": [10, 110, 10], "tolerance": 1e-6}}
+]

@@ -129,6 +129,14 @@ public:
     (void)modifiers;
     return false;
   }
+  // A key pressed while the view has the keyboard that the tool takes for
+  // itself (Extend to Meet's Tab steps to the next result, mitcad#2178);
+  // false leaves it to the view.
+  virtual bool viewKey(int key, Qt::KeyboardModifiers modifiers) {
+    (void)key;
+    (void)modifiers;
+    return false;
+  }
 
 protected:
   SketchController& m_c;
@@ -165,6 +173,9 @@ std::unique_ptr<SketchTool> dimensionTool(SketchController& c);
 // type: coincident, horizontal_vertical, parallel, perpendicular, tangent,
 // equal, concentric, collinear, midpoint, symmetric, smooth, fix
 std::unique_ptr<SketchTool> constraintTool(SketchController& c, const QString& type);
+// Extend to Meet (mitcad#2178, ExtendToMeet.cpp): two lines or arcs
+// extended or shortened to one shared corner point.
+std::unique_ptr<SketchTool> extendToMeetTool(SketchController& c);
 // Applies a constraint to the selection when it fits the type; false when
 // it does not (the tool then picks).
 bool constrainSelection(SketchController& c, const QString& type);

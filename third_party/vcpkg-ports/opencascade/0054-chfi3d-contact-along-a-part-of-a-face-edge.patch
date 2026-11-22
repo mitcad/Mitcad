@@ -23,12 +23,8 @@ a piece at each end.
   on the face, along its boundary, and the result's wire of the face
   intersected itself.
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow),
-test_contact_runs_along_a_part_of_the_walls_top_edge: Its failure without
-the patch is still to be shown: the patch does not revert at the port's
-tip without the more than 40 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0054.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 5859439..7c75673 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

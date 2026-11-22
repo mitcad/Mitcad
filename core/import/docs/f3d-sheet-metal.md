@@ -141,13 +141,55 @@ features*), each checked against its own history state as any other item:
 - **Holes** through a sheet: MitCad's simple hole through a planar panel
   cuts the sheet's material domain (`commands.md`, *hole*), so the body
   stays a sheet for the items after it.
+- **An Unfold and its Refold** (`.f3d`, mitcad#2117): the Unfold's
+  stationary face and its bends' faces are read by their names, found in
+  the history state before it (as an edge flange's edge), found in the
+  replay by their geometry and named by `sheet_reference`: the stationary
+  face must lie on a panel and each bend face on a bend, each bend taken
+  once (the file names both cylinders of a bend). It is a `sheet_unfold`
+  of those bends about that panel (`read`). The file's Refold names its
+  body only (a group item pairs it with its Unfold): it is a
+  `sheet_refold` of the last `sheet_unfold` of its body, closing every
+  bend that Unfold still holds open (`read`). Both are checked against
+  their history states as any other item.
 - A sheet item on a body whose sheet is no longer valid (an earlier item
   fell back and its base feature replaced the body, or an ordinary
   feature changed it) is not translated: it falls back, its note naming
   the item that first took the sheet meaning away (`its sheet body … is no
   longer a valid sheet: <item> took its sheet meaning away`; the sheet
   state keeps that first item, `commands.md`, *sheet_state*). It is never
-  replayed as an ordinary cut, rounding or chamfer instead.
+  replayed as an ordinary cut, rounding or chamfer instead. An `.f3d`
+  edge flange or hem, which names no body, is checked before its edges
+  are looked for (mitcad#2117): its body is the only valid sheet body,
+  or, where none is valid any more, the only sheet body there is; an
+  edge found on a body whose sheet is gone gives the same note.
+- A file's straight edge over collinear sketch lines (mitcad#2117): the
+  file's base flange has one edge where its profile has two lines in a
+  line, MitCad's face a wall per line, so no one edge of the replay is the
+  file's. The edge is then found as the replay's edges end to end (the
+  lookup of edges the replay splits, as a thread's), and the flange is a
+  `sheet_flange` on the first with `run` (`commands.md`, *A flange along a
+  straight run*): one bend and one wall along the whole run *(seen: the
+  reported design's first edge flange, its 250 mm edge two walls of
+  125 mm in the replay)*.
+- An `.f3d` edge flange's ends where the panel goes on along the bend line
+  (a concave corner) carry the rule's bend relief inside the flange's span:
+  each such `sheet_flange` has `relieve_ends` (`commands.md`, *A flange
+  along a straight run*) *(verified: the reported design's first edge
+  flange, whose four such ends each lose a relief of the rule's width,
+  through the setback and the relief's depth past it: 827.4 mm³ in all)*.
+  Hems do not take it.
+- An `.f3d` flange's edge that is not found in the replay names the first
+  deviation in its note: where the decoder found the edge in the file's
+  history, its middle and length there, and the replay's nearest edge to
+  that middle with its distance and length (mitcad#2117).
+- A flange on an edge of material an ordinary Join added to a panel in its
+  plane (the model's sheet-domain adapter keeps the sheet valid, but the
+  Join's own face names): `sheet_reference` names the edge by where it
+  runs, the boundary along it and the surface (front or back) it lies on,
+  which turns the flange as a sheet face's name would (mitcad#2117,
+  `commands.md`, *sheet_reference*). An Unfold's stationary face named
+  after such a Join is the panel whose surface holds its point.
 
 The stream's records ([*From the descriptions to the decoder*](f3d-undecoded.md#from-the-descriptions-to-the-decoder), cadmpeg's
 *BaseFlange*, *EdgeFlange* and *Hem* layouts; `core/f3d-design/src/build/sheet.rs`):
@@ -157,7 +199,9 @@ The stream's records ([*From the descriptions to the decoder*](f3d-undecoded.md#
 | Base flange (`7AFA0A65…`, `Face<n>`) | its profile's sketch and loops; its thickness (f64 at offset 123, the rule's) *(verified: both designs)* |
 | Edge flange (`7AFA0A65…`, `EdgeFlange<n>`) | found by the marked angle and height owners `p` (the holders of `FlangeAngle` and `FlangeHeight`): before them `u32` bend position (1 outside, 2 inside, 3 adjacent, 4 tangent to the side face), `u32` edge count, a wrapper reference per edge, the settings reference, `u32` height datum (1 inner, 2 outer, 3 tangent to the bend's outer surface *(verified, mitcad#242)*); after them a `u32`, at `p + 26` a flip byte (0, 1) *(verified: two flanges of each design, one flipped, give their states)*, at `p + 37` the inside bend radius (f64, cm); width owners `EdgeWidth`, `EdgeWidth_1`/`_2` (distances from the edge's midpoint, mitcad#242) |
 | Hem (`7AFA0A65…`, `Hem<n>`, mitcad#1364) | its parameters by their roles (`HemGap`, `HemLength`, `HemRadius`, `HemAngle`, `HemSetback`), their holders the marked owners of the fixed section at base `b`: `u32` bend position (4, tangent to the side face *(seen: every hem)*), `u32` edge count 1, the edge wrapper and settings references, the owners from `b + 41`; at `b + 66` (two owners) or `b + 76` (three) a `u32` form (1 open, 2 rolled, 3 double, 4 teardrop, 5 rope, 6 flat *(ours: one hem of each form in the reference models)*), then a byte and the rule's inside bend radius (f64, cm); its edge as an edge flange's |
-| Sheet-metal rule (`B42ED662…`) | expressions with their values in order (bend radius, relief width, relief depth, two more), five GUID texts, the corner relief size, the K-factor (f64, four bytes after the corner relief size's value), the material, the thickness text and a reference to the thickness parameter *(seen: one rule; the order of the relief fields is taken from their default expressions)* |
+| Unfold (`EC187027…`, `Unfold<n>`, mitcad#2117) | its input slots (`2CA5A1CD…`, each `u32 n`, n references, then the slot key `2DF7DA30…`, `u32 0` and `u32` role) in the order the record names them: the bends' faces (role 16, face inputs `5662F619…`, both cylinders of each bend), the stationary face (role 16, one face input), the body (role 4, a body input `9716F783…`); then a reference to the sheet-metal rule's holder (`E75C86D6…`) *(seen: one Unfold, its 24 faces the 12 bends of three edge flanges)* |
+| Refold (`483D584F…`, `Refold<n>`, mitcad#2117) | one input slot, the body (role 8), and the rule's holder; no bend and no reference to the Unfold: the group item `99F375B3…` (`UnfoldRefoldGroupMode`, no ASM state) names both *(seen: the Unfold's pair)* |
+| Sheet-metal rule (`B42ED662…`) | expressions with their values in order (bend radius, relief width, relief depth, two more), five GUID texts, the corner relief size, the K-factor (f64, four bytes after the corner relief size's value, the material's name right after it), the material, the thickness text and a reference to the thickness parameter *(seen: one rule; the order of the relief fields is taken from their default expressions)*. A later writer keeps the K-factor in an unfold rule the rule refers to (`B4439D38…`, named like `Linear (k=0.44)`): the f64 right after its root part, else the `k=` of its name; the rule itself then has the material's name where the K-factor was (mitcad#2117) *(verified: the reported design's Unfold, its developed bends as long as the file's)* |
 
 Edge recipes of some flanges have names with a nonzero word after their
 operations (`0x04000102`, `0x04000022`, `0x04000042`): the recipe reader

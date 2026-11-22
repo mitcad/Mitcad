@@ -6,9 +6,9 @@
 #      zoomed in further. E leaves the sketch with the sketch and the box
 #      inside the free area the Extrude card leaves (logged "View for
 #      Extrude from the sketch: fitted; ... (inside)").
-#   2. Extrude's automatic profile is one of the two drawn circles, not the
-#      face's leftover region around them (a key with the face's boundary,
-#      b{...}), and its preview is made.
+#   2. Extrude starts with both drawn circles (the sketch's outline set,
+#      mitcad#2194), not the face's leftover region around them (a key
+#      with the face's boundary, b{...}), and its preview is made.
 # Run by tools/ui-extrude-from-sketch-test.sh (Linux) and
 # tools/ui-windows-extrude-from-sketch-test.ps1 (Windows).
 expect-ever 'View area'
@@ -28,7 +28,7 @@ mark
 key e
 wait-log '^Command Extrude started'
 wait-log '^View for Extrude from the sketch: fitted; .* \(inside\)$'
-wait-log '^Extrude Profiles: 1 profile '
+wait-log '^Extrude Profiles: 2 profiles '
 expect-no-log '^Extrude Profiles: .*b\{'
 wait-log '^Preview Extrude: ok' 30
 screenshot '${MITCAD_TEST_WORK}/extrude-from-zoomed-sketch.png'

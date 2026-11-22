@@ -25,6 +25,7 @@
 #include "../browser/ActivateQuestion.hpp"
 #include "../browser/BrowserBackground.hpp"
 #include "../browser/BrowserPreferences.hpp"
+#include "../framework/ExtrudeStartPreference.hpp"
 #include "../browser/JointHolderQuestion.hpp"
 #include "../drawings/DrawingPreferences.hpp"
 #include "../files/Print3d.hpp"
@@ -37,6 +38,7 @@
 #include "../framework/Language.hpp"
 #include "../framework/MenuBarReveal.hpp"
 #include "../framework/BoostButton.hpp"
+#include "../framework/DiscordButton.hpp"
 #include "../framework/QuickAccess.hpp"
 #include "../framework/ResultCache.hpp"
 #include "../framework/UiSizes.hpp"
@@ -122,6 +124,7 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     resetAskToActivateComponent();
     setVersionWatermarkShown(true);
     setBrowserConsumeSketches(false);
+    saveExtrudeStart(NewFeatureOperation::Automatic);
 #ifdef MITCAD_MACOS_NATIVE_UI
     setNativeUiPreference(false);
 #endif
@@ -190,13 +193,16 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     clearLayoutPreference();
     QuickAccessSettings::saveVisible(true);
     BoostSettings::saveVisible(true);
+    DiscordSettings::saveVisible(true);
     if (MenuBarSettings::offered()) {
       MenuBarSettings::saveShown(true);
     }
 #if defined(Q_OS_MACOS) && !defined(MITCAD_MAC_UI)
     DocumentFrame::setWindowMenuBarShown(false);
 #endif
-    saveBrowserBackground(defaultBrowserBackground());
+    // No choice saved: the default (Rows, mitcad#2144) applies, and a later
+    // default too.
+    clearBrowserBackground();
     saveBrowserRowsShare(kDefaultBrowserRowsShare);
     drawings::saveCornerDots(drawings::CornerDots());
     saveSmallCircles(SmallCircles::Adaptive);

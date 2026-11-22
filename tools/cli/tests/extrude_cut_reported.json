@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The reporter's design of GitHub mitcad/Mitcad#492 (mitcad#2118; opened with --open, never committed): a component (C2, placed once as O2) with an L-shaped body F4.b0, mirrored by Mirror1 (F14), and Sketch4 (F10) on the top face of the body's flat leg with three slots. Extrude Cut of the three slots up to the leg's bottom face, extended (Extend To Selected Face), one side, as the Extrude panel sends it. The sketch's normal points out of the leg, so the bottom face lies behind the profiles: the cut turns round to reach it and cuts the slots through the leg. Before the fix the extrusion failed with 'the target lies behind the start of the sweep', the panel's Affected components list said 'Updating affected components…' and OK stayed off."},
+  {"cmd": "add_feature", "component": "C2", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F10", "region": "r{c13[c17,c16],c14[c16,c17],c16[c13,c14],c17[c14,c13]}"},
+                 {"sketch": "F10", "region": "r{c24[c28,c27],c25[c27,c28],c27[c24,c25],c28[c25,c24]}"},
+                 {"sketch": "F10", "region": "r{c1[c2,c4],c2[c3,c1],c3[c4,c2],c4[c1,c3]}"}],
+    "extent": {"type": "to_object", "object": {"type": "face", "body": "F4.b0", "face": "F4:side(c15[c13,c1])"}},
+    "operation": "cut",
+    "cut_scope": {"context": {"component": "C2", "occurrence": "O2"},
+                  "targets": {"type": "automatic", "excluded": [], "excluded_bodies": []}}}},
+  {"expect": {"feature": "F15", "status": "ok"}},
+  {"comment": "Each slot's walls are in the leg."},
+  {"expect": {"body": "F4.b0", "has_face": "F15:side(c13[c17,c16])"}},
+  {"expect": {"body": "F4.b0", "has_face": "F15:side(c24[c28,c27])"}},
+  {"expect": {"body": "F4.b0", "has_face": "F15:side(c1[c2,c4])"}}
+]

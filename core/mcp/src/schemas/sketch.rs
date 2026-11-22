@@ -68,6 +68,9 @@ pub(super) const COMMANDS: &[&str] = &[
     "sketch.blend_curve",
     "sketch.insert_block",
     "sketch.explode_block",
+    "sketch.explode_text",
+    "sketch.extend_to_meet",
+    "sketch.import_points",
     "sketch3d.create",
     "sketch3d.add_point",
     "sketch3d.add_line",
@@ -499,7 +502,8 @@ fn planar(name: &str) -> Option<Value> {
             "properties": {
                 "sketch": sketch(),
                 "constraint": constraint(),
-                "auto": flag(false, "Only when safe: refused when the others imply it, it conflicts or the solve moves anything")
+                "auto": flag(false, "Only when safe: refused when the others imply it, it conflicts or the solve moves anything"),
+                "check": flag(false, "Nothing changes: answers {\"check\": true} when the constraint would be added, else refused as it would be")
             },
             "required": ["sketch", "constraint"],
             "examples": [{"cmd": "sketch.add_constraint", "sketch": "F1", "constraint": {"type": "horizontal", "line": "c3"}},
@@ -937,6 +941,52 @@ fn planar(name: &str) -> Option<Value> {
             },
             "required": ["sketch", "instance"],
             "examples": [{"cmd": "sketch.explode_block", "sketch": "F1", "instance": "k7"}]
+        }),
+        // Explode Text (mitcad#2163).
+        "sketch.explode_text" => json!({
+            "description": "Explode Text: a text or QR code becomes plain, unconstrained sketch curves where it is laid out now, one line per straight piece of its outlines and one spline (degree 2 or 3, by its control points) per Bezier piece, the pieces of a contour sharing their end points; its frame or path curve stays. Later features' names of its pieces (regions, side faces, edges) are rewritten to the new curves; a name that cannot be mapped is a warning. Result: the editing commands' fields, made (the new curves in order), rewritten ({uid, name} of each feature), warnings.",
+            "properties": {
+                "sketch": sketch(),
+                "text": {"type": "string", "pattern": "^t[0-9]+$", "description": "The text (t<n>, the sketch query's texts)"}
+            },
+            "required": ["sketch", "text"],
+            "examples": [{"cmd": "sketch.explode_text", "sketch": "F1", "text": "t2"}]
+        }),
+        // Extend to Meet (mitcad#2178).
+        "sketch.extend_to_meet" => json!({
+            "description": "Extend to Meet: two curves (line + line, line + arc, arc + arc) extended or shortened to a point where their whole lines and circles meet, the two ends becoming one shared point. Each curve keeps the part around its pick; of the meeting points the one nearest the picks is taken (result 0), and result counts round through the others (an arc can reach a point in its gap either way round). Constraints and dimensions on the curves stay: a length or an arc length takes the new value. Refused in words for parallel or collinear lines, circles that do not meet or share a centre, and projected curves. Result: joined (the shared point), results (how many there are), result (the one taken).",
+            "properties": {
+                "sketch": sketch(),
+                "a": id("The first curve (c<n>), a line or an arc"),
+                "b": id("The second curve (c<n>)"),
+                "at_a": position("The pick on the first curve: the part that stays"),
+                "at_b": position("The pick on the second curve: the part that stays"),
+                "result": {"type": "integer", "minimum": 0, "description": "Which result, nearest the picks first (0, the default), counted round"}
+            },
+            "required": ["sketch", "a", "b", "at_a", "at_b"],
+            "examples": [{"cmd": "sketch.extend_to_meet", "sketch": "F1", "a": "c3", "at_a": [2, 0], "b": "c4", "at_b": [20, 8]}]
+        }),
+        "sketch.import_points" => json!({
+            "description": "Insert Points (mitcad#2232): x y coordinates, one point per line (two numbers separated by spaces, tabs, commas or semicolons; other lines skipped), into the sketch as one smooth spline or as points. Up to 30 points: a fit point spline through each; more: a cubic spline fitted by least squares within tolerance (at most 60 control points, a warning when that stops it). An airfoil (x in about 0 to 1, the Selig or Lednicer layout) is detected: one open spline from the trailing edge round the leading edge, chord along +X from the leading edge at at, a line across a blunt trailing edge, a point at the leading edge. One undo step. Result: curves, points, spline, closing_line, leading_edge, fit (through, least_squares or null), control_points, fit_points, closed, airfoil, airfoil_name, tolerance, deviation (mm), warnings.",
+            "properties": {
+                "sketch": sketch(),
+                "path": text("The .csv, .txt or .dat file to read (refused through MCP: give text)"),
+                "text": text("The points' text instead of path, as a file would hold it"),
+                "as": choice(&["spline", "points"], "One spline (the default) or one sketch point per point"),
+                "scale": number("The numbers in the design's length unit times this (default 1; not for an airfoil)"),
+                "at": position("Where the numbers' origin goes (an airfoil's leading edge, or its pivot)"),
+                "closed": {"type": "boolean", "description": "The spline runs on from the last point to the first; default: when the first and last points coincide; never for an airfoil"},
+                "tolerance": number("The largest distance of a point from a fitted spline, mm; default the larger of 0.01 mm and half the last decimal place times the scale (chord)"),
+                "airfoil": {"type": "boolean", "description": "Read as an airfoil; default: when the points are one; false reads an airfoil as plain points"},
+                "chord": number("An airfoil's chord length, mm (default 100)"),
+                "angle": number("An airfoil's angle of attack, radians; positive raises the leading edge"),
+                "pivot": number("The share of the chord at places and angle turns about: 0 the leading edge (default), 0.25 the quarter chord"),
+                "flip": flag(false, "An airfoil mirrored across its chord"),
+                "close_trailing_edge": flag(true, "A line between a blunt trailing edge's two ends")
+            },
+            "required": ["sketch"],
+            "restrictions": ["MCP refuses path (a file read): give the points as text."],
+            "examples": [{"cmd": "sketch.import_points", "sketch": "F1", "text": "0 0\n10 5\n20 0\n30 5\n"}]
         }),
         _ => return None,
     };

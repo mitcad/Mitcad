@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
-//! Analyses kept in the document (mitcad#41): section analyses and print
-//! analyses (mitcad#620), listed in the browser's Analysis folder and
-//! saved in the design file. They change no geometry: adding, editing,
-//! renaming, showing, hiding and deleting one is an undo step that
-//! recomputes nothing.
+//! Analyses kept in the document (mitcad#41): section analyses, print
+//! analyses (mitcad#620) and draft analyses (mitcad#2166), listed in the
+//! browser's Analysis folder and saved in the design file. They change no
+//! geometry: adding, editing, renaming, showing, hiding and deleting one is
+//! an undo step that recomputes nothing.
 //!
 //! An analysis refers to geometry as features do (a plane reference, a
-//! bed face), so a face reference follows the model by its topological
-//! name; it is resolved at the timeline marker whenever it is asked for,
-//! and an analysis whose plane, body or bed face is gone says why instead.
+//! bed face, a pull direction), so a face reference follows the model by
+//! its topological name; it is resolved at the timeline marker whenever it
+//! is asked for, and an analysis whose plane, body, bed face or pull
+//! reference is gone says why instead.
 //!
 //! At most one analysis is shown: showing one (adding it, or editing it
 //! shown) hides the others, so the bodies are cut by one plane.
@@ -54,15 +55,78 @@ pub enum AnalysisDef {
     Section(SectionAnalysis),
     /// Where bodies will print badly and what they will take (mitcad#620).
     Print(PrintAnalysis),
+    /// The bodies' faces by their draft from a pull direction (mitcad#2166).
+    Draft(DraftAnalysis),
 }
 
 impl AnalysisDef {
-    /// The first part of default names (`Section1`, `Print1`).
+    /// The first part of default names (`Section1`, `Print1`, `Draft1`).
     fn name_stem(&self) -> &'static str {
         match self {
             Self::Section(_) => "Section",
             Self::Print(_) => "Print",
+            Self::Draft(_) => "Draft",
         }
+    }
+}
+
+/// The least draft a face needs when none is given, degrees.
+pub const DEFAULT_DRAFT_ANGLE: f64 = 1.0;
+
+fn default_draft_angle() -> f64 {
+    DEFAULT_DRAFT_ANGLE
+}
+
+/// A Draft Analysis (mitcad#2166): each triangle of the bodies' meshes by
+/// its draft from the pull direction, the angle between its normal and
+/// the plane square to the pull: at least `angle` towards the pull (it
+/// releases when pulled along it), less than `angle` either way (it needs
+/// more draft), or at least `angle` the other way (it releases only when
+/// pulled the opposite way: the other mould half). A face hidden by
+/// another part of the body along the pull (an undercut) is not looked
+/// for. The bodies are analysed where Print Analysis analyses them
+/// ([`Document::print_placements`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftAnalysis {
+    pub bodies: Vec<BodyUid>,
+    /// The pull direction: the normal of a plane (an origin plane, a
+    /// construction plane, a planar face, a fixed plane) or the direction
+    /// of a line (an origin axis, a construction axis, a straight edge, a
+    /// sketch line, a fixed axis); none: the design's +Z. Follows the model
+    /// by its topological name.
+    #[serde(default)]
+    pub pull: Option<GeomRef>,
+    /// The pull reference's occurrence, from the design root, as a
+    /// section's `occurrence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<OccurrencePath>,
+    /// The pull direction reversed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip: bool,
+    /// The least draft a face needs, degrees, 0 to less than 90.
+    #[serde(default = "default_draft_angle")]
+    pub angle: f64,
+}
+
+impl DraftAnalysis {
+    /// Why the settings cannot be kept, if they cannot (not the geometry).
+    fn check(&self) -> Result<(), String> {
+        if self.bodies.is_empty() {
+            return Err("the draft analysis needs a body".to_owned());
+        }
+        check_draft_angle(self.angle)
+    }
+}
+
+/// Why a draft angle (degrees) is not one: from 0 to less than 90.
+pub fn check_draft_angle(angle: f64) -> Result<(), String> {
+    if (0.0..90.0).contains(&angle) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the draft angle must be from 0 to less than 90 degrees, got {angle}"
+        ))
     }
 }
 
@@ -408,6 +472,9 @@ impl Analysis {
             AnalysisDef::Print(print) => {
                 print.check().map_err(|e| format!("{}: {e}", self.name))?;
             }
+            AnalysisDef::Draft(draft) => {
+                draft.check().map_err(|e| format!("{}: {e}", self.name))?;
+            }
         }
         Ok(())
     }
@@ -654,6 +721,12 @@ impl<K: Kernel> Document<K> {
                             Ok(down) => value["down"] = json!(down),
                             Err(error) => value["error"] = json!(error),
                         },
+                        // The pull direction at the marker, or why a body
+                        // or the pull reference is not there.
+                        AnalysisDef::Draft(draft) => match self.draft_pull(draft) {
+                            Ok(pull) => value["pull_direction"] = json!(pull),
+                            Err(error) => value["error"] = json!(error),
+                        },
                     }
                     value
                 })
@@ -673,8 +746,85 @@ impl<K: Kernel> Document<K> {
                 self.print_direction(print)
                     .map_err(|e| invalid(format!("the print analysis: {e}")))?;
             }
+            AnalysisDef::Draft(draft) => {
+                self.draft_pull(draft)
+                    .map_err(|e| invalid(format!("the draft analysis: {e}")))?;
+            }
         }
         Ok(())
+    }
+
+    /// A draft analysis' pull direction (unit, design coordinates) at the
+    /// marker, flipped when it says so, or why its bodies or its pull
+    /// reference are not there (mitcad#2166).
+    pub fn draft_pull(&self, draft: &DraftAnalysis) -> Result<Vec3, String> {
+        for body in &draft.bodies {
+            if self.body_shape(*body).is_none() {
+                return Err(format!("body {body} does not exist at the timeline marker"));
+            }
+        }
+        let pull = match &draft.pull {
+            None => [0.0, 0.0, 1.0],
+            Some(reference) => self
+                .pull_direction(reference, draft.occurrence.as_ref())
+                .map_err(|e| format!("the pull direction: {e}"))?,
+        };
+        // No -0 in the direction.
+        Ok(pull.map(|c| {
+            if c == 0.0 {
+                0.0
+            } else if draft.flip {
+                -c
+            } else {
+                c
+            }
+        }))
+    }
+
+    /// The direction a pull reference gives, in design coordinates through
+    /// its occurrence (as [`Self::analysis_plane`]): a planar face's or a
+    /// fixed plane's normal; a straight edge's, a sketch line's or a fixed
+    /// axis' direction; an origin or construction datum's normal when it is
+    /// a plane, else its direction when it is an axis.
+    pub fn pull_direction(
+        &self,
+        reference: &GeomRef,
+        occurrence: Option<&OccurrencePath>,
+    ) -> Result<Vec3, String> {
+        let direction = match reference {
+            GeomRef::Face { .. } | GeomRef::FixedPlane { .. } => {
+                self.resolve_plane(reference)?.normal()
+            }
+            GeomRef::Edge { .. } | GeomRef::SketchCurves { .. } | GeomRef::FixedAxis { .. } => {
+                self.resolve_axis(reference)?.direction
+            }
+            GeomRef::Mount { .. } => self.resolve_plane(reference)?.normal(),
+            GeomRef::Origin(_) | GeomRef::Datum(_) => {
+                let datum = match reference {
+                    GeomRef::Origin(origin) => Some(origin.datum()),
+                    GeomRef::Datum(uid) => self.datum(*uid),
+                    _ => None,
+                };
+                match datum {
+                    Some(crate::datum::Datum::Plane(plane)) => plane.normal(),
+                    Some(crate::datum::Datum::Axis(axis)) => axis.direction,
+                    Some(_) => {
+                        return Err(
+                            reference.error(|what| format!("{what} is neither a plane nor a line"))
+                        );
+                    }
+                    // Gone at the marker: the resolver says why in words.
+                    None => self.resolve_plane(reference)?.normal(),
+                }
+            }
+            _ => {
+                return Err(reference.error(|what| format!("{what} is neither a plane nor a line")));
+            }
+        };
+        let path = self.analysis_occurrence(reference, occurrence, "pull direction")?;
+        let transform = self.path_transform(&path.0);
+        mitcad_vec3::unit(transform.apply_vector(direction))
+            .ok_or_else(|| "the pull direction has no length".to_owned())
     }
 
     /// Where each body is printed from: its first shown placement in the

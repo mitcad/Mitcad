@@ -181,7 +181,11 @@ fn existing_values_units_comments_and_renamed_ids_win() {
         &mut doc,
         thread(json!({"radial_clearance": "thread_radial_clearance"})),
     );
-    assert_eq!(user_parameters(&doc), original);
+    // The parameter is the same; the thread now uses it (`used_by`,
+    // mitcad#2202).
+    let mut expected = original.clone();
+    expected[0]["used_by"] = json!(["Thread1"]);
+    assert_eq!(user_parameters(&doc), expected);
     assert!(
         doc.kernel()
             .specs

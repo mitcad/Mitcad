@@ -2413,6 +2413,277 @@ void test_assembly_cut_through_two_linked_plates() {
   std::filesystem::remove_all(dir, ignored);
 }
 
+// A rigid transform as 4 rows of 4.
+using Placement = std::array<std::array<double, 4>, 4>;
+
+// The innermost JSON object of `text` around the offset `at` (strings
+// skipped), or "".
+std::string object_around(const std::string& text, std::size_t at) {
+  std::vector<std::size_t> open;
+  bool in_string = false;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
+    if (in_string) {
+      if (c == '\\') {
+        ++i;
+      } else if (c == '"') {
+        in_string = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      in_string = true;
+    } else if (c == '{') {
+      open.push_back(i);
+    } else if (c == '}') {
+      if (open.empty()) {
+        return {};
+      }
+      const std::size_t start = open.back();
+      open.pop_back();
+      // Objects close innermost first: the first one around `at`.
+      if (start <= at && at < i) {
+        return text.substr(start, i - start + 1);
+      }
+    }
+  }
+  return {};
+}
+
+// The object of `text` holding `marker` (its first one), or "".
+std::string object_with(const std::string& text, const std::string& marker) {
+  const std::size_t at = text.find(marker);
+  return at == std::string::npos ? std::string() : object_around(text, at);
+}
+
+// The `transform` (4 rows of 4) of a JSON object.
+std::optional<Placement> transform_of(const std::string& object) {
+  const std::string key = "\"transform\":";
+  const std::size_t at = object.find(key);
+  if (at == std::string::npos) {
+    return std::nullopt;
+  }
+  Placement m{};
+  const char* p = object.c_str() + at + key.size();
+  for (int k = 0; k < 16; ++k) {
+    while (*p == '[' || *p == ']' || *p == ',' || *p == ' ') {
+      ++p;
+    }
+    char* end = nullptr;
+    const double value = std::strtod(p, &end);
+    if (end == p) {
+      return std::nullopt;
+    }
+    m[static_cast<std::size_t>(k / 4)][static_cast<std::size_t>(k % 4)] = value;
+    p = end;
+  }
+  return m;
+}
+
+// `b` in the coordinates of `a` (both rigid): a⁻¹ · b.
+Placement relative_to(const Placement& a, const Placement& b) {
+  Placement r{};
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      for (std::size_t k = 0; k < 3; ++k) {
+        r[i][j] += a[k][i] * b[k][j];
+      }
+    }
+    for (std::size_t k = 0; k < 3; ++k) {
+      r[i][3] += a[k][i] * (b[k][3] - a[k][3]);
+    }
+  }
+  r[3][3] = 1.0;
+  return r;
+}
+
+// How far apart two placements are, in millimetres: the translations'
+// difference and the rotations' over 100 mm (the reported parts' size).
+double placement_gap(const Placement& a, const Placement& b) {
+  double gap = 0.0;
+  for (std::size_t i = 0; i < 3; ++i) {
+    for (std::size_t j = 0; j < 3; ++j) {
+      gap = std::max(gap, 100.0 * std::abs(a[i][j] - b[i][j]));
+    }
+    gap = std::max(gap, std::abs(a[i][3] - b[i][3]));
+  }
+  return gap;
+}
+
+std::string placement_text(const Placement& m) {
+  std::string text;
+  for (std::size_t i = 0; i < 3; ++i) {
+    char row[160];
+    std::snprintf(row, sizeof row, "[%.9f %.9f %.9f %.9f]", m[i][0], m[i][1], m[i][2], m[i][3]);
+    text += row;
+  }
+  return text;
+}
+
+// Where a body is placed in the design (the `instances` query; a body
+// placed once).
+std::optional<Placement> body_placement(const mitcad::Document& document, const std::string& body) {
+  const std::string instances(document.query(R"({"query": "instances", "hidden": true})"));
+  return transform_of(object_with(instances, "\"body\":\"" + body + "\""));
+}
+
+// GitHub #530 (mitcad#2221, follow-up of mitcad#2199), on the reporter's
+// design (never committed): `github-530/` under MITCAD_MITCAD_REPORTED,
+// the design of 5629413 bytes with the occurrences and joints below.
+// A sled (O1, its body F34.b0) is held by Joint1 (rigid) on the root's
+// box; an optocoupler board (O4, F38.b0) by Joint2 (rigid, 90 degrees,
+// -1.8 mm) on the sled; screws of the same component (O25 to O28, their
+// mount frame the joint origin F69) wait unjoined above the box. The
+// report: a Rigid joint from a screw's frame to a hole of the sled, its
+// preview and the joint added, turned the board over into the sled.
+// Each preview, and the joint added, must leave the board where it is on
+// the sled (to 1e-6 mm), the sled where it is in the box, and place the
+// screw. On a failure the joints' frames and the preview's placements are
+// printed: the first joint that no longer holds where it held.
+// An environment variable's value, empty when it is not set (_dupenv_s on
+// Windows, where std::getenv is deprecated under /W4).
+std::string env_value(const char* name) {
+#ifdef _WIN32
+  char* value = nullptr;
+  std::size_t size = 0;
+  if (_dupenv_s(&value, &size, name) != 0 || value == nullptr) {
+    return {};
+  }
+  std::string text(value);
+  free(value);
+  return text;
+#else
+  const char* value = std::getenv(name);
+  return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+
+void test_reported_screw_joint_keeps_earlier_joint() {
+  const std::string reported = env_value("MITCAD_MITCAD_REPORTED");
+  const std::filesystem::path folder =
+      !reported.empty() ? std::filesystem::path(reported) / "github-530" : std::filesystem::path();
+  std::filesystem::path design;
+  std::error_code error;
+  if (!folder.empty() && std::filesystem::is_directory(folder, error)) {
+    for (const auto& entry : std::filesystem::directory_iterator(folder, error)) {
+      if (entry.path().extension() == ".mitcad" && entry.is_regular_file(error) &&
+          entry.file_size(error) == std::uintmax_t{5629413}) {
+        design = entry.path();
+      }
+    }
+  }
+  if (design.empty()) {
+    std::puts("test_bridge: reported screw joint (GitHub #530): skipped (no design under "
+              "MITCAD_MITCAD_REPORTED/github-530)");
+    return;
+  }
+  const std::string text = read_text(design);
+  for (const char* marker : {R"("uid": "O25")", R"("uid": "F39")", R"("uid": "F69")"}) {
+    if (!contains(text, marker)) {
+      std::printf("test_bridge: reported screw joint (GitHub #530): skipped (%s holds no %s)\n",
+                  design.filename().string().c_str(), marker);
+      return;
+    }
+  }
+  auto document = mitcad::load_document(text);
+  run(*document, R"({"cmd": "recompute"})");
+  for (const char* joint : {"Joint1", "Joint2"}) {
+    CHECK(feature_ok(*document, joint));
+  }
+  const std::string joints_before(document->query(R"({"query": "joints"})"));
+  const auto sled = body_placement(*document, "F34.b0");
+  const auto board = body_placement(*document, "F38.b0");
+  CHECK(sled && board);
+  if (!sled || !board) {
+    return;
+  }
+  const Placement on_sled = relative_to(*sled, *board);
+
+  // The joints' frames and the placements, printed when a check fails.
+  const auto explain = [&](const std::string& what, const std::string& report) {
+    std::fprintf(stderr, "  %s\n", what.c_str());
+    const std::string joints_now(document->query(R"({"query": "joints"})"));
+    for (const char* joint : {"Joint1", "Joint2"}) {
+      const std::string marker = std::string("\"name\":\"") + joint + "\"";
+      std::fprintf(stderr, "  %s before: %s\n  %s now: %s\n", joint,
+                   object_with(joints_before, marker).c_str(), joint,
+                   object_with(joints_now, marker).c_str());
+    }
+    if (!report.empty()) {
+      const std::size_t at = report.find("\"placements\":");
+      std::fprintf(stderr, "  preview: %s\n",
+                   at == std::string::npos ? report.substr(0, 400).c_str()
+                                           : report.substr(at, 2000).c_str());
+    }
+  };
+  // The board on the sled and the sled in the box as `sled_now` and
+  // `board_now` place them.
+  const auto stays = [&](const std::string& when, const Placement& sled_now,
+                         const Placement& board_now, const std::string& report) {
+    const double sled_gap = placement_gap(*sled, sled_now);
+    const double board_gap = placement_gap(on_sled, relative_to(sled_now, board_now));
+    CHECK(sled_gap <= 1e-6);
+    CHECK(board_gap <= 1e-6);
+    if (sled_gap > 1e-6 || board_gap > 1e-6) {
+      explain(when + ": the sled moved " + std::to_string(sled_gap) + " mm, the board on it " +
+                  std::to_string(board_gap) + " mm\n  board on the sled before: " +
+                  placement_text(on_sled) + "\n  after: " +
+                  placement_text(relative_to(sled_now, board_now)),
+              report);
+    }
+  };
+
+  // Holes of the sled: a circular edge of an insert and one of the sled's
+  // own body.
+  std::vector<std::string> holes;
+  for (const char* body : {"F34.b1", "F34.b0"}) {
+    const std::string edges(document->query(std::string(R"({"query": "edges", "body": ")") + body +
+                                            R"(", "curve": "circle"})"));
+    const auto names = string_values(edges, "name");
+    CHECK(!names.empty());
+    if (!names.empty()) {
+      holes.push_back(std::string(R"({"occurrence": "O1", "geometry": {"body": ")") + body +
+                      R"(", "edge": ")" + names.front() + R"("}})");
+    }
+  }
+  const std::string screw = R"({"occurrence": "O25", "geometry": "F69"})";
+  for (const std::string& hole : holes) {
+    const std::string report(document->preview(
+        R"({"cmd": "add_feature", "def": {"type": "joint", "kind": "rigid", "a": )" + screw +
+        R"(, "b": )" + hole + R"(, "flip": true}})"));
+    CHECK(contains(report, R"("status":"ok")"));
+    // The screw goes to the hole; the sled and the board stay unless
+    // listed, and then as the preview places them.
+    CHECK(contains(report, R"("path":"O25")"));
+    const auto placed = [&](const char* path, const Placement& before) {
+      const auto moved = transform_of(object_with(report, std::string("\"path\":\"") + path + "\""));
+      return moved ? *moved : before;
+    };
+    stays("preview to " + hole, placed("O1", *sled), placed("O4", *board), report);
+  }
+  if (holes.empty()) {
+    return;
+  }
+
+  // Added: the screw placed, Joint1 and Joint2 still holding, the board
+  // where it was on the sled.
+  const std::string added = run(*document, R"({"cmd": "add_joint", "kind": "rigid", "a": )" + screw +
+                                               R"(, "b": )" + holes.front() +
+                                               R"(, "flip": true, "name": "ScrewJoint"})");
+  CHECK(feature_ok(*document, "ScrewJoint"));
+  const std::string joints_after(document->query(R"({"query": "joints"})"));
+  for (const char* joint : {"Joint1", "Joint2", "ScrewJoint"}) {
+    const std::string entry = object_with(joints_after, std::string("\"name\":\"") + joint + "\"");
+    CHECK(contains(entry, R"("solved":true)"));
+  }
+  const auto sled_after = body_placement(*document, "F34.b0");
+  const auto board_after = body_placement(*document, "F38.b0");
+  CHECK(sled_after && board_after);
+  if (sled_after && board_after) {
+    stays("added (" + added.substr(0, 200) + ")", *sled_after, *board_after, std::string());
+  }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2423,6 +2694,10 @@ int main(int argc, char** argv) {
   }
   if (argc > 1 && std::string(argv[1]) == "memory-guard") {
     test_memory_guard_in_a_shared_slice();
+    return failures == 0 ? 0 : 1;
+  }
+  if (argc > 1 && std::string(argv[1]) == "screw-joint-530") {
+    test_reported_screw_joint_keeps_earlier_joint();
     return failures == 0 ? 0 : 1;
   }
   test_block_fillet_and_dimension_change();
@@ -2462,6 +2737,7 @@ int main(int argc, char** argv) {
   test_face_extruded_up_to_a_face_of_its_own_body();
   test_join_apart_warns();
   test_assembly_cut_through_two_linked_plates();
+  test_reported_screw_joint_keeps_earlier_joint();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

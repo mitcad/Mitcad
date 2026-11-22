@@ -884,3 +884,145 @@ fn only_bodies_whose_boxes_lie_within_the_gap_are_measured() {
     let overlapping = [cube(0.0), cube(10.0)];
     assert_eq!(print_analysis::gap_candidates(&overlapping, 0.01), [(0, 1)]);
 }
+
+// ---------------------------------------------------------------------------
+// Draft Analysis (mitcad#2166): the three draft classes.
+
+/// Adds the planar quad `q` (counter-clockwise seen from outside) as two
+/// triangles.
+fn quad(mesh: &mut TriangleMesh, q: [[f64; 3]; 4]) {
+    let first = mesh.vertices.len() as u32;
+    mesh.vertices.extend(q);
+    mesh.triangles
+        .extend([[first, first + 1, first + 2], [first, first + 2, first + 3]]);
+}
+
+/// A box of `a` x `b` mm on z = 0, `h` mm high, its walls drafted from +Z:
+/// the -X wall leans in by `t` (+2° when `t` = h tan 2°: it releases
+/// upward), the +X wall is square (0°), the -Y and +Y walls lean out by
+/// `t` (−2°: they release only downward). The top is (a − t) x (b + 2t).
+fn drafted_box(a: f64, b: f64, h: f64, t: f64) -> TriangleMesh {
+    let b0 = [0.0, 0.0, 0.0];
+    let b1 = [a, 0.0, 0.0];
+    let b2 = [a, b, 0.0];
+    let b3 = [0.0, b, 0.0];
+    let t0 = [t, -t, h];
+    let t1 = [a, -t, h];
+    let t2 = [a, b + t, h];
+    let t3 = [t, b + t, h];
+    let mut mesh = TriangleMesh::default();
+    quad(&mut mesh, [b0, b3, b2, b1]); // bottom
+    quad(&mut mesh, [t0, t1, t2, t3]); // top
+    quad(&mut mesh, [b3, b0, t0, t3]); // -X, +2°
+    quad(&mut mesh, [b1, b2, t2, t1]); // +X, 0°
+    quad(&mut mesh, [b0, b1, t1, t0]); // -Y, −2°
+    quad(&mut mesh, [b2, b3, t3, t2]); // +Y, −2°
+    welded(mesh)
+}
+
+#[test]
+fn a_box_with_drafted_walls_gives_the_three_classes_exactly() {
+    let (a, b, h) = (40.0, 30.0, 20.0);
+    let t = h * 2.0_f64.to_radians().tan();
+    let mesh = drafted_box(a, b, h, t);
+    // The walls' heights along their slopes.
+    let slant = (h * h + t * t).sqrt();
+    let top = (a - t) * (b + 2.0 * t);
+    let bottom = a * b;
+    let minus_x = (b + t) * slant;
+    let plus_x = (b + t) * h;
+    let y_wall = (2.0 * a - t) / 2.0 * slant;
+    const AREA: f64 = 1e-6; // mm²
+
+    let up = [0.0, 0.0, 1.0];
+    let found = print_analysis::drafts(&mesh, up, 1.0);
+    assert!(close(
+        found.area,
+        top + bottom + minus_x + plus_x + 2.0 * y_wall,
+        AREA
+    ));
+    assert!(close(found.positive_area, top + minus_x, AREA), "{found:?}");
+    assert!(close(found.under_area, plus_x, AREA), "{found:?}");
+    assert!(
+        close(found.negative_area, bottom + 2.0 * y_wall, AREA),
+        "{found:?}"
+    );
+    assert_eq!(
+        (
+            found.positive.len(),
+            found.under.len(),
+            found.negative.len()
+        ),
+        (4, 2, 6)
+    );
+    for class in [
+        print_analysis::DraftClass::Positive,
+        print_analysis::DraftClass::Under,
+        print_analysis::DraftClass::Negative,
+    ] {
+        assert!(found.share(class) > 0.0 && found.share(class) < 1.0);
+    }
+    let shares = found.share(print_analysis::DraftClass::Positive)
+        + found.share(print_analysis::DraftClass::Under)
+        + found.share(print_analysis::DraftClass::Negative);
+    assert!(close(shares, 1.0, 1e-12));
+    // Each triangle once, in the class its normal gives.
+    for &i in &found.positive {
+        assert!(normal(&mesh, i)[2] > 0.0);
+    }
+    for &i in &found.negative {
+        assert!(normal(&mesh, i)[2] < 0.0);
+    }
+
+    // Pulled the other way: the classes trade places.
+    let down = print_analysis::drafts(&mesh, [0.0, 0.0, -1.0], 1.0);
+    assert!(close(down.positive_area, found.negative_area, AREA));
+    assert!(close(down.under_area, found.under_area, AREA));
+    assert!(close(down.negative_area, found.positive_area, AREA));
+
+    // A face exactly at the angle has enough draft; more than 2° needed,
+    // the drafted walls need more too.
+    let at = print_analysis::drafts(&mesh, up, 2.0);
+    assert!(close(at.under_area, plus_x, AREA), "{at:?}");
+    let more = print_analysis::drafts(&mesh, up, 3.0);
+    assert!(close(more.positive_area, top, AREA), "{more:?}");
+    assert!(close(
+        more.under_area,
+        minus_x + plus_x + 2.0 * y_wall,
+        AREA
+    ));
+    assert!(close(more.negative_area, bottom, AREA));
+
+    // Angle 0: nothing is under; the square wall counts as positive.
+    let none = print_analysis::drafts(&mesh, up, 0.0);
+    assert!(close(none.under_area, 0.0, AREA));
+    assert!(close(none.positive_area, top + minus_x + plus_x, AREA));
+}
+
+#[test]
+fn a_sphere_is_classed_by_its_triangles_normals() {
+    // Curved faces by class, not by exact area: each triangle in the class
+    // its own normal gives, the hemispheres' shares alike.
+    let mesh = sphere([0.0, 0.0, 10.0], 10.0, 64, 128);
+    let angle: f64 = 5.0;
+    let found = print_analysis::drafts(&mesh, [0.0, 0.0, 1.0], angle);
+    let sine = angle.to_radians().sin();
+    for &i in &found.positive {
+        assert!(normal(&mesh, i)[2] >= sine - 1e-9, "{i}");
+    }
+    for &i in &found.under {
+        assert!(normal(&mesh, i)[2].abs() < sine, "{i}");
+    }
+    for &i in &found.negative {
+        assert!(normal(&mesh, i)[2] <= -sine + 1e-9, "{i}");
+    }
+    assert_eq!(
+        found.positive.len() + found.under.len() + found.negative.len(),
+        mesh.triangles.len()
+    );
+    assert!(close(found.positive_area, found.negative_area, 1e-6));
+    assert!(found.under_area > 0.0);
+    // The band within 5° of the equator: about sin 5° of the area.
+    let share = found.share(print_analysis::DraftClass::Under);
+    assert!(close(share, sine, 0.02), "{share}");
+}

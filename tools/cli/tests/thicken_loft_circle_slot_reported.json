@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The owner's design of mitcad#2143 (opened with --open, never committed; tools/cli/loft-circle-slot-reported-test.cmake): on XZ a circle of radius 50 (Sketch1 F1), a plane 100 along Y (Plane1 F5) with a centre-point slot on it (Sketch2 F6, arc centres 73 either side, radius 21), and Loft1 (F8), a surface loft from the circle to the slot. Thickened 1 mm, the thicken failed ('the thickened surface does not close'): the loft's faces met at creases along the lines between them. Now they are tangent there and the surface thickens 1 mm along its normals, against them and symmetric, each a new body, with no warning or information."},
+  {"expect": {"feature": "Loft1", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"cmd": "add_feature", "def": {"type": "thicken", "bodies": ["F8.b0"], "thickness": 1, "symmetric": false,
+    "operation": "new_body", "participants": []}},
+  {"expect": {"feature": "Thicken1", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "thicken", "bodies": ["F8.b0"], "thickness": -1, "symmetric": false,
+    "operation": "new_body", "participants": []}},
+  {"expect": {"feature": "Thicken2", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "thicken", "bodies": ["F8.b0"], "thickness": 1, "symmetric": true,
+    "operation": "new_body", "participants": []}},
+  {"expect": {"feature": "Thicken3", "status": "ok"}},
+  {"expect": {"bodies": 4}}
+]

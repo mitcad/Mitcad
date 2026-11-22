@@ -259,6 +259,10 @@ pub struct Design {
     /// Notes: text anchored to a point in the model (format 52).
     #[serde(default)]
     pub notes: Vec<Value>,
+    /// Drawings a plain JSON design holds (format 59; a container keeps
+    /// each in an entry of its own, which this reader does not read).
+    #[serde(default)]
+    pub drawings: Vec<Value>,
 }
 
 fn mm() -> String {
@@ -354,6 +358,26 @@ impl Design {
     /// Exploded views (`motion.rs`, `ExplodedView`).
     pub fn exploded_views(&self) -> &[Value] {
         self.assembly_list("exploded")
+    }
+
+    /// Rigid groups (format 62): the parts an import placed, each list
+    /// held as one.
+    pub fn rigid_groups(&self) -> &[Value] {
+        self.assembly_list("rigid_groups")
+    }
+
+    /// The sheet metal rule a feature names, else the design's active
+    /// one, else its first; `None` when the design has no rule it reads
+    /// (SolidCraft's default rule applies).
+    pub fn sheet_rule(&self, name: Option<&str>) -> Option<crate::kinds::SheetRule> {
+        let rules = self.sheet.get("rules").and_then(Value::as_array)?;
+        let active = self.sheet.get("active").and_then(Value::as_str);
+        let wanted = name.or(active);
+        let found = rules
+            .iter()
+            .find(|r| wanted.is_some() && r.get("name").and_then(Value::as_str) == wanted)
+            .or_else(|| rules.first())?;
+        serde_json::from_value(found.clone()).ok()
     }
 
     /// The features in timeline order that are evaluated: before the

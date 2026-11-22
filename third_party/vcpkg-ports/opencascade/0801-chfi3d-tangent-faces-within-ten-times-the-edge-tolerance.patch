@@ -29,10 +29,9 @@ and the two curves at most 6.86 tolerances apart; seven covers that with
 the 2 % left by rounding up. Faces whose curves lie farther apart than
 that are not taken for tangent: their stored edges are worse than any
 measured.
-Test: geometry/tests/port/p0801-tangent-faces-edge-tolerance.cpp (ctest
-geometry.port.0801): two coplanar faces whose curves of one edge lie 6.5
-tolerances apart are tangent (stock: no, 1.5 tolerances), 7.5 tolerances
-apart they are not; within 1.4 tolerances and the 0.001 floor as before.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0801.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
 index e76af293..7b21f1ee 100644

@@ -246,6 +246,13 @@ fn validate_command(request: &Value) -> Result<(), String> {
         Some(ApiClass::Model) => {}
         Some(ApiClass::FileIo) if classes::file_path_read(request).is_some() => {
             let path = classes::file_path_read(request).unwrap_or_default();
+            // Insert Points takes the points' text instead (mitcad#2232).
+            if kind == "sketch.import_points" {
+                return Err(format!(
+                    "command sketch.import_points is not available through MCP with a path: it would read the file {}; give the points as text instead",
+                    mitcad_mcp::echoed(&path)
+                ));
+            }
             // The client's texts, cut (mitcad#935): refusals are logged.
             let (kind, path) = (mitcad_mcp::echoed(kind), mitcad_mcp::echoed(&path));
             return Err(format!(
@@ -360,11 +367,16 @@ impl Document {
     /// names on the document as it is now: a profile picked by a point
     /// inside it becomes that region's key, a fillet's or chamfer's
     /// `edges` or `faces` filter the names of the edges or faces the
-    /// `edges` or `faces` query finds with it. MCP only: both servers call
+    /// `edges` or `faces` query finds with it; a new feature's defaults
+    /// filled in where MCP's differ from the file's (a new loft's
+    /// `tangent_edges` `merge`, mitcad#2162). MCP only: both servers call
     /// it on each entry right before it runs.
     pub fn mcp_resolve_command(&self, request: &str) -> Result<String, crate::ApiError> {
         let mut command: Value = serde_json::from_str(request)
             .map_err(|error| crate::ApiError(format!("invalid MCP command JSON: {error}")))?;
+        // A new feature's defaults where the file's keep older designs as
+        // they were: a new loft merges its tangent edges (mitcad#2162).
+        mitcad_mcp::new_feature_defaults(&mut command);
         let ask = |request: Value| -> Result<Value, String> {
             parse_result(
                 &self

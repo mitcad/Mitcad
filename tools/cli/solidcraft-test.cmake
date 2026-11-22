@@ -68,6 +68,13 @@ run("mesh-convert, tol 0.05" import-solidcraft "${DESIGNS}/mesh-convert.solidcra
 if(NOT output MATCHES "check: passed")
   message(FATAL_ERROR "mesh-convert with tol 0.05: the check did not pass\n${output}")
 endif()
+# A frame member follows its 3D line (mitcad#2157): the rail's length is a
+# parameter of the line's dimension, and the member runs the new length.
+run("frame-members, rail 150" import-solidcraft "${DESIGNS}/frame-members.solidcraft.json"
+    --set "rail=150 mm" --expected "${DESIGNS}/frame-members.rail150.expected.json")
+if(NOT output MATCHES "check: passed")
+  message(FATAL_ERROR "frame-members with rail 150: the check did not pass\n${output}")
+endif()
 
 # The container: document.json in a zip with container.json.
 set(pack "${WORK}/pack")

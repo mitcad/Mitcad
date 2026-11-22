@@ -2104,6 +2104,79 @@ class McpTest(unittest.TestCase):
             self.assertIn("curvature", refused["error"])
             client.finish()
 
+    def test_model_render_sweep_pieces(self):
+        """mitcad#2148: a circle swept along a line and a tangent arc has one side face in
+        two pieces, a cylinder and a torus; the picture draws the circle between them and
+        leaves out the cylinder's seam, as the 3D view does."""
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            # Sketch1 (F1) on XY: the path, 25 along +X and a quarter of radius 30
+            # about (25, 30) on to (55, 30). Sketch2 (F2) on YZ: a circle of 20 at
+            # the origin, its seam at the sketch's +x, -Z: along the bottom of the
+            # tube. Sweep1 (F3).
+            client.tool("model_command", {"document": document, "command": [
+                {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+                    {"id": "p1", "type": "point", "at": [0, 0]},
+                    {"id": "p2", "type": "point", "at": [25, 0]},
+                    {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
+                    {"id": "p4", "type": "point", "at": [25, 30]},
+                    {"id": "p5", "type": "point", "at": [55, 30]},
+                    {"id": "c6", "type": "arc", "center": "p4", "start": "p2", "end": "p5"}]}},
+                {"cmd": "add_feature", "def": {"type": "sketch", "plane": "yz", "entities": [
+                    {"id": "p1", "type": "point", "at": [0, 0]},
+                    {"id": "c2", "type": "circle", "center": "p1", "radius": 10}]}},
+                {"cmd": "add_feature", "def": {"type": "sweep", "profiles": [{"sketch": "F2", "region": "r{c2}"}],
+                    "path": {"sketch": "F1", "curves": ["c3"], "chain": True}, "operation": "new_body"}}]})
+            arguments = {"document": document, "bodies": ["F3.b0"], "view": "bottom",
+                         "projection": "orthographic", "size": [400, 400]}
+            lines, lines_png = render(client, arguments)
+            plain, plain_png = render(client, dict(arguments, edges=False))
+            self.assertEqual(lines["camera"], plain["camera"])
+            camera = lines["camera"]
+            width, height, channels, with_rows = png_pixels(lines_png)
+            _, _, _, without_rows = png_pixels(plain_png)
+
+            def sub(a, b):
+                return [a[i] - b[i] for i in range(3)]
+
+            def dot(a, b):
+                return sum(a[i] * b[i] for i in range(3))
+
+            forward = sub(camera["target"], camera["eye"])
+            length = dot(forward, forward) ** 0.5
+            forward = [c / length for c in forward]
+            up = camera["up"]
+            right = [forward[1] * up[2] - forward[2] * up[1], forward[2] * up[0] - forward[0] * up[2],
+                     forward[0] * up[1] - forward[1] * up[0]]
+            scale = height / camera["height"]
+
+            def pixel(point):
+                offset = sub(point, camera["eye"])
+                return (round(width / 2 + scale * dot(offset, right)),
+                        round(height / 2 - scale * dot(offset, up)))
+
+            def edge_near(point, reach):
+                """Whether an edge is drawn within `reach` pixels of the point."""
+                x0, y0 = pixel(point)
+                for y in range(max(0, y0 - reach), min(height, y0 + reach + 1)):
+                    for x in range(max(0, x0 - reach), min(width, x0 + reach + 1)):
+                        at = x * channels
+                        a = with_rows[y][at:at + 3]
+                        b = without_rows[y][at:at + 3]
+                        if sum(abs(a[i] - b[i]) for i in range(3)) > 40:
+                            return True
+                return False
+
+            # The circle between the cylinder and the torus, at x = 25 across the
+            # tube (seen from below: the line y -10..10).
+            for y in (-6, -3, 3, 6):
+                self.assertTrue(edge_near([25, y, -10], 2), f"the circle between the pieces at y = {y}")
+            # The cylinder's seam along the bottom (y = 0, z = -10): left out.
+            for x in (6, 10, 14, 18):
+                self.assertFalse(edge_near([x, 0, -10], 1), f"the cylinder's seam at x = {x}")
+            client.finish()
+
     def test_model_render_line_art(self):
         """mitcad#1736: format svg, the edges seen as SVG paths, hidden ones dashed."""
         def line_art(client, arguments, error=False):

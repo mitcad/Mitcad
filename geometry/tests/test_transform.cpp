@@ -677,6 +677,36 @@ void test_primitives_name_their_faces() {
   CHECK(faces_named(*ring, "F6:side0") == 1);
   torus.b = 25;
   CHECK(throws_with([&] { primitive(torus); }, "too large"));
+
+  // A cone ending in an apex and a frustum (mitcad#2239): the base disc
+  // `bottom`, the top disc `top` (a frustum only), the conical face
+  // `side0`; pi r^2 h / 3 and pi h (R^2 + R r + r^2) / 3.
+  PrimitiveSpec cone;
+  cone.feature = "F7";
+  cone.kind = PrimitiveKind::Cone;
+  cone.a = 10;
+  cone.c = 30;
+  const ShapePtr point = primitive(cone);
+  CHECK(near(volume(*point), kPi * 100 * 30 / 3, 1e-6));
+  CHECK(faces_named(*point, "F7:bottom") == 1);
+  CHECK(faces_named(*point, "F7:top") == 0);
+  CHECK(faces_named(*point, "F7:side0") == 1);
+  cone.b = 4;
+  const ShapePtr frustum = primitive(cone);
+  CHECK(near(volume(*frustum), kPi * 30 * (100 + 40 + 16) / 3, 1e-6));
+  CHECK(box_is(*frustum, -10, -10, 0, 10, 10, 30));
+  for (const char* role : {"bottom", "top", "side0"}) {
+    CHECK(faces_named(*frustum, mitcad::geometry::face_name("F7", role)) == 1);
+  }
+  CHECK(face_geometry(*frustum, "F7:top").origin.Distance(gp_Pnt(0, 0, 30)) < 1e-9);
+  // Refused: equal radii (a cylinder), no radius at all, a negative one.
+  cone.b = 10;
+  CHECK(throws_with([&] { primitive(cone); }, "a cylinder"));
+  cone.a = 0;
+  cone.b = 0;
+  CHECK(throws_with([&] { primitive(cone); }, "needs a radius"));
+  cone.a = -1;
+  CHECK(throws_with([&] { primitive(cone); }, "must not be negative"));
 }
 
 // A body adopted from a shape (mitcad#244) is the body its B-rep data reads

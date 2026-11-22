@@ -35,6 +35,12 @@ struct DocumentSnapshot {
     // that came in partly, a placeholder of a skipped item; also in `error`.
     QString importNote;
     QString component; // C0 for the root
+    // The component a new-component operation makes, which its bodies are
+    // in (mitcad#2185: the timeline's `made_component`); empty for others.
+    QString madeComponent;
+    // The component its timeline mark is coloured by: the one it makes,
+    // else its own.
+    const QString& markComponent() const { return madeComponent.isEmpty() ? component : madeComponent; }
     int index = 0;
     // A sketch's degrees of freedom (P9: 0 is fully constrained); -1 when
     // it has no result or is no sketch.
@@ -158,6 +164,12 @@ struct DocumentSnapshot {
     // The link's path as the design saves it (mitcad#1416); empty when not
     // linked.
     QString link;
+    // A whole design linked with its components, joints and grounding,
+    // read only (mitcad#2209): not shown by its envelope, no chosen parts.
+    bool linkTree = false;
+    // A component of such a design: the linked component it is part of
+    // (read only like it); empty for any other component.
+    QString linkedIn;
   };
   struct Body {
     QString uid;
@@ -248,6 +260,10 @@ struct DocumentSnapshot {
   // Sketch blocks (mitcad#2110): the `sketch_blocks` query's blocks (name,
   // instances, outline).
   QJsonArray sketchBlocks;
+  // Selection sets (mitcad#2192): the `selection_sets` query's sets (name,
+  // members: each with its kind, reference, occurrence path, live name,
+  // feature type, `exists` and `active`), in the order they were added.
+  QJsonArray selectionSets;
   // CAM (mitcad#1013): the `cam_setups` query's setups (each with its
   // operations and their states, its work frame) and the design's
   // machines; empty when the design has none. A setup's `visible` is its

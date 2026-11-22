@@ -730,7 +730,8 @@ Write-Host "--- Extrude's profile clicks toggle one entry per region (mitcad#199
 # The design: Part:1 (O1) with Sketch1 (F1): squares A (60), B (40) and C
 # (20) nested about the origin, lines c1..c4, c9..c12 and c17..c20 (each
 # rectangle's corner points after its lines): the ring a between A and B,
-# the ring b between B and C and the square c, the newest profile.
+# the ring b between B and C and the square c. Extrude starts with the
+# sketch's outline set, the ring a and the square c (mitcad#2194).
 $ringA = 'r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
 $ringB = 'r{c9[c12,c10],c10[c9,c11],c11[c10,c12],c12[c11,c9]}'
 $squareC = 'r{c17[c20,c18],c18[c17,c19],c19[c18,c20],c20[c19,c17]}'
@@ -755,11 +756,14 @@ Ui-ExpectLog 'Opened with C1 active, as saved (unmodified)' 'Part is active'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
-Ui-ExpectNew "Extrude Profiles: 1 profile [profile $squareC of F1 in O1]" 'the newest profile, where Part:1 shows it'
+Ui-ExpectNew "Extrude Profiles: 2 profiles [profile $ringA of F1 in O1; profile $squareC of F1 in O1]" 'the outline set, where Part:1 shows it'
 Ui-ExpectNew 'Pick profile F1/' "Sketch1's profiles can be picked"
 Ui-Mark
 Ui-Step 'click the square c'             { Ui-ClickPick "profile F1/$squareC" }
-Ui-ExpectNew 'Extrude Profiles: nothing' 'the click took the newest profile out'
+Ui-ExpectNew "Extrude Profiles: 1 profile [profile $ringA of F1 in O1]" 'the click took the square c out'
+Ui-Mark
+Ui-Step 'click the ring a'               { Ui-ClickPick "profile F1/$ringA" }
+Ui-ExpectNew 'Extrude Profiles: nothing' 'the click took the ring a out'
 Ui-Mark
 Ui-Step 'click the ring a'               { Ui-ClickPick "profile F1/$ringA" }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $ringA of F1 in O1]" 'the ring a'

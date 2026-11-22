@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Primitive solids (Box, Cylinder, Sphere and Torus) on a frame.
+// Primitive solids (Box, Cylinder, Sphere, Torus and Cone) on a frame.
 
 #include <string>
 
@@ -10,7 +10,7 @@
 
 namespace mitcad::geometry {
 
-enum class PrimitiveKind { Box, Cylinder, Sphere, Torus };
+enum class PrimitiveKind { Box, Cylinder, Sphere, Torus, Cone };
 
 // Sizes in millimetres, all greater than zero:
 //   Box       a = length (frame x), b = width (frame y), c = height (normal),
@@ -18,7 +18,10 @@ enum class PrimitiveKind { Box, Cylinder, Sphere, Torus };
 //   Cylinder  a = radius, c = height, the base centre at the origin;
 //   Sphere    a = radius, the centre at the origin;
 //   Torus     a = ring radius, b = section radius (b < a), the centre at the
-//             origin and the axis along the normal.
+//             origin and the axis along the normal;
+//   Cone      a = base radius, b = top radius, c = height along the normal,
+//             the base centre at the origin (mitcad#2239); a radius may be
+//             zero (an apex there) but not both, and they differ.
 struct PrimitiveSpec {
   std::string feature;
   Frame frame;

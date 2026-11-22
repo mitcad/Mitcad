@@ -129,6 +129,29 @@ std::optional<DxfChoice> askDxfInsert(QWidget* parent, const QString& file,
 std::optional<DxfChoice> askSvgInsert(QWidget* parent, const QString& file,
                                       const QVector<QPair<QString, QString>>& planes, const QJsonObject& info);
 
+// Insert Points (mitcad#2232): the plane of a new sketch (as Insert DXF;
+// none: into the edited sketch), a spline or points, and for plain points
+// the scale and where the origin goes, for an airfoil (`info`'s
+// detection, switchable off) the chord length, the angle of attack, where
+// the leading edge goes and whether a line closes a blunt trailing edge.
+// Lengths are asked in the design's unit (`unit`, `unitMillimetres` mm)
+// and returned in mm. `info`: the model's `points_info` of the file.
+struct PointsChoice {
+  QString plane;
+  bool asPoints = false;
+  bool airfoil = false;
+  double scale = 1.0;     // the file's numbers in the design's unit, times this
+  double x = 0.0;         // mm: where the origin (an airfoil's leading edge) goes
+  double y = 0.0;
+  double chord = 100.0;   // mm
+  double angle = 0.0;     // degrees, positive raises the leading edge
+  bool closeTrailingEdge = true;
+};
+std::optional<PointsChoice> askPointsInsert(QWidget* parent, const QString& file,
+                                            const QVector<QPair<QString, QString>>& planes,
+                                            const QJsonObject& info, const QString& unit,
+                                            double unitMillimetres);
+
 // Insert Mesh: millimetres per unit of the file, and whether the mesh
 // bodies are converted to solids by Convert Mesh's Faceted Solid
 // (mitcad#1082) with its weld tolerance (mm) and merge angle (degrees);
@@ -163,10 +186,11 @@ std::optional<LinkPartsChoice> chooseLinkParts(QWidget* parent, const QString& t
 
 // Insert Component of a file outside the design's project (mitcad#1719): a
 // link to it would not be followed when the design opens again. Copy into
-// the project and link (the default), insert as a copy, or nothing when
-// cancelled. `inProject`: the design is in a project (else the rule is its
-// folder).
-enum class OutsideLinkChoice { CopyIntoProject, Copy };
+// the project and link (the default) the whole design or, with Choose parts…
+// ticked, chosen parts of the copy (mitcad#2137); insert as a copy; or
+// nothing when cancelled. `inProject`: the design is in a project (else the
+// rule is its folder).
+enum class OutsideLinkChoice { CopyIntoProject, CopyIntoProjectChooseParts, Copy };
 std::optional<OutsideLinkChoice> askOutsideLink(QWidget* parent, const QString& file, bool inProject);
 
 // Import or Open of a STEP file with an assembly (mitcad#1274): its parts

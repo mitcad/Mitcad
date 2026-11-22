@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Perforate (mitcad#461): a field of round holes over a whole sheet, on a
+//! Perforate (mitcad#461, mitcad#2242): a field of round holes on a
 //! staggered (60 degree) or square grid, kept clear of the material's edges,
 //! its cut-outs and its bends. The holes are cut through the material as a
 //! developed sheet cut, so the body, the Flat Pattern, the DXF and every
 //! measure have them.
 
+use super::extrude::ProfileRef;
 use super::mapping::map_params;
 use super::{CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References};
 use crate::ids::BodyUid;
@@ -25,6 +26,13 @@ pub enum PerforationPattern {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerforationOutline {
+    #[serde(deserialize_with = "super::extrude::profile_set")]
+    pub profiles: Vec<ProfileRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, bound(deserialize = "P: Deserialize<'de>"))]
 pub struct SheetPerforateDef<P = ParamId> {
     pub body: BodyUid,
@@ -42,6 +50,9 @@ pub struct SheetPerforateDef<P = ParamId> {
     /// Pattern's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stationary: Option<PanelId>,
+    /// Profiles from one sketch on a flat face of this sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<PerforationOutline>,
 }
 
 fn is_staggered(p: &PerforationPattern) -> bool {
@@ -59,6 +70,7 @@ impl<P> SheetPerforateDef<P> {
             margin: option,
             pattern: copy,
             stationary: copy,
+            outline: clone,
         }
     }
 }
@@ -83,10 +95,21 @@ impl FeatureInfo for SheetPerforateDef {
         let mut r = References::default();
         r.body(self.body);
         r.features.extend(self.stationary.map(|s| s.feature));
+        r.features.extend(self.profiles().iter().map(|p| p.sketch));
         r
     }
     fn check(&self, c: &CheckContext<'_>) -> Result<(), String> {
         c.body(self.body)?;
+        if let Some(outline) = &self.outline {
+            let first = outline
+                .profiles
+                .first()
+                .ok_or("select closed sketch profiles for the perforation outline")?;
+            if outline.profiles.iter().any(|p| p.sketch != first.sketch) {
+                return Err("the perforation outline's profiles must lie in one sketch".into());
+            }
+            c.profile_sketch(first.sketch)?;
+        }
         for f in self.references().features {
             c.feature(f)?;
         }
@@ -102,6 +125,11 @@ impl FeatureInfo for SheetPerforateDef {
     }
     fn creates_bodies(&self) -> bool {
         true
+    }
+    fn profiles(&self) -> &[ProfileRef] {
+        self.outline
+            .as_ref()
+            .map_or(&[], |outline| outline.profiles.as_slice())
     }
 }
 

@@ -45,15 +45,8 @@ Only the sizes come from the case: the hundredth of the radius and the
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_lens_overflow.cpp,
-test_lens_end_rolling_on_both_edges (ctest geometry.fillet_lens_overflow): a
-key on a shaft whose side is split near the key's other end, that end's
-convex arc rounded with 2, the split at two heights: valid, the contacts'
-ends within 1e-3, no face left on the lens's plane, a face past each split
-ending in a point at the lens's end, the material removed alike on both
-sides within 1e-3 mm3. Its failure without the patch is still to be shown:
-the patch does not revert at the port's tip without the 47 later patches
-that change the same lines (tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0822.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 7608be10..54ea22c1 100644

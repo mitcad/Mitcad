@@ -52,16 +52,8 @@ core).
   a core profile; the mesh edges' geometry stage already draws solid ones
   at their width.
 
-Test: none in geometry/tests, because the defect exists only in a
-core-profile context, which the OCCT-only tests do not create. The test
-is app.ui-macos-selection-look (tools/ui-scripts/selection-look.mitcad-ui,
-its view-line-width steps): it reads the macOS view's pixels back, a
-selected edge at least 3 logical pixels wide at Normal and wider at
-Thick, a sketch line at least 2 (less the driver's half pixel). Checked
-with OCCT alone in a core profile (Mesa llvmpipe, OpenGL 4.5 core):
-widths 4 and 6 drawn 4 and 6 pixels wide (1 without the patch), width 1
-unchanged, a dashed line of width 4 dashed, a line on a shaded face at
-its depth drawn over it and one under the face hidden.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1840.
 
 Upstream: new; changes only lines wider than 1 pixel in a desktop core
 profile, which were drawn 1 pixel wide; their ends are extended by half

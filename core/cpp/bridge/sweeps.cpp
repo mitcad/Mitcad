@@ -217,6 +217,8 @@ std::shared_ptr<geometry::Shape> loft_solid(rust::Str feature, const LoftInput& 
   }
   // Parallel along the centre line (mitcad#547).
   spec.parallel = input.parallel;
+  // Tangent Edges: Merge (mitcad#2162).
+  spec.merge_tangent = input.merge_tangent;
   std::size_t at = 0;
   for (const std::size_t count : input.rails) {
     if (at + count > input.rail_curves.size()) {

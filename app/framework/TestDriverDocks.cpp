@@ -345,4 +345,26 @@ bool TestDriver::runDockStep(const QString& name, const QStringList& a, int line
   return true;
 }
 
+// This file's steps (mitcad#2173): their specs, run by its run function before the others.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    // The Docked layout's docks hidden and shown again (mitcad#1455,
+    // TestDriverDocks.cpp).
+    {"dock-title-context", 1, 1, TestDriver::kInputOfMain},
+    {"expect-popup-entries", 1, 1, TestDriver::kPlain},
+    {"dock-close", 1, 1, TestDriver::kInputOfMain},
+    {"expect-dock", 2, 2, TestDriver::kIdle},
+    // Docks floated and moved, and where they are (mitcad#2070).
+    {"dock-float", 5, 5, TestDriver::kInputOfMain},
+    {"expect-dock-float", 5, 5, TestDriver::kIdle},
+    {"dock-area", 2, 2, TestDriver::kInputOfMain},
+    {"expect-dock-area", 2, 2, TestDriver::kIdle},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kDockSteps{
+    kStepSpecs, std::size(kStepSpecs), nullptr};
+
 } // namespace mitcad

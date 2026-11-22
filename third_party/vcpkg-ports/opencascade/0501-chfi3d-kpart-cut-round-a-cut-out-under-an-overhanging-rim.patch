@@ -54,18 +54,8 @@ Upstream: the new paths are taken where the cuts of 0055 and 0071 fail;
 the ordering and the period's start change nothing where no piece has no
 length or starts at the spine's start.
 
-Test: geometry/tests/test_fillet_rolling_ball.cpp,
-test_rim_rounding_below_a_ledge_over_flats_is_cut_round_them (ctest
-geometry.suite.fillet_rolling_ball): a post with flats under an overhanging
-rim, its rounding below the ledge cut round each flat on a circle of one
-edge or two, the torus one face, against the post rounded without flats and
-the flats cut after; another caller: geometry/tests/test_fillet_cutouts.cpp,
-test_rounding_over_flats_is_the_poles_with_the_flats_cut_again (ctest
-geometry.suite.fillet_cutouts), MitCad's fillet of the pole with flats built
-by the kernel itself, with no note. Its failure without the patch is still
-to be shown: with it and the 55 later patches that change the same lines
-reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0501.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index fb0285a0..b5500224 100644

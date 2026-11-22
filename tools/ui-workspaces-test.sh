@@ -111,6 +111,11 @@ echo "ok   one bottom bar in Design and Render: ${bars%%|*}"
 ui_expect_log 'Workspace DESIGN: the drawing closed' "Drawing -> Design: the drawing closed"
 ui_expect_log 'Ribbon more SOLID: none' "the more menu gone in a wide window again"
 ui_expect_log 'TestDriver: done' "the workspace selector"
+# The toolbar panel on the screen after the Start page (mitcad#2031):
+# the shared script also takes a window not exposed (Windows' session 0).
+grep -qE '^Toolbar panel after the Start page: shown at [0-9]+,[0-9]+ [0-9]+x[0-9]+ [(]Floating; the window exposed, ' "$UI_LOG" ||
+  ui_fail "the toolbar panel not shown in an exposed window after the Start page: $(grep '^Toolbar panel after the Start page: ' "$UI_LOG" | tail -1)"
+echo "ok   the toolbar panel shown in the exposed window after the Start page"
 # The project and assistant indicators in the title row: compact icon
 # buttons with a caret, their text in the tooltip (mitcad#1990).
 cards=$(grep '^Floating cards: ' "$UI_LOG" | tail -1)

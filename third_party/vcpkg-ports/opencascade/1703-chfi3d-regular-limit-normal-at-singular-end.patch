@@ -18,14 +18,8 @@ The original fillet_lens_overflow test covers this vanishing vertex and
 its validity, endpoints, quarter volumes and symmetry; the near-tangent
 contour and OCCT cases preserve finite-angle crossings.
 
-Test: geometry/tests/test_fillet_lens_overflow.cpp (ctest
-geometry.fillet_lens_overflow):
-test_rounding_rolling_into_a_vertex_where_it_vanishes and
-test_chain_through_points_where_the_rounding_vanishes, the block-on-post's
-vanishing vertex: valid, its end points, the four quarters' volumes and
-the symmetry. The rank-deficient end normal showed only on Apple Silicon;
-the failure without the patch is to be shown on a macOS arm64 build (on
-x86-64 the end normal is regular and the test passes either way).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1703.
 
 Upstream: new.
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx

@@ -234,3 +234,42 @@ fn the_corners_of_a_flange_on_several_edges_are_found() {
     let apart = [edges[0].clone(), edges[2].clone()];
     assert!(doc.sheet_flange_corners_json(body, &apart).is_err());
 }
+
+/// A flange along the straight run of its boundary (mitcad#2117): `run`
+/// is kept and reopened; with several edges, a profile or at position
+/// `edge` it is refused in words before any geometry.
+#[test]
+fn a_flange_along_a_run_is_kept_and_refused_in_words() {
+    let (mut doc, body, sketch) = sheet();
+    let single = json!({"type":"sheet_flange","body":body,
+        "boundary":edge(body, sketch, "c1[c4,c2]"),
+        "angle":std::f64::consts::FRAC_PI_2,"length":{"mode":"tangent","value":10},
+        "position":"inside","run":true});
+    let uid = doc.add_feature(&def(single.clone()), None).unwrap().uid;
+    let FeatureDef::SheetFlange(d) = &doc.feature(uid).unwrap().def else {
+        panic!("flange definition");
+    };
+    assert!(d.run);
+    let saved = doc.to_json();
+    let reopened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    let FeatureDef::SheetFlange(again) = &reopened.feature(uid).unwrap().def else {
+        panic!("flange definition");
+    };
+    assert!(again.run);
+    doc.undo();
+    let mut several = flange(body, sketch);
+    several["run"] = json!(true);
+    refused(&mut doc, several, "along a run of boundaries");
+    let mut at_edge = single;
+    at_edge["position"] = json!("edge");
+    refused(&mut doc, at_edge, "along a run of boundaries");
+    // Without it the flange is as before.
+    let plain = doc
+        .add_feature(&def(flange(body, sketch)), None)
+        .unwrap()
+        .uid;
+    let FeatureDef::SheetFlange(d) = &doc.feature(plain).unwrap().def else {
+        panic!("flange definition");
+    };
+    assert!(!d.run);
+}

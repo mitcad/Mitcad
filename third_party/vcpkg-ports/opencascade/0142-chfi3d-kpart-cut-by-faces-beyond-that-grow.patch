@@ -45,13 +45,8 @@ is not implemented). Still open: a closed spine whose gap crosses the seam
 of the other contact's face at the spine's start, with that contact inside
 its face (not along an edge), gave an unorientable face; 0145 builds it.
 
-Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow),
-test_chamfer_of_a_boss_beyond_a_plate_corner,
-test_chamfer_of_a_post_beyond_a_square_plate: Its failure without the
-patch is still to be shown: the patch does not revert at the port's tip
-without the more than 40 later patches that change the same lines (tried
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0142.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index e97ac50..aa28fd4 100644

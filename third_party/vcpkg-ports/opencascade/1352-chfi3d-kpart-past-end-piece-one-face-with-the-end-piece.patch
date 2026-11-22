@@ -21,9 +21,8 @@ piece's contact on its surface, whatever the blend's surface type. Only
 the count of five points is a choice (enough for a copy of the same
 analytic surface, which agrees everywhere or nowhere off a few points).
 
-Test: geometry/tests/test_fillet_fin_top_creases.cpp,
-test_transitions_cut_by_their_pieces (with 1350 and 1351): the rounding has
-the stored body's faces.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1352.
 
 Upstream: new.
 

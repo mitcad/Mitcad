@@ -103,7 +103,7 @@ pub struct MovedGroup {
 
 /// Features that place occurrences or relate them: they stay in their
 /// component, where the occurrences are.
-fn stays(def: &FeatureDef) -> bool {
+pub(super) fn stays(def: &FeatureDef) -> bool {
     matches!(
         def,
         FeatureDef::MoveOccurrence(_)

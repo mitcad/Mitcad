@@ -66,6 +66,8 @@ pub use document::{
 pub use document::KeptSlotParameter;
 // What a sketch block command did (mitcad#2110).
 pub use document::BlockEdit;
+// What Explode Text did (mitcad#2163).
+pub use document::TextExploded;
 pub use exchange::{BaseInput, BodyKind, ImportBody, Imported};
 pub use features::{FeatureDef, FeatureEntry, ValueInput};
 pub use file::FileError;
@@ -209,6 +211,7 @@ mod emboss_tests;
 pub use kernel::EmbossWrapSpec;
 // Boundary Fill: solids of the cells tool bodies enclose (mitcad#457).
 pub use kernel::BoundaryCell;
+pub use kernel::{BoundaryPlace, BoundaryRegion, BoundaryRegions};
 #[cfg(test)]
 mod boundary_fill_tests;
 // Patch, Stitch and Thicken: surface bodies filled, sewn and made solid
@@ -258,6 +261,8 @@ mod scoped_cut_replay_tests;
 // bodies' triangle meshes (mitcad#620).
 pub mod print_analysis;
 pub use document::{EstimateCheck, MinGapCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
+// Draft Analysis (mitcad#2166).
+pub use document::DraftAnalysis;
 #[cfg(test)]
 mod print_analysis_tests;
 // Materials as objects and components' default materials (mitcad#640).
@@ -459,3 +464,12 @@ pub use document::{MAX_SECTIONS, MeshSectionRequest, MeshSections, SectionTarget
 pub mod assembly_cut;
 // Linked parts of a design (mitcad#2130).
 pub use document::{LinkPartNode, LinkPartsInput, LinkPartsSet, LinkPartsTree};
+// Groups of user parameters, nested by path (mitcad#2180).
+pub mod parameter_groups;
+// Selection sets: named links to bodies, occurrences and features
+// (mitcad#2192).
+pub use document::{SelectionSet, SetMember};
+// What an edit that changes a feature's operation takes along (mitcad#2185).
+pub use document::OperationFollow;
+// Why a body may not go to a print service (mitcad#2214).
+pub use document::PrintServiceBlock;

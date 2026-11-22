@@ -113,6 +113,7 @@ impl<K: Kernel> Document<K> {
                 link,
                 linked,
                 section,
+                automatic: false,
                 label: if section {
                     "Section Curves to {sketch}"
                 } else {

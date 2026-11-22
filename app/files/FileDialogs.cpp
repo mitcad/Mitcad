@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "FileDialogs.hpp"
+#include "FileFormats.hpp"
 #include "framework/ModelMessages.hpp"
 
 #include <algorithm>
@@ -895,14 +896,182 @@ std::optional<DxfChoice> askSvgInsert(QWidget* parent, const QString& file,
   return choice;
 }
 
+std::optional<PointsChoice> askPointsInsert(QWidget* parent, const QString& file,
+                                            const QVector<QPair<QString, QString>>& planes,
+                                            const QJsonObject& info, const QString& unit,
+                                            double unitMillimetres) {
+  const double unitMm = unitMillimetres > 0.0 ? unitMillimetres : 1.0;
+  QDialog dialog(parent);
+  dialog.setWindowTitle(QObject::tr("Insert Points"));
+  auto* layout = new QVBoxLayout(&dialog);
+  const QString name = QFileInfo(file).fileName();
+  layout->addWidget(new QLabel(planes.isEmpty() ? QObject::tr("%1 goes into the edited sketch.").arg(name)
+                                                : QObject::tr("%1 goes into a new sketch.").arg(name)));
+  auto* form = new QFormLayout;
+  layout->addLayout(form);
+  auto* plane = new QComboBox;
+  for (const auto& [value, label] : planes) {
+    plane->addItem(label, value);
+  }
+  form->addRow(QObject::tr("Plane:"), plane);
+  form->setRowVisible(plane, !planes.isEmpty());
+  // What was read: the points, and an airfoil's name.
+  const int count = info.value(QStringLiteral("points")).toInt();
+  const bool detected = info.value(QStringLiteral("airfoil")).toBool();
+  const QString airfoilName = info.value(QStringLiteral("name")).toString();
+  QString read = QObject::tr("%n point(s)", nullptr, count);
+  if (detected) {
+    read = airfoilName.isEmpty() ? QObject::tr("%1, an airfoil").arg(read)
+                                 : QObject::tr("%1, the airfoil %2").arg(read, airfoilName);
+  }
+  form->addRow(QObject::tr("Read:"), new QLabel(read));
+  // A spline or points.
+  auto* spline = new QRadioButton(QObject::tr("Spline"));
+  spline->setToolTip(QObject::tr("One smooth spline through or near the points"));
+  auto* points = new QRadioButton(QObject::tr("Points"));
+  points->setToolTip(QObject::tr("One sketch point per point of the file"));
+  spline->setChecked(true);
+  auto* kind = new QButtonGroup(&dialog);
+  kind->addButton(spline);
+  kind->addButton(points);
+  auto* kindRow = new QHBoxLayout;
+  kindRow->addWidget(spline);
+  kindRow->addWidget(points);
+  kindRow->addStretch(1);
+  form->addRow(QObject::tr("Insert as:"), kindRow);
+  auto* airfoil = new QCheckBox(QObject::tr("Airfoil"));
+  airfoil->setToolTip(QObject::tr("Read the file as an airfoil: its chord along X from the leading edge"));
+  airfoil->setChecked(detected);
+  airfoil->setEnabled(detected);
+  form->addRow(QString(), airfoil);
+  auto* scale = new DecimalSpinBox;
+  scale->setRange(1e-6, 1e6);
+  scale->setDecimals(4);
+  scale->setValue(1.0);
+  scale->setToolTip(QObject::tr("The file's numbers are in %1, times this").arg(unit));
+  form->addRow(QObject::tr("Scale:"), scale);
+  const QString suffix = QLatin1Char(' ') + unit;
+  auto* chord = new DecimalSpinBox;
+  chord->setRange(1e-6 / unitMm, 1e6 / unitMm);
+  chord->setDecimals(4);
+  chord->setSuffix(suffix);
+  chord->setValue(100.0 / unitMm);
+  chord->setToolTip(QObject::tr("The length from the leading edge to the trailing edge"));
+  form->addRow(QObject::tr("Chord length:"), chord);
+  auto* angle = new DecimalSpinBox;
+  angle->setRange(-90.0, 90.0);
+  angle->setDecimals(3);
+  angle->setSuffix(QStringLiteral("°"));
+  angle->setValue(0.0);
+  angle->setToolTip(QObject::tr("Turned about the leading edge; a positive angle raises it"));
+  form->addRow(QObject::tr("Angle of attack:"), angle);
+  auto* close = new QCheckBox(QObject::tr("Close trailing edge"));
+  close->setToolTip(QObject::tr("A line between the two ends of a blunt trailing edge, so the profile is closed"));
+  close->setChecked(true);
+  form->addRow(QString(), close);
+  const auto coordinate = [unitMm, &suffix] {
+    auto* box = new DecimalSpinBox;
+    box->setRange(-1e6 / unitMm, 1e6 / unitMm);
+    box->setDecimals(4);
+    box->setSuffix(suffix);
+    return box;
+  };
+  auto* x = coordinate();
+  auto* y = coordinate();
+  auto* xLabel = new QLabel;
+  auto* yLabel = new QLabel;
+  form->addRow(xLabel, x);
+  form->addRow(yLabel, y);
+  auto* buttons = okCancel(dialog);
+  layout->addWidget(buttons);
+  // The airfoil's rows in place of Scale, and where its leading edge goes.
+  const auto update = [form, airfoil, spline, scale, chord, angle, close, x, xLabel, yLabel] {
+    const bool foil = airfoil->isChecked();
+    form->setRowVisible(scale, !foil);
+    form->setRowVisible(chord, foil);
+    form->setRowVisible(angle, foil);
+    form->setRowVisible(close, foil);
+    close->setEnabled(spline->isChecked());
+    xLabel->setText(foil ? QObject::tr("Leading edge at X:") : QObject::tr("Origin at X:"));
+    yLabel->setText(foil ? QObject::tr("Leading edge at Y:") : QObject::tr("Origin at Y:"));
+    x->setToolTip(foil ? QObject::tr("Where the airfoil's leading edge goes in the sketch")
+                       : QObject::tr("Where the file's origin goes in the sketch"));
+  };
+  QObject::connect(airfoil, &QCheckBox::toggled, &dialog, [update] { update(); });
+  QObject::connect(spline, &QRadioButton::toggled, &dialog, [update] { update(); });
+  update();
+  (detected ? static_cast<QWidget*>(chord) : static_cast<QWidget*>(scale))->setFocus();
+  qDebug().noquote() << QStringLiteral("Insert Points dialog opened: %1 points, %2")
+                            .arg(count)
+                            .arg(detected ? QStringLiteral("airfoil %1 (%2)")
+                                                .arg(airfoilName,
+                                                     info.value(QStringLiteral("layout")).toString())
+                                          : QStringLiteral("not an airfoil"));
+  // Where the inputs are, in the main window's coordinates (UI tests).
+  TestSync::singleShot(200, &dialog, [spline, points, airfoil, scale, chord, angle, close, x, y, buttons, parent] {
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    const QPoint origin = parent != nullptr ? parent->window()->mapToGlobal(QPoint(0, 0)) : QPoint();
+    const auto at = [&origin](const QWidget* widget) {
+      const QPoint global = widget->mapToGlobal(widget->rect().center()) - origin;
+      return QStringLiteral("%1,%2").arg(global.x()).arg(global.y());
+    };
+    for (const auto& [label, widget] :
+         {std::pair<const char*, QWidget*>{"spline", spline}, std::pair<const char*, QWidget*>{"points", points},
+          std::pair<const char*, QWidget*>{"airfoil", airfoil}, std::pair<const char*, QWidget*>{"scale", scale},
+          std::pair<const char*, QWidget*>{"chord", chord}, std::pair<const char*, QWidget*>{"angle", angle},
+          std::pair<const char*, QWidget*>{"close", close}, std::pair<const char*, QWidget*>{"x", x},
+          std::pair<const char*, QWidget*>{"y", y}}) {
+      if (widget->isVisible()) {
+        qDebug().noquote() << QStringLiteral("Insert Points %1 at %2").arg(QLatin1String(label), at(widget));
+      }
+    }
+    if (QPushButton* ok = buttons->button(QDialogButtonBox::Ok)) {
+      qDebug().noquote() << QStringLiteral("Insert Points OK at %1").arg(at(ok));
+    }
+  });
+
+  prepareModal(&dialog);
+  if (execDialog(&dialog) != QDialog::Accepted) {
+    return std::nullopt;
+  }
+  PointsChoice choice;
+  choice.plane = plane->currentData().toString();
+  choice.asPoints = points->isChecked();
+  choice.airfoil = airfoil->isChecked();
+  choice.scale = scale->value();
+  choice.x = x->value() * unitMm;
+  choice.y = y->value() * unitMm;
+  choice.chord = chord->value() * unitMm;
+  choice.angle = angle->value();
+  choice.closeTrailingEdge = close->isChecked();
+  const QString where = QStringLiteral("(%1, %2)").arg(x->value()).arg(y->value());
+  qDebug().noquote() << (choice.airfoil
+                             ? QStringLiteral("Insert Points: %1, airfoil on, chord %2%3, angle %4°, leading edge at %5, "
+                                              "trailing edge %6")
+                                   .arg(choice.asPoints ? QStringLiteral("points") : QStringLiteral("spline"))
+                                   .arg(chord->value())
+                                   .arg(suffix)
+                                   .arg(choice.angle)
+                                   .arg(where, choice.closeTrailingEdge ? QStringLiteral("closed")
+                                                                        : QStringLiteral("open"))
+                             : QStringLiteral("Insert Points: %1, airfoil off, scale %2, origin at %3")
+                                   .arg(choice.asPoints ? QStringLiteral("points") : QStringLiteral("spline"))
+                                   .arg(choice.scale)
+                                   .arg(where));
+  return choice;
+}
+
 std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& file) {
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Insert Mesh"));
   auto* layout = new QVBoxLayout(&dialog);
   auto* form = new QFormLayout;
   layout->addLayout(form);
-  auto* unit = unitBox();
-  form->addRow(QObject::tr("Unit of %1:").arg(QFileInfo(file).fileName()), unit);
+  // A 3MF file says its unit itself (mitcad#2156): nothing to ask.
+  QComboBox* unit = meshFileHasUnit(file) ? nullptr : unitBox();
+  if (unit != nullptr) {
+    form->addRow(QObject::tr("Unit of %1:").arg(QFileInfo(file).fileName()), unit);
+  }
   // Convert Mesh's Faceted Solid on the inserted bodies (mitcad#1082), with
   // its panel's tolerances; the choice is remembered.
   QSettings settings;
@@ -937,8 +1106,11 @@ std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& fi
   });
   QDialogButtonBox* buttons = okCancel(dialog);
   layout->addWidget(buttons);
-  unit->setFocus();
-  qDebug().noquote() << QStringLiteral("Insert Mesh dialog opened: unit %1").arg(unitOffer(unit));
+  if (unit != nullptr) {
+    unit->setFocus();
+  }
+  qDebug().noquote() << QStringLiteral("Insert Mesh dialog opened: unit %1")
+                            .arg(unit != nullptr ? unitOffer(unit) : QStringLiteral("of the file"));
   qDebug().noquote() << QStringLiteral("Insert Mesh convert to solid %1")
                             .arg(convert->isChecked() ? QStringLiteral("on") : QStringLiteral("off"));
   // Where the check box and OK are, in the main window's coordinates (UI
@@ -960,13 +1132,14 @@ std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& fi
     return std::nullopt;
   }
   MeshInsertChoice choice;
-  choice.unitMillimetres = kUnits[unit->currentIndex()].second;
+  choice.unitMillimetres = unit != nullptr ? kUnits[unit->currentIndex()].second : 1.0;
   choice.convert = convert->isChecked();
   choice.tolerance = tolerance->value();
   choice.angleDegrees = angle->value();
   settings.setValue(QStringLiteral("insertMesh/convertToSolid"), choice.convert);
   qDebug().noquote() << QStringLiteral("Insert Mesh: unit %1, convert to solid %2")
-                            .arg(unit->currentText(), choice.convert
+                            .arg(unit != nullptr ? unit->currentText() : QStringLiteral("of the file"),
+                                 choice.convert
                                                           ? QStringLiteral("on, weld tolerance %1 mm, merge angle %2 deg")
                                                                 .arg(choice.tolerance)
                                                                 .arg(choice.angleDegrees)
@@ -1286,6 +1459,19 @@ std::optional<OutsideLinkChoice> askOutsideLink(QWidget* parent, const QString& 
   QPushButton* copy = box.addButton(QObject::tr("Insert as a &Copy"), QMessageBox::AcceptRole);
   copy->setToolTip(QObject::tr("The design and its history become a component of this design"));
   box.setDefaultButton(copyIn);
+  // The copy linked whole (unticked, the default) or only chosen parts of
+  // it (mitcad#2137), as Linked > Whole design or Choose parts… does for a
+  // file in the project (`askLinked`, mitcad#2130). Insert as a Copy takes
+  // the whole design either way.
+  auto* parts = new QCheckBox(QObject::tr("Choose &parts…"), &box);
+  parts->setObjectName(QStringLiteral("insertOutsideLinkParts"));
+  parts->setToolTip(QObject::tr("Link only the occurrences and bodies you tick of the copy"));
+  parts->setChecked(false);
+  box.setCheckBox(parts);
+  QObject::connect(parts, &QCheckBox::toggled, &box, [](bool on) {
+    qDebug().noquote() << QStringLiteral("Insert Component outside the project: choose parts %1")
+                              .arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  });
   QString copyInLabel = copyIn->text();
   QString copyLabel = copy->text();
   copyInLabel.remove(QLatin1Char('&'));
@@ -1299,8 +1485,13 @@ std::optional<OutsideLinkChoice> askOutsideLink(QWidget* parent, const QString& 
   std::optional<OutsideLinkChoice> chosen;
   QString how = QStringLiteral("cancelled");
   if (box.clickedButton() == copyIn) {
-    chosen = OutsideLinkChoice::CopyIntoProject;
-    how = QStringLiteral("copy into the project and link");
+    if (parts->isChecked()) {
+      chosen = OutsideLinkChoice::CopyIntoProjectChooseParts;
+      how = QStringLiteral("copy into the project and link, chosen parts");
+    } else {
+      chosen = OutsideLinkChoice::CopyIntoProject;
+      how = QStringLiteral("copy into the project and link");
+    }
   } else if (box.clickedButton() == copy) {
     chosen = OutsideLinkChoice::Copy;
     how = QStringLiteral("insert as a copy");

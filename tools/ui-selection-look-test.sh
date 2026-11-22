@@ -32,6 +32,7 @@ work=$(mktemp -d "$root/build/ui-selection-look.XXXXXX")
 trap 'ui_cleanup; rm -rf -- "${work:?}"' EXIT
 export MITCAD_TEST_WORK=$work MITCAD_TEST_STEP_MS=30
 export MITCAD_TEST_INPUT=$here/ui-scripts/selection-look.mitcad-ui
+export MITCAD_TEST_PREFERENCES_DONE=Return # OK of the Preferences dialog
 "$cli" run "$here/ui-scripts/selection-look.json" --save "$work/selection-look.mitcad" || exit 1
 echo "=== Device pixel ratio $UI_SCALE"
 ui_start_display

@@ -264,6 +264,13 @@ pub struct LoftSpec<'a, S> {
     /// along it (mitcad#547), as a sweep's parallel orientation. Only with a
     /// centre line and without a frame.
     pub centerline_parallel: bool,
+    /// Tangent Edges: Merge (mitcad#2162): each section's runs of edges
+    /// meeting tangentially (within 1e-6 rad) joined into one edge by arc
+    /// length (within 1e-8 mm), so that the side between them is one face,
+    /// tangent-continuous across the former joins; such a face is named
+    /// after the first edge of its run (a section smooth all round after
+    /// its edge whose name sorts first). False: every edge its own face.
+    pub merge_tangent_edges: bool,
 }
 
 /// The section of a pipe: a circle of diameter `size`, or a square or an

@@ -54,7 +54,7 @@ use mitcad_model_drawing::def::{
     StandardView, Subject, ViewBreak, ViewDirection, ViewKind, ViewStyle, section_plane,
 };
 use mitcad_model_drawing::internal::Shading;
-use mitcad_model_drawing::sheet::{Anchor, Item, Pen, Sheet};
+use mitcad_model_drawing::sheet::{Anchor, Group, Item, Pen, Sheet};
 use mitcad_model_drawing::template::SheetTemplate;
 use mitcad_model_drawing::{
     CutPlane, DrawingOptions, Orientation, P2, Projection, SheetSize, Standard, Units,
@@ -3256,57 +3256,55 @@ pub(super) fn pens_json() -> Value {
 /// A sheet's groups for the application to draw: each item with its pen,
 /// points in sheet millimetres.
 pub(super) fn groups_json(sheet: &Sheet) -> Value {
-    let groups: Vec<Value> = sheet
-        .groups
+    Value::Array(sheet.groups.iter().map(group_json).collect())
+}
+
+/// One such group, also sent on its own as an annotation's drag preview.
+pub(super) fn group_json(group: &Group) -> Value {
+    let items: Vec<Value> = group
+        .items
         .iter()
-        .map(|g| {
-            let items: Vec<Value> = g
-                .items
-                .iter()
-                .map(|item| match item {
-                    Item::Line { pen, a, b } => json!({"line": [a, b], "pen": pen_name(*pen)}),
-                    Item::Arc {
-                        pen,
-                        center,
-                        radius,
-                        start,
-                        end,
-                    } => json!({"arc": {"center": center, "radius": radius, "start": start,
-                                "end": end}, "pen": pen_name(*pen)}),
-                    Item::Polyline {
-                        pen,
-                        points,
-                        closed,
-                    } => json!({"polyline": points, "closed": closed, "pen": pen_name(*pen)}),
-                    Item::Fill { points } => json!({ "fill": points }),
-                    Item::Shade { points, grey } => json!({"shade": points, "grey": grey}),
-                    // A title block's image (mitcad#1625): the file as
-                    // base64, stretched over its box.
-                    Item::Image {
-                        at,
-                        size,
-                        kind,
-                        data,
-                    } => json!({"image": data.base64(), "format": kind.name(), "at": at,
-                                "size": size}),
-                    Item::Text {
-                        at,
-                        height,
-                        angle,
-                        anchor,
-                        text,
-                    } => json!({"text": text, "at": at, "height": height, "angle": angle,
-                    "anchor": match anchor {
-                        Anchor::Start => "start",
-                        Anchor::Middle => "middle",
-                        Anchor::End => "end",
-                    }}),
-                })
-                .collect();
-            json!({"class": g.class, "id": g.id, "items": items})
+        .map(|item| match item {
+            Item::Line { pen, a, b } => json!({"line": [a, b], "pen": pen_name(*pen)}),
+            Item::Arc {
+                pen,
+                center,
+                radius,
+                start,
+                end,
+            } => json!({"arc": {"center": center, "radius": radius, "start": start,
+                        "end": end}, "pen": pen_name(*pen)}),
+            Item::Polyline {
+                pen,
+                points,
+                closed,
+            } => json!({"polyline": points, "closed": closed, "pen": pen_name(*pen)}),
+            Item::Fill { points } => json!({ "fill": points }),
+            Item::Shade { points, grey } => json!({"shade": points, "grey": grey}),
+            // A title block's image (mitcad#1625): the file as
+            // base64, stretched over its box.
+            Item::Image {
+                at,
+                size,
+                kind,
+                data,
+            } => json!({"image": data.base64(), "format": kind.name(), "at": at,
+                        "size": size}),
+            Item::Text {
+                at,
+                height,
+                angle,
+                anchor,
+                text,
+            } => json!({"text": text, "at": at, "height": height, "angle": angle,
+            "anchor": match anchor {
+                Anchor::Start => "start",
+                Anchor::Middle => "middle",
+                Anchor::End => "end",
+            }}),
         })
         .collect();
-    json!(groups)
+    json!({"class": group.class, "id": group.id, "items": items})
 }
 
 /// The largest of ISO 5455's scales at which a view's box takes at most

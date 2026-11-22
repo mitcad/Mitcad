@@ -208,6 +208,8 @@ const Allowed kAllowed[] = {
     {"cutouts.cpp", "std::snprintf(touch, sizeof touch,",
      "the touch point for the detail of the chamfer reaching a far edge, placed_error() below"},
     {"drawing.cpp", "\"deflection=%.4g angle=%.3g\"", "a drawing view's trace note for the log (mitcad#1671), not a point"},
+    {"shell_cavity.cpp", "shell_trace(\"cavity: it cuts into kept face \"",
+     "the Shell's developer trace on stderr with MITCAD_SHELL_TRACE (mitcad#2050), not a user text"},
 };
 
 bool allowed(const std::string& file, const std::string& text) {

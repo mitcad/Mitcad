@@ -134,3 +134,17 @@ mod sketch_scale_selection_2109_tests;
 // Perpendicular takes a line and a circle or arc, and two circles or arcs
 // (mitcad#2114).
 mod sketch_perpendicular_rounds_2114_tests;
+// The last copy of a sketch pattern deleted takes its pattern and its
+// parameters; a saved emptied record goes with the next edit (mitcad#2058).
+mod sketch_pattern_last_copy_2058_tests;
+// Explode Text and texts in a sketch's DXF export (mitcad#2163).
+mod sketch_explode_text_2163_tests;
+// Extend to Meet: two lines or a line and an arc brought to one shared
+// corner point (mitcad#2178).
+mod sketch_extend_to_meet_2178_tests;
+// `sketch.add_constraint` with `check`: nothing changes, the answer says
+// whether the constraint would be added (mitcad#2184).
+mod sketch_constraint_check_2184_tests;
+// Insert Points: a file's x y coordinates as one spline or as points, an
+// airfoil at its chord and angle of attack (mitcad#2232).
+mod sketch_import_points_2232_tests;

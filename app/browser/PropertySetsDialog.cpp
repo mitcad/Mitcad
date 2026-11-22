@@ -80,6 +80,11 @@ QString text(const QJsonObject& object, const char* field) {
 // What the source column says: the source, and whether the value is the
 // component's (on an occurrence) or the user changed what its source gave.
 QString sourceText(const QJsonObject& property) {
+  // A standing row (Part number, Description; mitcad#2138) stores nothing
+  // yet: no source.
+  if (property.value(QStringLiteral("standing")).toBool()) {
+    return QString();
+  }
   QString source = text(property, "source");
   QStringList notes;
   if (property.value(QStringLiteral("inherited")).toBool()) {
@@ -1430,7 +1435,11 @@ void PropertySetsDialog::editChoice(QTreeWidgetItem* item, const QStringList& ch
   // it is still handling its change.
   connect(combo, &QComboBox::currentIndexChanged, this, [this, combo, name, owner, set, key](int) {
     const QString chosen = combo->currentText();
-    afterEventWhenIdle(m_host, this, [this, name, owner, set, key, chosen] {
+    // The rebuild deletes the combo box: the keyboard that chose in it goes
+    // on in the table, not in the next widget of the window (typing a row's
+    // name and F2 after a choice reached nothing, mitcad#2248).
+    const bool keyboard = combo->hasFocus();
+    afterEventWhenIdle(m_host, this, [this, name, owner, set, key, chosen, keyboard] {
       QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("set_property")},
                           {QStringLiteral("owner"), owner},
                           {QStringLiteral("set"), set},
@@ -1444,6 +1453,9 @@ void PropertySetsDialog::editChoice(QTreeWidgetItem* item, const QStringList& ch
         qDebug().noquote() << QStringLiteral("Property %1: %2 refused: %3").arg(name, chosen, m_host.lastError());
       }
       refresh();
+      if (keyboard) {
+        m_table->setFocus(Qt::OtherFocusReason);
+      }
     });
   });
   qDebug().noquote() << QStringLiteral("Editing property %1 as a choice: %2")
@@ -1542,7 +1554,9 @@ void PropertySetsDialog::editTypes() {
 
 void PropertySetsDialog::updateButtons() {
   QTreeWidgetItem* item = m_table->currentItem();
+  // A standing row (mitcad#2138) has nothing stored to remove.
   const bool own = item != nullptr && !item->data(kKey, kNameRole).toString().isEmpty() &&
+                   !item->data(kKey, kPropertyRole).toMap().value(QStringLiteral("standing")).toBool() &&
                    !item->data(kKey, kPropertyRole).toMap().value(QStringLiteral("inherited")).toBool() &&
                    !item->data(kKey, kPropertyRole).toMap().value(QStringLiteral("read_only")).toBool() &&
                    item->data(kKey, kPropertyRole).toMap().value(QStringLiteral("source")).toString() !=

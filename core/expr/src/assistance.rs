@@ -3,7 +3,11 @@
 
 use super::ast::FUNCTIONS;
 use super::lexer::{Tok, lex};
-use super::{EvalContext, EvalError, Expr, Function, Lookup, Node, NodeKind, Quantity, Span};
+use super::parser::ParseErrorKind;
+use super::units::{base_unit, is_unit_name};
+use super::{
+    Constant, EvalContext, EvalError, Expr, Function, Lookup, Node, NodeKind, Quantity, Span,
+};
 
 /// Help for a supported function. Examples are ordinary editable formulas.
 pub struct FunctionHelp {
@@ -406,9 +410,391 @@ pub fn inspect(
     (span, Expr::from_node(node).eval(lookup, context))
 }
 
+/// What a piece of a formula's text is, for the formula editor's colours
+/// (mitcad#2179). The kinds come from the tokenizer the parser uses and
+/// from where a name stands, never from a second parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenKind {
+    Number,
+    /// A unit after a value (`mm`, `deg`, the inch mark), or a unit's name
+    /// where a value stands (an error the parser reports).
+    Unit,
+    /// A reference to a parameter (whether one has that name is the
+    /// design's to tell).
+    Name,
+    /// A name a `LET` binds, where it is bound and where it is used.
+    Local,
+    /// The table of a column reference, `Screws` of `Screws.dk`.
+    Table,
+    /// The column of a column reference, `dk` of `Screws.dk`.
+    Column,
+    Function,
+    /// `LET` and the constants (`PI`, `E`).
+    Keyword,
+    /// `+ - * / % ^ & < <= > >= = == <> !=` and the `.` of a column.
+    Operator,
+    Bracket,
+    /// `;` and `,` between arguments.
+    Separator,
+    /// Quoted text, also one not closed yet.
+    Text,
+    /// What cannot stand there: a character the tokenizer refuses, a
+    /// name after a value that is no unit, an unknown function, a name
+    /// the design cannot evaluate.
+    Error,
+}
+
+impl TokenKind {
+    /// The kind's name in the `formula_help` query's `tokens`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+            Self::Unit => "unit",
+            Self::Name => "name",
+            Self::Local => "local",
+            Self::Table => "table",
+            Self::Column => "column",
+            Self::Function => "function",
+            Self::Keyword => "keyword",
+            Self::Operator => "operator",
+            Self::Bracket => "bracket",
+            Self::Separator => "separator",
+            Self::Text => "text",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// A piece of a formula's text and what it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormulaToken {
+    pub kind: TokenKind,
+    pub span: Span,
+}
+
+/// The formula's text in pieces, in order, for colouring it while it is
+/// typed: also an unfinished or wrong formula. A part the tokenizer refuses
+/// is an [`TokenKind::Error`] piece and the text after it is cut again; a
+/// quoted text not closed yet runs to the end. White space is in no piece.
+/// Nothing for a formula too long to evaluate.
+pub fn tokens(text: &str) -> Vec<FormulaToken> {
+    let mut raw: Vec<(Option<Tok>, Span)> = Vec::new();
+    let shifted = |span: Span, by: usize| Span::new(span.start + by, span.end + by);
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        let error = match lex(rest) {
+            Ok(found) => {
+                raw.extend(
+                    found
+                        .into_iter()
+                        .map(|t| (Some(t.tok), shifted(t.span, at))),
+                );
+                break;
+            }
+            Err(error) => error,
+        };
+        if matches!(error.kind, ParseErrorKind::TooComplex) {
+            return Vec::new();
+        }
+        let start = error.span.start.min(rest.len());
+        if let Ok(found) = lex(&rest[..start]) {
+            raw.extend(
+                found
+                    .into_iter()
+                    .map(|t| (Some(t.tok), shifted(t.span, at))),
+            );
+        }
+        if matches!(error.kind, ParseErrorKind::UnterminatedText) {
+            raw.push((Some(Tok::Str), Span::new(at + start, text.len())));
+            break;
+        }
+        // At least one character, on a character's boundary.
+        let mut end = error.span.end.clamp(start, rest.len());
+        if end == start {
+            end = start + rest[start..].chars().next().map_or(1, char::len_utf8);
+        }
+        while end < rest.len() && !rest.is_char_boundary(end) {
+            end += 1;
+        }
+        raw.push((None, Span::new(at + start, at + end)));
+        at += end;
+    }
+    classify(text, &raw)
+}
+
+/// The unit names a formula may write after a value (`mm`, `deg`), for
+/// completion.
+pub fn unit_names() -> impl Iterator<Item = &'static str> {
+    super::units::unit_names()
+}
+
+fn classify(text: &str, raw: &[(Option<Tok>, Span)]) -> Vec<FormulaToken> {
+    let locals = let_locals(text, raw);
+    let mut result: Vec<FormulaToken> = Vec::with_capacity(raw.len());
+    for (index, &(tok, span)) in raw.iter().enumerate() {
+        let kind = match tok {
+            None => TokenKind::Error,
+            Some(Tok::Number(_)) => TokenKind::Number,
+            Some(Tok::Str) => TokenKind::Text,
+            Some(Tok::LParen | Tok::RParen) => TokenKind::Bracket,
+            Some(Tok::Semicolon | Tok::Comma) => TokenKind::Separator,
+            Some(Tok::Ident) => {
+                let previous = index.checked_sub(1).map(|i| (raw[i].0, result[i].kind));
+                let next = |n: usize| raw.get(index + n).and_then(|t| t.0);
+                ident_kind(
+                    &text[span.start..span.end],
+                    previous,
+                    next(1),
+                    next(2),
+                    &locals,
+                )
+            }
+            Some(_) => TokenKind::Operator,
+        };
+        result.push(FormulaToken { kind, span });
+    }
+    result
+}
+
+/// What a name is by where it stands: `previous` is the token before it
+/// (its kind as classified), `next` and `after` the two after it.
+fn ident_kind(
+    name: &str,
+    previous: Option<(Option<Tok>, TokenKind)>,
+    next: Option<Tok>,
+    after: Option<Tok>,
+    locals: &[&str],
+) -> TokenKind {
+    if previous.is_some_and(|(tok, _)| tok == Some(Tok::Dot)) {
+        return TokenKind::Column;
+    }
+    if next == Some(Tok::Dot) {
+        return TokenKind::Table;
+    }
+    // After a value only a unit may follow (`30 mm`, `(a + b) in`, `2''`).
+    let after_value = previous.is_some_and(|(tok, kind)| {
+        tok == Some(Tok::RParen)
+            || matches!(
+                kind,
+                TokenKind::Number
+                    | TokenKind::Name
+                    | TokenKind::Local
+                    | TokenKind::Column
+                    | TokenKind::Text
+            )
+            || (kind == TokenKind::Keyword && tok == Some(Tok::Ident))
+    });
+    if after_value {
+        return if base_unit(name).is_some() {
+            TokenKind::Unit
+        } else {
+            TokenKind::Error
+        };
+    }
+    if next == Some(Tok::LParen) {
+        return match Function::from_name(name) {
+            Some(Function::Let) => TokenKind::Keyword,
+            Some(_) => TokenKind::Function,
+            // `PI()`, a constant with an empty argument list.
+            None if Constant::from_name(name).is_some() && after == Some(Tok::RParen) => {
+                TokenKind::Keyword
+            }
+            None => TokenKind::Error,
+        };
+    }
+    if Constant::from_name(name).is_some() {
+        TokenKind::Keyword
+    } else if locals.contains(&name) {
+        TokenKind::Local
+    } else if Function::from_name(name).is_some_and(Function::is_reserved) {
+        // A function's name before its `(` is typed.
+        TokenKind::Function
+    } else if is_unit_name(name) {
+        TokenKind::Unit
+    } else if super::is_unsupported_name(name) {
+        TokenKind::Error
+    } else {
+        TokenKind::Name
+    }
+}
+
+/// The names the formula's `LET`s bind: a name alone in a binding's place
+/// (an odd argument's place, before its `;`).
+fn let_locals<'a>(text: &'a str, raw: &[(Option<Tok>, Span)]) -> Vec<&'a str> {
+    // Per open bracket: whether it is a LET's, its argument and whether
+    // nothing of that argument came yet.
+    let mut stack: Vec<(bool, usize, bool)> = Vec::new();
+    let mut locals = Vec::new();
+    for (index, &(tok, span)) in raw.iter().enumerate() {
+        match tok {
+            Some(Tok::LParen) => {
+                let is_let = index.checked_sub(1).is_some_and(|i| {
+                    raw[i].0 == Some(Tok::Ident)
+                        && text[raw[i].1.start..raw[i].1.end].eq_ignore_ascii_case("let")
+                });
+                if let Some(top) = stack.last_mut() {
+                    top.2 = false;
+                }
+                stack.push((is_let, 0, true));
+            }
+            Some(Tok::RParen) => {
+                stack.pop();
+            }
+            Some(Tok::Semicolon | Tok::Comma) => {
+                if let Some(top) = stack.last_mut() {
+                    top.1 += 1;
+                    top.2 = true;
+                }
+            }
+            _ => {
+                if let Some(top) = stack.last_mut() {
+                    let binding = top.0 && top.1 % 2 == 0 && top.2;
+                    let separated = matches!(
+                        raw.get(index + 1).and_then(|t| t.0),
+                        Some(Tok::Semicolon | Tok::Comma)
+                    );
+                    if binding && separated && tok == Some(Tok::Ident) {
+                        locals.push(&text[span.start..span.end]);
+                    }
+                    top.2 = false;
+                }
+            }
+        }
+    }
+    locals
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pieces' texts and kinds' names.
+    fn kinds(text: &str) -> Vec<(&str, &'static str)> {
+        tokens(text)
+            .into_iter()
+            .map(|t| (&text[t.span.start..t.span.end], t.kind.name()))
+            .collect()
+    }
+
+    #[test]
+    fn tokens_tell_names_units_functions_and_keywords_apart() {
+        assert_eq!(
+            kinds("width+(sheet_thickness*2)+(spacing*2 mm)"),
+            vec![
+                ("width", "name"),
+                ("+", "operator"),
+                ("(", "bracket"),
+                ("sheet_thickness", "name"),
+                ("*", "operator"),
+                ("2", "number"),
+                (")", "bracket"),
+                ("+", "operator"),
+                ("(", "bracket"),
+                ("spacing", "name"),
+                ("*", "operator"),
+                ("2", "number"),
+                ("mm", "unit"),
+                (")", "bracket"),
+            ]
+        );
+        assert_eq!(
+            kinds("LET(p; 5 mm; FLOOR(len / p) * PI)"),
+            vec![
+                ("LET", "keyword"),
+                ("(", "bracket"),
+                ("p", "local"),
+                (";", "separator"),
+                ("5", "number"),
+                ("mm", "unit"),
+                (";", "separator"),
+                ("FLOOR", "function"),
+                ("(", "bracket"),
+                ("len", "name"),
+                ("/", "operator"),
+                ("p", "local"),
+                (")", "bracket"),
+                ("*", "operator"),
+                ("PI", "keyword"),
+                (")", "bracket"),
+            ]
+        );
+        assert_eq!(
+            kinds("'Box ' & Screws.dk"),
+            vec![
+                ("'Box '", "text"),
+                ("&", "operator"),
+                ("Screws", "table"),
+                (".", "operator"),
+                ("dk", "column"),
+            ]
+        );
+        // The inch and foot marks and the degree sign after a number.
+        assert_eq!(
+            kinds("3' 6\" + 30°"),
+            vec![
+                ("3", "number"),
+                ("'", "unit"),
+                ("6", "number"),
+                ("\"", "unit"),
+                ("+", "operator"),
+                ("30", "number"),
+                ("°", "unit"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unfinished_and_wrong_formulas_keep_their_pieces() {
+        // A name after a value that is no unit, an unknown function.
+        assert_eq!(
+            kinds("5 apples + nofun(2)"),
+            vec![
+                ("5", "number"),
+                ("apples", "error"),
+                ("+", "operator"),
+                ("nofun", "error"),
+                ("(", "bracket"),
+                ("2", "number"),
+                (")", "bracket"),
+            ]
+        );
+        // A character the tokenizer refuses, and what follows it.
+        assert_eq!(
+            kinds("a ? b"),
+            vec![("a", "name"), ("?", "error"), ("b", "name")]
+        );
+        // A quoted text not closed yet runs to the end.
+        assert_eq!(
+            kinds("CONCAT(a; 'Box"),
+            vec![
+                ("CONCAT", "function"),
+                ("(", "bracket"),
+                ("a", "name"),
+                (";", "separator"),
+                ("'Box", "text"),
+            ]
+        );
+        // A function's name before its `(`; nothing for nothing.
+        assert_eq!(kinds("FLOOR"), vec![("FLOOR", "function")]);
+        assert!(tokens("").is_empty());
+        assert!(tokens("   ").is_empty());
+        // A multi-byte character the tokenizer refuses stays whole.
+        assert_eq!(
+            kinds("a € b"),
+            vec![("a", "name"), ("€", "error"), ("b", "name")]
+        );
+    }
+
+    #[test]
+    fn unit_names_are_the_parsers() {
+        let names: Vec<&str> = unit_names().collect();
+        assert!(names.contains(&"mm") && names.contains(&"deg") && names.contains(&"in"));
+        for name in names {
+            assert!(Expr::parse(&format!("1 {name}")).is_ok(), "{name}");
+        }
+    }
+
     #[test]
     fn incomplete_nested_calls_and_decimal_commas_use_real_tokens() {
         assert_eq!(signature_at("FLOOR(", 6), Some((Function::Floor, 0)));

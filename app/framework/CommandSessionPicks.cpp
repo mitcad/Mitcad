@@ -19,6 +19,7 @@
 #include "CommandSession.hpp"
 #include "InputPicks.hpp"
 #include "ParameterPicker.hpp"
+#include "UserText.hpp"
 
 namespace mitcad {
 namespace {
@@ -196,7 +197,7 @@ QString CommandSession::limitHint(const QString& key, const QString& text) {
   } catch (const std::exception& e) {
     // A strict parameter refuses it: said where the value is, as other
     // problems are told when the panel's OK is pressed.
-    about = tr("Refused by the limits of %1: %2").arg(own, mitcad::modelMessage(e.what()));
+    about = tr("Refused by the limits of %1: %2").arg(own, mitcad::modelMessage(userText(QString::fromUtf8(e.what()))));
     hint = tr("refused by its limits");
   }
   if (!about.isEmpty()) {

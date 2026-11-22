@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MIT
+# Closing the last design (mitcad#2142) with Preferences › General › Quit
+# MitCad when the last design is closed at its default, off, on part.mitcad
+# (a 20 mm cube in MITCAD_TEST_WORK, opened by the runner):
+#   1. File › Close of the only design: the window stays on the Start page
+#      with no design open (no document tab, "Last design closed: Start
+#      page"), and the process runs on.
+#   2. Open from there: the design shows again in the same window.
+#   3. Closed again, then New Design: a new untitled design from the Start
+#      page, in the same window.
+#   4. Preferences › General shows the check box cleared; it is turned on
+#      and saved (the restart is last-design-close-restart.mitcad-ui).
+# Preferences is a dialog on Windows and Linux (applied with OK) and the
+# Settings window on macOS (applied as it changes). Run by
+# tools/ui-last-design-close-test.sh (Linux),
+# tools/ui-windows-last-design-close-test.ps1 (Windows) and
+# tools/ui-macos-last-design-close-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-document-windows 1
+expect-document-frame-design open
+
+# 1. File › Close of the only design: the Start page, MitCad runs on.
+mark
+command file.close
+wait-log '^Last design closed: Start page$' 20
+wait-log '^Start page shown$' 10
+expect-document-frame-design none
+expect-document-windows 1
+expect-model-bodies 0 0
+sleep 1500
+expect-document-windows 1
+expect-no-log '^Document windows closed'
+screenshot '${MITCAD_TEST_WORK}/last-design-closed.png'
+
+# 2. Open from the Start page: the design again, in the same window.
+mark
+open-file '${MITCAD_TEST_WORK}/part.mitcad'
+wait-log '^Design shown again after the last design closed$' 30
+wait-idle 30
+expect-document-frame-design open
+expect-document-windows 1
+
+# 3. Closed again, then New Design: an untitled design from the Start page.
+mark
+command file.close
+wait-log '^Last design closed: Start page$' 20
+expect-document-frame-design none
+mark
+command file.new_design
+wait-log '^Design shown again after the last design closed$' 20
+wait-idle
+expect-document-frame-design open
+expect-document-windows 1
+
+# 4. The preference: off by default, turned on.
+mark
+command tools.preferences.general
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property quitOnLastClose checked false
+button '^Quit MitCad when the last design is closed$' quitOnLastClose
+key Return
+wait-log '^Preferences: quit when the last design is closed on$' 10
+focus-main
+wait-idle
+expect-setting documents/quitOnLastClose true
+expect-no-log '^Document windows closed'
+expect-never 'TestDriver: FAIL'

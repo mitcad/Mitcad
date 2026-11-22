@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QPoint>
 #include <QHash>
+#include <QJsonArray>
 #include <QPointer>
 #include <QRect>
 #include <QString>
@@ -197,6 +198,16 @@ public:
   void changeUnits();
   // Find in Browser for an item picked in the view (a face finds its body).
   void findInBrowser(const SelectionItem& item);
+  // Selection sets (mitcad#2192, app/COMMANDS.md "Selection Sets"). The
+  // members of a selection for Create Selection Set and a set's Add
+  // Selection and Replace with Selection: the selected Browser rows a set
+  // takes (a feature's row as the feature), else the items when every one
+  // is a member a set takes (browser/SelectionSets.hpp); empty otherwise.
+  QJsonArray selectionSetMembers(const Selection& items) const;
+  // Create Selection Set: a set of the members under the next free name
+  // (SelectionSet1, ...), one undo step, its row then renamed in place;
+  // logged "Created selection set SelectionSet1: body F2.b0, feature F1".
+  void createSelectionSet(const QJsonArray& members);
   // The view's context menu Hide submenu (mitcad#347): the bodies (uids) and
   // the occurrences (paths) of the faces, edges, vertices and bodies of the
   // selection, each once; no occurrence for the root component's bodies.
@@ -340,6 +351,16 @@ private:
   // Ungroup on a folder's row: everything in it out of it, nothing
   // deleted; one undo step `Ungroup Frame`, logged "Ungrouped Frame".
   void ungroupFolder(const BrowserNode& folder);
+  // A selection set's row (mitcad#2192): Select picks every member, as a
+  // click on the row does; Add Selection and Replace with Selection change
+  // its members to the selection's (one undo step, logged "Selection set
+  // Favourites: 3 members"); Remove from Set on a member's row takes it out.
+  void selectSet(const QString& name);
+  void changeSetMembers(const QString& name, bool replace);
+  void removeFromSet(const BrowserNode& member);
+  // The members of a row's menu: the selected rows a set takes when the
+  // row is one of them, else the row's own.
+  QJsonArray menuSetMembers(const BrowserNode& node) const;
   // The occurrences of a folder's row (ComponentFolder), by path, and every
   // body's folder in the component of a body folder's row, by uid.
   QStringList folderOccurrences(const BrowserNode& folder) const;

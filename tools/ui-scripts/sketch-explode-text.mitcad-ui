@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Explode Text (mitcad#2163, GitHub mitcad/Mitcad#520) on
+# sketch-explode-text.json (Sketch1: the text t1 'I', 20 mm high):
+#   1. A click on the text's outline selects it; its context menu offers
+#      Explode Text beside Edit Text, which turns it into plain curves as
+#      one undo step.
+#   2. Trim on the first of them (c4, a piece of the letter) removes it:
+#      the letter's pieces are ordinary sketch curves now.
+# Run by tools/ui-sketch-explode-text-test.sh (Linux),
+# tools/ui-windows-sketch-explode-text-test.ps1 (Windows) and
+# tools/ui-macos-sketch-explode-text-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+command view.fit
+wait-idle
+capture-undo-depth baseline
+
+# 1. The text's context menu: Explode Text.
+mark
+sketch-click-text '^I$'
+wait-idle
+mark
+sketch-click-text '^I$' right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Edit Text [|] Explode Text'
+popup 'Explode Text'
+wait-log '^Exploded text t1 in Sketch1: [0-9]+ curves$'
+wait-idle
+expect-undo-depth ${baseline} 1
+screenshot '${MITCAD_TEST_WORK}/sketch-explode-text.png'
+
+# 2. Trim takes a piece of the letter.
+mark
+command sketch.trim
+wait-log '^Sketch tool Trim$'
+mark
+sketch-click-curve c4
+wait-log '^Trimmed c4 at '
+expect-no-log 'Trim: .*(refused|cannot)'
+key Escape
+wait-idle
+expect-undo-depth ${baseline} 2
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

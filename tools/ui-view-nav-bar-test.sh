@@ -16,8 +16,9 @@
 #      (through the command search) turns the bar's button on again.
 #      Layout Grid likewise.
 #   3. Visual Style: the bar's drop-down lists the styles, Wireframe chosen
-#      there is the View menu's style; the View menu's Shaded with Visible
-#      Edges Only is the bar's check again.
+#      there is the View menu's style; Wireframe with Visible Edges Only
+#      (mitcad#2155) likewise, and still the style after a restart; the View
+#      menu's Shaded with Visible Edges Only is the bar's check again.
 #   4. Fit in the bar fits the view.
 #   5. In a sketch on XZ: the bar is still shown; after Isometric View the
 #      bar's Look At looks at the sketch plane (from FRONT, along 0 1 0);
@@ -110,11 +111,23 @@ round() {
   echo "--- Visual Style"
   ui_mark
   ui_step "Visual Style (bar)"             ui_click_logged "Navigation bar Visual Style"
-  ui_expect_new "Context menu: Shaded | Shaded with Visible Edges Only | Shaded with Hidden Edges | Wireframe | Wireframe with Hidden Edges" \
+  ui_expect_new "Context menu: Shaded | Shaded with Visible Edges Only | Shaded with Hidden Edges | Wireframe | Wireframe with Hidden Edges | Wireframe with Visible Edges Only" \
     "$layout: the bar's drop-down lists the styles"
   ui_step "Wireframe (drop-down)"          ui_menu_choose "Wireframe"
   ui_expect_new "Visual style Wireframe" "$layout: Wireframe from the bar"
   states on on "Wireframe" "$layout: the View menu's style is Wireframe"
+  # The sixth style (mitcad#2155), last in the list, kept after a restart.
+  ui_mark
+  ui_step "Visual Style (bar)"             ui_click_logged "Navigation bar Visual Style"
+  ui_expect_new "Context menu: Shaded | " "$layout: the bar's drop-down again"
+  ui_step "Wireframe with Visible Edges Only (drop-down)" ui_menu_choose "Wireframe with Visible Edges Only"
+  ui_expect_new "Visual style Wireframe with Visible Edges Only" "$layout: Wireframe with Visible Edges Only from the bar"
+  states on on "Wireframe with Visible Edges Only" "$layout: the View menu's style is Wireframe with Visible Edges Only"
+  ui_stop_app
+  ui_start_app --chrome="$layout"
+  UI_MARK=0
+  ui_expect_log "Navigation bar shown ($place) at " "$layout: the bar shown after the restart"
+  states on on "Wireframe with Visible Edges Only" "$layout: the style kept after a restart"
   ui_mark
   ui_step "Shaded with Visible Edges Only (View menu command, search)" ui_command "Shaded with Visible Edges Only"
   ui_expect_new "Visual style Shaded with Visible Edges Only" "$layout: the default style from the View menu"

@@ -356,6 +356,15 @@ vcpkg_from_github(
         1820-stepcafcontrol-sub-shape-names-skip-what-the-reader-left-unresolved.patch
         1830-chfi3d-end-cut-across-the-faces-beside-a-tangent-face.patch
         1840-tkopengl-lines-wider-than-a-pixel-in-a-core-profile-drawn-as-quads.patch
+        1805-chfi3d-corner-of-one-rounding-sets-back-along-its-concave-edges-only.patch
+        2031-tkopengl-window-less-egl-context-draws-into-its-default-fbo-not-the-back-buffer.patch
+        2140-brepoffset-crease-fading-into-a-smooth-face-keeps-its-branch-alone.patch
+        2141-chfi3d-trace-of-the-walk-of-a-rounding.patch
+        2142-chfi3d-no-start-on-a-section-narrower-than-a-vanishing-end.patch
+        2143-brepoffset-apex-cut-only-where-its-construction-has-a-solution.patch
+        2170-bopalgo-wiresplitter-vertex-met-a-period-apart.patch
+        2050-brepoffset-intersection-round-a-periodic-curve-trimmed-over-its-edges-across-the-origin.patch
+        1870-brepblend-approximation-solves-sections-on-the-walked-ball.patch
 )
 
 # The compiler cache (docs/development.md, "The compiler cache of the vcpkg
@@ -383,6 +392,15 @@ vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
         vtk         USE_VTK
 )
 
+# MitCad (mitcad#2031): OCCT's OpenGL driver through EGL on Linux, without
+# Xlib, so that the application runs natively on Wayland as well as on X11
+# (Qt's EGL integration there); with Xlib OCCT reads the current context
+# through GLX only. The config tells MitCad's build (OpenCASCADE_WITH_EGL).
+set(MITCAD_OPTIONS "")
+if(VCPKG_TARGET_IS_LINUX)
+    list(APPEND MITCAD_OPTIONS -DUSE_XLIB=OFF)
+endif()
+
 # We turn off BUILD_MODULE_Draw as it requires TCL 8.6 and TK 8.6 specifically which conflicts with vcpkg only having TCL 9.0 
 # And pre-built ActiveTCL binaries are behind a marketing wall :(
 # We use the Unix install layout for Windows as it matches vcpkg
@@ -390,6 +408,7 @@ vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
         ${FEATURE_OPTIONS}
+        ${MITCAD_OPTIONS}
         -DBUILD_LIBRARY_TYPE=${BUILD_TYPE}
         -DBUILD_MODULE_Draw=OFF
         -DBUILD_DOC_Overview=OFF
@@ -403,6 +422,10 @@ vcpkg_cmake_configure(
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 vcpkg_cmake_config_fixup(CONFIG_PATH lib/cmake/opencascade)
+if(VCPKG_TARGET_IS_LINUX)
+    file(APPEND "${CURRENT_PACKAGES_DIR}/share/opencascade/OpenCASCADEConfig.cmake"
+        "\n# MitCad's port (mitcad#2031): OpenGL through EGL, without Xlib.\nset(OpenCASCADE_WITH_EGL ON)\n")
+endif()
 
 #make occt includes relative to source_file
 file(GLOB extra_headers

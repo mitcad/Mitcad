@@ -41,12 +41,8 @@ the rod's rounded side and its narrow bevel at the top).
   the point on arc where the piece runs on beyond it (prolonged for the
   face at the end to cut it); before, the whole line became the edge.
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow),
-test_rounding_between_rod_and_pipe_ends_at_an_inclined_top,
-test_rounding_between_rod_and_pipe_ends_at_an_inclined_bottom: It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted
-together with 0550, which changes the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0056.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 40fc544..1ac78f8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

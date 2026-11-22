@@ -52,6 +52,12 @@ pub struct BaseDef<P = ParamId> {
     /// bodies without a new one are removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replaces: Vec<BodyUid>,
+    /// Holds the own bodies of a component of a design linked with its
+    /// components (mitcad#2209, `document/link_tree.rs`), or of the
+    /// design's root: it may hold none, as the root of an assembly often
+    /// has none of its own.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub linked_tree: bool,
     /// A base feature has no dimensions; the value form is unused.
     #[serde(skip)]
     pub values: PhantomData<P>,
@@ -118,6 +124,7 @@ impl<P> BaseDef<P> {
             participants: Vec::new(),
             source: None,
             replaces: Vec::new(),
+            linked_tree: false,
             values: PhantomData,
         }
     }
@@ -129,6 +136,7 @@ impl<P> BaseDef<P> {
             participants: clone,
             source: clone,
             replaces: clone,
+            linked_tree: copy,
             values: phantom,
         }
     }
@@ -197,7 +205,9 @@ impl FeatureInfo for BaseDef {
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         // Without bodies it only removes the bodies it replaces.
-        if self.bodies.is_empty() && self.replaces.is_empty() {
+        // A linked design's component without bodies of its own
+        // (mitcad#2209) holds none.
+        if self.bodies.is_empty() && self.replaces.is_empty() && !self.linked_tree {
             return Err("a base feature needs at least one body".to_owned());
         }
         for (i, body) in self.bodies.iter().enumerate() {

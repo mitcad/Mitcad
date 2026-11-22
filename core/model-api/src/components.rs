@@ -1114,6 +1114,18 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             {
                 value["link_parts"] = link_parts_value(Some(parts));
             }
+            // A whole design linked with its components (mitcad#2209):
+            // the linked component says so, and each of its components
+            // names it.
+            if def
+                .and_then(|d| d.link.as_ref())
+                .is_some_and(|l| l.tree.is_some())
+            {
+                value["link_tree"] = json!(true);
+            }
+            if let Some(linked) = a.linked_in(uid) {
+                value["linked_in"] = json!(linked);
+            }
             value
         };
         let mut components = vec![component(ComponentUid::ROOT)];

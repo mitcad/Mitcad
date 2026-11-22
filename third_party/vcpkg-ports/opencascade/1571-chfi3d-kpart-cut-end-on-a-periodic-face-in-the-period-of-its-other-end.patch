@@ -15,9 +15,8 @@ foot on the other (u = 2.07 at 3): its curve on the cylinder was made a
 period off (from 7.85 to 8.35) and the face's wire did not close in its
 parameters (an unorientable face).
 
-Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
-picked at its other side rounded with 1, 3 and 6 on the synthetic body
-whose seam runs up at the side picked first (y = 25).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1571.
 
 Upstream: new.
 

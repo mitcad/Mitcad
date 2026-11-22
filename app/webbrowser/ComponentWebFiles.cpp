@@ -80,9 +80,6 @@ WebFileCheck checkWebFileName(const QString& fileName) {
   if (suffix == QStringLiteral("pdf")) {
     return refused(Text::tr("MitCad cannot import PDF documents (.pdf)."));
   }
-  if (suffix == QStringLiteral("3mf")) {
-    return refused(Text::tr("MitCad cannot import 3MF files as components (.3mf)."));
-  }
   return refused(Text::tr("MitCad cannot import .%1 files.").arg(suffix));
 }
 
@@ -103,8 +100,13 @@ WebFileCheck checkWebFileContent(const QString& fileName, const QByteArray& head
     return refused(Text::tr("%1 is a PDF document, not a model file.").arg(name));
   }
   const QString suffix = QFileInfo(fileName).suffix().toLower();
-  if (check.kind == WebFileKind::Zip && !head.startsWith("PK\x03\x04") && !head.startsWith("PK\x05\x06")) {
+  const bool zip = head.startsWith("PK\x03\x04") || head.startsWith("PK\x05\x06");
+  if (check.kind == WebFileKind::Zip && !zip) {
     return refused(Text::tr("%1 is not a zip file.").arg(name));
+  }
+  // A 3MF file is a zip package (mitcad#2156).
+  if (suffix == QStringLiteral("3mf") && !zip) {
+    return refused(Text::tr("%1 is not a 3MF file: it is not a zip package.").arg(name));
   }
   if ((suffix == QStringLiteral("step") || suffix == QStringLiteral("stp")) && !start.startsWith("iso-10303-21")) {
     return refused(Text::tr("%1 is not a STEP file: it has no ISO-10303-21 header.").arg(name));

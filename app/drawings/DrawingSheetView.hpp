@@ -113,6 +113,9 @@ struct SheetAnnotation {
   // first fill; mitcad#1295): a drag that starts on it slides the tip
   // along its edge. Empty for the others.
   QPolygonF tip;
+  // A hole callout's arrow (its first fill, its point first; mitcad#2212),
+  // logged on the sheet. Empty for the others.
+  QPolygonF arrow;
 };
 
 class DrawingSheetView : public QWidget {
@@ -241,8 +244,12 @@ public:
   // A dimension dragged alone snaps likewise: its outline moves by
   // `delta` (sheet mm) instead of the pointer's drag; so does a note's
   // text, a datum's square or a frame, its leader to 45 degrees
-  // (mitcad#1294).
-  void setDragSnap(bool snapped, const QPointF& delta, const QString& hint);
+  // (mitcad#1294). A hole callout's preview is the model's drawing of it
+  // at that place, with the arrow on the hole (mitcad#2253).
+  void setDragSnap(bool snapped, const QPointF& delta, const QString& hint, const QJsonObject& preview);
+  // Keep the final callout preview until setSheet replaces it with the
+  // settled drawing. Clear it explicitly when the edit fails.
+  void setDraggedCallout(const QJsonObject& preview);
   // The keyboard modifiers of the last mouse button released: with Shift
   // (or Alt, dragsFreely) a dimension is placed or dragged freely, without
   // its snap.
@@ -404,7 +411,7 @@ private:
   // under the pointer does.
   bool followsPointer() const;
   // Paints the groups' items with the sheet's transform.
-  void paintItems(QPainter& painter) const;
+  void paintItems(QPainter& painter, const QJsonArray& groups, const QString& hiddenGroup = {}) const;
   // Paints a title block's image over a box (sheet mm), its proportions
   // kept; false when its file could not be read.
   bool paintImage(QPainter& painter, const QString& base64, const QString& format, const QRectF& box) const;
@@ -523,6 +530,7 @@ private:
   QPointF m_snapAt;
   bool m_dragSnapped = false;
   QPointF m_dragSnap;
+  QJsonObject m_draggedCallout; // model's group and box in sheet millimetres
   QString m_snapHint;
   Qt::KeyboardModifiers m_releaseModifiers;
   // The last right press (mitcad#1404): whether a tool was picking then,

@@ -66,15 +66,8 @@ points of the cuts chained within 100 times the 3D tolerance (at least
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_lens_overflow.cpp,
-test_roundings_joined_across_a_corner (ctest geometry.fillet_lens_overflow):
-a bulge on a housing's rounded corner, its foot rounded with 20, the edges
-given in both orders: valid, the junctions at the height of the blend within
-1e-4, nothing beyond the first side above the top, the material added alike
-on both sides of the corner's bisector. Its failure without the patch is
-still to be shown: the patch does not revert at the port's tip without the
-more than 40 later patches that change the same lines (tried 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0772.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 75f492a0..ff88e36e 100644

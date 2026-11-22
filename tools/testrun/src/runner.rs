@@ -395,6 +395,10 @@ pub struct Runner<'o> {
     /// A release gate's run: the geometry tests left out by their
     /// fingerprints, and those whose passes are kept (`fingerprint`).
     release: Option<fingerprint::Plan>,
+    /// The tests whose first claim on memory held others back
+    /// (`schedule::claimant`, mitcad#2177), and since when (seconds from
+    /// the run's start).
+    claims: BTreeMap<usize, f64>,
 }
 
 /// ctest's listing of the build tree's tests (`--show-only=json-v1`) with
@@ -691,6 +695,7 @@ impl<'o> Runner<'o> {
             stop: None,
             skipped,
             release,
+            claims: BTreeMap::new(),
         })
     }
 
@@ -1141,13 +1146,41 @@ impl<'o> Runner<'o> {
                         available,
                         lane_waiting: self.lane_waiting(),
                     };
-                    let admissible: Vec<usize> = ready
-                        .into_iter()
-                        .filter(|&i| {
+                    let refusals: Vec<_> = ready
+                        .iter()
+                        .map(|&i| {
                             let c = self.tests[i].candidate();
-                            schedule::admit(&c, &running, &now, &self.limits).is_ok()
+                            schedule::admit(&c, &running, &now, &self.limits)
                         })
                         .collect();
+                    // The first claim on memory (mitcad#2177): the tests
+                    // ranked below the claimant leave it its room.
+                    let all: Vec<Candidate> =
+                        ready.iter().map(|&i| self.tests[i].candidate()).collect();
+                    let cap = self.free.map_or(self.limits.budget, |free| free.cap);
+                    let claim = schedule::claimant(&all, &refusals, cap);
+                    let mut held = false;
+                    let admissible: Vec<usize> = ready
+                        .iter()
+                        .enumerate()
+                        .filter(|&(k, _)| refusals[k].is_ok())
+                        .filter(|&(k, _)| match claim {
+                            Some(h) if h != k => {
+                                let room =
+                                    schedule::leaves_room(&all[k], &all[h], &running, &self.limits);
+                                held |= !room;
+                                room
+                            }
+                            _ => true,
+                        })
+                        .map(|(_, &i)| i)
+                        .collect();
+                    // Reported only for a claimant that waits (one that may
+                    // start now goes in this decision).
+                    if let Some(h) = claim.filter(|&h| held && refusals[h].is_err()) {
+                        let at = self.started.elapsed().as_secs_f64();
+                        self.claims.entry(ready[h]).or_insert(at);
+                    }
                     let candidates: Vec<Candidate> = admissible
                         .iter()
                         .map(|&i| self.tests[i].candidate())
@@ -1525,6 +1558,8 @@ impl<'o> Runner<'o> {
             free.line(mean)
         });
         let budget = self.free.map_or(self.limits.budget, |free| free.cap);
+        let claims: Vec<(usize, f64)> = self.claims.iter().map(|(&i, &at)| (i, at)).collect();
+        let claims = report::claims_line(&outcomes, &claims);
         // The release's skipped tests (a stale table of an earlier run goes).
         let release = self.release.as_ref().map(fingerprint::Plan::text);
         let table = self.out.join(fingerprint::SKIPPED_TABLE);
@@ -1552,6 +1587,7 @@ impl<'o> Runner<'o> {
             ui,
             free: free.as_deref(),
             release: release.as_deref(),
+            claims: claims.as_deref(),
         };
         let text = report::render(&summary);
         println!("\n{text}");

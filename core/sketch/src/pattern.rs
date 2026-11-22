@@ -991,6 +991,8 @@ impl SketchEdit<'_> {
     /// whose original changed kind or points is made again. New copies are
     /// placed where the pattern puts them, so that the solve starts there.
     pub fn sync_patterns(&mut self) -> Result<(), String> {
+        // A pattern whose every copy was deleted goes (mitcad#2058).
+        self.drop_emptied_patterns();
         let mut doomed: BTreeSet<EntityUid> = BTreeSet::new();
         for i in 0..self.def.patterns.len() {
             let mut pattern = self.def.patterns[i].clone();
@@ -1188,6 +1190,39 @@ impl SketchEdit<'_> {
             pattern.skipped.extend(hit);
             pattern.skipped.sort_unstable();
             pattern.skipped.dedup();
+        }
+    }
+
+    /// Removes the patterns that make no copy any more, every instance
+    /// skipped while an original stays (mitcad#2058): the last copy
+    /// deleted takes its pattern, as Free Pattern (`sketch.remove` of the
+    /// pattern) does, in the same edit, so that the edit's parameter
+    /// release frees the pattern's spacing or angle parameters. A design
+    /// saved with such a record (0.66.0) loses it on the next edit of its
+    /// sketch; the record made nothing, so no curve moves. The originals
+    /// stay as plain sketch geometry. Says so in a note per pattern.
+    fn drop_emptied_patterns(&mut self) {
+        let emptied: BTreeSet<ConstraintUid> = self
+            .def
+            .patterns
+            .iter()
+            .filter(|p| {
+                p.indices().is_empty()
+                    && p.entities
+                        .iter()
+                        .any(|r| self.def.entity(r.uid()).is_some())
+            })
+            .map(|p| p.id)
+            .collect();
+        if emptied.is_empty() {
+            return;
+        }
+        self.drop_constraints(&emptied);
+        for id in &emptied {
+            self.report.notes.push(crate::said(
+                "the pattern was removed with its last copy",
+                format!("pattern {id} was removed with its last copy"),
+            ));
         }
     }
 

@@ -135,8 +135,15 @@ pub(crate) trait LibrariesCrateOps<K: Kernel> {
     /// (mitcad#1985): each row as the list's, with its `level`, `item`
     /// (none for a Reference), `quantity` (in its parent, or in the whole
     /// design; 0 for a Reference), `placed`, `bom_structure`, `mass` and
-    /// `volume` of one; and the `totals`.
-    fn bom_view_with(&self, keys: &[String], view: mitcad_model::BomView) -> Value;
+    /// `volume` of one; and the `totals`. With `group_identical` the rows
+    /// of equal parts are combined (mitcad#2215), each with the
+    /// `group_names` of the rows it holds, as the list's.
+    fn bom_view_with(
+        &self,
+        keys: &[String],
+        view: mitcad_model::BomView,
+        group_identical: bool,
+    ) -> Value;
 
     /// The `library_usage` query (mitcad#418, mitcad#518): the library parts
     /// the design uses, BUILD sources and inserted library components
@@ -466,9 +473,34 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
         json!({"rows": rows, "group_identical": group_identical})
     }
 
-    fn bom_view_with(&self, keys: &[String], view: mitcad_model::BomView) -> Value {
+    fn bom_view_with(
+        &self,
+        keys: &[String],
+        view: mitcad_model::BomView,
+        group_identical: bool,
+    ) -> Value {
         let legacy = self.parts_list_with(keys);
-        let list = self.bom_view(view);
+        let list = self.bom_view_grouped(view, group_identical);
+        // A grouped row's members by name, as the list's tooltips have them
+        // (mitcad#2215).
+        use mitcad_model::ids::{BodyUid, ComponentUid};
+        let member_name = |(component, body): &(ComponentUid, Option<BodyUid>)| match body {
+            Some(body) => self.body_name(*body),
+            None => legacy["rows"]
+                .as_array()
+                .and_then(|rows| {
+                    rows.iter()
+                        .find(|r| r["component"] == json!(component) && r["purchased"] != true)
+                })
+                .and_then(|r| r["name"].as_str())
+                .map(str::to_owned)
+                .or_else(|| {
+                    self.assembly()
+                        .component(*component)
+                        .map(|c| c.name.clone())
+                })
+                .unwrap_or_default(),
+        };
         let mut rows = Vec::new();
         for row in &list.rows {
             let mut value = match row.body {
@@ -502,6 +534,7 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
             value["bom_structure"] = json!(row.structure.as_str());
             value["mass"] = json!(row.mass);
             value["volume"] = json!(row.volume);
+            value["group_names"] = json!(row.members.iter().map(member_name).collect::<Vec<_>>());
             rows.push(value);
         }
         let mut quantity: usize = list.rows.iter().map(|r| r.quantity).sum();
@@ -522,7 +555,7 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
             mitcad_model::BomView::Structured => "structured",
             mitcad_model::BomView::Parts => "parts",
         };
-        json!({"rows": rows, "view": view,
+        json!({"rows": rows, "view": view, "group_identical": group_identical,
                "totals": {"quantity": quantity, "mass": list.mass, "volume": list.volume}})
     }
 

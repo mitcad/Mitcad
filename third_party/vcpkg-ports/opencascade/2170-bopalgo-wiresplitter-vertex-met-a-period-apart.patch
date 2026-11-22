@@ -1,0 +1,312 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BOPAlgo_WireSplitter: a vertex the edges of a face meet at points a period
+apart, with no closed edge there, is told apart by those points
+(mitcad#2170, GitHub mitcad/Mitcad#463).
+
+The case: a rod with three thin fins, read from a STEP file. The rod's
+side (a cylinder) is one face without a seam: its boundary runs down one
+line of the cylinder (u = 0), round the rod, and back up beside the fins
+(u just short of 2 pi), and it reaches u = 2 pi only at one vertex, where
+two fins meet the rod; there it passes that vertex a second time, on the
+line it ran down (u = 0). An inner wire of two edges, where the third
+fin's knife edge grazes the rod, touches the boundary at that vertex
+(u = 0). Six edges meet at the vertex, at two points of the face's
+parameters a period apart, and none of them is closed on the face. The
+face is valid. A union of the finned rod with a ring or a triangle that
+trims the face splits it with the boolean's face builder (the vertex is
+used more than twice, so BuildDraftFace does not keep its wires).
+
+The wire splitter (Path) treats a vertex as one point unless an edge
+there is closed on the face or degenerated (aVertMap). Arriving at this
+vertex at u = 2 pi, it closed a loop at the earlier visit at u = 0, and it
+chose the edge to go on along from the edges leaving both points, by
+angles measured at each edge's own point. Two of the five loops came out
+closed in 3d but a period apart in 2d: their faces were not closed in the
+face's parameters and could not be oriented (BRepCheck_NotClosed,
+BRepCheck_UnorientableShape), and the union of the 26 bodies of the
+reported design was invalid.
+
+In SplitBlock, on a surface periodic or closed in u or v (the face's
+adaptor), a vertex used by more than two edges, none of them closed on the
+face or degenerated, whose edges meet it at points more than half a period
+apart, is marked (aVertCopies), where the face's own wires (the face given
+to the face builder, valid, its curves meeting each other) also meet it
+at points a period apart. A vertex the boundary passes once, where an edge
+whose curve the boolean made (a section, a split shared with another
+face's edge, on a face spanning more than the period) lies a period from
+the boundary, is not marked: the vertex the join of a pad flush with a
+body's merged cylindrical walls met so came out without the pad when it
+was (geometry.suite.boolean, mitcad#964's case). The face's own vertex is
+matched with the vertex in the split where it is that vertex or lies
+within their tolerances of it: where another argument's vertex coincides
+with it, the pave filler puts a new vertex in its place (MakeSDVertices),
+as in a finned rod's common with a union holding it, and as in the
+reported union of all 31 bodies, which with a match by identity alone
+still missed 24 of them. At a marked vertex Path closes a loop only
+at the visit whose point is the one it came to (not a period away from
+it), and goes on only along edges leaving that point, as it does at a
+vertex on a closed edge with the 2d tolerance. Planar faces, vertices
+whose edges meet them at one point, and vertices on a seam are split as
+before.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2170.
+diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_WireSplitter_1.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_WireSplitter_1.cxx
+--- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_WireSplitter_1.cxx
++++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_WireSplitter_1.cxx
+@@ -71,6 +71,9 @@ static double ClockWiseAngle(const double aAngleIn, const double aAngleOut);
+ static void Path(const BRepAdaptor_Surface&                           aGAS,
+                  const TopoDS_Face&                                   myFace,
+                  const MyDataMapOfShapeBoolean&                       aVertMap,
++                 const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& aVertCopies,
++                 const double                                         aUPeriod,
++                 const double                                         aVPeriod,
+                  const TopoDS_Vertex&                                 aVa,
+                  const TopoDS_Edge&                                   aEOuta,
+                  BOPAlgo_EdgeInfo&                                    anEdgeInfo,
+@@ -82,6 +85,11 @@ static void Path(const BRepAdaptor_Surface&                           aGAS,
+                                             NCollection_List<BOPAlgo_EdgeInfo>,
+                                             TopTools_ShapeMapHasher>& mySmartMap);
+ 
++static bool IsSameCopy(const gp_Pnt2d& theP1,
++                       const gp_Pnt2d& theP2,
++                       const double    theUPeriod,
++                       const double    theVPeriod);
++
+ static double Tolerance2D(const TopoDS_Vertex& aV, const BRepAdaptor_Surface& aGAS);
+ 
+ static double UTolerance2D(const TopoDS_Vertex& aV, const BRepAdaptor_Surface& aGAS);
+@@ -304,6 +312,122 @@ void BOPAlgo_WireSplitter::SplitBlock(const TopoDS_Face&                   myFac
+   // 3. Angles in mySmartMap
+   const BRepAdaptor_Surface& aBAS = theContext->SurfaceAdaptor(myFace);
+   //
++  // Vertices the edges meet at points of the face's parameters a period
++  // apart, with no closed edge there to mark them (a face of a cylinder
++  // without a seam, whose boundary passes a vertex once at one end of the
++  // period and once at the other, an inner wire touching it there).
++  // Path tells such a vertex's points apart: a loop closes there only at
++  // the point it left from, and goes on along an edge leaving the point
++  // it came to.
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aVertCopies;
++  double                                                 aUPeriod = 0., aVPeriod = 0.;
++  if (aBAS.IsUPeriodic())
++  {
++    aUPeriod = aBAS.UPeriod();
++  }
++  else if (aBAS.IsUClosed())
++  {
++    aUPeriod = aBAS.LastUParameter() - aBAS.FirstUParameter();
++  }
++  if (aBAS.IsVPeriodic())
++  {
++    aVPeriod = aBAS.VPeriod();
++  }
++  else if (aBAS.IsVClosed())
++  {
++    aVPeriod = aBAS.LastVParameter() - aBAS.FirstVParameter();
++  }
++  if (aUPeriod > 0. || aVPeriod > 0.)
++  {
++    for (i = 1; i <= aNb; i++)
++    {
++      const TopoDS_Vertex& aV = (*(TopoDS_Vertex*)(&mySmartMap.FindKey(i)));
++      const NCollection_List<BOPAlgo_EdgeInfo>& aLEI = mySmartMap(i);
++      if (aLEI.Extent() < 3 || aVertMap.Find(aV))
++      {
++        continue;
++      }
++      bool     bFirst = true;
++      gp_Pnt2d aP2D0;
++      aItLEI.Initialize(aLEI);
++      for (; aItLEI.More(); aItLEI.Next())
++      {
++        const BOPAlgo_EdgeInfo& aEI = aItLEI.Value();
++        aVV                         = aV;
++        aVV.Orientation(aEI.IsIn() ? TopAbs_REVERSED : TopAbs_FORWARD);
++        const gp_Pnt2d aP2D = Coord2d(aVV, aEI.Edge(), myFace);
++        if (bFirst)
++        {
++          aP2D0  = aP2D;
++          bFirst = false;
++        }
++        else if (!IsSameCopy(aP2D0, aP2D, aUPeriod, aVPeriod))
++        {
++          aVertCopies.Add(aV);
++          break;
++        }
++      }
++    }
++    // Only where the face's own wires meet the vertex at points a period
++    // apart: the face is valid, its own curves meet each other there. An
++    // edge whose curve on the face the boolean made (a section, a split
++    // shared with another face's edge, on a face spanning more than the
++    // period) may lie a period from the boundary at a vertex the boundary
++    // passes once; such a vertex is split as before. The face's own vertex
++    // is taken where it is the vertex or lies within their tolerances of
++    // it: where another shape's vertex coincides with it, the boolean puts
++    // a new vertex in its place (the face of a finned rod, its end circle's
++    // vertex met by a bare rod's lying on it; the rod's common with a union
++    // holding it, each vertex met by its image).
++    if (!aVertCopies.IsEmpty())
++    {
++      NCollection_DataMap<TopoDS_Shape, gp_Pnt2d, TopTools_ShapeMapHasher> aFirstPoints;
++      NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>              aOwnCopies;
++      TopExp_Explorer aExpE(myFace, TopAbs_EDGE);
++      for (; aExpE.More(); aExpE.Next())
++      {
++        const TopoDS_Edge& aE = TopoDS::Edge(aExpE.Current());
++        if (BRep_Tool::Degenerated(aE) || BRep_Tool::IsClosed(aE, myFace)
++            || !BOPTools_AlgoTools2D::HasCurveOnSurface(aE, myFace))
++        {
++          continue;
++        }
++        TopoDS_Iterator aItV(aE);
++        for (; aItV.More(); aItV.Next())
++        {
++          const TopoDS_Vertex& aVE   = TopoDS::Vertex(aItV.Value());
++          const gp_Pnt         aPVE  = BRep_Tool::Pnt(aVE);
++          const double         aTolE = BRep_Tool::Tolerance(aVE);
++          NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator aItC(aVertCopies);
++          for (; aItC.More(); aItC.Next())
++          {
++            const TopoDS_Vertex& aVC = TopoDS::Vertex(aItC.Key());
++            if (aOwnCopies.Contains(aVC))
++            {
++              continue;
++            }
++            if (!aVC.IsSame(aVE)
++                && aPVE.Distance(BRep_Tool::Pnt(aVC)) > aTolE + BRep_Tool::Tolerance(aVC))
++            {
++              continue;
++            }
++            const gp_Pnt2d  aP2D  = Coord2d(aVE, aE, myFace);
++            const gp_Pnt2d* pP2D0 = aFirstPoints.Seek(aVC);
++            if (!pP2D0)
++            {
++              aFirstPoints.Bind(aVC, aP2D);
++            }
++            else if (!IsSameCopy(*pP2D0, aP2D, aUPeriod, aVPeriod))
++            {
++              aOwnCopies.Add(aVC);
++            }
++          }
++        }
++      }
++      aVertCopies = aOwnCopies;
++    }
++  }
++  //
+   for (i = 1; i <= aNb; i++)
+   {
+     const TopoDS_Vertex&                      aV   = (*(TopoDS_Vertex*)(&mySmartMap.FindKey(i)));
+@@ -357,7 +481,20 @@ void BOPAlgo_WireSplitter::SplitBlock(const TopoDS_Face&                   myFac
+         aVertVa.Clear();
+         aCoordVa.Clear();
+         //
+-        Path(aBAS, myFace, aVertMap, aVa, aEOuta, aEI, aLS, aVertVa, aCoordVa, aCB, mySmartMap);
++        Path(aBAS,
++             myFace,
++             aVertMap,
++             aVertCopies,
++             aUPeriod,
++             aVPeriod,
++             aVa,
++             aEOuta,
++             aEI,
++             aLS,
++             aVertVa,
++             aCoordVa,
++             aCB,
++             mySmartMap);
+       }
+     }
+   } // for (i=1; i<=aNb; ++i) {
+@@ -368,6 +505,9 @@ void BOPAlgo_WireSplitter::SplitBlock(const TopoDS_Face&                   myFac
+ void Path(const BRepAdaptor_Surface&                           aGAS,
+           const TopoDS_Face&                                   myFace,
+           const MyDataMapOfShapeBoolean&                       aVertMap,
++          const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& aVertCopies,
++          const double                                         aUPeriod,
++          const double                                         aVPeriod,
+           const TopoDS_Vertex&                                 aVFirst,
+           const TopoDS_Edge&                                   aEFirst,
+           BOPAlgo_EdgeInfo&                                    aEIFirst,
+@@ -383,7 +523,7 @@ void Path(const BRepAdaptor_Surface&                           aGAS,
+   double                                       anAngleIn, anAngleOut, anAngle, aMinAngle;
+   double                                       aTol2D, aTol2D2, aD2, aTwoPI;
+   bool                                         anIsSameV2d, anIsSameV, anIsOut, anIsNotPassed;
+-  bool                                         bIsClosed;
++  bool                                         bIsClosed, bHasCopies;
+   TopoDS_Vertex                                aVa, aVb;
+   TopoDS_Edge                                  aEOuta;
+   NCollection_List<BOPAlgo_EdgeInfo>::Iterator anIt;
+@@ -431,7 +571,8 @@ void Path(const BRepAdaptor_Surface&                           aGAS,
+     aTol2D  = 2. * Tolerance2D(aVb, aGAS);
+     aTol2D2 = aTol2D * aTol2D;
+     //
+-    bIsClosed = aVertMap.Find(aVb);
++    bIsClosed  = aVertMap.Find(aVb);
++    bHasCopies = aVertCopies.Contains(aVb);
+     {
+       NCollection_List<TopoDS_Shape> aBuf;
+       bool                           bHasEdge = false;
+@@ -458,7 +599,12 @@ void Path(const BRepAdaptor_Surface&                           aGAS,
+         anIsSameV2d = anIsSameV;
+         if (anIsSameV)
+         {
+-          if (bIsClosed)
++          if (bHasCopies)
++          {
++            // Closed only at the point of the vertex it left from.
++            anIsSameV2d = IsSameCopy(aPaPrev, aPb, aUPeriod, aVPeriod);
++          }
++          else if (bIsClosed)
+           {
+             aD2         = aPaPrev.SquareDistance(aPb);
+             anIsSameV2d = aD2 < aTol2D2;
+@@ -578,7 +724,15 @@ void Path(const BRepAdaptor_Surface&                           aGAS,
+         else
+         {
+           // check 2d distance
+-          if (bIsClosed)
++          if (bHasCopies)
++          {
++            // Only an edge leaving the point of the vertex it came to.
++            if (!IsSameCopy(Coord2dVf(aE, myFace), aPb, aUPeriod, aVPeriod))
++            {
++              continue;
++            }
++          }
++          else if (bIsClosed)
+           {
+             gp_Pnt2d aP2Dx;
+             //
+@@ -866,6 +1020,26 @@ double Angle(const gp_Dir2d& aDir2D)
+ 
+ //=================================================================================================
+ 
++bool IsSameCopy(const gp_Pnt2d& theP1,
++                const gp_Pnt2d& theP2,
++                const double    theUPeriod,
++                const double    theVPeriod)
++{
++  // Whether two points of one vertex in the face's parameters are one
++  // point, not a period apart (they are either).
++  if (theUPeriod > 0. && fabs(theP1.X() - theP2.X()) > 0.5 * theUPeriod)
++  {
++    return false;
++  }
++  if (theVPeriod > 0. && fabs(theP1.Y() - theP2.Y()) > 0.5 * theVPeriod)
++  {
++    return false;
++  }
++  return true;
++}
++
++//=================================================================================================
++
+ double Tolerance2D(const TopoDS_Vertex& aV, const BRepAdaptor_Surface& aGAS)
+ {
+   double              aTol2D, anUr, aVr, aTolV3D;

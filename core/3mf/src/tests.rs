@@ -251,7 +251,7 @@ fn rejects_what_the_core_specification_does_not_allow() {
     );
     fails(
         xml.replace("<model ", "<model requiredextensions=\"p\" "),
-        "requires extensions",
+        "which the file does not declare",
     );
     fails(
         xml.replace(CORE_NAMESPACE, "http://example.invalid/3mf"),
@@ -605,4 +605,298 @@ fn cut_packages_and_other_files_are_refused() {
         assert!(read(other).is_err());
         assert!(read_package(other).is_err());
     }
+}
+
+/// A mesh as the XML of a 3MF `<mesh>`.
+fn mesh_xml(mesh: &Mesh) -> String {
+    let mut xml = String::from("<mesh><vertices>");
+    for v in &mesh.vertices {
+        xml.push_str(&format!(
+            "<vertex x=\"{}\" y=\"{}\" z=\"{}\"/>",
+            v[0], v[1], v[2]
+        ));
+    }
+    xml.push_str("</vertices><triangles>");
+    for t in &mesh.triangles {
+        xml.push_str(&format!(
+            "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
+            t[0], t[1], t[2]
+        ));
+    }
+    xml.push_str("</triangles></mesh>");
+    xml
+}
+
+/// A package of the root model `root` (`3D/3dmodel.model`) and the other
+/// files by path, as a slicer's project is laid out.
+fn slicer_package(root: &str, files: &[(&str, String)]) -> Vec<u8> {
+    let mut zip = mitcad_zip::Writer::new();
+    let types = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+         <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+         <Default Extension=\"model\" ContentType=\"{MODEL_CONTENT_TYPE}\"/>\
+         <Default Extension=\"config\" ContentType=\"text/xml\"/></Types>"
+    );
+    let relationships = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+         <Relationship Target=\"/3D/3dmodel.model\" Id=\"rel-1\" Type=\"{MODEL_RELATIONSHIP}\"/>\
+         </Relationships>"
+    );
+    let stored = mitcad_zip::Method::Stored;
+    zip.add("[Content_Types].xml", types.as_bytes(), stored)
+        .unwrap();
+    zip.add("_rels/.rels", relationships.as_bytes(), stored)
+        .unwrap();
+    zip.add("3D/3dmodel.model", root.as_bytes(), stored)
+        .unwrap();
+    for (path, text) in files {
+        zip.add(path, text.as_bytes(), stored).unwrap();
+    }
+    zip.finish().unwrap()
+}
+
+/// A model part's XML with the Production extension required.
+fn production_model(body: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"{CORE_NAMESPACE}\" \
+         xmlns:p=\"{PRODUCTION_NAMESPACE}\" requiredextensions=\"p\">{body}</model>"
+    )
+}
+
+/// A slicer's project (mitcad#2156): the root model places objects whose
+/// meshes are in `3D/Objects/object_1.model` through the Production
+/// extension's `p:path`; the meshes have no names, the settings file
+/// names them; the colour is a base material of the other model part.
+fn production_project() -> (Vec<u8>, String, String) {
+    let objects = production_model(&format!(
+        "<resources>\
+         <basematerials id=\"1\"><base name=\"Signal red\" displaycolor=\"#FF0000FF\"/></basematerials>\
+         <object id=\"2\" type=\"model\" pid=\"1\" pindex=\"0\">{}</object>\
+         <object id=\"3\" type=\"model\" name=\"Pin\">{}</object>\
+         </resources><build/>",
+        mesh_xml(&cube([0.0; 3], 10.0)),
+        mesh_xml(&cube([0.0; 3], 2.0)),
+    ));
+    let root = production_model(
+        "<resources>\
+         <object id=\"5\" type=\"model\"><components>\
+         <component p:path=\"/3D/Objects/object_1.model\" objectid=\"2\"/>\
+         <component p:path=\"/3D/Objects/object_1.model\" objectid=\"3\" \
+         transform=\"1 0 0 0 1 0 0 0 1 20 0 0\"/>\
+         </components></object>\
+         <object id=\"6\" type=\"model\"><components>\
+         <component p:path=\"/3D/Objects/object_1.model\" objectid=\"2\"/>\
+         </components></object>\
+         </resources><build>\
+         <item objectid=\"5\" transform=\"1 0 0 0 1 0 0 0 1 0 0 5\"/>\
+         <item objectid=\"6\" transform=\"0 1 0 -1 0 0 0 0 1 50 0 5\"/>\
+         </build>",
+    );
+    let settings = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<config>\
+         <object id=\"5\"><metadata key=\"name\" value=\"Bracket\"/>\
+         <part id=\"2\" subtype=\"normal_part\"><metadata key=\"name\" value=\"Plate\"/></part>\
+         </object></config>"
+        .to_owned();
+    (
+        slicer_package(
+            &root,
+            &[
+                ("3D/Objects/object_1.model", objects.clone()),
+                ("Metadata/model_settings.config", settings),
+            ],
+        ),
+        root,
+        objects,
+    )
+}
+
+#[test]
+fn production_components_place_objects_of_other_model_parts() {
+    let (data, _, _) = production_project();
+    let model = read(&data).unwrap();
+    // The plate placed twice (by both objects), the pin once.
+    assert_eq!(model.parts.len(), 2, "{:?}", model.parts);
+    let plate = &model.parts[0];
+    let pin = &model.parts[1];
+    // The plate's name from the settings (its object's part), the pin's
+    // its own.
+    assert_eq!(plate.name, "Plate");
+    assert_eq!(pin.name, "Pin");
+    assert_eq!(plate.color, Some([1.0, 0.0, 0.0]));
+    assert_eq!(pin.color, None);
+    assert_eq!(plate.mesh, cube([0.0; 3], 10.0));
+    let up = Placement {
+        translation: [0.0, 0.0, 5.0],
+        ..Placement::IDENTITY
+    };
+    // A quarter turn about z, 50 mm along x and 5 up.
+    let turned = Placement {
+        linear: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        translation: [50.0, 0.0, 5.0],
+    };
+    assert_eq!(plate.placements, vec![up, turned]);
+    assert_eq!(
+        pin.placements,
+        vec![Placement {
+            translation: [20.0, 0.0, 5.0],
+            ..Placement::IDENTITY
+        }]
+    );
+    // Two build items: two objects, named by the settings or by their id.
+    assert_eq!(model.objects.len(), 2);
+    assert_eq!(model.objects[0].name, "Bracket");
+    assert_eq!(model.objects[0].components, vec![(0, 0), (1, 0)]);
+    assert_eq!(model.objects[1].name, "Object 6");
+    assert_eq!(model.objects[1].components, vec![(0, 1)]);
+    // The import's read: the same, and the base material's name.
+    let imported = read_for_import(&data).unwrap();
+    assert_eq!(imported.model, model);
+    assert_eq!(
+        imported.materials,
+        vec![Some("Signal red".to_owned()), None]
+    );
+    assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+
+    // Without the settings file: the reader's own names.
+    let (_, root, objects) = production_project();
+    let bare = slicer_package(&root, &[("3D/Objects/object_1.model", objects)]);
+    let model = read(&bare).unwrap();
+    assert_eq!(model.parts[0].name, "Object 2");
+    assert_eq!(model.objects[0].name, "Object 5");
+}
+
+#[test]
+fn other_required_extensions_and_bad_references_are_refused_in_words() {
+    let (_, root, objects) = production_project();
+    let fails = |root: &str, objects: &str, text: &str| {
+        let data = slicer_package(root, &[("3D/Objects/object_1.model", objects.to_owned())]);
+        let error = read(&data).unwrap_err().to_string();
+        assert!(error.contains(text), "{error} (expected: {text})");
+        let error = read_for_import(&data).unwrap_err().to_string();
+        assert!(error.contains(text), "{error} (expected: {text})");
+    };
+    // The Slice extension required beside the Production extension.
+    let slice = root.replace(
+        "requiredextensions=\"p\"",
+        "xmlns:s=\"http://schemas.microsoft.com/3dmanufacturing/slice/2015/07\" \
+         requiredextensions=\"p s\"",
+    );
+    fails(
+        &slice,
+        &objects,
+        "the file requires the 3MF Slice extension, which MitCad does not read",
+    );
+    // Required by the other model part only.
+    let material = objects.replace(
+        "requiredextensions=\"p\"",
+        "xmlns:m=\"http://schemas.microsoft.com/3dmanufacturing/material/2015/02\" \
+         requiredextensions=\"m\"",
+    );
+    fails(&root, &material, "Materials and Properties extension");
+    // A part that is not in the package, an object that is not in it.
+    fails(
+        &root.replace(
+            "object_1.model\" objectid=\"3\"",
+            "object_9.model\" objectid=\"3\"",
+        ),
+        &objects,
+        "has no model part 3D/Objects/object_9.model",
+    );
+    fails(
+        &root.replace("objectid=\"3\"", "objectid=\"4\""),
+        &objects,
+        "refers to object 4 of 3D/Objects/object_1.model, which is not defined",
+    );
+    // Only the root model refers to other model parts.
+    let chained = objects.replace(
+        "</resources>",
+        "<object id=\"7\" type=\"model\"><components>\
+         <component p:path=\"/3D/3dmodel.model\" objectid=\"5\"/></components></object>\
+         </resources>",
+    );
+    fails(
+        &root,
+        &chained,
+        "only the root model refers to other model parts",
+    );
+    // Not a zip archive at all.
+    let error = read_for_import(b"solid cube\nendsolid cube\n")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not a zip package"), "{error}");
+}
+
+#[test]
+fn the_import_takes_an_open_mesh_with_a_warning() {
+    let model = Model {
+        name: "Open".to_owned(),
+        parts: vec![part(
+            "Shell",
+            cube([0.0; 3], 10.0),
+            Some([0.0, 0.0, 1.0]),
+            vec![Placement::IDENTITY],
+        )],
+        ..Model::default()
+    };
+    let data = write(&model).unwrap();
+    let xml = model_xml(&data);
+    let repack = |model: &str| {
+        let archive = mitcad_zip::Archive::new(data.clone()).unwrap();
+        let mut zip = mitcad_zip::Writer::new();
+        for name in ["[Content_Types].xml", "_rels/.rels"] {
+            let bytes = archive.read_by_name(name).unwrap();
+            zip.add(name, &bytes, mitcad_zip::Method::Stored).unwrap();
+        }
+        zip.add(
+            "3D/3dmodel.model",
+            model.as_bytes(),
+            mitcad_zip::Method::Stored,
+        )
+        .unwrap();
+        zip.finish().unwrap()
+    };
+    // The top left open, one triangle that uses a vertex twice.
+    let open = repack(
+        &xml.replacen("<triangle v1=\"4\" v2=\"5\" v3=\"7\"/>", "", 1)
+            .replacen(
+                "<triangle v1=\"0\" v2=\"2\" v3=\"3\"/>",
+                "<triangle v1=\"0\" v2=\"2\" v3=\"3\"/>\n<triangle v1=\"1\" v2=\"1\" v3=\"3\"/>",
+                1,
+            ),
+    );
+    assert!(
+        read(&open)
+            .unwrap_err()
+            .to_string()
+            .contains("uses a vertex twice")
+    );
+    let imported = read_for_import(&open).unwrap();
+    let shell = &imported.model.parts[0];
+    assert_eq!(shell.name, "Shell");
+    assert_eq!(shell.mesh.triangles.len(), 11);
+    assert_eq!(shell.color, Some([0.0, 0.0, 1.0]));
+    assert_eq!(imported.materials, vec![Some("Shell".to_owned())]);
+    assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
+    let warning = &imported.warnings[0];
+    assert!(warning.starts_with("Shell: "), "{warning}");
+    assert!(
+        warning.contains("triangles that use a vertex twice are left out: 1"),
+        "{warning}"
+    );
+    assert!(warning.contains("its mesh is not closed"), "{warning}");
+    assert!(
+        warning.contains("Convert Mesh cannot make a solid"),
+        "{warning}"
+    );
+    // An index out of range is still refused.
+    let beyond = repack(&xml.replacen(
+        "v1=\"0\" v2=\"2\" v3=\"3\"",
+        "v1=\"0\" v2=\"2\" v3=\"9\"",
+        1,
+    ));
+    let error = read_for_import(&beyond).unwrap_err().to_string();
+    assert!(error.contains("beyond the 8 vertices"), "{error}");
 }

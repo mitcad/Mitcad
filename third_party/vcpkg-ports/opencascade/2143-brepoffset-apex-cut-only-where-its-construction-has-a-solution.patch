@@ -1,0 +1,326 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offsets: an apex of a face with a degenerated edge is cut only where its
+construction has a solution; elsewhere that side is left as it is
+(mitcad#2140, GitHub mitcad/Mitcad#517).
+
+The case: a Y tube's crotch rounded (patch 2142), then shelled 2 mm
+inwards with its ends open. Each rounding face ends in a point where the
+crease fades (a degenerated edge at its vanishing end, ChFi3d_ShrinkVanishingEnd,
+patch 0130). BRepOffset_Offset::Init takes a face with a degenerated edge
+of an offset surface for one with an apex, like a cone's or a sphere's
+pole, when the offset iso there is longer than 1e-5 (TolApex): it crosses
+the generatrix with the apex line (through the degenerated point, square to
+the plane of three points of the offset iso) and, offset inwards, projects
+that crossing onto the opposite iso to cut the surface there. At the
+rounding's vanishing end the offset iso is micrometres long and nearly
+straight, the apex line has no meaning, and the crossing projects nowhere:
+GeomAPI_ProjectPointOnCurve::LowerDistanceParameter read a solution that
+does not exist and raised Standard_OutOfRange without a message, the thick
+solid failing at once (MitCad: "the geometry kernel's offset raised an
+error"; the debugger's stop: TKGeomAlgo under BRepOffset_Offset::Init from
+MakeOffsetFaces).
+
+- In each of the four sides (u and v, first and last), the apex is cut
+  only where the generatrix crosses the apex line (GeomAPI_ExtremaCurveCurve
+  has an extremum) and, offset inwards, the crossing projects onto the iso
+  (GeomAPI_ProjectPointOnCurve has a point). Elsewhere that side is not
+  cut and does not count as a singularity: the degenerated edge's offset is
+  made as for any other edge (degenerated, at its vertex's offset). Where
+  the construction has its solutions, nothing changes.
+- A degenerated side is taken for an apex only where its offset iso is
+  longer than 2 % of the offset (and than TolApex, 1e-5, as before): at
+  an apex the surface's normals turn about the point, at a rounding's
+  vanishing end they stay parallel. (With the guard alone, the projection
+  on the rounding's other face found a meaningless point at the face's far
+  end, the offset face was cut to nothing there, its edges' curves on it
+  collapsed to a point, and the shell came out valid but with tolerances
+  of tens of millimetres, every point classified on it.)
+  The rounding's vanishing ends' offset isos measured 0.0045 (rounded
+  with 6) and 0.0024 (with 50) for a wall of 2: a turn of the normals of
+  about 0.1 degree; a cone's or a sphere's pole turns them by tens of
+  degrees, its offset iso a sizable part of the offset (a first threshold
+  of 1e-3 of the offset was below both).
+- With MITCAD_TRACE_OFFSET_CREASE set, each degenerated side's offset iso
+  length and the threshold are printed.
+- (A face with two degenerated sides of which one is cut and the other not
+  keeps the one singularity flag of the face, as before.)
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2143.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx
+@@ -81,6 +81,7 @@
+ static int  NbOFFSET = 0;
+ #endif
+ #include <cstdio>
++#include <OSD_Environment.hxx>
+ #include <Geom_BSplineSurface.hxx>
+ 
+ static gp_Pnt GetFarestCorner(const TopoDS_Wire& aWire)
+@@ -565,6 +566,13 @@
+     if (!DegEdges.IsEmpty())
+     {
+       const double TolApex = 1.e-5;
++      // (An apex is where the surface's normals turn about the degenerated
++      // point, its offset iso a part of the offset long, a cone's or a
++      // sphere's pole; not a rounding's end where its section vanishes, the
++      // normals there parallel and the offset iso micrometres long,
++      // mitcad#2140.)
++      const double anApexIso = std::max(TolApex, 0.02 * std::abs(myOffset));
++      const bool   aTraceApex = !OSD_Environment("MITCAD_TRACE_OFFSET_CREASE").Value().IsEmpty();
+       // define the iso of singularity (u or v)
+       TopoDS_Edge               theDegEdge = TopoDS::Edge(DegEdges(1));
+       occ::handle<Geom2d_Curve> aCurve = BRep_Tool::CurveOnSurface(theDegEdge, Face, fpar, lpar);
+@@ -637,7 +645,12 @@
+         if (UminDegen)
+         {
+           occ::handle<Geom_Curve> uiso = TheSurf->UIso(uf1);
+-          if (BRepOffset_Tool::Gabarit(uiso) > TolApex)
++          if (aTraceApex)
++          {
++            std::fprintf(stderr, "offset apex: a degenerated side's offset iso %.6g long, the apex threshold %.6g\n",
++                         BRepOffset_Tool::Gabarit(uiso), anApexIso);
++          }
++          if (BRepOffset_Tool::Gabarit(uiso) > anApexIso)
+           {
+             occ::handle<Geom_Surface> BasisSurf =
+               occ::down_cast<Geom_OffsetSurface>(TheSurf)->BasisSurface();
+@@ -652,9 +665,21 @@
+             occ::handle<Geom_Line>    LineGeneratrix = new Geom_Line(Pfirst, DirGeneratrix);
+             GeomAPI_ExtremaCurveCurve theExtrema(LineGeneratrix, LineApex);
+             gp_Pnt                    Pint1, Pint2;
+-            theExtrema.NearestPoints(Pint1, Pint2);
+-            double length = Pfirst.Distance(Pint1);
+-            if (OffsetOutside)
++            // (An apex is cut only where the generatrix crosses the apex
++            // line and, offset inwards, that crossing projects onto the
++            // iso: a rounding's end where its section vanishes is no apex,
++            // and its offset iso is nearly a point, mitcad#2140.)
++            bool aApexCut = theExtrema.NbExtrema() > 0;
++            double length = 0.;
++            if (aApexCut)
++            {
++              theExtrema.NearestPoints(Pint1, Pint2);
++              length = Pfirst.Distance(Pint1);
++            }
++            if (!aApexCut)
++            {
++            }
++            else if (OffsetOutside)
+             {
+               occ::handle<Geom_BoundedSurface> aSurf =
+                 new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, vf2);
+@@ -668,17 +693,29 @@
+             {
+               occ::handle<Geom_Curve>     viso = TheSurf->VIso(vf1);
+               GeomAPI_ProjectPointOnCurve Projector(Pint1, viso);
+-              double                      NewFirstU = Projector.LowerDistanceParameter();
+-              TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, NewFirstU, uf2, vf1, vf2);
+-              MinApex = TheSurf->Value(NewFirstU, vf1);
++              aApexCut = Projector.NbPoints() > 0;
++              if (aApexCut)
++              {
++                double                      NewFirstU = Projector.LowerDistanceParameter();
++                TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, NewFirstU, uf2, vf1, vf2);
++                MinApex = TheSurf->Value(NewFirstU, vf1);
++              }
++            }
++            if (aApexCut)
++            {
++              HasSingularity = true;
+             }
+-            HasSingularity = true;
+           }
+         } // end of if (UminDegen)
+         if (UmaxDegen)
+         {
+           occ::handle<Geom_Curve> uiso = TheSurf->UIso(uf2);
+-          if (BRepOffset_Tool::Gabarit(uiso) > TolApex)
++          if (aTraceApex)
++          {
++            std::fprintf(stderr, "offset apex: a degenerated side's offset iso %.6g long, the apex threshold %.6g\n",
++                         BRepOffset_Tool::Gabarit(uiso), anApexIso);
++          }
++          if (BRepOffset_Tool::Gabarit(uiso) > anApexIso)
+           {
+             occ::handle<Geom_Surface> BasisSurf =
+               occ::down_cast<Geom_OffsetSurface>(TheSurf)->BasisSurface();
+@@ -693,9 +730,21 @@
+             occ::handle<Geom_Line>    LineGeneratrix = new Geom_Line(Pfirst, DirGeneratrix);
+             GeomAPI_ExtremaCurveCurve theExtrema(LineGeneratrix, LineApex);
+             gp_Pnt                    Pint1, Pint2;
+-            theExtrema.NearestPoints(Pint1, Pint2);
+-            double length = Pfirst.Distance(Pint1);
+-            if (OffsetOutside)
++            // (An apex is cut only where the generatrix crosses the apex
++            // line and, offset inwards, that crossing projects onto the
++            // iso: a rounding's end where its section vanishes is no apex,
++            // and its offset iso is nearly a point, mitcad#2140.)
++            bool aApexCut = theExtrema.NbExtrema() > 0;
++            double length = 0.;
++            if (aApexCut)
++            {
++              theExtrema.NearestPoints(Pint1, Pint2);
++              length = Pfirst.Distance(Pint1);
++            }
++            if (!aApexCut)
++            {
++            }
++            else if (OffsetOutside)
+             {
+               occ::handle<Geom_BoundedSurface> aSurf =
+                 new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, vf2);
+@@ -709,17 +758,29 @@
+             {
+               occ::handle<Geom_Curve>     viso = TheSurf->VIso(vf1);
+               GeomAPI_ProjectPointOnCurve Projector(Pint1, viso);
+-              double                      NewLastU = Projector.LowerDistanceParameter();
+-              TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, NewLastU, vf1, vf2);
+-              MaxApex = TheSurf->Value(NewLastU, vf1);
++              aApexCut = Projector.NbPoints() > 0;
++              if (aApexCut)
++              {
++                double                      NewLastU = Projector.LowerDistanceParameter();
++                TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, NewLastU, vf1, vf2);
++                MaxApex = TheSurf->Value(NewLastU, vf1);
++              }
++            }
++            if (aApexCut)
++            {
++              HasSingularity = true;
+             }
+-            HasSingularity = true;
+           }
+         } // end of if (UmaxDegen)
+         if (VminDegen)
+         {
+           occ::handle<Geom_Curve> viso = TheSurf->VIso(vf1);
+-          if (BRepOffset_Tool::Gabarit(viso) > TolApex)
++          if (aTraceApex)
++          {
++            std::fprintf(stderr, "offset apex: a degenerated side's offset iso %.6g long, the apex threshold %.6g\n",
++                         BRepOffset_Tool::Gabarit(viso), anApexIso);
++          }
++          if (BRepOffset_Tool::Gabarit(viso) > anApexIso)
+           {
+             occ::handle<Geom_Surface> BasisSurf =
+               occ::down_cast<Geom_OffsetSurface>(TheSurf)->BasisSurface();
+@@ -734,9 +795,21 @@
+             occ::handle<Geom_Line>    LineGeneratrix = new Geom_Line(Pfirst, DirGeneratrix);
+             GeomAPI_ExtremaCurveCurve theExtrema(LineGeneratrix, LineApex);
+             gp_Pnt                    Pint1, Pint2;
+-            theExtrema.NearestPoints(Pint1, Pint2);
+-            double length = Pfirst.Distance(Pint1);
+-            if (OffsetOutside)
++            // (An apex is cut only where the generatrix crosses the apex
++            // line and, offset inwards, that crossing projects onto the
++            // iso: a rounding's end where its section vanishes is no apex,
++            // and its offset iso is nearly a point, mitcad#2140.)
++            bool aApexCut = theExtrema.NbExtrema() > 0;
++            double length = 0.;
++            if (aApexCut)
++            {
++              theExtrema.NearestPoints(Pint1, Pint2);
++              length = Pfirst.Distance(Pint1);
++            }
++            if (!aApexCut)
++            {
++            }
++            else if (OffsetOutside)
+             {
+               occ::handle<Geom_BoundedSurface> aSurf =
+                 new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, vf2);
+@@ -750,19 +823,31 @@
+             {
+               occ::handle<Geom_Curve>     uiso = TheSurf->UIso(uf1);
+               GeomAPI_ProjectPointOnCurve Projector(Pint1, uiso);
+-              double                      NewFirstV = Projector.LowerDistanceParameter();
+-              TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, NewFirstV, vf2);
+-              MinApex = TheSurf->Value(uf1, NewFirstV);
+-              // TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1+length, vf2);
+-              // MinApex = TheSurf->Value( uf1, vf1+length );
++              aApexCut = Projector.NbPoints() > 0;
++              if (aApexCut)
++              {
++                double                      NewFirstV = Projector.LowerDistanceParameter();
++                TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, NewFirstV, vf2);
++                MinApex = TheSurf->Value(uf1, NewFirstV);
++                // TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1+length, vf2);
++                // MinApex = TheSurf->Value( uf1, vf1+length );
++              }
++            }
++            if (aApexCut)
++            {
++              HasSingularity = true;
+             }
+-            HasSingularity = true;
+           }
+         } // end of if (VminDegen)
+         if (VmaxDegen)
+         {
+           occ::handle<Geom_Curve> viso = TheSurf->VIso(vf2);
+-          if (BRepOffset_Tool::Gabarit(viso) > TolApex)
++          if (aTraceApex)
++          {
++            std::fprintf(stderr, "offset apex: a degenerated side's offset iso %.6g long, the apex threshold %.6g\n",
++                         BRepOffset_Tool::Gabarit(viso), anApexIso);
++          }
++          if (BRepOffset_Tool::Gabarit(viso) > anApexIso)
+           {
+             occ::handle<Geom_Surface> BasisSurf =
+               occ::down_cast<Geom_OffsetSurface>(TheSurf)->BasisSurface();
+@@ -777,9 +862,21 @@
+             occ::handle<Geom_Line>    LineGeneratrix = new Geom_Line(Pfirst, DirGeneratrix);
+             GeomAPI_ExtremaCurveCurve theExtrema(LineGeneratrix, LineApex);
+             gp_Pnt                    Pint1, Pint2;
+-            theExtrema.NearestPoints(Pint1, Pint2);
+-            double length = Pfirst.Distance(Pint1);
+-            if (OffsetOutside)
++            // (An apex is cut only where the generatrix crosses the apex
++            // line and, offset inwards, that crossing projects onto the
++            // iso: a rounding's end where its section vanishes is no apex,
++            // and its offset iso is nearly a point, mitcad#2140.)
++            bool aApexCut = theExtrema.NbExtrema() > 0;
++            double length = 0.;
++            if (aApexCut)
++            {
++              theExtrema.NearestPoints(Pint1, Pint2);
++              length = Pfirst.Distance(Pint1);
++            }
++            if (!aApexCut)
++            {
++            }
++            else if (OffsetOutside)
+             {
+               occ::handle<Geom_BoundedSurface> aSurf =
+                 new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, vf2);
+@@ -793,13 +890,20 @@
+             {
+               occ::handle<Geom_Curve>     uiso = TheSurf->UIso(uf1);
+               GeomAPI_ProjectPointOnCurve Projector(Pint1, uiso);
+-              double                      NewLastV = Projector.LowerDistanceParameter();
+-              TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, NewLastV);
+-              MaxApex = TheSurf->Value(uf1, NewLastV);
+-              // TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, vf2-length);
+-              // MaxApex = TheSurf->Value( uf1, vf2-length );
++              aApexCut = Projector.NbPoints() > 0;
++              if (aApexCut)
++              {
++                double                      NewLastV = Projector.LowerDistanceParameter();
++                TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, NewLastV);
++                MaxApex = TheSurf->Value(uf1, NewLastV);
++                // TheSurf = new Geom_RectangularTrimmedSurface(TheSurf, uf1, uf2, vf1, vf2-length);
++                // MaxApex = TheSurf->Value( uf1, vf2-length );
++              }
++            }
++            if (aApexCut)
++            {
++              HasSingularity = true;
+             }
+-            HasSingularity = true;
+           }
+         } // end of if (VmaxDegen)
+       } // end of else (case of Geom_OffsetSurface)

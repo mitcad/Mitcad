@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# Linked parts of a design outside the project (mitcad#2137), the second
+# run of tools/ui-link-parts-test.sh (Linux), on an empty design
+# (link-parts-holder.json) in a project (a folder with
+# .mitcad/project.json, no versions) and the design it links parts of
+# (link-parts-source.json: Bracket:1 and Bracket:2, one component placed
+# twice, 500 mm3 each, and Board:1, 800 mm3) outside that project. The
+# runner puts the absolute path of that design in place of @SOURCE@ in a
+# copy of this script.
+#   1. Insert Component of the design: the outside-link question, Choose
+#      parts... ticked, Copy into the Project and Link; Cancel in the
+#      parts list cancels the whole insert, and nothing is copied.
+#   2. The same with Bracket:1 ticked: the design is copied into the
+#      project's parts folder under its own name (no copy was left by 1)
+#      and the copy is linked with Bracket:1's body alone.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-model-bodies 0 0
+
+# --- 1. Copy into the Project and Link > Choose parts..., then Cancel.
+mark
+command insert.component
+focus-dialog '^Insert Component$' 20
+type @SOURCE@
+key return
+wait-log '^Insert Component outside the project: link-parts-source[.]mitcad [(]project[)]; choices ' 30
+focus-dialog '^Insert Component$' 20
+button '^Choose parts$'
+wait-log '^Insert Component outside the project: choose parts on$' 20
+button '^Copy into the Project and Link$'
+wait-log '^Insert Component outside the project: copy into the project and link, chosen parts$' 20
+wait-log '^Choose Parts opened: link-parts-source[.]mitcad, 3 rows$' 60
+focus-dialog '^Choose Parts$' 20
+button '^Cancel$'
+wait-log '^Choose Parts: canceled$' 20
+wait-idle
+expect-model-bodies 0 0
+
+# --- 2. Copy into the Project and Link > Choose parts..., Bracket:1 ticked.
+mark
+command insert.component
+focus-dialog '^Insert Component$' 20
+type @SOURCE@
+key return
+wait-log '^Insert Component outside the project: link-parts-source[.]mitcad [(]project[)]; choices ' 30
+focus-dialog '^Insert Component$' 20
+button '^Choose parts$'
+wait-log '^Insert Component outside the project: choose parts on$' 20
+button '^Copy into the Project and Link$'
+wait-log '^Insert Component outside the project: copy into the project and link, chosen parts$' 20
+wait-log '^Choose Parts opened: link-parts-source[.]mitcad, 3 rows$' 60
+focus-dialog '^Choose Parts$' 20
+key space
+wait-log '^Choose Parts: ticked Bracket:1$' 20
+button '^OK$'
+wait-log '^Choose Parts: O1$' 20
+wait-log '^Linked parts of link-parts-source: Bracket:1$' 60
+wait-log '^Insert Component: copied link-parts-source[.]mitcad into the project as parts/link-parts-source[.]mitcad$' 20
+wait-log '^Inserted component link-parts-source [(]linked[)] from link-parts-source[.]mitcad$' 20
+wait-idle
+expect-model-bodies 1 500
+expect-ever '^Browser Root/link-parts-source:1 at ' 30
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

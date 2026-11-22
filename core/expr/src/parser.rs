@@ -90,8 +90,21 @@ pub enum ParseErrorKind {
     },
 }
 
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ParseError {
+    /// What is wrong, in words a person reads, without the byte offset
+    /// that `Display` (the agents' and the log's text) ends with
+    /// (mitcad#2181): the offset is the `span`, which a field marks.
+    pub fn message(&self) -> String {
+        struct Words<'a>(&'a ParseError);
+        impl fmt::Display for Words<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.describe(f)
+            }
+        }
+        Words(self).to_string()
+    }
+
+    fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             ParseErrorKind::Empty => f.write_str("empty expression")?,
             ParseErrorKind::UnexpectedChar(c) => write!(f, "unexpected character “{c}”")?,
@@ -165,6 +178,13 @@ impl fmt::Display for ParseError {
                 "argument {argument} of {function} must be a column such as Table.Column"
             )?,
         }
+        Ok(())
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.describe(f)?;
         write!(f, " at byte {}", self.span.start)
     }
 }

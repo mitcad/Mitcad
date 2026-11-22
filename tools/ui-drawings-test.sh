@@ -3,6 +3,7 @@
 # check-all sources: app/drawings app/browser app/files app/MainWindow.cpp core/model/src/drawing core/model-drawing/src
 # check-all sources: core/model-api/src/drawings.rs core/model-api/src/drawing.rs core/model/src/document/drawings.rs tools/cli
 # check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/annotations.rs app/view/AnnotationDialogs.cpp
+# check-all sources: core/model/src/document/properties.rs core/model/src/document/library_parts.rs core/model-api/src/drawing_tables.rs
 # check-all sources: core/model-api/src/drawing_tables.rs core/model-api/src/drawing_templates.rs app/print
 # check-all sources: app/printing
 # check-all sources: core/dwg/src/write.rs
@@ -77,7 +78,11 @@
 #     list selected: the list moves too (mitcad#752), undone; Export… SVG
 #     with the parts list; the placement
 #     deleted from the browser: the list counts one Component1 and the
-#     balloon is broken; Undo brings them back.
+#     balloon is broken; Undo brings them back. The parts list selected:
+#     its panel's hint while a shown Description or Part Number cell is
+#     empty (mitcad#2138; Part Number on, Description off); each
+#     component's standing Part number typed in place in its Property
+#     Sets, and the hint gone: every Part Number cell filled.
 #   - File › Export Drawing twice: the design's only drawing, made in the
 #     workspace, offered first (mitcad#1680), New Drawing chosen; a note
 #     added to the new drawing by hand, then the same drawing written as
@@ -1120,6 +1125,58 @@ echo "ok   the balloon broken: $(annotations_drawn)"
 ui_mark
 ui_step "undo (Ctrl+Z)"                    ui_key ctrl+z
 ui_expect_new "1 = 1 Component1 x2; 2 Component2 x1 | 2 = 1" "the placement and the balloon back"
+
+echo "--- The parts list's Part Number from Property Sets and the panel's hint (mitcad#2138)"
+HINT="Drawing table hint: Set Part number and Description in a component's Property Sets... (its Browser menu)."
+ui_mark
+settled "Drawing annotation 1"
+ui_step "select the parts list"            ui_click_logged "Drawing annotation 1"
+ui_expect_new "Drawing annotation 1 selected" "the parts list selected"
+ui_expect_new "$HINT (empty description)" "the hint: its Description cells are empty"
+ui_mark
+settled "Drawing panel drawingTableColumn_part_number"
+ui_step "Part Number on"                   ui_click_logged "Drawing panel drawingTableColumn_part_number"
+ui_expect_new "$HINT (empty part_number, description)" "the Part Number cells empty too"
+ui_mark
+settled "Drawing panel drawingTableColumn_description"
+ui_step "Description off"                  ui_click_logged "Drawing panel drawingTableColumn_description"
+ui_expect_new "$HINT (empty part_number)" "only the shown columns count"
+no_refusal
+ui_step "Esc"                              ui_key Escape
+ui_mark
+settled "Drawing Close Drawing"
+ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
+ui_expect_new "Drawing closed" "the 3D view again"
+# type_part_number occurrence number: the component's standing Part number
+# row typed in place in its Property Sets.
+type_part_number() {
+  ui_focus_main
+  ui_mark
+  ui_step "right-click $1"                 ui_click_logged "Browser Root/$1" 3
+  ui_step "choose Property Sets..."        ui_menu_choose "Property Sets..."
+  ui_expect_new "Property sets row: component Identity/Part number =  ()" "its standing Part number row, empty"
+  ui_focus_dialog '^Property Sets$'
+  ui_step "double-click its value"         ui_double_click_logged "Property sets component Identity/Part number value"
+  ui_sync
+  ui_key ctrl+a
+  xdotool type --delay 40 "$2"
+  ui_key Return
+  ui_expect_new "Property component Identity/Part number set: $2" "the Part number typed in place"
+  ui_focus_dialog '^Property Sets$'
+  ui_step "close"                          ui_click_logged "Property sets close"
+}
+type_part_number Component1:1 PN-100
+type_part_number Component2:1 PN-200
+ui_focus_main
+ui_mark
+ui_step "open Drawing1 (double-click)"     ui_double_click_logged "Browser Root/Drawings/Drawing1"
+ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "the drawing opened again"
+ui_mark
+settled "Drawing annotation 1"
+ui_step "select the parts list"            ui_click_logged "Drawing annotation 1"
+ui_expect_new "Drawing annotation 1 selected" "the parts list selected"
+ui_expect_new "Drawing table hint: none" "every Part Number cell filled from Property Sets: no hint"
+ui_step "Esc"                              ui_key Escape
 
 echo "--- File › Export Drawing writes the drawing it made again, as it is (mitcad#725)"
 ui_mark

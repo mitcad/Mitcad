@@ -20,14 +20,8 @@ boxes meet. The results, the requests recorded and the statuses are
 unchanged. ShapeBuild_ReShape gets members (code built against the port's
 headers must be rebuilt with them).
 
-Test: geometry/tests/test_shapefix.cpp (ctest geometry.suite.shapefix),
-test_holes_repaired_as_before (the results stock OCCT 8.0.1 gave, on faces
-of many holes) and test_apply_again_as_apply
-(ShapeBuild_ReShape::ApplyAgain, which the patch adds: it does not build
-without it). The repair's time has no bound yet. It fails without the
-patch: the test does not build without it (shown 2026-11-20 by
-tools/occt-port-proof.py, reverted together with 1050, which changes the
-same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0060.
 diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeBuild/ShapeBuild_ReShape.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeBuild/ShapeBuild_ReShape.cxx
 index dc170a79..a4787b08 100644
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeBuild/ShapeBuild_ReShape.cxx

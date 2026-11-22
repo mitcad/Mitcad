@@ -63,7 +63,31 @@ pub(super) const COMMANDS: &[&str] = &[
     "remove_sketch_block",
     "edit_sketch_block",
     "finish_sketch_block",
+    // Selection sets (mitcad#2192).
+    "add_selection_set",
+    "set_selection_set_members",
+    "rename_selection_set",
+    "delete_selection_set",
 ];
+
+/// A selection set's member (mitcad#2192): a body, a feature, or an
+/// occurrence alone.
+fn set_member() -> Value {
+    json!({
+        "type": "object",
+        "description": "A body (body: uid or name at the marker) or a feature (feature: uid or name; sketches, construction geometry and joints are features), with occurrence: the path from the root that places it when it is not in the root; or a component placed in the design (occurrence alone)",
+        "properties": {
+            "body": text("A body's uid (F2.b0) or name"),
+            "feature": text("A feature's uid (F5) or name"),
+            "occurrence": text("The occurrence path from the root, by uids (O1/O4) or names (Arm:1/Pin:2)")
+        },
+        "additionalProperties": false
+    })
+}
+
+fn set_members(description: &str) -> Value {
+    json!({"type": "array", "items": set_member(), "description": description})
+}
 
 /// The standard box styles (mitcad#1939).
 const BOX_STYLES: &[&str] = &["fefco_0201", "ecma_a20"];
@@ -166,10 +190,25 @@ fn analysis_def() -> Value {
         "required": ["type", "bodies"],
         "additionalProperties": false
     });
+    // Draft Analysis (mitcad#2166).
+    let draft = json!({
+        "type": "object",
+        "description": "The bodies' faces by their draft from a pull direction: enough draft towards the pull, too little either way, enough the other way (the other mold half)",
+        "properties": {
+            "type": {"const": "draft"},
+            "bodies": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "The bodies (uids, F2.b0)"},
+            "pull": json!({"type": ["string", "object", "null"], "description": "The pull direction: a plane's normal (an origin or construction plane, a planar face) or a line's direction (an origin or construction axis, a straight edge, a sketch line); null: the design's +Z (model_reference {\"section\": \"Geometric references\"})"}),
+            "occurrence": text("The pull reference's occurrence, a path from the root (O1/O4)"),
+            "flip": flag(false, "The pull direction reversed"),
+            "angle": json!({"type": "number", "minimum": 0, "exclusiveMaximum": 90, "default": 1, "description": "The least draft a face needs, degrees"})
+        },
+        "required": ["type", "bodies"],
+        "additionalProperties": false
+    });
     json!({
         "type": "object",
-        "description": "What the analysis is, by its type: section or print",
-        "oneOf": [section, print]
+        "description": "What the analysis is, by its type: section, print or draft",
+        "oneOf": [section, print, draft]
     })
 }
 
@@ -429,19 +468,20 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "rename_group", "name": "Base", "new_name": "Housing"}]
         }),
         "add_analysis" => json!({
-            "description": "Adds a section or print analysis, shown (the others hidden); no geometry changes. Result: name.",
+            "description": "Adds a section, print or draft analysis, shown (the others hidden); no geometry changes. Result: name.",
             "properties": {
                 "def": analysis_def(),
-                "name": text("Its name; the next free Section<n> or Print<n> when left out")
+                "name": text("Its name; the next free Section<n>, Print<n> or Draft<n> when left out")
             },
             "required": ["def"],
             "examples": [
                 {"cmd": "add_analysis", "def": {"type": "section", "plane": "xz", "offset": 10}},
-                {"cmd": "add_analysis", "name": "Print1", "def": {"type": "print", "bodies": ["F2.b0"], "overhang": {"angle": 50}}}
+                {"cmd": "add_analysis", "name": "Print1", "def": {"type": "print", "bodies": ["F2.b0"], "overhang": {"angle": 50}}},
+                {"cmd": "add_analysis", "def": {"type": "draft", "bodies": ["F2.b0"], "pull": "xy", "angle": 2}}
             ]
         }),
         "edit_analysis" => json!({
-            "description": "Replaces an analysis' definition (section or print).",
+            "description": "Replaces an analysis' definition (section, print or draft).",
             "properties": {
                 "name": analysis(),
                 "def": analysis_def(),
@@ -622,6 +662,40 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "properties": {"cancel": flag(false, "Leave the block as it was")},
             "required": [],
             "examples": [{"cmd": "finish_sketch_block"}]
+        }),
+        // Selection sets (mitcad#2192): links to items, nothing recomputed.
+        "add_selection_set" => json!({
+            "description": "Adds a named selection set: links to bodies, components and features (sketches, construction geometry, joints) that leave them where they are. Changes no geometry, timeline or bill of materials. A name another set has is refused. Result: name, members (the count).",
+            "properties": {
+                "name": text("Its name; the next free SelectionSet<n> when left out"),
+                "members": set_members("Its members, each once")
+            },
+            "required": [],
+            "examples": [{"cmd": "add_selection_set", "name": "Favourites", "members": [{"body": "F2.b0"}, {"feature": "F1"}]}]
+        }),
+        "set_selection_set_members" => json!({
+            "description": "Changes a selection set's members: members replaces them all, then add adds those not in it yet and remove takes those out. Result: name, members (the count).",
+            "properties": {
+                "name": text("The set"),
+                "members": set_members("All its members; left out: those it has"),
+                "add": set_members("Members to add"),
+                "remove": set_members("Members to take out")
+            },
+            "required": ["name"],
+            "examples": [{"cmd": "set_selection_set_members", "name": "Favourites", "add": [{"occurrence": "O1"}]},
+                         {"cmd": "set_selection_set_members", "name": "Favourites", "remove": [{"body": "F2.b0"}]}]
+        }),
+        "rename_selection_set" => json!({
+            "description": "Renames a selection set; a name another set has is refused. Result: name.",
+            "properties": {"name": text("The set"), "new_name": text("Its new name")},
+            "required": ["name", "new_name"],
+            "examples": [{"cmd": "rename_selection_set", "name": "SelectionSet1", "new_name": "Favourites"}]
+        }),
+        "delete_selection_set" => json!({
+            "description": "Deletes a selection set; its items stay.",
+            "properties": {"name": text("The set")},
+            "required": ["name"],
+            "examples": [{"cmd": "delete_selection_set", "name": "Favourites"}]
         }),
         _ => return None,
     };

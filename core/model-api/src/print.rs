@@ -25,12 +25,14 @@ use mitcad_model::datum::Vec3;
 use mitcad_model::exchange::{MeshTolerance, Refinement, TriangleMesh};
 use mitcad_model::features::geom_ref::GeomRef;
 use mitcad_model::ids::BodyUid;
-use mitcad_model::internal::document::{check_minimum_wall, check_overhang_angle, print_material};
+use mitcad_model::internal::document::{
+    check_draft_angle, check_minimum_wall, check_overhang_angle, print_material,
+};
 use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::{BoundingBox, Kernel};
 use mitcad_model::print_analysis::{self, Bed, EstimateSettings};
 use mitcad_model::transform::Transform;
-use mitcad_model::{Document, ModelError};
+use mitcad_model::{Document, DraftAnalysis, ModelError};
 
 fn default_angle() -> f64 {
     print_analysis::DEFAULT_ANGLE
@@ -867,4 +869,140 @@ fn estimate_json(estimate: &print_analysis::Estimate, material: &Made) -> Value 
         "material_id": material.id,
         "density": material.density,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Draft Analysis (mitcad#2166): `draft_analysis`, a draft analysis' fields
+// asked of the bodies' meshes as Print Analysis meshes them.
+
+fn default_draft_angle() -> f64 {
+    mitcad_model::internal::document::DEFAULT_DRAFT_ANGLE
+}
+
+/// `draft_analysis`: the fields of a draft analysis' definition, and the
+/// mesh's deviation and whether the triangles are wanted.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DraftQuery {
+    /// Empty for all bodies at the marker.
+    #[serde(default)]
+    bodies: Vec<BodyUid>,
+    /// A plane (its normal) or a line (its direction); the design's +Z
+    /// when left out or null.
+    #[serde(default)]
+    pull: Option<GeomRef>,
+    #[serde(default)]
+    occurrence: Option<mitcad_model::features::OccurrencePath>,
+    #[serde(default)]
+    flip: bool,
+    /// The least draft a face needs, degrees.
+    #[serde(default = "default_draft_angle")]
+    angle: f64,
+    #[serde(default)]
+    deviation: Option<f64>,
+    /// Each class' triangles per body; false answers the areas only.
+    #[serde(default = "default_triangles")]
+    triangles: bool,
+}
+
+/// The draft classes in the answers' words.
+const DRAFT_CLASSES: [&str; 3] = ["positive", "under", "negative"];
+
+/// The areas and shares of the classes, `<class>_area` and
+/// `<class>_share`, with `area`.
+fn draft_areas(value: &mut Value, area: f64, areas: [f64; 3]) {
+    value["area"] = json!(area);
+    for (class, part) in DRAFT_CLASSES.iter().zip(areas) {
+        value[format!("{class}_area")] = json!(part);
+        value[format!("{class}_share")] = json!(if area > 0.0 { part / area } else { 0.0 });
+    }
+}
+
+/// The document's method of Draft Analysis, as an extension trait
+/// (mitcad#777).
+pub(super) trait DraftOps<K: Kernel> {
+    /// `draft_analysis`: the pull direction (unit, design coordinates),
+    /// per body and in total the area and each class' area and share, and
+    /// per body each class' triangles in design coordinates.
+    fn draft_analysis_json(&self, query: &DraftQuery) -> Result<Value, ApiError>;
+}
+
+impl<K: Kernel> DraftOps<K> for Document<K> {
+    fn draft_analysis_json(&self, query: &DraftQuery) -> Result<Value, ApiError> {
+        check_draft_angle(query.angle).map_err(ApiError)?;
+        let tolerance = print_tolerance(query.deviation)?;
+        let bodies = match self.print_bodies(&query.bodies) {
+            Ok(bodies) => bodies,
+            Err(error) => return Ok(json!({"error": error})),
+        };
+        let def = DraftAnalysis {
+            bodies: bodies.iter().map(|b| b.uid).collect(),
+            pull: query.pull.clone(),
+            occurrence: query.occurrence.clone(),
+            flip: query.flip,
+            angle: query.angle,
+        };
+        let pull = match self.draft_pull(&def) {
+            Ok(pull) => pull,
+            Err(error) => return Ok(json!({"error": error})),
+        };
+        let settings = json!({"pull": pull, "angle": query.angle});
+        let mut results = Vec::with_capacity(bodies.len());
+        let (mut area, mut areas) = (0.0, [0.0; 3]);
+        for body in &bodies {
+            self.print_stop()?;
+            let key = result_key("draft-analysis-v1", body, &tolerance, &settings);
+            let value = match self.print_cache().result(key) {
+                Some(value) => value,
+                None => {
+                    let mesh = match self.print_mesh(body, &tolerance) {
+                        Ok(mesh) => mesh,
+                        Err(error) => return Ok(json!({"error": error})),
+                    };
+                    self.print_stop()?;
+                    let mesh = print_analysis::placed(&mesh, &body.placement);
+                    let found = print_analysis::drafts(&mesh, pull, query.angle);
+                    let flat = |triangles: &[usize]| -> Vec<[f64; 9]> {
+                        triangles
+                            .iter()
+                            .map(|t| print_analysis::flat(&mesh, *t))
+                            .collect()
+                    };
+                    let mut value = json!({
+                        "triangles": {
+                            "positive": flat(&found.positive),
+                            "under": flat(&found.under),
+                            "negative": flat(&found.negative),
+                        },
+                    });
+                    draft_areas(
+                        &mut value,
+                        found.area,
+                        [found.positive_area, found.under_area, found.negative_area],
+                    );
+                    let value = Arc::new(value);
+                    self.print_cache().keep_result(key, Arc::clone(&value));
+                    value
+                }
+            };
+            area += value["area"].as_f64().unwrap_or_default();
+            for (class, sum) in DRAFT_CLASSES.iter().zip(areas.iter_mut()) {
+                *sum += value[format!("{class}_area")].as_f64().unwrap_or_default();
+            }
+            let mut value = named(&value, body);
+            if !query.triangles
+                && let Some(fields) = value.as_object_mut()
+            {
+                fields.remove("triangles");
+            }
+            results.push(value);
+        }
+        let mut answer = json!({
+            "pull": pull,
+            "angle": query.angle,
+            "bodies": results,
+        });
+        draft_areas(&mut answer, area, areas);
+        Ok(answer)
+    }
 }

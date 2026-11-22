@@ -82,7 +82,7 @@ use crate::notice::{FeatureError, said, said_after, said_around, said_at};
 use crate::parameters::{ParamId, Parameters};
 use crate::profile::SketchFrame;
 use crate::recompute::Read;
-use crate::sketch::regions::{RegionCurve, face_bounded_regions, regions_and_layout};
+use crate::sketch::regions::{RegionCurve, own_area_regions, regions_and_layout};
 use crate::sketch::spatial_planar::planar_view;
 use crate::sketch::{ConstraintUid, SketchEntityRef, project};
 use crate::topo::{EdgeName, FaceName, TopoName};
@@ -709,14 +709,20 @@ fn planar_output<K: Kernel>(
         ..SketchDef::default()
     };
     let boundary = super::sketch::face_boundary(&shell, &frames.plane, &frames.frame, ctx)?;
-    let (region_info, layout, own) = if boundary.is_empty() {
+    // The face's edges (and an automatic outline) do not split an area of
+    // the user's curves, as in a planar sketch (mitcad#2197).
+    let (own_curves, mut automatic) = planar.split_automatic(curves.clone());
+    automatic.extend(boundary);
+    let (region_info, layout, own) = if automatic.is_empty() {
         let (region_info, layout) = regions_and_layout(&curves);
         (region_info, layout, OwnRegions::default())
     } else {
-        let own = curves.clone();
-        curves.extend(boundary);
-        let (region_info, layout) = face_bounded_regions(&curves);
-        (region_info, layout, OwnRegions::new(own))
+        let found = own_area_regions(&own_curves, &automatic);
+        (
+            found.regions,
+            found.layout,
+            OwnRegions::new(curves).with_earlier(found.earlier),
+        )
     };
     Ok(SketchOutput {
         frame: frames.frame,

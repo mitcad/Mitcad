@@ -22,6 +22,7 @@ pub(crate) mod folded;
 // (mitcad#1450).
 pub(crate) mod body_copy;
 // The derived whole-body Flat Pattern (mitcad#208).
+pub mod bend_table;
 pub mod flat;
 // Its DXF drawing and picks resolved to semantic references (mitcad#210).
 pub mod flat_dxf;

@@ -62,17 +62,8 @@ again keeps the stripe bad where that fails, so the fillet fails as
 before: a boundary that reports the failure. The handler round the start
 point's search rethrows.
 
-Test: geometry/tests/test_fillet_roll_over_blend.cpp,
-test_rounding_rolls_on_the_far_edges and
-test_rounding_rolls_on_the_far_edges_other_version (ctest
-geometry.fillet_roll_over_blend): the cases fillet-roll-over-blend and
-fillet-roll-over-blend-2, the inner rim rounded with OCCT alone: valid, of
-the expected volume and faces, within 2 um of the stored body round the
-rim; the port's notes record it failing without the patch. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted
-together with 0173, 1370, 1430, 1580, which change the same lines). The
-test reads a stored case (MITCAD_GEOMETRY_CASES), not a synthetic body: a
-synthetic test is still wanted (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1230.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx
 index 983b131a..84674d25 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstConstRad.cxx

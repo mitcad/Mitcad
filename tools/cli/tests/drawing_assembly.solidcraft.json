@@ -1,0 +1,13 @@
+{"format": "solidcraft/27", "name": "Drawing assembly", "units": "mm", "params": [],
+ "components": [{"id": 101, "name": "Saddle"}],
+ "occurrences": [
+  {"id": 201, "component": 101, "name": "Saddle:1", "transform": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[100,0,0,1]]},
+  {"id": 202, "component": 101, "name": "Saddle:2", "transform": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[200,0,0,1]]},
+  {"id": 203, "component": 101, "name": "Saddle:3", "transform": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[300,0,0,1]]},
+  {"id": 204, "component": 101, "name": "Saddle:4", "transform": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[400,0,0,1]]}],
+ "features": [
+  {"id": 1, "name": "Box1", "type": "box", "body_names": ["Base"], "corner": [0,0,0],
+   "length": "40", "width": "30", "height": "20", "operation": "new_body"},
+  {"id": 2, "name": "Box2", "type": "box", "component": 101, "body_names": ["Clamp"], "corner": [0,0,0],
+   "length": "10", "width": "10", "height": "10", "operation": "new_body"}],
+ "next_id": 3}

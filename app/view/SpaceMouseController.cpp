@@ -141,6 +141,14 @@ void SpaceMouseController::sketchChanged() {
   reportRotationLock();
 }
 
+void SpaceMouseController::windowPlaced() {
+  // A connection it makes comes through the backend's `connection` hook,
+  // as a device that comes later does.
+  if (m_backend) {
+    m_backend->windowPlaced();
+  }
+}
+
 void SpaceMouseController::reportRotationLock() {
   if (m_hooks.rotationLock) {
     m_hooks.rotationLock(rotationLocked());

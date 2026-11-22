@@ -49,16 +49,9 @@ extension taken up to 1.2 times what the walk needs, accepted from 1.1.
 
 Before, the result was invalid, its vertices up to tens of millimetres
 off.
-Test: geometry/tests/test_sweeps.cpp,
-test_thread_roots_rounded_up_to_the_nuts_faces (ctest
-geometry.suite.sweeps.3): a ring's bore threaded from below the ring to
-above it, the thread's root rounded up to the ring's faces: valid, the
-vertices within 1e-3, the volume added that of the section the ball fills
-turned over the ring's height, and each face's gain that section turned
-through the angle the root rises across it. Its failure without the patch
-is still to be shown: the patch does not revert at the port's tip without
-the more than 40 later patches that change the same lines (tried
-2026-11-20 by tools/occt-port-proof.py).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0742.
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

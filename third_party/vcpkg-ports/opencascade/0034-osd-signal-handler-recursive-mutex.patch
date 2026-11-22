@@ -14,20 +14,8 @@ mutex is now a std::recursive_mutex: setting the handlers and handling a
 signal on another thread still exclude each other, and the handler's own
 nested lock goes through.
 
-Test: geometry/tests/port/p0034-raised-signal-reaches-occts-exception.cpp
-(ctest geometry.port.0034): test_raised_segv_is_the_operations_error and
-test_raised_sigill_is_the_operations_error, a signal SIGWntHandler hands
-to CallHandler (the nested lock) raised inside an operation is the
-operation's error, not std::system_error;
-test_raised_sigfpe_is_the_operations_error, the boundary case (raise
-passes _FPE_EXPLICITGEN, which SIGWntHandler handles under its one lock),
-holds with and without the patch;
-test_raised_segv_on_another_thread_after_one_was_handled, the mutex is
-free again after a handled signal: a new thread installs the handlers and
-its signal is its operation's error within 30 s. The patched code is
-compiled on Windows only, so the tests show the patch there; on Linux
-and macOS they pass with and without it. It passes without the patch: the
-test does not prove it (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0034.
 
 --- a/src/FoundationClasses/TKernel/OSD/OSD_signal.cxx
 +++ b/src/FoundationClasses/TKernel/OSD/OSD_signal.cxx

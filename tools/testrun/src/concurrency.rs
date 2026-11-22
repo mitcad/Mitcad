@@ -179,7 +179,7 @@ pub fn run_facts(records: &[(String, Run)]) -> RunFacts {
 /// at once, and the contention failures (whose rooms were lowered).
 pub fn summary(facts: &RunFacts, cap: usize) -> String {
     format!(
-        "UI entries at once: cap {cap}; this run at most {}, {} failed beside others and passed alone (their rooms lowered), {} failed beside others",
+        "UI entries at once: cap {cap}; this run at most {}, {} failed beside others and passed with fewer beside them (their rooms lowered), {} failed beside others",
         facts.at_once, facts.contended, facts.unresolved
     )
 }

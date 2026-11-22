@@ -15,13 +15,8 @@ assigning the projected contact. It translates only curves wholly outside
 the face bounds that fit wholly inside after a whole-period shift. Closed
 contacts crossing a seam retain the existing split-at-vertex handling.
 
-Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow), test_chamfer_of_a_flange_under_teeth:
-a flange's top circle chamfered past the strip between the circle and the
-teeth, its contact running on into the teeth's faces and round the root
-roundings' cylinders; without the patch the result is invalid. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py). (The lug
-in a bore with its seam turned, named before, succeeds without the patch.)
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0230.
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -43,13 +43,8 @@ two-stripe corner failed there ("No intersection pc pc").
   orients their curves from their other side, their faces by the
   orientation found against the support).
 
-Test: geometry/tests/test_fillet_top_chains.cpp, test_inner_arm_ends
-(ctest geometry.fillet_top_chains): on the stored case
-`fillet-wall-run-on`, both inner arm ends built together, valid, the
-ride's ends on the plate at the foot's end and on the top's prolonged
-edge. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py, reverted together with 1728, 1729, which change
-the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1727.
 
 Failures (mitcad#1986): the guide's interpolation and the walk onto the
 corner fail with OCCT's reports of a computation it cannot make

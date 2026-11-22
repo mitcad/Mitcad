@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/parameter-groups.mitcad-ui (mitcad#2180): the user parameters width = 600 mm, depth = 400 mm and height = 720 mm, in this creation order, ungrouped, and no feature."},
+  {"cmd": "add_parameter", "name": "width", "unit": "mm", "expression": "600 mm"},
+  {"cmd": "add_parameter", "name": "depth", "unit": "mm", "expression": "400 mm"},
+  {"cmd": "add_parameter", "name": "height", "unit": "mm", "expression": "720 mm"}
+]

@@ -63,13 +63,9 @@ edges, one concave and one convex, both rounded with constant radii wider
 than the face, the concave stripe failing (DeferLensRoundings); it holds
 for any such crescent (a key's arc on a shaft, a boss's cylinder running
 into a bore, two cylinders of other radii), whatever the faces beside it.
-Test: geometry/tests/port/p0821-lens-rounded-on-both-edges.cpp (ctest
-geometry.port.0821): a key of radius 5.19 on a shaft of radius 25, the
-key's end a lens 0.54 high, both lens edges rounded with 2: built, valid,
-no face on the lens's plane, the convex blend's contact ending on the key's
-sides, the material added alike on both sides (without the patch: not
-built). The boundary: the lens's convex edge alone rounded with 0.2, the
-lens kept.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0821.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

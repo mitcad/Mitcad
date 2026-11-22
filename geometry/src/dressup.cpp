@@ -56,6 +56,7 @@
 #include <Law_BSpline.hxx>
 #include <Law_Interpolate.hxx>
 #include <NCollection_Array1.hxx>
+#include <NCollection_DataMap.hxx>
 #include <NCollection_HArray1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_IndexedMap.hxx>
@@ -98,6 +99,7 @@
 #include "emboss_projection.hpp"
 #include "face_join.hpp"
 #include "face_select.hpp"
+#include "groove_end.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/boolean.hpp"
 #include "mitcad/geometry/user_error.hpp"
@@ -4111,6 +4113,7 @@ ShapePtr over_cutouts(const Shape& input, const std::vector<FilletSet>& sets, co
 // (after the merged face's first name), the input's name stands for it in
 // every face name of the result (the dressup's faces named after the edges
 // they round).
+ShapePtr with_renames(const ShapePtr& result, std::vector<std::pair<std::string, std::string>> renames);
 ShapePtr with_input_names(const ShapePtr& result, const Shape& built_on, const Shape& input) {
   if (!result) {
     return result;
@@ -4166,6 +4169,17 @@ ShapePtr with_input_names(const ShapePtr& result, const Shape& built_on, const S
         break;
       }
     }
+  }
+  return with_renames(result, std::move(renames));
+}
+
+// The result with its faces' names renamed: in each name every occurrence
+// of a rename's first string (the longest where several start at a place)
+// replaced by its second, in one pass, so that a name put in is not renamed
+// again.
+ShapePtr with_renames(const ShapePtr& result, std::vector<std::pair<std::string, std::string>> renames) {
+  if (!result) {
+    return result;
   }
   std::sort(renames.begin(), renames.end());
   renames.erase(std::unique(renames.begin(), renames.end()), renames.end());
@@ -4686,6 +4700,79 @@ std::string worded_failure(const std::string& kernel, const std::string& where) 
   return with_detail(start + where, " (the geometry kernel: " + error_message(kernel).substr(start.size()) + ")");
 }
 
+// A rounding of concave selected edges (`owner`) wider than a narrow face
+// beside them whose far edges go on tangentially into convex faces beyond
+// (a step's riser running into a round face, mitcad#2208): `build` rounds,
+// at the full size, the body with each such narrow face replaced by the
+// faces beyond continued along their own surfaces up to the edge's other
+// face (faces_beyond_grown), so that the ball takes the narrow face away and
+// rolls on over the face beyond, as where the geometry kernel's own rounding
+// runs onto it. The result is taken where it is one closed solid holding a
+// face of the rounding and the whole input lies within it (a rounding of
+// concave edges only adds material: the material taken away with the
+// narrow face is filled again, the narrow face consumed all along); its
+// faces are named after the picked edges. Null otherwise (never throws but
+// for cancelling and invalid arguments); `applies` tells whether there was
+// such a narrow face. Other narrow faces beside the edges, still narrow on
+// that body, are continued past their far edges there (over_narrow_faces).
+template <class Build>
+ShapePtr over_tangent_far_edges(const std::string& feature, const Shape& input, const std::vector<int>& owner,
+                                double contact, Build&& build, bool& applies) {
+  applies = false;
+  try {
+    OCC_CATCH_SIGNALS
+    const ShapePtr copy = detail::working_copy(input);
+    const std::optional<detail::FacesBeyondGrown> grown = detail::faces_beyond_grown(*copy, owner, contact);
+    if (!grown) {
+      return nullptr;
+    }
+    applies = true;
+    ShapePtr made;
+    try {
+      made = build(*grown->body, grown->owner);
+    } catch (const std::invalid_argument&) {
+      throw;
+    } catch (const Cancelled&) {
+      throw;
+    } catch (...) {
+      made = over_narrow_faces(feature, "fillet", *grown->body, grown->owner, contact, 1.0, build);
+    }
+    if (!made || !closed_solids(made->occt()) || !holds_made_face(*made, feature + ":fillet(")) {
+      return nullptr;
+    }
+    int solids = 0;
+    for (TopExp_Explorer ex(made->occt(), TopAbs_SOLID); ex.More(); ex.Next()) {
+      ++solids;
+    }
+    if (solids != 1) {
+      return nullptr;
+    }
+    // (The input less the result: nothing.)
+    BRepAlgoAPI_Cut left;
+    NCollection_List<TopoDS_Shape> arguments;
+    NCollection_List<TopoDS_Shape> tools;
+    arguments.Append(input.occt());
+    tools.Append(made->occt());
+    left.SetArguments(arguments);
+    left.SetTools(tools);
+    left.SetNonDestructive(true);
+    left.SetRunParallel(true);
+    left.Build();
+    const double whole = std::abs(detail::volume_of(input.occt()));
+    if (!left.IsDone() || left.HasErrors() ||
+        std::abs(detail::volume_of(left.Shape())) > 1.0e-6 * std::max(1.0, whole)) {
+      return nullptr;
+    }
+    return with_renames(made, grown->renames);
+  } catch (const std::invalid_argument&) {
+    throw;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 // A rounding of the selected edges (`owner`) that the geometry kernel
 // failed to build at its exact size, or left open (OpenResult); called
 // while that error is handled. Where a face beside the edges is narrower
@@ -4698,10 +4785,12 @@ std::string worded_failure(const std::string& kernel, const std::string& where) 
 // built so, the error says in words which face the rounding would take
 // away and that the faces beyond cannot meet it, the kernel's own error
 // before it; where no face is narrower, the kernel's error stands (the
-// 0.1 % smaller retry follows, mitcad#1106).
-template <class Build, class Rings>
+// 0.1 % smaller retry follows, mitcad#1106). `ends` rounds the ends of
+// grooves the edges are (groove_end.hpp, mitcad#2154), null where they are
+// not.
+template <class Build, class Rings, class Ends>
 ShapePtr past_narrow_faces(const std::string& feature, const Shape& input, const std::vector<int>& owner,
-                           double given_contact, Build&& build, Rings&& rings) {
+                           double given_contact, Build&& build, Rings&& rings, Ends&& ends) {
   std::string where;
   double contact = given_contact;
   try {
@@ -4736,6 +4825,24 @@ ShapePtr past_narrow_faces(const std::string& feature, const Shape& input, const
   if (ringed) {
     return ringed;
   }
+  // The end of a shallow groove (a tube ending in a flat end cap) rounded
+  // wider than the end cap is high: on the body with the end cap continued
+  // to the whole disc and the floor to the whole tube, the rounding closed
+  // round the circle, what it adds cut by the faces beyond (mitcad#2154).
+  // The rounding's ends on the faces beyond, as over_narrow_faces builds
+  // them, fail there (the kernel's corner at each end of the edge meets
+  // the same edge twice).
+  ShapePtr grooved;
+  try {
+    grooved = ends(*detail::working_copy(input));
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    grooved = nullptr;
+  }
+  if (grooved) {
+    return grooved;
+  }
   // (On the body with the narrow faces continued, a chain ending against a
   // plane that does not reach across the rounding is ended on it,
   // ended_on_end_planes.)
@@ -4757,21 +4864,37 @@ ShapePtr past_narrow_faces(const std::string& feature, const Shape& input, const
       throw;
     }
   };
+  // A narrow face whose far edges go on tangentially into convex faces
+  // beyond (a step's riser running into a round face): the ball takes it
+  // away and rolls on over the faces beyond (over_tangent_far_edges,
+  // mitcad#2208). Continued along its own surface (over_narrow_faces), the
+  // ball would keep to that surface, and the rounding, the space filled past
+  // the far edge cut out again, would hang beside the face beyond as a
+  // sheet: where the rounding over such a face cannot be built, it fails
+  // in words, never that sheet.
+  bool tangent_far_edges = false;
+  if (ShapePtr rolled = over_tangent_far_edges(feature, input, owner, contact, build_or_ended, tangent_far_edges)) {
+    return rolled;
+  }
   ShapePtr over;
   bool freeform = false;
-  try {
-    over = over_narrow_faces(feature, "fillet", input, owner, contact, 1.0, build_or_ended, nullptr, false,
-                             nullptr, &freeform);
-  } catch (const Cancelled&) {
-    throw;
-  } catch (...) {
-    over = nullptr;
+  if (!tangent_far_edges) {
+    try {
+      over = over_narrow_faces(feature, "fillet", input, owner, contact, 1.0, build_or_ended, nullptr, false,
+                               nullptr, &freeform);
+    } catch (const Cancelled&) {
+      throw;
+    } catch (...) {
+      over = nullptr;
+    }
   }
   // A chain ending against a plane that does not reach across the rounding
   // there, with no narrow face continued: ended on that plane, the rounding
   // on the body without the material past it built as above
   // (ended_on_end_planes, GitHub #353).
-  if (!over) {
+  // (Not over a narrow face with tangent far edges: its build above ended
+  // chains on such planes already.)
+  if (!over && !tangent_far_edges) {
     over = ended_on_end_planes(input, owner, contact, feature + ":fillet(",
                                [&](const Shape& on, const std::vector<int>& edges) -> ShapePtr {
                                  try {
@@ -6045,6 +6168,514 @@ detail::RunOutSize chamfer_run_out_size(const Shape& body, const ChamferSet& set
   return size;
 }
 
+// The ends of grooves (detail::groove_end, mitcad#2154) the sets round:
+// a selected edge's name and its set's constant radius.
+struct RoundedGrooveEnd {
+  std::string edge;
+  double radius = 0.0;
+};
+
+// Rounds the groove ends `ends` one by one (found again by their names);
+// null where one cannot be built so.
+ShapePtr round_groove_ends(const std::string& feature, const Shape& body, const std::vector<RoundedGrooveEnd>& ends) {
+  ShapePtr made = std::make_shared<Shape>(body);
+  for (const RoundedGrooveEnd& end : ends) {
+    const std::vector<int> found = made->find_edges(end.edge);
+    if (found.size() != 1) {
+      return nullptr;
+    }
+    const std::optional<detail::GrooveEnd> groove = detail::groove_end(*made, found.front());
+    if (!groove) {
+      return nullptr;
+    }
+    made = detail::rounded_groove_end(feature, *made, found.front(), *groove, end.radius);
+    if (!made) {
+      return nullptr;
+    }
+  }
+  return made;
+}
+
+// The rounding of selected edges (`owner`) that are all ends of grooves,
+// each narrower than its groove, on the body with the end cap continued
+// to the whole disc and the floor to the whole tube (past_narrow_faces'
+// `ends`, mitcad#2154). Null where an edge is no groove end or its set no
+// constant radius, or it cannot be built so.
+ShapePtr groove_ends_rounded(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
+                             const std::vector<int>& owner) {
+  std::vector<RoundedGrooveEnd> ends;
+  for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+    const int s = owner[static_cast<std::size_t>(e)];
+    if (s < 0) {
+      continue;
+    }
+    const FilletSet& set = sets[static_cast<std::size_t>(s)];
+    if (set.size != FilletSize::Constant || body.edge_name(e).empty()) {
+      return nullptr;
+    }
+    const std::optional<detail::GrooveEnd> groove = detail::groove_end(body, e);
+    if (!groove || set.radius >= groove->circle.Radius() - detail::kGrooveRadiusTolerance) {
+      return nullptr;
+    }
+    ends.push_back({body.edge_name(e), set.radius});
+  }
+  return ends.empty() ? nullptr : round_groove_ends(feature, body, ends);
+}
+
+// Roundings of groove ends as wide as their grooves or wider (mitcad#2154),
+// before the geometry kernel is asked for them: wider fails in words (no
+// ball of that radius fits in the groove, detail::groove_too_narrow); as
+// wide (within 1e-6 mm) is the sphere of that radius on the groove's axis
+// (detail::rounded_groove_end), whose ball does not move along the edge,
+// which the kernel's rolling ball cannot build (it crashed). The sets' other
+// edges are then rounded on that body by fillet() itself (`whole` set).
+// Null where no such end is selected.
+ShapePtr groove_balls(const std::string& feature, const Shape& input, const std::vector<FilletSet>& sets,
+                      const std::vector<int>& owner, bool rolling_ball_corners, bool& whole) {
+  whole = false;
+  std::vector<RoundedGrooveEnd> balls;
+  std::vector<char> ball(owner.size(), 0);
+  for (int e = 0; e < input.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+    const int s = owner[static_cast<std::size_t>(e)];
+    if (s < 0 || sets[static_cast<std::size_t>(s)].size != FilletSize::Constant) {
+      continue;
+    }
+    const double radius = sets[static_cast<std::size_t>(s)].radius;
+    const std::optional<detail::GrooveEnd> groove = detail::groove_end(input, e);
+    if (!groove) {
+      continue;
+    }
+    const double groove_radius = groove->circle.Radius();
+    if (radius > groove_radius + detail::kGrooveRadiusTolerance) {
+      throw std::invalid_argument(detail::groove_too_narrow(input, e, *groove, radius));
+    }
+    if (std::abs(radius - groove_radius) <= detail::kGrooveRadiusTolerance && !input.edge_name(e).empty()) {
+      balls.push_back({input.edge_name(e), radius});
+      ball[static_cast<std::size_t>(e)] = 1;
+    }
+  }
+  if (balls.empty()) {
+    return nullptr;
+  }
+  ShapePtr made = round_groove_ends(feature, input, balls);
+  if (!made) {
+    const std::string& name = balls.front().edge;
+    throw std::runtime_error(
+        "fillet failed; " +
+        placed_error("the fillet as wide as the groove it ends cannot be built: the ball it ends the groove in does "
+                     "not fit the faces round the groove's end",
+                     "the fillet of edge " + name +
+                         " as wide as the groove it ends cannot be built: the ball it ends the groove in does not "
+                         "fit the faces round the groove's end",
+                     {edge_place(name)}));
+  }
+  // The sets' other edges, by name, rounded on that body.
+  std::vector<FilletSet> rest;
+  for (std::size_t s = 0; s < sets.size(); ++s) {
+    FilletSet other = sets[s];
+    other.edges.clear();
+    other.faces.clear();
+    for (int e = 0; e < input.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      if (owner[static_cast<std::size_t>(e)] == static_cast<int>(s) && ball[static_cast<std::size_t>(e)] == 0) {
+        other.edges.push_back(input.edge_name(e));
+      }
+    }
+    if (!other.edges.empty()) {
+      rest.push_back(std::move(other));
+    }
+  }
+  if (rest.empty()) {
+    return made;
+  }
+  whole = true;
+  return fillet(feature, *made, rest, rolling_ball_corners);
+}
+
+// The selected edges (`owner`: the set of each edge, -1 for none) in
+// groups that the geometry kernel rounds apart from each other: its
+// contours (the edges' tangent chains) joined where they share a vertex,
+// or a face on which they come within `reach` of each other (the copies
+// of a pattern's rounding stand on one floor face, far apart), so that no
+// two groups' roundings meet at a corner or on a face. Each group as an
+// owner list of `body`'s edges; empty where the edges form one group, or
+// an edge lies in no contour or has no name (the groups are found again by
+// name on the bodies built in between).
+std::vector<std::vector<int>> independent_edge_groups(const Shape& body, const std::vector<int>& owner,
+                                                      double reach) {
+  std::vector<std::vector<int>> groups;
+  try {
+    OCC_CATCH_SIGNALS
+    BRepFilletAPI_MakeFillet maker(body.occt());
+    std::vector<int> selected;
+    for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      if (owner[static_cast<std::size_t>(e)] < 0) {
+        continue;
+      }
+      if (body.edge_name(e).empty()) {
+        return {};
+      }
+      selected.push_back(e);
+      if (maker.Contour(body.edge(e)) == 0) {
+        maker.Add(1.0, body.edge(e));
+      }
+    }
+    const int contours = maker.NbContours();
+    if (contours < 2) {
+      return {};
+    }
+    std::vector<int> root(static_cast<std::size_t>(contours) + 1);
+    for (int c = 0; c <= contours; ++c) {
+      root[static_cast<std::size_t>(c)] = c;
+    }
+    const auto find = [&](int c) {
+      while (root[static_cast<std::size_t>(c)] != c) {
+        c = root[static_cast<std::size_t>(c)] = root[static_cast<std::size_t>(root[static_cast<std::size_t>(c)])];
+      }
+      return c;
+    };
+    const auto join = [&](int a, int b) { root[static_cast<std::size_t>(find(a))] = find(b); };
+    // Each contour's edges as one compound, for the distances.
+    std::vector<TopoDS_Compound> edges_of(static_cast<std::size_t>(contours) + 1);
+    BRep_Builder builder;
+    for (int c = 1; c <= contours; ++c) {
+      builder.MakeCompound(edges_of[static_cast<std::size_t>(c)]);
+      for (int i = 1; i <= maker.NbEdges(c); ++i) {
+        builder.Add(edges_of[static_cast<std::size_t>(c)], maker.Edge(c, i));
+      }
+    }
+    NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+    TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of);
+    // The contours beside each face and at each vertex.
+    NCollection_DataMap<TopoDS_Shape, std::vector<int>, TopTools_ShapeMapHasher> at_face;
+    NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher> at_vertex;
+    for (int c = 1; c <= contours; ++c) {
+      for (int i = 1; i <= maker.NbEdges(c); ++i) {
+        const TopoDS_Edge& edge = maker.Edge(c, i);
+        if (const NCollection_List<TopoDS_Shape>* faces = faces_of.Seek(edge)) {
+          for (const TopoDS_Shape& face : *faces) {
+            if (!at_face.IsBound(face)) {
+              at_face.Bind(face, std::vector<int>());
+            }
+            std::vector<int>& beside = at_face.ChangeFind(face);
+            if (std::find(beside.begin(), beside.end(), c) == beside.end()) {
+              beside.push_back(c);
+            }
+          }
+        }
+        for (TopExp_Explorer v(edge, TopAbs_VERTEX); v.More(); v.Next()) {
+          if (const int* seen = at_vertex.Seek(v.Current())) {
+            join(*seen, c);
+          } else {
+            at_vertex.Bind(v.Current(), c);
+          }
+        }
+      }
+    }
+    for (NCollection_DataMap<TopoDS_Shape, std::vector<int>, TopTools_ShapeMapHasher>::Iterator it(at_face);
+         it.More(); it.Next()) {
+      const std::vector<int>& beside = it.Value();
+      for (std::size_t i = 0; i < beside.size(); ++i) {
+        for (std::size_t j = i + 1; j < beside.size(); ++j) {
+          if (find(beside[i]) == find(beside[j])) {
+            continue;
+          }
+          throw_if_cancelled();
+          BRepExtrema_DistShapeShape distance(edges_of[static_cast<std::size_t>(beside[i])],
+                                              edges_of[static_cast<std::size_t>(beside[j])]);
+          if (!distance.IsDone() || distance.Value() <= reach) {
+            join(beside[i], beside[j]);
+          }
+        }
+      }
+    }
+    std::vector<int> group_of(static_cast<std::size_t>(contours) + 1, -1);
+    for (const int e : selected) {
+      const int c = maker.Contour(body.edge(e));
+      if (c <= 0) {
+        return {};
+      }
+      int& g = group_of[static_cast<std::size_t>(find(c))];
+      if (g < 0) {
+        g = static_cast<int>(groups.size());
+        groups.emplace_back(owner.size(), -1);
+      }
+      groups[static_cast<std::size_t>(g)][static_cast<std::size_t>(e)] = owner[static_cast<std::size_t>(e)];
+    }
+  } catch (const Standard_Failure&) {
+    return {};
+  }
+  if (groups.size() < 2) {
+    return {};
+  }
+  return groups;
+}
+
+// The notes, infos and remarks of `from` that `into` does not hold yet.
+void add_new_messages(Shape& into, const Shape& from) {
+  const auto holds = [](const std::vector<std::string>& texts, const std::string& text) {
+    return std::find(texts.begin(), texts.end(), text) != texts.end();
+  };
+  for (std::size_t k = 0; k < from.notes().size(); ++k) {
+    if (!holds(into.notes(), from.notes()[k])) {
+      into.add_note(from.notes()[k],
+                    k < from.note_places().size() ? from.note_places()[k] : std::vector<Shape::NotePlace>());
+    }
+  }
+  for (const std::string& info : from.infos()) {
+    if (!holds(into.infos(), info)) {
+      into.add_info(info);
+    }
+  }
+  for (std::size_t k = 0; k < from.remarks().size(); ++k) {
+    if (!holds(into.remarks(), from.remarks()[k])) {
+      into.add_remark(from.remarks()[k], k < from.remark_places().size() ? from.remark_places()[k]
+                                                                         : std::vector<Shape::NotePlace>());
+    }
+  }
+}
+
+// The groups of independent_edge_groups built one after another by
+// `build` (of a body and its owner list), each group's edges found by
+// name on the body the groups before it made; with the messages of every
+// group's result. Null where a group fails or its edges are not found.
+template <class Build>
+ShapePtr groups_one_by_one(const Shape& input, const std::vector<std::vector<int>>& groups, Build&& build) {
+  std::vector<ShapePtr> made;
+  const Shape* on = &input;
+  try {
+    for (const std::vector<int>& group : groups) {
+      std::vector<int> owner(static_cast<std::size_t>(on->edge_count()), -1);
+      for (std::size_t e = 0; e < group.size(); ++e) {
+        if (group[e] < 0) {
+          continue;
+        }
+        const std::vector<int> found = on->find_edges(input.edge_name(static_cast<int>(e)));
+        if (found.empty()) {
+          return nullptr;
+        }
+        for (const int i : found) {
+          owner[static_cast<std::size_t>(i)] = group[e];
+        }
+      }
+      ShapePtr next = build(*on, owner);
+      if (!next) {
+        return nullptr;
+      }
+      made.push_back(next);
+      on = next.get();
+    }
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    return nullptr;
+  }
+  ShapePtr result = made.back();
+  for (std::size_t k = 0; k + 1 < made.size(); ++k) {
+    add_new_messages(*result, *made[k]);
+  }
+  return result;
+}
+
+// Groups apart (mitcad#2165): at most this many groups are built one after
+// the other (each group is built twice, alone and in turn).
+constexpr std::size_t kMostGroupsApart = 6;
+// The volume the groups built in turn change the body by matches the sum
+// of what each group alone changes it by within this part of the body's
+// volume (of 1 mm3 for a smaller body).
+constexpr double kGroupsApartVolume = 1.0e-6;
+
+// Whether a point inside edge `a` (at nine points along it) has its foot on
+// edge `b` inside `b` (not at an end of it) within `reach`: the two run side
+// by side, their roundings on the faces between them within reach of each
+// other. Side by side too where a curve cannot be read.
+bool side_by_side(const TopoDS_Edge& a, const TopoDS_Edge& b, double reach) {
+  try {
+    OCC_CATCH_SIGNALS
+    double fa = 0.0, la = 0.0, fb = 0.0, lb = 0.0;
+    const Handle(Geom_Curve) ca = BRep_Tool::Curve(a, fa, la);
+    const Handle(Geom_Curve) cb = BRep_Tool::Curve(b, fb, lb);
+    if (ca.IsNull() || cb.IsNull()) {
+      return true;
+    }
+    const double margin = 1.0e-7 * std::max(1.0, std::abs(lb - fb));
+    for (int k = 1; k <= 9; ++k) {
+      const gp_Pnt p = ca->Value(fa + (la - fa) * k / 10.0);
+      GeomAPI_ProjectPointOnCurve foot(p, cb, fb, lb);
+      for (int i = 1; i <= foot.NbPoints(); ++i) {
+        const double u = foot.Parameter(i);
+        if (u > fb + margin && u < lb - margin && foot.Distance(i) <= reach) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } catch (const Standard_Failure&) {
+    return true;
+  }
+}
+
+// The selected edges (`owner`: a set per edge, -1 for none) in groups whose
+// roundings cannot meet (mitcad#2165): edges that share a vertex, or that
+// run side by side (side_by_side) within twice `contact` (how far a
+// rounding reaches its faces from its edge: two roundings that meet on the
+// face between them, or take it away together), are one group, and so are
+// the groups they join. Finer than independent_edge_groups (mitcad#2161),
+// which joins contours on one face within that reach anywhere: the
+// vertical edges of a step's upper face and of its lower face come within
+// it on the end face they share only end to end, at the step, where their
+// roundings end on the step's ledge. The groups in the order `order` (the
+// body's edges, seed_order: as the sets list them) gives their first edges,
+// each group's edges in that order.
+std::vector<std::vector<int>> rounding_groups(const Shape& body, const std::vector<int>& owner,
+                                              const std::vector<int>& order, double contact) {
+  std::vector<int> edges;
+  const int count = std::min(body.edge_count(), static_cast<int>(owner.size()));
+  for (const int e : order) {
+    if (e >= 0 && e < count && owner[static_cast<std::size_t>(e)] >= 0 &&
+        std::find(edges.begin(), edges.end(), e) == edges.end()) {
+      edges.push_back(e);
+    }
+  }
+  std::vector<std::size_t> parent(edges.size());
+  for (std::size_t i = 0; i < parent.size(); ++i) {
+    parent[i] = i;
+  }
+  const auto root = [&](std::size_t i) {
+    while (parent[i] != i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const double reach = 2.0 * contact * (1.0 + 1.0e-6) + Precision::Confusion();
+  std::vector<Bnd_Box> boxes(edges.size());
+  for (std::size_t i = 0; i < edges.size(); ++i) {
+    BRepBndLib::Add(body.edge(edges[i]), boxes[i]);
+    boxes[i].Enlarge(reach);
+  }
+  for (std::size_t i = 0; i < edges.size(); ++i) {
+    const TopoDS_Edge& a = body.edge(edges[i]);
+    TopoDS_Vertex a1, a2;
+    TopExp::Vertices(a, a1, a2);
+    for (std::size_t j = i + 1; j < edges.size(); ++j) {
+      if (root(i) == root(j) || boxes[i].IsOut(boxes[j])) {
+        continue;
+      }
+      throw_if_cancelled();
+      const TopoDS_Edge& b = body.edge(edges[j]);
+      TopoDS_Vertex b1, b2;
+      TopExp::Vertices(b, b1, b2);
+      const bool shared = (!a1.IsNull() && (a1.IsSame(b1) || a1.IsSame(b2))) ||
+                          (!a2.IsNull() && (a2.IsSame(b1) || a2.IsSame(b2)));
+      if (shared || side_by_side(a, b, reach) || side_by_side(b, a, reach)) {
+        parent[root(j)] = root(i);
+      }
+    }
+  }
+  std::vector<std::vector<int>> groups;
+  std::map<std::size_t, std::size_t> group_of;
+  for (std::size_t i = 0; i < edges.size(); ++i) {
+    const std::size_t r = root(i);
+    const auto found = group_of.find(r);
+    if (found == group_of.end()) {
+      group_of.emplace(r, groups.size());
+      groups.push_back({edges[i]});
+    } else {
+      groups[found->second].push_back(edges[i]);
+    }
+  }
+  return groups;
+}
+
+double closed_volume(const TopoDS_Shape& shape) {
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(shape, props, 1.0e-7, true);
+  return props.Mass();
+}
+
+// The selected edges (`owner`) built group by group (rounding_groups) at
+// their exact size, each group on the result of the ones before, as
+// features of a group each build them, where the geometry kernel's build of
+// all of them at once has failed and so has the path past narrow faces
+// (mitcad#2165: the vertical edges of a step's upper and lower face, each
+// pair taking its face away). `exact` builds the edges `owner` of a body at
+// their exact size, or throws; the groups in the order `order` gives their
+// edges. Kept only where it is the body the build of all at once would be:
+// the groups do not change each other's roundings, so that the volume the
+// body loses (or gains) in all is the sum of what each group alone takes
+// from (or adds to) the body. Null where there are fewer than two groups
+// (or more than kMostGroupsApart), a group does not build, or the volumes
+// do not add up. With the messages of every group's result.
+template <class Exact>
+ShapePtr groups_apart(const Shape& body, const std::vector<int>& owner, const std::vector<int>& order,
+                      double contact, Exact&& exact) {
+  std::vector<std::vector<int>> groups;
+  try {
+    OCC_CATCH_SIGNALS
+    groups = rounding_groups(body, owner, order, contact);
+  } catch (const Standard_Failure&) {
+    return nullptr;
+  }
+  if (groups.size() < 2 || groups.size() > kMostGroupsApart) {
+    return nullptr;
+  }
+  const auto own = [&](const std::vector<int>& group) {
+    std::vector<int> selected(owner.size(), -1);
+    for (const int edge : group) {
+      selected[static_cast<std::size_t>(edge)] = owner[static_cast<std::size_t>(edge)];
+    }
+    return selected;
+  };
+  try {
+    OCC_CATCH_SIGNALS
+    const double volume = closed_volume(body.occt());
+    double alone = 0.0;
+    std::vector<ShapePtr> made;
+    for (std::size_t g = 0; g < groups.size(); ++g) {
+      const ShapePtr single = exact(body, own(groups[g]));
+      if (!single) {
+        return nullptr;
+      }
+      alone += closed_volume(single->occt()) - volume;
+      if (g == 0) {
+        made.push_back(single);
+        continue;
+      }
+      // (The group's edges on the result so far: every piece of each, as
+      // FootCorners' later passes take them.)
+      const Shape& on = *made.back();
+      std::vector<int> next(static_cast<std::size_t>(on.edge_count()), -1);
+      for (const int edge : groups[g]) {
+        const std::vector<int> found = pieces_of(body, edge, on);
+        if (found.empty()) {
+          return nullptr;
+        }
+        for (const int piece : found) {
+          next[static_cast<std::size_t>(piece)] = owner[static_cast<std::size_t>(edge)];
+        }
+      }
+      ShapePtr built = exact(on, next);
+      if (!built) {
+        return nullptr;
+      }
+      made.push_back(built);
+    }
+    ShapePtr result = made.back();
+    const double together = closed_volume(result->occt()) - volume;
+    if (!(std::abs(together - alone) <= kGroupsApartVolume * std::max(1.0, std::abs(volume)))) {
+      return nullptr;
+    }
+    for (std::size_t k = 0; k + 1 < made.size(); ++k) {
+      add_new_messages(*result, *made[k]);
+    }
+    return result;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 } // namespace
 
 ShapePtr fillet(const std::string& feature, const Shape& given, const std::vector<FilletSet>& sets,
@@ -6074,15 +6705,31 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
     blended[s] = sets[s].size == FilletSize::Asymmetric || sets[s].curvature ? 1 : 0;
     any_blended = any_blended || blended[s] != 0;
   }
+  // A groove's end rounded as wide as the groove or wider, before the
+  // geometry kernel (mitcad#2154).
+  bool whole = false;
+  ShapePtr result = groove_balls(feature, input, sets, owner, rolling_ball_corners, whole);
+  if (whole) {
+    return result;
+  }
+  // The edges at their exact size alone, none of the ways round a failure
+  // (the rings, the narrow faces continued, the 0.1 % smaller retry), on a
+  // first pass over groups of edges the kernel rounds apart (mitcad#2161).
+  bool quick = false;
   // Where the geometry kernel cannot round them, a face that the roundings
   // of two of its edges together reach across is named as the cause
   // (narrow_face_cause, mitcad#1482).
-  ShapePtr result;
   try {
-    result = canonical(input, with_own_chains("fillet", input, sets, owner,
+    if (!result) {
+      result = canonical(input, with_own_chains("fillet", input, sets, owner,
                                                       [&](const std::vector<int>& selected) {
       const auto build = [&](const Shape& target, const std::vector<int>& own_edges) {
-        const auto rings = [&](const Shape& body) { return ring_fillet(feature, body, sets, own_edges); };
+        const auto rings = [&](const Shape& body) {
+          if (quick) {
+            throw std::runtime_error("no rings on the first pass");
+          }
+          return ring_fillet(feature, body, sets, own_edges);
+        };
         return or_rings("fillet", target, [&] {
           const auto contact = [&] { return largest_contact(target, sets, own_edges); };
           return with_shrink_retry("fillet", target, contact, [&](double scale) {
@@ -6105,6 +6752,9 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
                          : rounded();
             };
             if (scale != 1.0) {
+              if (quick) {
+                throw std::runtime_error("no smaller retry on the first pass");
+              }
               return at_size();
             }
             try {
@@ -6114,11 +6764,87 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
             } catch (const Cancelled&) {
               throw;
             } catch (...) {
-              return past_narrow_faces(feature, target, own_edges, contact(), rounded_on, rings);
+              if (quick) {
+                throw;
+              }
+              const auto ends = [&](const Shape& body) {
+                return groove_ends_rounded(feature, body, sets, own_edges);
+              };
+              try {
+                return past_narrow_faces(feature, target, own_edges, contact(), rounded_on, rings, ends);
+              } catch (const std::invalid_argument&) {
+                throw;
+              } catch (const Cancelled&) {
+                throw;
+              } catch (...) {
+                // Groups of edges whose roundings cannot meet, one group
+                // after the other at the exact size, as a feature for each
+                // group builds them, where that is the body the build of
+                // all at once would be (groups_apart, mitcad#2165); else
+                // the error stands (the 0.1 % smaller retry follows).
+                const auto exact_on = [&](const Shape& on, const std::vector<int>& edges) -> ShapePtr {
+                  const auto rounded_here = [&] { return rounded_on(on, edges); };
+                  try {
+                    return !any_blended && rolling_ball_corners
+                               ? or_mitred(feature, on, sets, edges, rounded_here)
+                               : rounded_here();
+                  } catch (const std::invalid_argument&) {
+                    throw;
+                  } catch (const Cancelled&) {
+                    throw;
+                  } catch (...) {
+                    const auto rings_here = [&](const Shape& b) { return ring_fillet(feature, b, sets, edges); };
+                    const auto ends_here = [&](const Shape& b) {
+                      return groove_ends_rounded(feature, b, sets, edges);
+                    };
+                    return past_narrow_faces(feature, on, edges, largest_contact(on, sets, edges), rounded_on,
+                                             rings_here, ends_here);
+                  }
+                };
+                if (ShapePtr apart = groups_apart(target, own_edges, seed_order(target, sets, own_edges), contact(),
+                                                  exact_on)) {
+                  return apart;
+                }
+                throw;
+              }
             }
           });
         }, rings);
       };
+      // Edges in groups the kernel rounds apart (the copies of a pattern's
+      // rounding, at its elements: mitcad#2161): where they do not build at
+      // their exact size together, each group on its own, one after
+      // another, with all the ways round a failure; only where one of them
+      // fails, all of them together with those ways, as before. The ways
+      // round a failure on all the groups at once (a narrow face continued
+      // at one element) took 90 s on a pattern's seven copies, where the
+      // copies one by one took 5 s. Contours on one face apart by more than
+      // twice the rounding's reach (its size or the farthest its contact
+      // lies from its edge) are rounded apart.
+      double reach = largest_size(sets);
+      try {
+        reach = std::max(reach, largest_contact(input, sets, selected));
+      } catch (const Cancelled&) {
+        throw;
+      } catch (...) {
+      }
+      const std::vector<std::vector<int>> groups = independent_edge_groups(input, selected, 2.0 * reach);
+      if (!groups.empty()) {
+        quick = true;
+        try {
+          ShapePtr together = build(input, selected);
+          quick = false;
+          return together;
+        } catch (const Cancelled&) {
+          quick = false;
+          throw;
+        } catch (...) {
+          quick = false;
+        }
+        if (ShapePtr apart = groups_one_by_one(input, groups, build)) {
+          return apart;
+        }
+      }
       try {
         return build(input, selected);
       } catch (const Cancelled&) {
@@ -6142,6 +6868,7 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
         throw;
       }
     }));
+    }
     // (Whichever way it was built.)
     if (result) {
       require_closed(given.occt(), result->occt(), "fillet");

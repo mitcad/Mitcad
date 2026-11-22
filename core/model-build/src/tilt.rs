@@ -326,7 +326,7 @@ impl<K: Kernel> RetiltCrateOps<K> for Document<K> {
                 occurrence: OccurrencePath(self.path_from_host(&bind.occurrence)?),
                 geometry: bind.geometry.clone(),
             }),
-            Some(LengthInput::Value(_)) => None,
+            Some(LengthInput::Value(_) | LengthInput::Match { .. }) => None,
             None => info
                 .record
                 .bound

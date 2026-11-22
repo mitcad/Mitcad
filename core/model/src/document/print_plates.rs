@@ -404,13 +404,35 @@ impl<K: Kernel> Document<K> {
     }
 
     /// Takes bodies and occurrences off the plates they are on (they then
-    /// go on the first plate as the design places them). One undo step,
-    /// unless none was on a plate.
+    /// go on the first plate as the design shows them). One undo step. A
+    /// target that is no plate's item refuses the whole call, a line
+    /// naming each such target (mitcad#2222): what no plate names prints
+    /// on the first plate, and hiding it is what leaves it out.
     pub fn remove_from_plates(&mut self, targets: &[PlateTarget]) -> Result<(), ModelError> {
         if targets.is_empty() {
             return Err(invalid(
                 "remove_from_plates needs the bodies or occurrences to take off",
             ));
+        }
+        let mut refused: Vec<String> = Vec::new();
+        for target in targets {
+            if self
+                .state
+                .print_plates
+                .iter()
+                .all(|p| p.item(target).is_none())
+            {
+                let name = self.plate_target_name(target);
+                let line = format!(
+                    "{name} is not placed on a plate by itself: what no plate names prints on the first plate; hide it to leave it out."
+                );
+                if !refused.contains(&line) {
+                    refused.push(line);
+                }
+            }
+        }
+        if !refused.is_empty() {
+            return Err(invalid(refused.join("\n")));
         }
         let mut plates = self.state.print_plates.clone();
         let mut from = Vec::new();
@@ -439,9 +461,12 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The placements on no plate: each shown placement of a printed body
-    /// without an item of its own that no occurrence item takes (all of
-    /// its placements when none is shown), with its path (None for a body
-    /// not placed). They print on the first plate.
+    /// without an item of its own that no occurrence item takes, with its
+    /// path (None for a body not placed, when its light bulb and its
+    /// component's Bodies folder show it). They print on the first plate.
+    /// A body with no shown placement goes on no plate (mitcad#2222):
+    /// hiding a body, or every occurrence it is placed in, keeps it off
+    /// the plates unless an item puts it on one.
     pub(crate) fn unplaced(&self) -> Vec<(BodyUid, Option<Vec<OccurrenceUid>>)> {
         let instances = self.instances();
         let mut out = Vec::new();
@@ -458,22 +483,33 @@ impl<K: Kernel> Document<K> {
             }
             let mine: Vec<_> = instances.iter().filter(|i| i.body == uid).collect();
             if mine.is_empty() {
-                out.push((uid, None));
+                if self.unplaced_body_shown(uid) {
+                    out.push((uid, None));
+                }
                 continue;
             }
-            let shown: Vec<_> = mine.iter().filter(|i| i.visible).collect();
-            let placements: Vec<&&crate::document::InstanceView> = if shown.is_empty() {
-                mine.iter().collect()
-            } else {
-                shown
-            };
-            for instance in placements {
+            for instance in mine.into_iter().filter(|i| i.visible) {
                 if self.plate_of_path(&instance.path).is_none() {
                     out.push((uid, Some(instance.path.clone())));
                 }
             }
         }
         out
+    }
+
+    /// Whether a body that no occurrence places is shown: its light bulb
+    /// and its component's Bodies folder, as `instances` sees a placed
+    /// one's.
+    fn unplaced_body_shown(&self, uid: BodyUid) -> bool {
+        self.state
+            .body_attributes
+            .get(&uid)
+            .is_none_or(|b| b.visible)
+            && self.body_component(uid).is_none_or(|component| {
+                self.state
+                    .display
+                    .folder_shown(component, super::display::Folder::Bodies)
+            })
     }
 
     /// The `print_plates` query: each plate with its items (their names,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <utility>
@@ -41,8 +42,9 @@ public:
 
   // Shows what the overlay has of it; an empty overlay hides it.
   void setOverlay(const PrintOverlay& overlay);
-  // The categories' colours for another background (mitcad#1041).
-  void setColors(const QColor& overhang, const QColor& thin, const QColor& gap);
+  // The categories' colours for another background (mitcad#1041); `draft`
+  // Draft Analysis' classes (mitcad#2166).
+  void setColors(const QColor& overhang, const QColor& thin, const QColor& gap, const std::array<QColor, 3>& draft);
 
 private:
   // Paints the cards again when what they show, the screen's pixel ratio
@@ -64,6 +66,7 @@ private:
   std::optional<gp_Pnt> m_gapPoint; // the middle of the smallest narrow gap
   QString m_gapLabel;
   QColor m_gapColor;
+  std::array<QColor, 3> m_draftColors; // Draft Analysis' classes (mitcad#2166)
   QString m_title;
   std::vector<std::pair<QColor, QString>> m_entries; // the legend's
   QColor m_markerColor;

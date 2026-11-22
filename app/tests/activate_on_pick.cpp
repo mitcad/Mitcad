@@ -232,7 +232,7 @@ void partTests() {
 
   // Every part placed by a pick, by its Place On; the shafts linked.
   for (const char* id : {"solid.gear", "solid.pulley", "solid.bearing", "solid.coil", "solid.box", "solid.cylinder",
-                         "solid.sphere", "solid.torus"}) {
+                         "solid.sphere", "solid.torus", "solid.cone"}) {
     CHECK(activatingInputs(QString::fromLatin1(id)) == QStringList{QStringLiteral("at")});
     CHECK(linksShafts(QString::fromLatin1(id)));
   }

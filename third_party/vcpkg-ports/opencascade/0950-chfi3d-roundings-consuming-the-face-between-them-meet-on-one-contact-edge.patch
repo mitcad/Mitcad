@@ -44,11 +44,8 @@ computation it cannot make (ChFi3d_IsComputationFailure, 0016) where the
 two lines are not one: that pair is not merged. Any other failure (a
 broken invariant, a signal) is rethrown.
 
-Test: geometry/tests/test_fillet_consumed_strip.cpp (ctest
-geometry.fillet_consumed_strip): windows in a ring wall 3 thick, each
-window's floor and ceiling rounded with 1.5 on both edges: built, the
-material taken within 2e-3 of the section's. Fails without the patch
-(not done), done with it (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0950.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

@@ -38,3 +38,8 @@ mod sketch_partly_redundant_reported_1992_tests;
 // import_file stopped inside its read by the memory guard or the user's
 // cancel, in the import's own words, the design unchanged (mitcad#2032).
 mod import_stopped_2032_tests;
+// The reporter's design of GitHub mitcad/Mitcad#470 and #471: its emptied
+// sketch patterns go with the next edit of the sketch (mitcad#2058).
+mod sketch_pattern_last_copy_reported_2058_tests;
+// 3MF files as mesh bodies, a part placed twice as a component (mitcad#2156).
+mod threemf_import_2156_tests;

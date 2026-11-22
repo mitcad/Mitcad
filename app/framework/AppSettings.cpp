@@ -50,6 +50,14 @@ GeneralSettings GeneralSettings::load() {
   if (presentation == QStringLiteral("tabs") || presentation == QStringLiteral("windows")) {
     general.openDesignsIn = presentation;
   }
+  general.quitOnLastClose = settings.value(QStringLiteral("documents/quitOnLastClose"), false).toBool();
+  // Another text (an edited settings file) is the question.
+  const QString newDesignSave =
+      settings.value(QStringLiteral("documents/newDesignSave"), general.newDesignSave).toString();
+  if (newDesignSave == QStringLiteral("ask") || newDesignSave == QStringLiteral("computer") ||
+      newDesignSave == QStringLiteral("project")) {
+    general.newDesignSave = newDesignSave;
+  }
   return general;
 }
 
@@ -62,6 +70,8 @@ void GeneralSettings::save() const {
   settings.setValue(kTemperatureUnit, temperatureUnit);
   settings.setValue(QStringLiteral("documents/openInCurrentWindow"), openInCurrentWindow);
   settings.setValue(QStringLiteral("documents/openDesignsIn"), openDesignsIn);
+  settings.setValue(QStringLiteral("documents/quitOnLastClose"), quitOnLastClose);
+  settings.setValue(QStringLiteral("documents/newDesignSave"), newDesignSave);
 }
 
 bool VersionSettings::complete() const {

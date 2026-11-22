@@ -1,0 +1,96 @@
+{
+  "format": "solidcraft/63",
+  "name": "Format 63 hems, slanted start, edge radii, side margins",
+  "units": "mm",
+  "params": [{"name": "t", "expr": "2 mm", "unit": "mm"}],
+  "sheet": {
+    "rules": [{"name": "Plate", "thickness": "t", "k_factor": "0.5", "bend_radius": "Thickness",
+               "hem_gap": "Thickness / 2", "material": "Aluminium 5052-H32"}],
+    "active": "Plate"
+  },
+  "features": [
+    {
+      "id": 1, "name": "Outline", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p2", "pos": [100.0, 0.0], "fixed": true},
+          {"id": "p3", "pos": [100.0, 50.0], "fixed": true},
+          {"id": "p4", "pos": [0.0, 50.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 2, "name": "Base", "type": "sheet_base", "body_names": ["Tray"],
+      "sketch": 1, "profiles": {"type": "all"}
+    },
+    {
+      "id": 3, "name": "Hem1", "type": "sheet_hem",
+      "edges": [[50.0, 0.0, 2.0]], "edge_names": ["F2:side:l1|F2:top"],
+      "length": "10", "gap": "3 mm"
+    },
+    {
+      "id": 4, "name": "Hem2", "type": "sheet_hem",
+      "edges": [[50.0, 50.0, 2.0]], "edge_names": ["F2:side:l3|F2:top"],
+      "length": "10"
+    },
+    {
+      "id": 5, "name": "Block", "type": "box", "body_names": ["Block"],
+      "corner": [0, 100, 0], "length": "40", "width": "40", "height": "20",
+      "operation": "new_body"
+    },
+    {
+      "id": 6, "name": "Bevel", "type": "chamfer",
+      "edges": [[20.0, 140.0, 20.0]], "edge_names": ["F5:+y|F5:+z"], "distance": "10"
+    },
+    {
+      "id": 7, "name": "PegSketch", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "c1.center", "pos": [20.0, 135.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "c1", "type": "circle", "c": 1, "r": 3.0}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 8, "name": "Peg", "type": "extrude", "body_names": ["Peg"],
+      "sketch": 7, "profiles": {"type": "all"},
+      "extent": {"distance": "10", "direction": "positive", "from": [20.0, 135.0, 15.0]},
+      "operation": "new_body"
+    },
+    {
+      "id": 9, "name": "Cube", "type": "box", "body_names": ["Cube"],
+      "corner": [60, 100, 0], "length": "20", "width": "20", "height": "20",
+      "operation": "new_body"
+    },
+    {
+      "id": 10, "name": "Round", "type": "fillet",
+      "edges": [[70.0, 100.0, 20.0], [70.0, 120.0, 20.0]],
+      "edge_names": ["F9:+z|F9:-y", "F9:+y|F9:+z"],
+      "radius": "2", "edge_radii": ["2", "3 mm"], "tangent_chain": false
+    },
+    {
+      "id": 11, "name": "Envelope", "type": "bounding_solid", "body_names": ["Envelope"],
+      "bodies": ["Block"], "margins": ["1", "1", "2", "2", "0", "5"]
+    },
+    {
+      "id": 12, "name": "Even", "type": "bounding_solid", "body_names": ["Even"],
+      "bodies": ["Cube"], "margins": ["1 mm", "1 mm", "1 mm", "1 mm", "1 mm", "1 mm"]
+    }
+  ],
+  "next_id": 13
+}

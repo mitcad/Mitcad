@@ -30,13 +30,9 @@ across the seam fails with OCCT's reports of a computation it cannot make
 stripe's own state is restored and its ends are left as before, which its
 caller is told. Any other failure (a broken invariant, a signal) is
 rethrown.
-Test: geometry/tests/port/p0341-rolled-walk-across-a-seam.cpp (ctest
-geometry.port.0341): 0340's rod with a ridge, the ridge's end rounded with
-5, the rod's seam at 45 degrees on either side of the top, between the
-lens's tip and the point where the ball comes tangent to the ridge's side:
-built, valid, the material added that of the rod with its seam underneath
-(without the patch: not built). The boundary: the seam at 90 degrees,
-beyond the tangency, as 0340 builds it.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0341.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index c27394630..78fcaedbd 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx

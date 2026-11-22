@@ -36,9 +36,11 @@
 #include "view/CameraTurn.hpp"
 #include "view/DefaultView.hpp"
 #include "view/PickFacing.hpp"
+#include "view/SectionHatch.hpp"
 #include "view/ViewCube.hpp"
 #include "view/ViewEdges.hpp"
 #include "view/ViewTessellation.hpp"
+#include "view/TexturedBody.hpp"
 #include "sketch/PointMarkers.hpp"
 #ifdef __APPLE__
 #include "render/MacFrameDisplay.hpp"
@@ -49,6 +51,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <initializer_list>
@@ -82,6 +85,18 @@
 #include <QWindow>
 #include <QtLogging>
 #include <QtMath>
+#ifdef MITCAD_OCCT_EGL
+// OCCT draws through EGL on Linux (mitcad#2031). EGL's headers without
+// Xlib's, whose macros (None, Bool, Status) clash with Qt's and OCCT's names.
+#ifndef EGL_NO_X11
+#define EGL_NO_X11
+#endif
+#include <EGL/egl.h>
+#include <QtGui/qopenglcontext_platform.h>
+#if !QT_CONFIG(egl)
+#error "OCCT draws through EGL (MITCAD_OCCT_EGL), but this Qt was built without EGL"
+#endif
+#endif
 
 #include <AIS_AnimationCamera.hxx>
 #include <AIS_ColoredShape.hxx>
@@ -239,8 +254,6 @@ const Quantity_Color kAxisColor = viewRole(ColorRole::DatumAxis);
 const Quantity_Color kHiddenEdgeColor = viewRole(ColorRole::HiddenEdge);
 // Section Analysis' caps of the root component: a colour bodies seldom have.
 const QColor kCapColor = viewColor(ColorRole::SectionCap, false);
-// How far the hatch lines lie off the caps, of the caps' size (see hatchOf).
-constexpr double kHatchLift = 5e-3;
 constexpr double kHatchWidth = 1.5;
 // The section's order in depth (mitcad#784). What lies in the cut plane
 // comes in three layers at the same depth: a sketch's curves and points on
@@ -564,6 +577,46 @@ public:
     OpenGl_FrameBuffer::BindReadBuffer(context);
   }
 };
+
+#ifdef MITCAD_OCCT_EGL
+// OCCT's driver over Qt's own EGL context (mitcad#2031). A view attaches
+// to an existing context only when the driver names that very context
+// (OpenGl_Window). OpenGl_GraphicDriver::InitEglContext would release
+// every view's resources first and choose a configuration of its own,
+// with which OCCT makes a pbuffer where Qt's context has no surface (Qt's
+// offscreen surface is surfaceless on Mesa), and pbuffers are missing on
+// some Wayland drivers. Without a configuration OCCT draws surfaceless as
+// Qt does, into the framebuffer paintGL() wraps.
+class QtEglGraphicDriver : public OpenGl_GraphicDriver {
+public:
+  explicit QtEglGraphicDriver(const occ::handle<Aspect_DisplayConnection>& display)
+      : OpenGl_GraphicDriver(display, false) {}
+
+  void useEglContext(void* display, void* context) {
+    myEglDisplay = static_cast<Aspect_Display>(display);
+    myEglContext = static_cast<Aspect_RenderingContext>(context);
+    myEglConfig = nullptr;
+  }
+};
+#endif
+
+// The view's default framebuffer, wrapping the one Qt bound for paintGL().
+// A framebuffer OCCT made itself (a surfaceless EGL view's) is replaced and
+// released. Null when Qt has none bound.
+occ::handle<OpenGl_FrameBuffer> wrapQtFramebuffer(const occ::handle<OpenGl_Context>& gl) {
+  occ::handle<OpenGl_FrameBuffer> framebuffer = occ::handle<QtFrameBuffer>::DownCast(gl->DefaultFrameBuffer());
+  if (framebuffer.IsNull()) {
+    framebuffer = new QtFrameBuffer();
+    const occ::handle<OpenGl_FrameBuffer> previous = gl->SetDefaultFrameBuffer(framebuffer);
+    if (!previous.IsNull()) {
+      previous->Release(gl.get());
+    }
+  }
+  if (!framebuffer->InitWrapper(gl)) {
+    return occ::handle<OpenGl_FrameBuffer>();
+  }
+  return framebuffer;
+}
 
 occ::handle<OpenGl_Context> glContextOf(const occ::handle<V3d_View>& view) {
   const occ::handle<OpenGl_View> glView = occ::handle<OpenGl_View>::DownCast(view->View());
@@ -902,12 +955,72 @@ bool shadedFaces(VisualStyle visual) {
          visual == VisualStyle::ShadedHiddenEdges;
 }
 
-// The same faces in the same colours.
+// What the shaded view draws of a look's texture (mitcad#2186): its image
+// file, repeat, rotation and projection; empty without one it draws (none,
+// its image not found, or laid by a mesh's own texture coordinates).
+QString viewTextureKey(const Appearance& a) {
+  if (!a.hasTexture || a.texture.uv || a.texture.file.isEmpty()) {
+    return QString();
+  }
+  return QStringLiteral("%1|%2|%3|%4|%5")
+      .arg(a.texture.file)
+      .arg(a.texture.width)
+      .arg(a.texture.height)
+      .arg(a.texture.rotation)
+      .arg(a.texture.grain ? 2 : a.texture.planar ? 1 : 0);
+}
+
+// The same faces in the same colours and textures.
 bool sameFaceColors(const std::vector<BodyDisplay::FaceLook>& a, const std::vector<BodyDisplay::FaceLook>& b) {
   return std::equal(a.begin(), a.end(), b.begin(), b.end(),
                     [](const BodyDisplay::FaceLook& x, const BodyDisplay::FaceLook& y) {
-                      return x.faces == y.faces && x.color == y.color;
+                      return x.faces == y.faces && x.color == y.color &&
+                             viewTextureKey(x.appearance) == viewTextureKey(y.appearance);
                     });
+}
+
+// A look in the shaded view (mitcad#2186): its colour (the default body
+// colour when invalid), and the texture of its base colour image when the
+// appearance has one the view draws (viewTextureKey).
+ViewLook viewLookOf(const Appearance* appearance, const QColor& color) {
+  ViewLook look;
+  look.color = color.isValid() ? occtColor(color) : kBodyColor;
+  if (appearance == nullptr || viewTextureKey(*appearance).isEmpty()) {
+    return look;
+  }
+  const AppearanceTexture& texture = appearance->texture;
+  look.texture = viewTexture(texture.file);
+  look.width = texture.width > 0.0 ? texture.width : 100.0;
+  look.height = texture.height > 0.0 ? texture.height : 100.0;
+  look.rotation = texture.rotation;
+  look.projection = texture.grain    ? ViewProjection::Grain
+                    : texture.planar ? ViewProjection::Planar
+                                     : ViewProjection::Box;
+  return look;
+}
+
+// A body with textures in the shaded styles (mitcad#2186): its own look
+// and its face groups', when one of them is textured; null otherwise.
+occ::handle<TexturedBody> texturedBodyOf(const geometry::Shape& named, const Appearance* appearance,
+                                         const QColor& color, const std::vector<BodyDisplay::FaceLook>& faceLooks,
+                                         VisualStyle visual, const std::shared_ptr<const ViewEdges>& edges) {
+  if (!shadedFaces(visual)) {
+    return occ::handle<TexturedBody>();
+  }
+  std::vector<ViewLook> looks{viewLookOf(appearance, color)};
+  std::unordered_map<const TopoDS_TShape*, std::size_t> faceLook;
+  for (const BodyDisplay::FaceLook& group : faceLooks) {
+    looks.push_back(viewLookOf(&group.appearance, group.color));
+    for (const int face : group.faces) {
+      if (face >= 0 && face < named.face_count()) {
+        faceLook[named.face(face).TShape().get()] = looks.size() - 1;
+      }
+    }
+  }
+  if (std::none_of(looks.begin(), looks.end(), [](const ViewLook& look) { return !look.texture.IsNull(); })) {
+    return occ::handle<TexturedBody>();
+  }
+  return new TexturedBody(std::move(looks), std::move(faceLook), edges, named.occt());
 }
 
 // The same faces with the same look in the rendered view.
@@ -992,6 +1105,7 @@ QString seeThroughLook(const occ::handle<AIS_Shape>& object, bool culled) {
 }
 
 occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay::Style style, const QColor& color,
+                                      const Appearance* appearance,
                                       const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
                                       const QColor& paper, bool sectioned,
                                       const std::shared_ptr<const ViewEdges>& edges) {
@@ -1028,12 +1142,18 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
   }
   // Faces with appearances of their own (mitcad#53) in their colours, in
   // the shaded styles.
-  const bool faceColors = !faceLooks.empty() && shadedFaces(visual);
+  // Textures (mitcad#2186): a body or face with a texture the view draws
+  // takes the textured presentation, which draws the face groups' colours
+  // too.
+  const occ::handle<TexturedBody> textured = texturedBodyOf(named, appearance, color, faceLooks, visual, edges);
+  const bool faceColors = !faceLooks.empty() && shadedFaces(visual) && textured.IsNull();
   occ::handle<AIS_ColoredShape> colored;
   if (faceColors) {
     colored = edges ? new FineEdges<AIS_ColoredShape>(edges, shape) : new AIS_ColoredShape(shape);
   }
-  occ::handle<AIS_Shape> body = faceColors ? occ::handle<AIS_Shape>(colored) : object();
+  occ::handle<AIS_Shape> body = !textured.IsNull() ? occ::handle<AIS_Shape>(textured)
+                                : faceColors        ? occ::handle<AIS_Shape>(colored)
+                                                    : object();
   body->SetColor(color.isValid() ? occtColor(color) : kBodyColor);
   // Before the faces' own colours: their aspects copy the body's.
   behindSection(body, sectioned);
@@ -1068,13 +1188,26 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
     break;
   }
   case VisualStyle::WireframeHiddenEdges:
+  case VisualStyle::WireframeVisibleEdges: {
     // The faces in the background's colour, unlit, as paper: they hide the
-    // edges behind them, which are then drawn dashed. (OCCT draws
-    // see-through faces after every layer that shares the depth buffer, so
-    // invisible faces cannot hide edges.)
+    // edges behind them, which Wireframe with Hidden Edges then draws
+    // dashed and Wireframe with Visible Edges Only leaves out (mitcad#2155).
+    // (OCCT draws see-through faces after every layer that shares the
+    // depth buffer, so invisible faces cannot hide edges.)
     body->SetColor(occtColor(paper));
-    drawer->ShadingAspect()->Aspect()->SetShadingModel(Graphic3d_TypeOfShadingModel_Unlit);
+    const occ::handle<Graphic3d_AspectFillArea3d>& faces = drawer->ShadingAspect()->Aspect();
+    faces->SetShadingModel(Graphic3d_TypeOfShadingModel_Unlit);
+    // The outlines of curved faces (a cylinder's sides seen from the side)
+    // in the edges' colour and width: OCCT's outline draws the back faces
+    // again, pushed out along their normals by the width, where the front
+    // faces do not cover them. It draws only where back faces are culled:
+    // the closed shells of an opaque solid, not an open surface body's
+    // faces nor a body a section's planes clip.
+    faces->SetDrawSilhouette(true);
+    faces->SetEdgeColor(wireColor(color));
+    faces->SetEdgeWidth(kPlainEdgeWidth);
     break;
+  }
   case VisualStyle::Shaded:
   case VisualStyle::ShadedHiddenEdges:
     break; // the hidden-edge style adds its edges separately
@@ -1127,10 +1260,12 @@ void drawWithoutMeshing(const occ::handle<AIS_Shape>& object) {
 }
 
 occ::handle<AIS_Shape> makeBody(const geometry::Shape& named, BodyDisplay::Style style, const QColor& color,
+                                const Appearance* appearance,
                                 const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
                                 const QColor& paper, bool sectioned,
                                 const std::shared_ptr<const ViewEdges>& edges) {
-  occ::handle<AIS_Shape> body = makeBodyObject(named, style, color, faceLooks, visual, paper, sectioned, edges);
+  occ::handle<AIS_Shape> body =
+      makeBodyObject(named, style, color, appearance, faceLooks, visual, paper, sectioned, edges);
   if (!drawerMeshes(named)) {
     body->Attributes()->SetAutoTriangulation(false);
   }
@@ -1306,6 +1441,20 @@ bool drawsHiddenEdges(VisualStyle style) {
   return style == VisualStyle::ShadedHiddenEdges || style == VisualStyle::WireframeHiddenEdges;
 }
 
+// Whether a body's edges in sight are drawn in their own layer, against
+// the faces' depth: in the hidden-edge styles, and in Wireframe with
+// Visible Edges Only, which has their faces without the dashed edges
+// behind them (mitcad#2155).
+bool drawsEdgeLayers(VisualStyle style) {
+  return drawsHiddenEdges(style) || style == VisualStyle::WireframeVisibleEdges;
+}
+
+// The paper styles: the faces in the background's middle colour, unlit,
+// hiding the edges behind them.
+bool paperFaces(VisualStyle style) {
+  return style == VisualStyle::WireframeHiddenEdges || style == VisualStyle::WireframeVisibleEdges;
+}
+
 // The edges of a shape, each once.
 TopoDS_Shape edgesOf(const TopoDS_Shape& shape) {
   NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
@@ -1385,107 +1534,6 @@ QString cubeName(V3d_TypeOfOrientation orientation) {
   return parts.join(QLatin1Char('-'));
 }
 
-// A hatch over the section caps: lines at 45 degrees to the plane's x axis
-// (135 degrees when `mirrored`), lifted a little off the caps on the normal
-// side (the side the cut took away) so that they are drawn over the caps'
-// fill. Each cap face gets its own spacing: about eight lines across a
-// small face, but never closer than 40 lines across all the caps (a large
-// face does not turn into a solid colour) nor wider than a 400th of them.
-TopoDS_Shape hatchOf(const TopoDS_Shape& caps, const gp_Ax3& plane, bool mirrored) {
-  Bnd_Box box;
-  BRepBndLib::Add(caps, box, false);
-  if (box.IsVoid()) {
-    return TopoDS_Shape();
-  }
-  const double size = std::sqrt(box.SquareExtent());
-  const gp_Vec x(plane.XDirection());
-  const gp_Vec y(plane.YDirection());
-  const gp_Vec along = mirrored ? (x - y) / std::sqrt(2.0) : (x + y) / std::sqrt(2.0);
-  const gp_Vec across = mirrored ? (x + y) / std::sqrt(2.0) : (x - y) / std::sqrt(2.0);
-  const gp_Pnt origin = plane.Location();
-  const gp_Vec lift = gp_Vec(plane.Direction()) * (size * kHatchLift);
-  TopoDS_Compound lines;
-  BRep_Builder builder;
-  builder.MakeCompound(lines);
-  bool any = false;
-  for (TopExp_Explorer faces(caps, TopAbs_FACE); faces.More(); faces.Next()) {
-    const TopoDS_Face& face = TopoDS::Face(faces.Current());
-    Bnd_Box faceBox;
-    BRepBndLib::Add(face, faceBox, false);
-    if (faceBox.IsVoid()) {
-      continue;
-    }
-    const double spacing =
-        std::max(size / 400.0, std::min(std::sqrt(faceBox.SquareExtent()) / 8.0, size / 40.0));
-    // Per line k at (k + 0.5) * spacing across: its pieces along, from every
-    // triangle of the face it crosses.
-    std::map<long, std::vector<std::pair<double, double>>> pieces;
-    TopLoc_Location location;
-    occ::handle<Poly_Triangulation> mesh = BRep_Tool::Triangulation(face, location);
-    if (mesh.IsNull()) {
-      BRepMesh_IncrementalMesh(face, size * 1e-3, false, 0.5);
-      mesh = BRep_Tool::Triangulation(face, location);
-      if (mesh.IsNull()) {
-        continue;
-      }
-    }
-    const gp_Trsf toModel = location.Transformation();
-    for (int t = 1; t <= mesh->NbTriangles(); ++t) {
-      int nodes[3];
-      mesh->Triangle(t).Get(nodes[0], nodes[1], nodes[2]);
-      double s[3];
-      double u[3];
-      for (int i = 0; i < 3; ++i) {
-        const gp_Vec p(origin, mesh->Node(nodes[i]).Transformed(toModel));
-        s[i] = p.Dot(across) / spacing - 0.5;
-        u[i] = p.Dot(along);
-      }
-      const auto first = static_cast<long>(std::ceil(std::min({s[0], s[1], s[2]})));
-      const auto last = static_cast<long>(std::floor(std::max({s[0], s[1], s[2]})));
-      for (long k = first; k <= last; ++k) {
-        double low = std::numeric_limits<double>::max();
-        double high = -low;
-        for (int i = 0; i < 3; ++i) {
-          const int j = (i + 1) % 3;
-          const double a = s[i] - static_cast<double>(k);
-          const double b = s[j] - static_cast<double>(k);
-          if ((a < 0.0 && b < 0.0) || (a > 0.0 && b > 0.0) || a == b) {
-            continue;
-          }
-          const double at = u[i] + (u[j] - u[i]) * a / (a - b);
-          low = std::min(low, at);
-          high = std::max(high, at);
-        }
-        if (high > low) {
-          pieces[k].emplace_back(low, high);
-        }
-      }
-    }
-    // Each line's pieces joined where they meet (neighbouring triangles).
-    for (auto& [k, spans] : pieces) {
-      std::sort(spans.begin(), spans.end());
-      const gp_Pnt base = origin.Translated(across * ((static_cast<double>(k) + 0.5) * spacing) + lift);
-      const double gap = size * 1e-9;
-      for (std::size_t i = 0; i < spans.size();) {
-        double end = spans[i].second;
-        std::size_t next = i + 1;
-        while (next < spans.size() && spans[next].first <= end + gap) {
-          end = std::max(end, spans[next].second);
-          ++next;
-        }
-        if (end - spans[i].first > gap) {
-          builder.Add(lines, BRepBuilderAPI_MakeEdge(base.Translated(along * spans[i].first),
-                                                     base.Translated(along * end))
-                                 .Edge());
-          any = true;
-        }
-        i = next;
-      }
-    }
-  }
-  return any ? TopoDS_Shape(lines) : TopoDS_Shape();
-}
-
 // A sketch profile's presentation. Its face has no triangulation, and the
 // presentation meshes it here, on the UI thread, with auto-triangulation on
 // (its faces and their edges): that is safe because the face is the view's
@@ -1558,7 +1606,11 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   // took millions at the view's 0.01 mm and froze the window.
   useViewMeshing();
   const occ::handle<Aspect_DisplayConnection> display = new Aspect_DisplayConnection();
+#ifdef MITCAD_OCCT_EGL
+  const occ::handle<OpenGl_GraphicDriver> driver = new QtEglGraphicDriver(display);
+#else
   const occ::handle<OpenGl_GraphicDriver> driver = new OpenGl_GraphicDriver(display, false);
+#endif
   driver->ChangeOptions().buffersNoSwap = true;      // Qt swaps the buffers
   driver->ChangeOptions().buffersOpaqueAlpha = true; // keep Qt's framebuffer opaque
   driver->ChangeOptions().useSystemBuffer = false;   // always render into FBOs
@@ -2090,6 +2142,7 @@ void OcctViewer::display(const occ::handle<AIS_Shape>& object, int displayMode, 
 void OcctViewer::remove(const occ::handle<AIS_Shape>& object) {
   m_pickInfo.erase(object.get());
   m_inactiveObjects.erase(object.get());
+  m_unfilledProfiles.erase(object.get());
   m_context->Remove(object, false);
 }
 
@@ -2247,6 +2300,7 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
         sameTransformation(existing->second.placement.Transformation(), body.placement.Transformation()) &&
         existing->second.component == body.component && existing->second.componentColor == body.componentColor &&
         existing->second.color == body.color &&
+        viewTextureKey(existing->second.appearance) == viewTextureKey(body.appearance) &&
         existing->second.sectioned == body.sectioned &&
         sameFaceColors(existing->second.faceLooks, body.faceLooks)) {
       BodyEntry entry = existing->second;
@@ -2270,6 +2324,7 @@ void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
         existing->second.object->Shape().IsEqual(shape) && existing->second.component == body.component &&
         existing->second.componentColor == body.componentColor &&
         existing->second.color == body.color && existing->second.sectioned == body.sectioned &&
+        viewTextureKey(existing->second.appearance) == viewTextureKey(body.appearance) &&
         sameFaceColors(existing->second.faceLooks, body.faceLooks)) {
       // Only placed elsewhere (a component moved, a Move's drag, mitcad#838):
       // its objects move, nothing is drawn anew from its faces.
@@ -2769,9 +2824,22 @@ void OcctViewer::showBody(BodyEntry& entry) {
     // face that a split left.
     entry.edges = same ? same : std::make_shared<const ViewEdges>(shape, partners, entry.shape.get());
   }
+  // The component palette shows no textures (mitcad#2186).
   entry.object = makeBody(*entry.shape, inactive || seeThrough ? BodyDisplay::Style::Ghost : entry.style, color,
+                         componentColors ? nullptr : &entry.appearance,
                          componentColors ? std::vector<BodyDisplay::FaceLook>{} : entry.faceLooks,
                          m_visualStyle, m_paper, entry.sectioned, entry.edges);
+  if (const auto* textured = dynamic_cast<const TexturedBody*>(entry.object.get())) {
+    // For the UI tests (mitcad#2186): which bodies the view draws with
+    // textures.
+    const QString look = QStringLiteral("View textured body %1: %2 textured looks")
+                             .arg(QString::fromStdString(entry.uid))
+                             .arg(textured->texturedLooks());
+    if (!m_loggedTexturedBodies.contains(look)) {
+      m_loggedTexturedBodies.insert(look);
+      qDebug().noquote() << look;
+    }
+  }
   if (seeThrough) {
     entry.object->SetTransparency(kTransparentBodyTransparency);
     const occ::handle<Prs3d_Drawer>& drawer = entry.object->Attributes();
@@ -2814,7 +2882,7 @@ void OcctViewer::showBody(BodyEntry& entry) {
   entry.hiddenEdges.Nullify();
   entry.visibleEdges.Nullify();
   // A transparent body's edges are its own face boundaries.
-  if (!normal || inactive || seeThrough || !drawsHiddenEdges(m_visualStyle)) {
+  if (!normal || inactive || seeThrough || !drawsEdgeLayers(m_visualStyle)) {
     if (normal) {
       applyRenderedVisibility(entry);
     }
@@ -2823,16 +2891,21 @@ void OcctViewer::showBody(BodyEntry& entry) {
   // The copies of its edges (mitcad#1633), the view's own: drawn as they
   // are, never meshed; a mesh body's edges from its mesh (mitcad#1553).
   const TopoDS_Shape edges = entry.edges ? entry.edges->drawn() : edgesOf(shape);
-  entry.hiddenEdges = new AIS_Shape(edges);
-  drawWithoutMeshing(entry.hiddenEdges);
-  setEdgeStyle(entry.hiddenEdges, kHiddenEdgeColor, 1.0, Aspect_TOL_DASH);
+  // The dashed edges behind faces in the hidden-edge styles only; Wireframe
+  // with Visible Edges Only has the edges in sight alone (mitcad#2155).
+  if (drawsHiddenEdges(m_visualStyle)) {
+    entry.hiddenEdges = new AIS_Shape(edges);
+    drawWithoutMeshing(entry.hiddenEdges);
+    setEdgeStyle(entry.hiddenEdges, kHiddenEdgeColor, 1.0, Aspect_TOL_DASH);
+  }
   entry.visibleEdges = new AIS_Shape(edges);
   drawWithoutMeshing(entry.visibleEdges);
-  setEdgeStyle(entry.visibleEdges,
-               m_visualStyle == VisualStyle::WireframeHiddenEdges ? wireColor(color) : kEdgeColor,
-               1.0);
+  setEdgeStyle(entry.visibleEdges, paperFaces(m_visualStyle) ? wireColor(color) : kEdgeColor, 1.0);
   for (const auto& [object, layer] :
        {std::pair{entry.hiddenEdges, m_hiddenLayer}, std::pair{entry.visibleEdges, m_edgeLayer}}) {
+    if (object.IsNull()) {
+      continue;
+    }
     if (placed) {
       object->SetLocalTransformation(entry.placement.Transformation());
     }
@@ -2974,7 +3047,8 @@ void OcctViewer::setVisualStyle(VisualStyle style) {
 }
 
 void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shape>>& profiles,
-                             const std::map<std::string, QString>& occurrences) {
+                             const std::map<std::string, QString>& occurrences,
+                             const std::set<ProfileKey>& unfilled) {
   ScopedTiming timing("display profiles");
   // A profile whose face is the one shown keeps its display (the main
   // window passes the same face while the region stays the same).
@@ -2988,6 +3062,17 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
   // fork shares no face, edge or curve record with them.
   std::map<ProfileKey, occ::handle<AIS_Shape>> shown = std::move(m_profiles);
   m_profiles.clear();
+  // Drawn without fill now or not (mitcad#2194): whether that changed.
+  const auto markUnfilled = [this, &unfilled](const ProfileKey& key, const occ::handle<AIS_Shape>& profile) {
+    const bool now = unfilled.count(key) != 0;
+    const bool was = m_unfilledProfiles.count(profile.get()) != 0;
+    if (now) {
+      m_unfilledProfiles.insert(profile.get());
+    } else {
+      m_unfilledProfiles.erase(profile.get());
+    }
+    return now != was;
+  };
   int made = 0;
   for (const auto& [key, face] : profiles) {
     const auto placed = occurrences.find(key.first);
@@ -2997,8 +3082,10 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
       const auto info = m_pickInfo.find(existing->second.get());
       if (info != m_pickInfo.end()) {
         info->second.item.occurrence = occurrence;
-        // Pale outside the active component (mitcad#420).
-        if (markInactive(existing->second, isInactiveItem(info->second.item))) {
+        // Pale outside the active component (mitcad#420); without fill
+        // outside the outline set (mitcad#2194).
+        const bool inactiveChanged = markInactive(existing->second, isInactiveItem(info->second.item));
+        if (markUnfilled(key, existing->second) || inactiveChanged) {
           styleProfile(existing->second);
           m_context->Redisplay(existing->second, false);
         }
@@ -3014,8 +3101,9 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
     info.item = {SelectKind::Profile, QString::fromStdString(key.first),
                  QString::fromStdString(key.second), QStringLiteral("plane")};
     info.item.occurrence = occurrence;
-    if (markInactive(profile, isInactiveItem(info.item))) {
-      styleProfile(profile); // pale outside the active component (mitcad#420)
+    const bool inactive = markInactive(profile, isInactiveItem(info.item));
+    if (markUnfilled(key, profile) || inactive) {
+      styleProfile(profile); // pale outside the active component (mitcad#420), unfilled (mitcad#2194)
     }
     display(profile, AIS_Shaded, std::move(info), true);
     placeProfile(profile); // through the bodies while an input takes profiles (mitcad#1222)
@@ -3023,6 +3111,20 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
   }
   for (const auto& [key, profile] : shown) {
     remove(profile);
+  }
+  // The profiles drawn without fill, when that changed (mitcad#2194).
+  QStringList open;
+  for (const auto& [key, profile] : m_profiles) {
+    if (m_unfilledProfiles.count(profile.get()) != 0) {
+      open << QStringLiteral("%1 %2").arg(QString::fromStdString(key.first), QString::fromStdString(key.second));
+    }
+  }
+  const QString unfilledText =
+      open.isEmpty() ? QStringLiteral("none")
+                     : QStringLiteral("%1 [%2]").arg(open.size()).arg(open.join(QStringLiteral(", ")));
+  if (unfilledText != m_loggedUnfilled) {
+    m_loggedUnfilled = unfilledText;
+    qDebug().noquote() << QStringLiteral("Profiles without fill: %1").arg(unfilledText);
   }
   updateProfilesThrough(); // mitcad#1931
   logSketchThrough();
@@ -4061,7 +4163,10 @@ int OcctViewer::styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind
 
 void OcctViewer::styleProfile(const occ::handle<AIS_Shape>& profile) const {
   const bool inactive = drawnInactive(profile);
-  profile->SetTransparency(inactive ? kInactiveProfileTransparency : 0.6);
+  // Outside its sketch's outline set (a hole's disc, mitcad#2194): its
+  // outline only; the hover's and the selection's own styles still fill it.
+  const bool unfilled = m_unfilledProfiles.count(profile.get()) != 0;
+  profile->SetTransparency(unfilled ? 1.0 : inactive ? kInactiveProfileTransparency : 0.6);
   profile->Attributes()->SetFaceBoundaryAspect(new Prs3d_LineAspect(
       inactive ? inactiveColor(kSketchColor, m_paper) : kSketchColor, Aspect_TOL_SOLID, 2.0));
 }
@@ -5068,6 +5173,23 @@ void OcctViewer::setShiftHeld(bool held, bool hover) {
   requestFrame();
 }
 
+void OcctViewer::applyDeferredShiftRelease() {
+  if (!m_shiftReleaseDeferred || m_pointerInputPending) {
+    return;
+  }
+  m_shiftReleaseDeferred = false;
+  // After the frame (not inside it): the release, unless Shift is down
+  // again by then.
+  QMetaObject::invokeMethod(
+      this,
+      [this] {
+        if (!m_shiftReleaseDeferred && !QGuiApplication::keyboardModifiers().testFlag(Qt::ShiftModifier)) {
+          setShiftHeld(false, true);
+        }
+      },
+      Qt::QueuedConnection);
+}
+
 bool OcctViewer::eventFilter(QObject* watched, QEvent* event) {
   const QEvent::Type type = event->type();
   if (headlessUiTest() && watched == parentWidget() &&
@@ -5090,9 +5212,20 @@ bool OcctViewer::eventFilter(QObject* watched, QEvent* event) {
     const auto* key = static_cast<const QKeyEvent*>(event);
     if (key->key() == Qt::Key_Shift && !key->isAutoRepeat() && window() != nullptr &&
         window()->isActiveWindow()) {
-      setShiftHeld(type == QEvent::KeyPress, true);
+      if (type == QEvent::KeyRelease && m_shiftHeld && m_pointerInputPending) {
+        // A Shift+click is picked on the next frame (FlushViewEvents in
+        // paintGL), with the kinds pickable then: a release read before that
+        // frame (input read in one go under load) narrowed the scope first,
+        // and the click took the face in front instead of the hidden edge
+        // (mitcad#2189). The release waits for that frame.
+        m_shiftReleaseDeferred = true;
+      } else {
+        m_shiftReleaseDeferred = false;
+        setShiftHeld(type == QEvent::KeyPress, true);
+      }
     }
   } else if (m_scoped && type == QEvent::ApplicationDeactivate) {
+    m_shiftReleaseDeferred = false;
     setShiftHeld(false, false); // the release goes to another application
   }
   return QOpenGLWidget::eventFilter(watched, event);
@@ -6935,10 +7068,23 @@ gp_Vec OcctViewer::areaShift(const occ::handle<Graphic3d_Camera>& camera, const 
 
 void OcctViewer::moveCamera(const occ::handle<Graphic3d_Camera>& end) {
   AbortViewAnimation();
-  if (!m_navigation.animate || m_view->Window().IsNull() || !isVisible()) {
+  // A window nobody sees moves at once: one not exposed (Windows session 0,
+  // where Qt never exposes it) draws no steady frames, so a glide stayed at
+  // its start until something else drew one, and the datums' places waited
+  // for its rest (mitcad#2248: Create Sketch's move clear of the cards).
+  const QWindow* handle = window()->windowHandle();
+  const bool unseen = handle == nullptr || !handle->isExposed();
+  if (!m_navigation.animate || m_view->Window().IsNull() || !isVisible() || unseen) {
     m_view->Camera()->Copy(end);
     m_view->Invalidate();
     cameraMoved();
+    if (m_navigation.animate && unseen) {
+      // Still a navigation, as the glide would have been: it ends after the
+      // quiet time (navigationFinished), and what follows the end (the
+      // command input's pick places) is logged again.
+      navigationStep();
+      updateNavigation();
+    }
     requestFrame();
     return;
   }
@@ -8068,7 +8214,7 @@ void OcctViewer::setBackground(const QColor& top, const QColor& bottom, bool gra
   }
   if (paper != m_paper) {
     m_paper = paper;
-    if (m_visualStyle == VisualStyle::WireframeHiddenEdges) {
+    if (paperFaces(m_visualStyle)) {
       for (auto& [key, entry] : m_bodies) {
         removeBody(entry);
         showBody(entry);
@@ -8240,7 +8386,13 @@ void OcctViewer::setSectionCaps(const std::vector<SectionCap>& caps, const gp_Ax
     m_context->Display(object, AIS_Shaded, -1, false);
     m_sectionCaps.push_back(object);
     int lines = 0;
-    const TopoDS_Shape hatch = hatchOf(caps[i].faces, plane, mirrored);
+    // In the plane itself (mitcad#2146): no lift towards the eye, which
+    // stood the lines visibly off the caps when the view was zoomed in on
+    // part of the cut. They win over the caps' fill without it: the caps
+    // lie just behind the plane by their polygon offset (which does not
+    // move lines), the clipped bodies' faces further back, and the hatch is
+    // drawn in the layer of the edges in sight, after the caps' layer.
+    const TopoDS_Shape hatch = sectionHatch(caps[i].faces, plane, mirrored);
     if (!hatch.IsNull()) {
       for (TopExp_Explorer edges(hatch, TopAbs_EDGE); edges.More(); edges.Next()) {
         ++lines;
@@ -8253,10 +8405,13 @@ void OcctViewer::setSectionCaps(const std::vector<SectionCap>& caps, const gp_Ax
       m_context->Display(hatchObject, AIS_WireFrame, -1, false);
       m_sectionHatches.push_back(hatchObject);
     }
-    m_sectionLook.append(QStringLiteral("%1 hatch %2 at %3 deg, %4 lines")
+    // For UI tests: the hatch's largest distance from the plane (mm), 0
+    // when it lies in it.
+    m_sectionLook.append(QStringLiteral("%1 hatch %2 at %3 deg, %4 lines, %5 mm off the plane")
                              .arg(color.name(), hatchColor.name())
                              .arg(mirrored ? 135 : 45)
-                             .arg(lines));
+                             .arg(lines)
+                             .arg(sectionHatchPlaneDistance(hatch, plane), 0, 'f', 6));
   }
   logSectionCaps();
   sceneChanged();
@@ -8284,6 +8439,9 @@ void OcctViewer::logSectionCaps() {
     break;
   case VisualStyle::WireframeHiddenEdges:
     style = "Wireframe with Hidden Edges";
+    break;
+  case VisualStyle::WireframeVisibleEdges:
+    style = "Wireframe with Visible Edges Only";
     break;
   }
   const QString logged = QStringLiteral("Section caps: %1 colour(s) [%2] in %3, bodies in %4 colours")
@@ -8801,6 +8959,20 @@ QString OcctViewer::attachGl() {
   if (!glContext->Init(context()->format().profile() == QSurfaceFormat::CoreProfile)) {
     return QStringLiteral("OCCT could not attach to the OpenGL context");
   }
+#ifdef MITCAD_OCCT_EGL
+  // OCCT draws through EGL (mitcad#2031): its driver names Qt's context.
+  // Qt on X11 with its GLX integration (QT_XCB_GL_INTEGRATION set by the
+  // user) has none: the reason goes to the log (reportGlFailure,
+  // mitcad#2125).
+  auto* egl = context()->nativeInterface<QNativeInterface::QEGLContext>();
+  const occ::handle<QtEglGraphicDriver> eglDriver = occ::handle<QtEglGraphicDriver>::DownCast(m_viewer->Driver());
+  if (egl == nullptr || eglDriver.IsNull()) {
+    return QStringLiteral("Qt's OpenGL context is not an EGL context (platform %1, QT_XCB_GL_INTEGRATION %2); "
+                          "OCCT draws through EGL")
+        .arg(QGuiApplication::platformName(), qEnvironmentVariable("QT_XCB_GL_INTEGRATION"));
+  }
+  eglDriver->useEglContext(egl->display(), egl->nativeContext());
+#endif
 
   occ::handle<Aspect_NeutralWindow> window =
       occ::handle<Aspect_NeutralWindow>::DownCast(m_view->Window());
@@ -8817,14 +8989,25 @@ QString OcctViewer::attachGl() {
   // The first window keeps a framing made before it (settleCamera).
   const double shownHeight = (firstTime && !m_fitMade) ? 0.0 : visibleHeight();
   window->SetNativeHandle(occtDrawable());
+#ifdef MITCAD_OCCT_EGL
+  // A surfaceless EGL view gets a framebuffer of OCCT's own at this size
+  // until paintGL() wraps Qt's: never an empty one.
+  window->SetSize(std::max(1, viewWidth), std::max(1, viewHeight));
+#else
   window->SetSize(viewWidth, viewHeight);
+#endif
   // SetWindow wraps the same Qt native context in a new OCCT context and
   // shares the previous wrapper's shader manager. Keep that old wrapper
   // alive until its shared manager has an explicit new owner: its destructor
   // clears the manager's context pointer while it still owns that pointer.
   occ::handle<OpenGl_Context> previous = hadWindow ? glContextOf(m_view) : occ::handle<OpenGl_Context>();
   logGlBinding("before SetWindow", this, previous);
+  // A throw here is caught and told by initializeGL() (mitcad#2125).
   m_view->SetWindow(window, glContext->RenderingContext());
+#ifdef MITCAD_OCCT_EGL
+  // OCCT bound a framebuffer of its own for a surfaceless view: Qt's again.
+  context()->functions()->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+#endif
   const occ::handle<OpenGl_Context> attached = glContextOf(m_view);
   logGlBinding("after SetWindow", this, attached);
   attached->ShaderManager()->SetContext(attached.get());
@@ -8869,7 +9052,123 @@ QString OcctViewer::attachGl() {
     emit glInitialized(QString::fromLatin1(renderer != nullptr ? renderer : "unknown"));
   }
   m_glAttached = true;
+  m_compositionPending = true;
   return QString();
+}
+
+namespace {
+
+// "OpenGL 4.5 compatibility, RGBA 8/8/8/8, depth 24, stencil 8".
+QString surfaceFormatText(const QSurfaceFormat& format) {
+  QString type = QStringLiteral("default");
+  if (format.renderableType() == QSurfaceFormat::OpenGL) {
+    type = QStringLiteral("OpenGL");
+  } else if (format.renderableType() == QSurfaceFormat::OpenGLES) {
+    type = QStringLiteral("OpenGL ES");
+  }
+  QString profile;
+  if (format.profile() == QSurfaceFormat::CoreProfile) {
+    profile = QStringLiteral(" core");
+  } else if (format.profile() == QSurfaceFormat::CompatibilityProfile) {
+    profile = QStringLiteral(" compatibility");
+  }
+  return QStringLiteral("%1 %2.%3%4, RGBA %5/%6/%7/%8, depth %9, stencil %10")
+      .arg(type)
+      .arg(format.majorVersion())
+      .arg(format.minorVersion())
+      .arg(profile)
+      .arg(format.redBufferSize())
+      .arg(format.greenBufferSize())
+      .arg(format.blueBufferSize())
+      .arg(format.alphaBufferSize())
+      .arg(format.depthBufferSize())
+      .arg(format.stencilBufferSize());
+}
+
+QString surfaceTypeText(QSurface::SurfaceType type) {
+  if (type == QSurface::RasterSurface) {
+    return QStringLiteral("raster");
+  }
+  if (type == QSurface::OpenGLSurface) {
+    return QStringLiteral("OpenGL");
+  }
+  if (type == QSurface::VulkanSurface) {
+    return QStringLiteral("Vulkan");
+  }
+  if (type == QSurface::MetalSurface) {
+    return QStringLiteral("Metal");
+  }
+  if (type == QSurface::Direct3DSurface) {
+    return QStringLiteral("Direct3D");
+  }
+  return QStringLiteral("other (%1)").arg(static_cast<int>(type));
+}
+
+} // namespace
+
+void OcctViewer::logComposition() {
+  // The view is a texture that Qt composes with the window's other widgets
+  // (QOpenGLWidget): the top-level window's surface and format decide how
+  // the widgets over it show (they need the window's alpha where the view
+  // is). On Wayland the owner's desktop showed the view but not the Start
+  // page and the bars over it (mitcad#2031); this line says what the window
+  // had.
+  const QWidget* top = window();
+  const QWindow* handle = top != nullptr ? top->windowHandle() : nullptr;
+  QString windowText = QStringLiteral("no native window");
+  if (handle != nullptr) {
+    windowText = QStringLiteral("%1, %2, exposed %3")
+                     .arg(surfaceTypeText(handle->surfaceType()), surfaceFormatText(handle->format()),
+                          handle->isExposed() ? QStringLiteral("yes") : QStringLiteral("no"));
+  }
+  QString surfaceText = QStringLiteral("not EGL");
+#ifdef MITCAD_OCCT_EGL
+  if (auto* egl = context()->nativeInterface<QNativeInterface::QEGLContext>()) {
+    const EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
+    if (surface == EGL_NO_SURFACE) {
+      surfaceText = QStringLiteral("surfaceless");
+    } else {
+      EGLint width = 0;
+      EGLint height = 0;
+      eglQuerySurface(egl->display(), surface, EGL_WIDTH, &width);
+      eglQuerySurface(egl->display(), surface, EGL_HEIGHT, &height);
+      surfaceText = QStringLiteral("an EGL surface %1x%2").arg(width).arg(height);
+    }
+  }
+#endif
+  // The widgets shown over the view: its own children (the Start page, the
+  // cube's controls) and the later siblings that cross it (the Floating
+  // layout's rows and cards).
+  QStringList over;
+  const QRect area(mapTo(top, QPoint(0, 0)), size());
+  for (const QWidget* child : findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+    if (child->isVisible() && !child->isWindow()) {
+      over << (child->objectName().isEmpty() ? QString::fromLatin1(child->metaObject()->className())
+                                             : child->objectName());
+    }
+  }
+  if (const QWidget* holder = parentWidget()) {
+    bool after = false;
+    for (const QObject* object : holder->children()) {
+      const auto* sibling = qobject_cast<const QWidget*>(object);
+      if (sibling == this) {
+        after = true;
+        continue;
+      }
+      if (!after || sibling == nullptr || !sibling->isVisible() || sibling->isWindow()) {
+        continue;
+      }
+      if (QRect(sibling->mapTo(top, QPoint(0, 0)), sibling->size()).intersects(area)) {
+        over << (sibling->objectName().isEmpty() ? QString::fromLatin1(sibling->metaObject()->className())
+                                                 : sibling->objectName());
+      }
+    }
+  }
+  qInfo().noquote() << QStringLiteral("View composition: platform %1; window surface %2; view context %3, "
+                                      "drawing into %4; widgets over the view: %5")
+                           .arg(QGuiApplication::platformName(), windowText, surfaceFormatText(context()->format()),
+                                surfaceText,
+                                over.isEmpty() ? QStringLiteral("none") : over.join(QStringLiteral(", ")));
 }
 
 void OcctViewer::watchHeadlessParent() {
@@ -8926,10 +9225,18 @@ QSurfaceFormat viewportSurfaceFormat() {
 #else
   // OCCT's GLX backend needs compatibility: core reads Qt's pbuffer with
   // XGetWindowAttributes(). DeprecatedFunctions prevents Mesa promoting a
-  // forward-compatible request to core. Keep the existing WGL/GLX format.
+  // forward-compatible request to core. Keep the existing WGL/GLX format;
+  // through EGL on Linux (mitcad#2031) the same compatibility context.
   format.setVersion(4, 5);
   format.setProfile(QSurfaceFormat::CompatibilityProfile);
   format.setOption(QSurfaceFormat::DeprecatedFunctions);
+#ifdef MITCAD_OCCT_EGL
+  // Desktop OpenGL by name: Qt resolves the default renderable type to
+  // OpenGL ES on NVIDIA's EGL, and an ES 4.5 context does not exist there
+  // (EGL_BAD_MATCH for every context, so no 3D view). Mesa resolves the
+  // default to OpenGL already; OCCT needs desktop OpenGL on both.
+  format.setRenderableType(QSurfaceFormat::OpenGL);
+#endif
 #endif
   return format;
 }
@@ -8945,6 +9252,11 @@ Aspect_Drawable OcctViewer::occtDrawable() {
   // stacks above its siblings; the top-level window's view is already native,
   // does not change the layout and stays the same while the widget lives.
   return static_cast<Aspect_Drawable>(window()->winId());
+#elif defined(MITCAD_OCCT_EGL)
+  // OCCT on EGL (mitcad#2031) takes the surface current with Qt's context:
+  // Qt's offscreen pbuffer, or none (surfaceless). Another surface than
+  // the view's attaches again (paintGL()).
+  return static_cast<Aspect_Drawable>(reinterpret_cast<std::uintptr_t>(eglGetCurrentSurface(EGL_DRAW)));
 #else
   if (!m_glxWindow) {
     m_glxWindow = std::make_unique<QWindow>();
@@ -9004,8 +9316,9 @@ void OcctViewer::paintGL() {
   ScopedTiming timing("frame");
   // With MITCAD_TEST_GL_FAILURE, a move to another top-level window counts
   // as Qt making the surface again on every platform (mitcad#2125): on
-  // Linux the view's drawable is a helper window of its own that stays. So
-  // does a screen change of the window (watchGlTestScreen).
+  // Linux the view's drawable (a helper window of its own with GLX, Qt's
+  // offscreen surface or none with EGL) stays. So does a screen change of
+  // the window (watchGlTestScreen).
   const bool testSurfaceRemade = (m_glAttachedTopLevel != window() || m_glTestScreenChanged) &&
                                  !qEnvironmentVariableIsEmpty("MITCAD_TEST_GL_FAILURE");
   if (m_view->Window()->NativeHandle() != occtDrawable() || testSurfaceRemade) {
@@ -9022,12 +9335,8 @@ void OcctViewer::paintGL() {
   // shader manager with the wrapper that owns this view, as OCCT's context
   // activation does; native-context identity alone does not set that owner.
   glContext->ShaderManager()->SetContext(glContext.get());
-  occ::handle<OpenGl_FrameBuffer> framebuffer = glContext->DefaultFrameBuffer();
+  occ::handle<OpenGl_FrameBuffer> framebuffer = wrapQtFramebuffer(glContext);
   if (framebuffer.IsNull()) {
-    framebuffer = new QtFrameBuffer();
-    glContext->SetDefaultFrameBuffer(framebuffer);
-  }
-  if (!framebuffer->InitWrapper(glContext)) {
     reportGlFailure(QStringLiteral("OCCT could not wrap Qt's framebuffer"));
     return;
   }
@@ -9053,6 +9362,16 @@ void OcctViewer::paintGL() {
     const double shownHeight = visibleHeight();
     window->SetSize(newSize.x(), newSize.y());
     m_view->MustBeResized();
+#ifdef MITCAD_OCCT_EGL
+    // A surfaceless EGL view's resize made OCCT a framebuffer of its own
+    // and bound it (OpenGl_Window::init): Qt's again for this frame.
+    context()->functions()->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    framebuffer = wrapQtFramebuffer(glContext);
+    if (framebuffer.IsNull()) {
+      reportGlFailure(QStringLiteral("OCCT could not wrap Qt's framebuffer after a resize"));
+      return;
+    }
+#endif
     if (oldSize.x() > 0 && oldSize.y() > 0 && shownHeight > 0.0 && std::isfinite(shownHeight)) {
       setVisibleHeight(*m_view->Camera(), shownHeight);
     }
@@ -9078,12 +9397,17 @@ void OcctViewer::paintGL() {
     FlushViewEvents(m_context, m_view, true);
     if (PressedMouseButtons() == Aspect_VKeyMouse_NONE && !m_navigationState.buttons()) {
       m_pointerInputPending = false;
+      applyDeferredShiftRelease(); // the Shift+click picked (mitcad#2189)
     }
   } catch (const Standard_Failure& failure) {
     qWarning() << "OCCT view event failed:" << failure.what();
   } catch (const std::exception& failure) {
     // A click on the cube turns the view here (mitcad#773).
     qWarning() << "OCCT view event failed:" << failure.what();
+  }
+  if (m_compositionPending) {
+    m_compositionPending = false;
+    logComposition();
   }
   if (m_glFailureTold) {
     // A graphics failure (reportGlFailure) is over; a new one is told again.
@@ -9300,6 +9624,7 @@ void OcctViewer::cancelPointerInteraction() {
   m_scrollRefused = false;
   m_navigationState.setButtons(false);
   m_pointerInputPending = false;
+  applyDeferredShiftRelease();
   if (m_dragItem) {
     endOccurrenceDrag(QPointF(), true);
   }
@@ -9406,7 +9731,9 @@ bool OcctViewer::event(QEvent* event) {
   const bool handled = QOpenGLWidget::event(event);
   if (event->type() == QEvent::DevicePixelRatioChange) {
     applyDevicePixelRatio();
-  } else if (event->type() == QEvent::ApplicationPaletteChange) {
+  } else if (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::PaletteChange) {
+    // The theme reaches a child widget as its own palette's change, the
+    // application's change comes on its own (mitcad#2145): either one.
     emit themeChanged();
   } else if (event->type() == QEvent::Show && m_glAttached) {
     // Shown again in a window not exposed yet (a move to a new window):
@@ -9456,6 +9783,8 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
     }
     m_pressPosition = event->position();
     m_pressModifiers = keys;
+    // (QWidget's mouseDoubleClickEvent passes the second press here.)
+    m_pressDoubleClick = event->type() == QEvent::MouseButtonDblClick;
     m_windowPick = false;
     const NCollection_Vec2<int> pixel = toDevicePixels(event->position());
     m_context->MoveTo(pixel.x(), pixel.y(), m_view, false);
@@ -9496,7 +9825,7 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
   }
   const bool wasPending = m_pointerInputPending;
   m_pointerInputPending = true;
-  if (UpdateMouseButtons(toDevicePixels(m_orbitWrap.position(event->position(), event->globalPosition())),
+  if (UpdateMouseButtons(toDevicePixels(orbitPosition(event)),
                          viewButtons(event->buttons()), viewFlags(keys), false)) {
     requestFrame();
   } else {
@@ -9591,7 +9920,7 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   }
   // Where the view has the release: after an orbit past the edge of the
   // screen, as far from the press as the whole drag went.
-  const QPointF released = m_orbitWrap.position(event->position(), event->globalPosition());
+  const QPointF released = orbitPosition(event);
   // The release belongs to the press: its keys, not the ones held now
   // (mitcad#1571); the live keys count again once every button is up.
   const Qt::KeyboardModifiers keys = pressKeys(event->modifiers());
@@ -9618,6 +9947,7 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
     m_dragRefused = false;
     m_windowPick = false;
     m_clickPosition = m_pressPosition;
+    m_clickDoubleClick = m_pressDoubleClick;
     const Aspect_VKeyFlags flags = viewFlags(m_pressModifiers);
     m_pointerInputPending = true;
     UpdateMouseButtons(toDevicePixels(m_pressPosition), Aspect_VKeyMouse_LeftButton, flags, false);
@@ -9648,6 +9978,7 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
     } else {
       setShiftHeld(keys.testFlag(Qt::ShiftModifier), false);
       m_clickPosition = event->position();
+      m_clickDoubleClick = m_pressDoubleClick;
     }
   }
   const Aspect_VKeyFlags flags = viewFlags(keys);
@@ -9726,7 +10057,7 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   // guard below would take for a lost release, ending the orbit. It brings
   // the view nothing new (the wrap puts it where the view already is).
   if (event->buttons() == Qt::NoButton && m_orbitWrap.takeJumpMove(event->globalPosition())) {
-    m_orbitWrap.position(event->position(), event->globalPosition());
+    orbitPosition(event);
     return;
   }
   // AppKit menu tracking and other controls may receive a release that
@@ -9775,7 +10106,7 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   // other keys for a new gesture of the held button (Option pressed during
   // a select turning it into an orbit, released during an orbit turning it
   // into a window selection) and stop taking the press as a click.
-  if (UpdateMousePosition(toDevicePixels(m_orbitWrap.position(event->position(), event->globalPosition())),
+  if (UpdateMousePosition(toDevicePixels(orbitPosition(event)),
                           viewButtons(event->buttons()), viewFlags(pressKeys(event->modifiers())), false)) {
     requestFrame();
   }
@@ -9787,7 +10118,8 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
 // view does not see (view/OrbitWrap.hpp, GitHub mitcad/Mitcad#139). Touch and
 // pens have no cursor of their own to move. Where the system does not move
 // the cursor (Wayland), the drag tries no more and the orbit stops at the
-// edge as before.
+// edge as before. With two screens side by side the shared edge jumps too:
+// the cursor stays on the screen the orbit is on (mitcad#2188).
 void OcctViewer::wrapOrbitCursor(const QMouseEvent* event) {
   if (myMouseActiveGesture != AIS_MouseGesture_RotateOrbit || event->source() != Qt::MouseEventNotSynthesized ||
       !m_orbitWrap.canJump()) {
@@ -9799,6 +10131,13 @@ void OcctViewer::wrapOrbitCursor(const QMouseEvent* event) {
     if (!m_orbitScreen) {
       return;
     }
+    const QRect area = m_orbitScreen->geometry();
+    qDebug().noquote() << QStringLiteral("Orbit on screen %1,%2 %3 x %4 of %5")
+                              .arg(area.x())
+                              .arg(area.y())
+                              .arg(area.width())
+                              .arg(area.height())
+                              .arg(QGuiApplication::screens().size());
   }
   const std::optional<QPoint> to = OrbitWrap::target(from, m_orbitScreen->geometry());
   if (!to) {
@@ -9809,13 +10148,44 @@ void OcctViewer::wrapOrbitCursor(const QMouseEvent* event) {
     m_orbitWrap.refused();
     return;
   }
-  m_orbitWrap.jumped(from, *to);
-  qDebug().noquote() << QStringLiteral("Orbit cursor jumped to %1,%2").arg(to->x()).arg(to->y());
+  // How far the jump moved the cursor in the widget's coordinates, which the
+  // view gets: the event's own position, not its global one, since a drag
+  // that passed onto the next screen has its global position in that
+  // screen's scale and origin (mitcad#2188).
+  const QPointF shift = event->position() - mapFromGlobal(QPointF(*to));
+  m_orbitWrap.jumped(from, *to, shift, event->timestamp());
+  qDebug().noquote() << QStringLiteral("Orbit cursor jumped to %1,%2 from %3,%4")
+                            .arg(to->x())
+                            .arg(to->y())
+                            .arg(qRound(from.x()))
+                            .arg(qRound(from.y()));
 }
 
 void OcctViewer::resetOrbitWrap() {
   m_orbitWrap.reset();
   m_orbitScreen = nullptr;
+}
+
+// The position the view gets for a mouse event during an orbit past the edge
+// of the screen (view/OrbitWrap.hpp): the event's timestamp tells moves
+// queued before a jump from later ones, a later one from the old edge is the
+// cursor put back (GitHub mitcad/Mitcad#546, mitcad#2205). A jump put back is
+// undone and logged with the move and where the cursor is then, which tells a
+// move that only waited in the queue (the cursor on the far side) from the
+// system putting the cursor back.
+QPointF OcctViewer::orbitPosition(const QMouseEvent* event) {
+  const QPointF at = m_orbitWrap.position(event->position(), event->globalPosition(), event->timestamp());
+  if (m_orbitWrap.takeUndone()) {
+    const QPoint cursor = m_orbitScreen ? QCursor::pos(m_orbitScreen) : QCursor::pos();
+    const QPoint move = event->globalPosition().toPoint();
+    qDebug().noquote() << QStringLiteral("Orbit cursor jump not taken: the system put the cursor back at the edge "
+                                         "(move at %1,%2, cursor at %3,%4)")
+                              .arg(move.x())
+                              .arg(move.y())
+                              .arg(cursor.x())
+                              .arg(cursor.y());
+  }
+  return at;
 }
 
 void OcctViewer::wheelEvent(QWheelEvent* event) {

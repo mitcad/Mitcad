@@ -367,6 +367,12 @@ pub(crate) fn is_unit_name(name: &str) -> bool {
     base_unit(name).is_some()
 }
 
+/// The unit names a formula may write after a value, in the table's order
+/// (the formula editor's completion, mitcad#2179).
+pub(crate) fn unit_names() -> impl Iterator<Item = &'static str> {
+    UNIT_NAMES.iter().map(|(name, _)| *name)
+}
+
 /// Unit of measure: a power of one length unit times a power of one angle
 /// unit, such as `mm`, `in^2`, `deg` or `mm*deg^-1`. The default is
 /// unitless.

@@ -39,17 +39,8 @@ seam that is no iso-line is left as before.
 
 Upstream: new.
 
-Test: geometry/tests/port/p0931-seam-run-on-to-a-corners-cut.cpp (ctest
-geometry.port.0931): a roof whose ridge runs into a rod standing on it, the
-rod's seam a B-spline curve on the line through the ridge's end at +y or at
--y, the ridge rounded with 1: valid, the material removed the blend's
-section along the ridge less the rod within 1e-6; without the patch the
-result is invalid and its volume about 213 mm3 off. The boundary cases
-build the same with and without the patch: the seam away from the ridge,
-and the seam left a line (which OCCT's own way prolongs).
-geometry/tests/test_fillet_seam_run_on.cpp (ctest
-geometry.fillet_seam_run_on), the rod sewn from a cylinder face whose seam
-lies away from its surface's u = 0, fails without the patch as well.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0931.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 2411e415..f0c08991 100644

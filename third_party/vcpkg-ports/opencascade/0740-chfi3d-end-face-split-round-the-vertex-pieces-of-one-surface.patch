@@ -39,13 +39,9 @@ where the edge does not lie on the surface, the curve stays null and
 OCCT's own handling goes on as before. No size comes from the case.
 
 Before, the result was invalid.
-Test: geometry/tests/test_fillet_results.cpp,
-test_bar_top_rounded_into_a_bore_split_round_the_corner (ctest
-geometry.suite.fillet_results): a bar across a ring of two layers, the
-upper notched over the bar and the notch filled again (the bore's wall in
-three pieces round each end of the bar's top edges), as copied (each piece
-on its own surface): the bar's top edges rounded. It fails without the
-patch (shown 2026-11-20 by tools/occt-port-proof.py).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0740.
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

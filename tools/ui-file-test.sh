@@ -211,7 +211,7 @@ expect_title "Untitled - MitCad"
 [ "$(sha256sum "$FILE")" = "$checksum" ] || ui_fail "the file changed after Don't Save"
 echo "ok   file unchanged"
 
-echo "--- Close: the empty design after it has Component1 active (mitcad#898)"
+echo "--- Close: the Start page with no design open (mitcad#2142); the empty design under it has Component1 active (mitcad#898)"
 ui_mark
 ui_step "open (Ctrl+O)"                  ui_key ctrl+o
 ui_step "type the path, Enter"           type_path "Open" "$FILE"
@@ -222,7 +222,8 @@ ui_mark
 ui_step "close (Ctrl+W)"                 ui_key ctrl+w
 ui_expect_new "Document closed" "the design closed"
 ui_expect_new "$NEW_DESIGN" "the new design after Close has Component1 active"
-expect_title "Untitled - MitCad"
+ui_expect_new "Last design closed: Start page" "the last design closed to the Start page (the default)"
+expect_title "Start - MitCad"
 focus_main
 ui_key ctrl+q
 expect_exit "unmodified document exits without a prompt"

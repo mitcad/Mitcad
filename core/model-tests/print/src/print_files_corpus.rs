@@ -5,7 +5,9 @@
 //! design as the application's Import from Slicer... imports it
 //! (`import_print_profile` into the design), checked against its row, then
 //! exported in the same dialect and read back: every value read into
-//! Mitcad's keys must come back alike.
+//! Mitcad's keys must come back alike. Each project's meshes are imported
+//! too, as File › Import imports a 3MF file (mitcad#2156): mesh bodies,
+//! named as the project's settings file names its objects.
 //!
 //! `index.tsv`: comment lines (`#`), a header row naming the columns, then
 //! a row per project. The columns checked when a row gives them:
@@ -391,4 +393,119 @@ fn projects_import_as_indexed_and_their_values_come_back() {
         failures.join("\n")
     );
     eprintln!("3mf corpus: {} projects pass their checks", rows.len());
+}
+
+/// The words of a name the 3MF reader gives an object that nothing names
+/// (`Object <id>`).
+fn unnamed(name: &str) -> bool {
+    name.strip_prefix("Object ")
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Imports a row's project's meshes (mitcad#2156) into a fresh design as
+/// File › Import does (`import_file`): its mesh bodies, the parts placed
+/// more than once as components, and when the package has a slicer's
+/// settings file that names its objects, no body or component named
+/// `Object <id>`. The failures, each starting with the file; a line of what
+/// came in.
+fn check_meshes(row: &Row) -> Vec<String> {
+    let Some(file) = row.get("file") else {
+        return Vec::new();
+    };
+    let path = row.dir.join(file);
+    let mut failures = Vec::new();
+    let mut fail = |text: String| failures.push(format!("{file}: meshes: {text}"));
+    let data = match std::fs::read(&path) {
+        Ok(data) => data,
+        Err(e) => {
+            fail(format!("cannot read {}: {e}", path.display()));
+            return failures;
+        }
+    };
+    let named = mitcad_3mf::read_package(&data).is_ok_and(|package| {
+        [
+            "Metadata/model_settings.config",
+            "Metadata/Slic3r_PE_model.config",
+        ]
+        .iter()
+        .any(|settings| package.file(settings).is_some())
+    });
+    let mut doc = Document::new(MockKernel::default());
+    let import = json!({"cmd": "import_file", "path": path.to_string_lossy()});
+    let result: Value = match doc.command(&import.to_string()) {
+        Ok(text) => serde_json::from_str(&text).unwrap(),
+        Err(e) => {
+            fail(format!("import_file refused it: {e}"));
+            return failures;
+        }
+    };
+    let names = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item["name"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let bodies = names(&result["bodies"]);
+    let components = names(&result["components"]);
+    if bodies.is_empty() {
+        fail(format!("no mesh bodies came in: {result}"));
+    }
+    if result["bodies"]
+        .as_array()
+        .is_some_and(|list| list.iter().any(|b| b["kind"] != "mesh"))
+    {
+        fail(format!("a body that is not a mesh body: {result}"));
+    }
+    if named {
+        for name in bodies.iter().chain(&components) {
+            if unnamed(name) {
+                fail(format!(
+                    "{name}: the settings file's name of its object was not taken"
+                ));
+            }
+        }
+    }
+    eprintln!(
+        "3mf corpus meshes: {file}: {} body(ies) ({}), {} component(s) ({}), {} occurrence(s), \
+         {} warning(s)",
+        bodies.len(),
+        bodies.join(", "),
+        components.len(),
+        components.join(", "),
+        result["occurrences"].as_u64().unwrap_or(0),
+        result["warnings"].as_array().map_or(0, Vec::len)
+    );
+    failures
+}
+
+#[test]
+#[ignore = "the 3MF corpus: the ctest 3mf.corpus runs it (--ignored)"]
+fn projects_import_their_meshes_named_as_their_settings_name_them() {
+    let Some(corpus) = std::env::var_os("MITCAD_3MF_CORPUS") else {
+        eprintln!("3mf corpus: skipped (MITCAD_3MF_CORPUS is not set)");
+        return;
+    };
+    let rows: Vec<Row> = std::env::split_paths(&corpus)
+        .flat_map(|dir| rows(&dir))
+        .collect();
+    if rows.is_empty() {
+        eprintln!("3mf corpus: skipped (no index.tsv of MITCAD_3MF_CORPUS lists a project)");
+        return;
+    }
+    let failures: Vec<String> = rows.iter().flat_map(check_meshes).collect();
+    assert!(
+        failures.is_empty(),
+        "3mf corpus meshes: {} failures in {} projects:\n{}",
+        failures.len(),
+        rows.len(),
+        failures.join("\n")
+    );
+    eprintln!(
+        "3mf corpus meshes: {} projects import their meshes",
+        rows.len()
+    );
 }

@@ -257,6 +257,22 @@ Whenever a test ends, and every 0.5 s:
    half of them while fewer than half of the tests have a history).
 3. **Longest first:** each test's rank is its predicted wall time plus the
    longest chain of tests waiting for it (DEPENDS, fixtures).
+   **The first claim on memory** (mitcad#2177, `schedule::claimant`): of
+   the ready tests that may start now or that only memory keeps waiting
+   (the budget, not a lock, the CPU gate or a test that runs alone), the
+   one ranked highest holds every test ranked below it to what leaves it
+   room: such a test starts only where its prediction and the claimant's
+   fit the budget beside the running tests (`schedule::leaves_room`). A
+   test of the priority lane passes the claim of a test outside it. A
+   claimant larger than the budget can ever be (its cap) claims nothing
+   and waits for an empty machine as before. So the test at the head of
+   the longest chain, the cargo test build that the Rust tests wait for,
+   starts as soon as the memory comes free, rather than waiting while
+   smaller tests take that memory again and again (in bundle checks it
+   waited 9 to 12 minutes and then ran nearly alone for 14 to 20 at the
+   end of the ctest step). The report names each claim that held tests
+   back (`First claim on memory (the tests ranked below left it room):
+   core.cargo_build from 0:05, started 0:40 (25.9 GiB predicted)`).
 4. **Complementary pairing:** among the tests ranked within 60 % of the
    longest, the one whose memory and cores leave the remaining memory and
    CPU in the most even shares (a memory-heavy CPU-light test when much
@@ -336,8 +352,10 @@ itself and hands over (`--record-ui`, below).
 - **What each run records:** a UI entry's run keeps `beside`, the most
   other UI entries that ran beside it. In `--schedule` with a bound (see
   below), a UI entry that failed or timed out with others beside it runs
-  once more alone, after the others (as check-all's own UI step does,
-  mitcad#657); its result counts, the first attempt is named in the
+  once more alone, after the others (check-all's own UI step reruns its
+  failures after the others too, up to `--ui-retry-jobs` at once, each
+  with fewer beside it than its failure had, mitcad#657, mitcad#2177);
+  its result counts, the first attempt is named in the
   report (`Rerun alone (failed beside other UI entries)`), in
   `status.txt` (`ui`) and in its note.
 - **A contention failure:** a UI entry failed beside `b` others and then
@@ -360,7 +378,8 @@ itself and hands over (`--record-ui`, below).
   runner learnt a lower cap (`ui_caps`) needs no hand edit: that field is
   not read, and the file's next save drops it. The end report gives the
   run's line (`UI entries at once: cap 6; this run at most 6, 2 failed
-  beside others and passed alone (their rooms lowered), ...`). Measuring
+  beside others and passed with fewer beside them (their rooms lowered),
+  ...`). Measuring
   mode records and learns the rooms too, but neither reruns nor holds UI
   entries to the cap.
 

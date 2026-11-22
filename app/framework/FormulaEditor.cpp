@@ -12,7 +12,13 @@
 #include <QComboBox>
 #include <QColor>
 #include <QDialogButtonBox>
+#include <QFont>
+#include <QFontDatabase>
 #include <QFormLayout>
+#include <QHash>
+#include <QPalette>
+#include <QSyntaxHighlighter>
+#include <QTextCharFormat>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -65,7 +71,115 @@ QString limitText(const QJsonObject& limits, const char* name) {
   return limits.value(QLatin1String(name)).toString();
 }
 
+// The text's UTF-16 position of each UTF-8 byte offset (the model's
+// ranges), and its length after the last.
+std::vector<int> utf16Positions(const QString& text) {
+  std::vector<int> at;
+  at.reserve(static_cast<std::size_t>(text.size()) * 2 + 1);
+  for (int i = 0; i < text.size();) {
+    const bool pair = text.at(i).isHighSurrogate() && i + 1 < text.size() && text.at(i + 1).isLowSurrogate();
+    const char32_t code = pair ? QChar::surrogateToUcs4(text.at(i), text.at(i + 1)) : text.at(i).unicode();
+    const int bytes = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    for (int b = 0; b < bytes; ++b) {
+      at.push_back(i);
+    }
+    i += pair ? 2 : 1;
+  }
+  at.push_back(static_cast<int>(text.size()));
+  return at;
+}
+
+// Where a unit may be typed (mitcad#2179): a word right after a number, a
+// name or `)` that is no function's name (`30 m|`, `(a + b) i|`).
+bool unitPlace(const QString& text, const NameFragment& fragment) {
+  if (fragment.active || fragment.assigned || fragment.typed.isEmpty() || fragment.length == 0 ||
+      !text.at(fragment.start).isLetter()) {
+    return false;
+  }
+  int before = fragment.start - 1;
+  while (before >= 0 && text.at(before).isSpace()) {
+    --before;
+  }
+  int after = fragment.start + fragment.length;
+  while (after < text.size() && text.at(after).isSpace()) {
+    ++after;
+  }
+  if (after < text.size() && text.at(after) == QLatin1Char('(')) {
+    return false;
+  }
+  if (before < 0) {
+    return false;
+  }
+  const QChar c = text.at(before);
+  return c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char(')');
+}
+
 } // namespace
+
+// The formula's colours (mitcad#2179): the pieces the model's tokenizer
+// gives, in UTF-16 positions of the whole text, each block coloured by the
+// pieces over it.
+class FormulaHighlighter : public QSyntaxHighlighter {
+public:
+  struct Piece {
+    int start = 0;
+    int end = 0;
+    QString kind;
+  };
+
+  explicit FormulaHighlighter(QPlainTextEdit* editor) : QSyntaxHighlighter(editor->document()), m_editor(editor) {}
+
+  void setPieces(std::vector<Piece> pieces) {
+    m_pieces = std::move(pieces);
+    rehighlight();
+  }
+  const std::vector<Piece>& pieces() const { return m_pieces; }
+
+protected:
+  void highlightBlock(const QString& text) override {
+    const int from = currentBlock().position();
+    const int to = from + static_cast<int>(text.size());
+    const QPalette palette = m_editor->palette();
+    for (const Piece& piece : m_pieces) {
+      if (piece.end <= from || piece.start >= to) {
+        continue;
+      }
+      const int start = std::max(piece.start, from);
+      const int end = std::min(piece.end, to);
+      setFormat(start - from, end - start, formulaTokenFormat(piece.kind, palette));
+    }
+  }
+
+private:
+  QPlainTextEdit* m_editor;
+  std::vector<Piece> m_pieces;
+};
+
+QColor formulaTokenColor(const QString& kind, const QPalette& palette) {
+  static const QHash<QString, ColorRole> roles = {
+      {QStringLiteral("name"), ColorRole::FormulaName},       {QStringLiteral("local"), ColorRole::FormulaName},
+      {QStringLiteral("table"), ColorRole::FormulaName},      {QStringLiteral("column"), ColorRole::FormulaName},
+      {QStringLiteral("function"), ColorRole::FormulaFunction}, {QStringLiteral("keyword"), ColorRole::FormulaKeyword},
+      {QStringLiteral("number"), ColorRole::FormulaNumber},   {QStringLiteral("unit"), ColorRole::FormulaUnit},
+      {QStringLiteral("operator"), ColorRole::FormulaOperator}, {QStringLiteral("bracket"), ColorRole::FormulaOperator},
+      {QStringLiteral("separator"), ColorRole::FormulaOperator}, {QStringLiteral("text"), ColorRole::FormulaString},
+      {QStringLiteral("unknown"), ColorRole::ErrorText},      {QStringLiteral("error"), ColorRole::ErrorText},
+  };
+  return themeColor(roles.value(kind, ColorRole::Text), palette);
+}
+
+QTextCharFormat formulaTokenFormat(const QString& kind, const QPalette& palette) {
+  QTextCharFormat format;
+  format.setForeground(formulaTokenColor(kind, palette));
+  if (kind == QLatin1String("keyword")) {
+    format.setFontWeight(QFont::Bold);
+  }
+  if (kind == QLatin1String("unknown") || kind == QLatin1String("error")) {
+    format.setUnderlineStyle(QTextCharFormat::WaveUnderline);
+    format.setUnderlineColor(themeColor(ColorRole::ErrorBorder, palette));
+  }
+  return format;
+}
 
 QString formulaKindName(ParameterKind kind) {
   return kind == ParameterKind::Text ? QStringLiteral("text") :
@@ -128,6 +242,9 @@ FormulaEditor::FormulaEditor(ParameterSource source, ParameterFieldOptions optio
   m_expression->setPlainText(expression);
   m_expression->setMinimumHeight(110);
   m_expression->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+  // A code editor (mitcad#2179): a fixed-pitch font and the tokens' colours.
+  m_expression->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  m_highlighter = new FormulaHighlighter(m_expression);
   layout->addWidget(m_expression, 1);
   m_signature = new QLabel;
   m_signature->setObjectName(QStringLiteral("formulaSignature"));
@@ -202,6 +319,9 @@ FormulaEditor::FormulaEditor(ParameterSource source, ParameterFieldOptions optio
   connect(m_expression, &QPlainTextEdit::textChanged, debounce, [debounce] { debounce->start(); });
   connect(m_expression, &QPlainTextEdit::cursorPositionChanged, debounce, [debounce] { debounce->start(); });
   connect(debounce, &QTimer::timeout, this, &FormulaEditor::updateHelp);
+  // The colours follow each change at once, the marks each caret move.
+  connect(m_expression, &QPlainTextEdit::textChanged, this, &FormulaEditor::updateTokens);
+  connect(m_expression, &QPlainTextEdit::cursorPositionChanged, this, &FormulaEditor::updateMarks);
   editor->hovered = [this](int at) { inspectAt(at); };
   // Completion (mitcad#667): a list of its own under the caret, without
   // the keyboard, so that the text keeps it.
@@ -230,6 +350,7 @@ FormulaEditor::FormulaEditor(ParameterSource source, ParameterFieldOptions optio
   });
   loadCompletions();
   filterFunctions({});
+  updateTokens();
   updateHelp();
   fitWindowToContents(this);
   m_expression->setFocus();
@@ -303,18 +424,14 @@ void FormulaEditor::updateHelp() {
     m_value->setText(tr("Value: %1").arg(value.value(QStringLiteral("result")).toObject().value(QStringLiteral("text")).toString()));
     const QJsonObject error=value.value(QStringLiteral("error")).toObject();
     m_error->setText(error.value(QStringLiteral("message")).toString());
-    QList<QTextEdit::ExtraSelection> markings;
+    m_errorStart=-1;
+    m_errorEnd=-1;
     if (!error.isEmpty()) {
       const QByteArray bytes=m_expression->toPlainText().toUtf8();
-      QTextEdit::ExtraSelection mark;
-      mark.cursor=m_expression->textCursor();
-      mark.cursor.setPosition(int(QString::fromUtf8(bytes.left(error.value(QStringLiteral("start")).toInt())).size()));
-      mark.cursor.setPosition(int(QString::fromUtf8(bytes.left(error.value(QStringLiteral("end")).toInt())).size()),QTextCursor::KeepAnchor);
-      mark.format.setUnderlineStyle(QTextCharFormat::WaveUnderline);
-      mark.format.setUnderlineColor(themeColor(ColorRole::ErrorBorder, m_expression->palette()));
-      markings << mark;
+      m_errorStart=int(QString::fromUtf8(bytes.left(error.value(QStringLiteral("start")).toInt())).size());
+      m_errorEnd=int(QString::fromUtf8(bytes.left(error.value(QStringLiteral("end")).toInt())).size());
     }
-    m_expression->setExtraSelections(markings);
+    updateMarks();
     inspectAt(cursor.selectionStart(),cursor.selectionEnd());
     qDebug().noquote() << QStringLiteral("Formula signature: %1").arg(m_signature->text());
   } catch (const std::exception& error) {
@@ -322,7 +439,133 @@ void FormulaEditor::updateHelp() {
     m_signature->clear();
     m_value->clear();
     m_part->clear();
-    m_expression->setExtraSelections({});
+    m_errorStart=-1;
+    m_errorEnd=-1;
+    updateMarks();
+  }
+}
+
+void FormulaEditor::updateTokens() {
+  if (m_updatingTokens || m_highlighter == nullptr) {
+    return;
+  }
+  m_updatingTokens = true;
+  std::vector<FormulaHighlighter::Piece> pieces;
+  const QString text = m_expression->toPlainText();
+  if (m_source.query && !text.trimmed().isEmpty()) {
+    try {
+      const QJsonObject answer = m_source.query({{QStringLiteral("query"), QStringLiteral("formula_help")},
+                                                 {QStringLiteral("expression"), text},
+                                                 {QStringLiteral("kind"), formulaKindName(m_options.kind)},
+                                                 {QStringLiteral("tokens_only"), true}});
+      const std::vector<int> at = utf16Positions(text);
+      const auto position = [&at](int byte) {
+        return at[static_cast<std::size_t>(std::clamp(byte, 0, static_cast<int>(at.size()) - 1))];
+      };
+      for (const QJsonValue& value : answer.value(QStringLiteral("tokens")).toArray()) {
+        const QJsonObject token = value.toObject();
+        pieces.push_back({position(token.value(QStringLiteral("start")).toInt()),
+                          position(token.value(QStringLiteral("end")).toInt()),
+                          token.value(QStringLiteral("kind")).toString()});
+      }
+    } catch (const std::exception&) {
+      // A job computes the model: no colours until it answers again.
+    }
+  }
+  m_highlighter->setPieces(std::move(pieces));
+  m_updatingTokens = false;
+  updateMarks();
+}
+
+void FormulaEditor::updateMarks() {
+  if (m_highlighter == nullptr) {
+    return;
+  }
+  const QPalette palette = m_expression->palette();
+  QList<QTextEdit::ExtraSelection> marks;
+  // The line with the caret, under everything else.
+  QTextEdit::ExtraSelection line;
+  line.format.setBackground(themeColor(ColorRole::FormulaLine, palette));
+  line.format.setProperty(QTextFormat::FullWidthSelection, true);
+  line.cursor = m_expression->textCursor();
+  line.cursor.clearSelection();
+  marks << line;
+  // The bracket at the caret (after it, else before it) and its match.
+  const std::vector<FormulaHighlighter::Piece>& pieces = m_highlighter->pieces();
+  const QString text = m_expression->toPlainText();
+  const int caret = m_expression->textCursor().position();
+  int at = -1;
+  for (int i = 0; i < static_cast<int>(pieces.size()); ++i) {
+    const FormulaHighlighter::Piece& piece = pieces[static_cast<std::size_t>(i)];
+    if (piece.kind != QLatin1String("bracket")) {
+      continue;
+    }
+    if (piece.start == caret) {
+      at = i;
+      break;
+    }
+    if (piece.end == caret) {
+      at = i;
+    }
+  }
+  if (at >= 0 && pieces[static_cast<std::size_t>(at)].start < text.size()) {
+    const bool opening = text.at(pieces[static_cast<std::size_t>(at)].start) == QLatin1Char('(');
+    const int step = opening ? 1 : -1;
+    int depth = 0;
+    int match = -1;
+    for (int i = at; i >= 0 && i < static_cast<int>(pieces.size()); i += step) {
+      const FormulaHighlighter::Piece& piece = pieces[static_cast<std::size_t>(i)];
+      if (piece.kind != QLatin1String("bracket") || piece.start >= text.size()) {
+        continue;
+      }
+      depth += (text.at(piece.start) == QLatin1Char('(')) == opening ? 1 : -1;
+      if (depth == 0) {
+        match = i;
+        break;
+      }
+    }
+    if (match >= 0) {
+      for (const int index : {at, match}) {
+        QTextEdit::ExtraSelection bracket;
+        bracket.format.setBackground(themeColor(ColorRole::FormulaBracket, palette));
+        bracket.cursor = m_expression->textCursor();
+        bracket.cursor.setPosition(pieces[static_cast<std::size_t>(index)].start);
+        bracket.cursor.setPosition(pieces[static_cast<std::size_t>(index)].end, QTextCursor::KeepAnchor);
+        marks << bracket;
+      }
+    }
+  }
+  // The error's range, over the colours: a wavy underline only, so that
+  // the text keeps its colours under it.
+  if (m_errorStart >= 0 && m_errorEnd >= m_errorStart && m_errorEnd <= text.size()) {
+    QTextEdit::ExtraSelection mark;
+    mark.cursor = m_expression->textCursor();
+    mark.cursor.setPosition(m_errorStart);
+    mark.cursor.setPosition(m_errorEnd, QTextCursor::KeepAnchor);
+    mark.format.setUnderlineStyle(QTextCharFormat::WaveUnderline);
+    mark.format.setUnderlineColor(themeColor(ColorRole::ErrorBorder, palette));
+    marks << mark;
+  }
+  m_expression->setExtraSelections(marks);
+}
+
+QString FormulaEditor::tokenKindAt(int position) const {
+  if (m_highlighter != nullptr) {
+    for (const FormulaHighlighter::Piece& piece : m_highlighter->pieces()) {
+      if (piece.start <= position && position < piece.end) {
+        return piece.kind;
+      }
+    }
+  }
+  return {};
+}
+
+void FormulaEditor::changeEvent(QEvent* event) {
+  QDialog::changeEvent(event);
+  // The light or dark theme's colours.
+  if ((event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) && m_highlighter != nullptr) {
+    m_highlighter->rehighlight();
+    updateMarks();
   }
 }
 
@@ -406,15 +649,26 @@ void FormulaEditor::loadCompletions() {
       for (const SuggestedParameter& parameter : suggestedParameters(m_source.parameters())) {
         if (parameter.name != m_options.own) {
           m_parameterNames << parameter.name;
+          m_parameterValues.insert(parameter.name, parameter.text);
         }
       }
     }
     if (m_source.query) {
       const QJsonObject help = m_source.query({{QStringLiteral("query"), QStringLiteral("formula_help")}});
-      for (const QJsonValue& function : help.value(QStringLiteral("functions")).toArray()) {
-        m_functionNames << function.toObject().value(QStringLiteral("name")).toString();
+      for (const QJsonValue& value : help.value(QStringLiteral("functions")).toArray()) {
+        const QJsonObject function = value.toObject();
+        const QString name = function.value(QStringLiteral("name")).toString();
+        m_functionNames << name;
+        QStringList arguments;
+        for (const QJsonValue& argument : function.value(QStringLiteral("arguments")).toArray()) {
+          arguments << argument.toString();
+        }
+        m_functionSignatures.insert(name, tr("function (%1)").arg(arguments.join(QStringLiteral("; "))));
       }
       m_tables = suggestedTables(help.value(QStringLiteral("tables")).toArray());
+      for (const QJsonValue& unit : help.value(QStringLiteral("units")).toArray()) {
+        m_unitNames << unit.toString();
+      }
     }
   } catch (const std::exception&) {
     // A job computes the model: nothing to complete with.
@@ -459,9 +713,12 @@ void FormulaEditor::updateCompletions(bool mayOpen) {
   } else {
     const NameFragment fragment = nameFragmentAt(text, caret);
     if (fragment.active && !fragment.typed.isEmpty()) {
+      // Each with what it is (mitcad#2179): a parameter's value in its
+      // unit, a function's arguments.
       for (const QString& name : std::as_const(m_parameterNames)) {
         if (name.startsWith(fragment.typed, Qt::CaseInsensitive)) {
-          entries.push_back({name, tr("parameter")});
+          const QString value = m_parameterValues.value(name);
+          entries.push_back({name, value.isEmpty() ? tr("parameter") : tr("parameter, %1").arg(value)});
         }
       }
       for (const SuggestedTable* table : matchTables(m_tables, fragment.typed, false)) {
@@ -471,7 +728,17 @@ void FormulaEditor::updateCompletions(bool mayOpen) {
       }
       for (const QString& name : std::as_const(m_functionNames)) {
         if (name.startsWith(fragment.typed, Qt::CaseInsensitive)) {
-          entries.push_back({name + QLatin1Char('('), tr("function")});
+          entries.push_back({name + QLatin1Char('('), m_functionSignatures.value(name, tr("function"))});
+        }
+      }
+      m_completionStart = fragment.start;
+      m_completionLength = fragment.length;
+      typed = fragment.typed;
+    } else if (unitPlace(text, fragment)) {
+      // After a value, the units (mitcad#2179), as written (`mm`, not `MM`).
+      for (const QString& unit : std::as_const(m_unitNames)) {
+        if (unit.startsWith(fragment.typed)) {
+          entries.push_back({unit, tr("unit")});
         }
       }
       m_completionStart = fragment.start;
@@ -479,6 +746,11 @@ void FormulaEditor::updateCompletions(bool mayOpen) {
       typed = fragment.typed;
     }
   }
+  // What is typed already first, so that Enter or Tab keeps it (`5 m`
+  // stays metres rather than becoming millimetres).
+  std::stable_partition(entries.begin(), entries.end(), [&typed](const Entry& entry) {
+    return entry.insert == typed;
+  });
   // Nothing to offer, or exactly the one name typed already.
   if (entries.empty() ||
       (entries.size() == 1 && entries.front().insert == text.mid(m_completionStart, m_completionLength))) {

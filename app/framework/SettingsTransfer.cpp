@@ -81,10 +81,13 @@ const SettingsRule kRules[] = {
     {"units/", "preferences", PathKind::None},
     {"documents/openInCurrentWindow", "preferences", PathKind::None},
     {"documents/openDesignsIn", "preferences", PathKind::None},
+    {"documents/quitOnLastClose", "preferences", PathKind::None},
+    {"documents/newDesignSave", "preferences", PathKind::None},
     {"interface/language", "preferences", PathKind::None},
     {"components/askActivate", "preferences", PathKind::None},
     {"view/showVersion", "preferences", PathKind::None},
     {"browser/consumeSketches", "preferences", PathKind::None},
+    {"extrude/startOperation", "preferences", PathKind::None},
     // Display.
     {"view/perspective", "preferences", PathKind::None},
     {"view/cubeProjection", "preferences", PathKind::None},

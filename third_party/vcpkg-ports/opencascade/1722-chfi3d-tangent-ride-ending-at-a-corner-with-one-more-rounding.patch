@@ -54,15 +54,8 @@ A ride whose end corner the small rounding reaches past the ride's point
 the larger one's: a corner of three blends) is not made so: the corner
 fails as before.
 
-Test: geometry/tests/test_fillet_tangent_ride.cpp, test_wall_end_corners
-(ctest geometry.fillet_tangent_ride): the wall 2.5 wide with an end's edge
-rounded too (0.5 or 1, either side, one or both ends), a prism and a box,
-both orders: valid, the volume within a millionth; and
-geometry.fillet_top_chains, test_tower_top on the stored case
-`fillet-wall-run-on`. It fails with this patch and 7 later patches that
-change the same lines reverted together, so the test does not single this
-patch out (shown 2026-11-20 by tools/occt-port-proof.py; the patches are
-listed in third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1722.
 
 Failures (mitcad#1986): the handler round the two stripes' computation
 again fails the fillet (done false): a boundary that reports the failure.

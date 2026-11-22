@@ -125,8 +125,10 @@ focus-widget shortcutSearch
 key Return
 wait-log '^Keyboard Shortcuts conflict: E \(Extrude\) is the start of E, X \(Keyboard and Mouse Overview\) .+[.] Change one of them[.]$'
 wait-log '^Keyboard Shortcuts conflict at: Keyboard and Mouse Overview \| '
-# The message (titled as the window), then the window again.
-focus-dialog '^Keyboard Shortcuts$'
+# The message, then the window again. The message is titled as the
+# window, but macOS drops a message box's title: it is found by its text
+# there (the driver prefers the active modal window among the matches).
+focus-dialog '^Keyboard Shortcuts$|^E \(Extrude\) is the start of E, X '
 button '^OK$'
 wait-idle
 focus-dialog '^Keyboard Shortcuts$'

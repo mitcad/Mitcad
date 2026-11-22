@@ -398,6 +398,13 @@ impl Builder<'_> {
     /// kinds: 0 free, 1 tangent, 2 smooth, 3 direction, 4 sharp point
     /// *(assumed: no design has one)*, 5 tangent point. Closed lofts are not
     /// decoded.
+    ///
+    /// The Tangent Edges flag (`isTangentEdgesMerged`) is not decoded
+    /// (mitcad#2195): the four bytes after the root part are `01` in every
+    /// loft record seen (the 26 reference models and the local designs'
+    /// lofts), and every API dump says true, so it is likely one of them, but
+    /// which one cannot be told without a loft saved with the option off.
+    /// The byte after `isSolid` is `00` in all of them.
     pub(super) fn loft(&self, it: &TimelineEntry) -> Detail {
         let mut map = Map::new();
         if let Some(fields) = self.loft_fields(it) {

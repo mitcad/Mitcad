@@ -8,7 +8,9 @@
 #   1. Floating: a click on the failures summary shows Fillet2's error in
 #      the band right above the timeline, as wide as it; it is still shown
 #      8 s later; its close button turns it into the stub of the latest
-#      message, which keeps the band's row.
+#      message, which keeps the band's row. The close button is the shared
+#      close mark on a small card button, in the middle of the row
+#      (mitcad#2182).
 #   2. The error again, then Extrude (E): the next command closes it.
 #   3. Esc cancels Extrude: the hint "Command canceled." fades after about
 #      6 s and leaves its stub.
@@ -157,6 +159,22 @@ if ($band[1] + $band[3] -gt $timeline[1]) { Ui-Fail "the band is not above the t
 if ($row -lt $timeline[3]) { Ui-Fail "the band's row is lower than the timeline: '$placed'" }
 Write-Host "ok   right above the timeline, its row $row px"
 Ui-ExpectLog 'Message band close at' 'the close button is placed'
+# The close button (mitcad#2182): the shared close mark (app/icons/dismiss.svg)
+# on a small card button, its middle that of the band's row within 2 px.
+$close = $null
+foreach ($line in @(Ui-LogLines)) { if ($line -match '^Message band close at ') { $close = $line } }
+if ($close -notmatch '^Message band close at (-?\d+),(-?\d+), row middle (-?\d+), icon ([a-z-]+) (\d+) px in (\d+)x(\d+)') {
+  Ui-Fail "the close button's place: '$close'"
+}
+$closeY = [int]$Matches[2]
+$rowMiddle = [int]$Matches[3]
+if ($Matches[4] -ne 'dismiss') { Ui-Fail "the close button is not the shared close mark: '$close'" }
+if ([int]$Matches[5] -lt 16 -or [int]$Matches[6] -lt 24 -or [int]$Matches[7] -lt 24) {
+  Ui-Fail "the close button is smaller than a small card button: '$close'"
+}
+Write-Host "ok   the close button is the shared close mark, $($Matches[5]) px in $($Matches[6])x$($Matches[7])"
+if ([Math]::Abs($closeY - $rowMiddle) -gt 2) { Ui-Fail "the close button is $($closeY - $rowMiddle) px off the row's middle: '$close'" }
+Write-Host "ok   the close button in the middle of the row ($($closeY - $rowMiddle) px)"
 Start-Sleep -Seconds 8
 Ui-Sync
 Not-Since '^Message band stub: ' 'the error is still shown 8 s later'

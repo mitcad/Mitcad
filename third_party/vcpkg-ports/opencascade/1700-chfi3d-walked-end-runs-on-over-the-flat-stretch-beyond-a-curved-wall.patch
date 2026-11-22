@@ -51,17 +51,8 @@ surface bounded at the curve's ends, failed.
   faces out, so that they had no name of their own and a later rounding
   along the top's edge with them found no edge.
 
-Test: geometry/tests/test_fillet_wall_run_on.cpp, test_reported_body
-(ctest geometry.fillet_wall_run_on): on the stored case
-`fillet-wall-run-on` of MITCAD_GEOMETRY_CASES, the outer foot rounded with
-3 by OCCT's fillet alone: valid, the flat stretches gone, the foot on the
-plate that of a ball on the plate and the curved side continued by its
-polynomial within 0.01 mm, the volume a little under the run-on over the
-flat stretch's plane (by at most a twentieth of the material added);
-documented to fail without this patch.
-No synthetic body: a U of cubic B-spline sides went another way at its
-ends (invalid with and without the patch). It fails without the patch
-(shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1700.
 
 Failures (mitcad#1986): the longer B-spline curve's construction fails
 with OCCT's reports of a computation it cannot make

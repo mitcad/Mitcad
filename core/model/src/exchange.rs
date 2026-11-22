@@ -61,6 +61,11 @@ pub use gltf_import::{gltf_file_json, is_gltf_path};
 mod serp_import;
 pub use serp_import::is_serp_path;
 
+// 3MF files as mesh bodies, parts placed more than once as components
+// (mitcad#2156).
+mod threemf_import;
+pub use threemf_import::is_3mf_path;
+
 // Animated USDZ export: time-sampled placements (mitcad#1597).
 pub mod usdz_animation;
 pub use usdz_animation::{
@@ -1812,6 +1817,9 @@ impl<K: Kernel> Document<K> {
             // their layers (mitcad#1596).
             let changes =
                 self.layer_events(&model, &settings, plates, plate_ids, &design, &mut exported);
+            // The printer's extruders as the slicer's own preset of it has
+            // them (mitcad#2207).
+            let extruders = self.printer_extruders(dialect, settings.first());
             // With the purge volumes set by hand (mitcad#705), on the
             // plates (mitcad#1050).
             let written = crate::print_files::export_print(
@@ -1822,6 +1830,7 @@ impl<K: Kernel> Document<K> {
                 &self.state().purge_volumes,
                 plates,
                 &changes,
+                extruders,
             );
             exported.layer_events = written.layer_events;
             exported.delivery = Some(written.delivery);
@@ -1864,7 +1873,9 @@ impl<K: Kernel> Document<K> {
     /// (mitcad#1445). With `points`, the sketch's free-standing points are
     /// written as POINT entities on the layer `POINTS` (mitcad#1963: hole
     /// marks for a cutting table), its construction points on the layer
-    /// `construction` only with `construction` too. Returns the number of
+    /// `construction` only with `construction` too. Its texts and QR codes
+    /// are written as their outlines (mitcad#2163): each piece a LINE or a
+    /// SPLINE of degree 2 or 3 on the layer `0`. Returns the number of
     /// entities.
     pub fn export_sketch_dxf(
         &self,
@@ -1921,6 +1932,14 @@ impl<K: Kernel> Document<K> {
                 Some((layer, e.as_ref().to_string(), curve.whole()))
             })
             .collect();
+        // Texts and QR codes as their outlines (mitcad#2163): each piece a
+        // line or a spline on the layer 0, as Explode Text makes them.
+        let mut curves = curves;
+        for outline in output.texts.iter() {
+            for (name, piece) in crate::sketch::text_explode::outline_pieces(outline) {
+                curves.push(("0", name, piece.geometry()));
+            }
+        }
         let mut drawing = sketch_drawing(curves.iter().map(|(l, n, g)| (*l, n.as_str(), g)))
             .map_err(|e| invalid(format!("{}: {e}", entry.name)))?;
         if points {

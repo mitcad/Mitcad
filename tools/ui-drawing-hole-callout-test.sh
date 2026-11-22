@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/drawings app/framework/TestDriver.cpp tools/cli
-# check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/hole_callouts.rs
+# check-all sources: app/drawings app/framework/TestDriver.cpp app/framework/TestDriverSketch.cpp tools/cli
+# check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/drawing_spacing.rs core/model-api/src/hole_callouts.rs
 # check-all sources: core/model-api/src/drawings.rs core/model-drawing/src/annotate.rs core/model-drawing/src/compose.rs
 # check-all sources: core/model/src/drawing/annotate_def.rs
 # check-all sources: tools/ui-scripts/drawing-hole-callout.mitcad-ui tools/ui-scripts/drawing-hole-callout.json
@@ -11,8 +11,11 @@
 # tools/ui-macos-drawing-hole-callout-test.sh) on a design that mitcad-cli
 # makes (tools/ui-scripts/drawing-hole-callout.json: a block with a
 # counterbored hole through it, seen end on in a top view): Hole Callout
-# on the hole writes its lines; Text After typed in its panel goes after
-# them; the drill made larger, the callout follows.
+# on the hole writes its lines, its text placed left of the hole puts its
+# arrow on the hole's left (mitcad#2212); Text After typed in its panel
+# goes after them; Text Before TYP goes in front, and on a line of its own
+# once a line break alone is added after it; the drill made larger, the
+# callout follows.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-drawing-hole-callout-test.sh
@@ -37,5 +40,7 @@ kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'hole callout driver timed out'; 
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 ui_expect_log '"type":"hole_callout"' 'the hole callout asked for'
 ui_expect_log 'Drawing panel hole callout: before , after , replace none' 'its panel with no own texts'
-ui_expect_log 'TestDriver: done' 'the callout written, its own text after it, the hole followed'
+ui_expect_log 'Drawing hole callout 1 arrow at 147.' 'its arrow on the side of its text'
+ui_expect_log 'Drawing panel hole callout: before TYP\n, after 2 PLACES' 'TYP on a line of its own'
+ui_expect_log 'TestDriver: done' 'the callout written, its own texts with it, the hole followed'
 ui_finish 'UI drawing hole callout'

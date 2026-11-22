@@ -415,6 +415,19 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/runout_dressup.cpp
   src/runout_dressup.hpp)
+
+# The end of a groove rounded as a ball mill ends it: the rounding closed
+# round the tube's circle on the extended body, a sphere at the groove's
+# radius (mitcad#2154).
+target_sources(mitcad_geometry PRIVATE
+  src/groove_end.cpp
+  src/groove_end.hpp)
+
+# Lofts' Tangent Edges: Merge, a section's tangent edges joined into one
+# smooth edge by arc length (mitcad#2162).
+target_sources(mitcad_geometry PRIVATE
+  src/loft_merge.cpp
+  src/loft_merge.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1527,6 +1540,27 @@ if(BUILD_TESTING)
   target_link_libraries(test_fillet_unequal_torus_corner PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_unequal_torus_corner COMMAND test_fillet_unequal_torus_corner)
   set_tests_properties(geometry.fillet_unequal_torus_corner PROPERTIES TIMEOUT 300)
+
+  # A rib's rounding ending at its foot beside a channel's rim, a vertex
+  # with a concave edge (the rib's end on the flat), with OCCT's fillet
+  # alone: the corner set back along the concave edge only, its plate
+  # inside the body and the flat past the rib kept (port patch 1805,
+  # mitcad#2038).
+  add_executable(test_fillet_rib_foot_corner tests/test_fillet_rib_foot_corner.cpp)
+  target_link_libraries(test_fillet_rib_foot_corner PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_rib_foot_corner COMMAND test_fillet_rib_foot_corner)
+  set_tests_properties(geometry.fillet_rib_foot_corner PROPERTIES TIMEOUT 300)
+
+  # Tangent Edges: Merge (mitcad#2162): a circle R30 lofted to a 160 x 40
+  # slot 50 mm above it is one valid side face, tangent-continuous (G1)
+  # across the slot's former line-arc joins and the seam, two sections, three
+  # (Hermite) and with a tangent end condition (skinned); kept, a face per
+  # edge; a rectangle keeps its corner edges; the curve sections' surface
+  # loft likewise.
+  add_executable(test_loft_tangent_edges tests/test_loft_tangent_edges.cpp)
+  target_link_libraries(test_loft_tangent_edges PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.loft_tangent_edges COMMAND test_loft_tangent_edges)
+  set_tests_properties(geometry.loft_tangent_edges PROPERTIES TIMEOUT 300)
 endif()
 
 if(BUILD_TESTING)
@@ -1542,4 +1576,104 @@ if(BUILD_TESTING)
   add_test(NAME geometry.step_read_crash
     COMMAND test_step_read_crash "${CMAKE_CURRENT_BINARY_DIR}/step-read-crash")
   set_tests_properties(geometry.step_read_crash PROPERTIES ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=step" TIMEOUT 120)
+endif()
+
+if(BUILD_TESTING)
+  # A plate rounded 15 with a cylinder of radius 15 on one corner's axis
+  # (GitHub #466, mitcad#2050): shells 2 inside and outside with the
+  # cylinder's top and the plate's bottom open, and the closed inward
+  # offset, with OCCT alone (port patch 2050: the foot's intersection all
+  # round a circle trimmed across its origin), against the volumes from the
+  # areas; with "probe" a printout of variants for the diagnosis.
+  add_executable(test_shell_boss_on_corner tests/test_shell_boss_on_corner.cpp)
+  target_link_libraries(test_shell_boss_on_corner PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.shell_boss_on_corner COMMAND test_shell_boss_on_corner)
+  set_tests_properties(geometry.shell_boss_on_corner PROPERTIES TIMEOUT 300)
+
+  # A loft from a circle to a slot, its faces tangent along the lines
+  # between them (mitcad#2141, mitcad#2143): shelled 2 mm inside with
+  # either end removed, Sharp and Round, and the owner's case (valid single
+  # solids, the inner faces the wall from the outer ones); its surface loft
+  # thickened 1 mm to each side and symmetric (valid single solids, the
+  # volumes the area times the thickness); a square to a circle still
+  # OCCT's loft.
+  add_executable(test_loft_circle_slot tests/test_loft_circle_slot.cpp)
+  target_link_libraries(test_loft_circle_slot PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.loft_circle_slot COMMAND test_loft_circle_slot)
+  set_tests_properties(geometry.loft_circle_slot PROPERTIES TIMEOUT 600)
+
+  # A union holds every shape it joins (mitcad#2053): the check of a point
+  # inside each input on candidates that miss inputs and on unions that
+  # hold them all, and the reported Join of a hub with 30 bodies (GitHub
+  # mitcad/Mitcad#463, `github-463/` under MITCAD_MITCAD_REPORTED, its STEP
+  # file unpacked into the build folder; skipped without it).
+  find_package(ZLIB REQUIRED)
+  add_executable(test_join_holds_inputs tests/test_join_holds_inputs.cpp)
+  target_link_libraries(test_join_holds_inputs PRIVATE mitcad_geometry mitcad_geometry_io ZLIB::ZLIB mitcad_warnings)
+  add_test(NAME geometry.join_holds_inputs
+    COMMAND test_join_holds_inputs "${CMAKE_CURRENT_BINARY_DIR}/join-holds-inputs")
+  set_tests_properties(geometry.join_holds_inputs PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A Y tube (a circle swept along a line and a tangent arc, mirrored and
+  # joined) whose crotch, a crease fading to tangency at both ends, is
+  # rounded with 6 and 50 and which is shelled 2 mm inwards with its ends
+  # open, without a rounding and after each; a shell the kernel and the
+  # cavity both refuse fails in words (mitcad#2140, port patch 2140).
+  # `test_y_tube_crotch --probe` prints the kernel's reports instead.
+  add_executable(test_y_tube_crotch tests/test_y_tube_crotch.cpp)
+  target_link_libraries(test_y_tube_crotch PRIVATE mitcad_geometry mitcad_warnings)
+  # Not registered on Windows until mitcad#2247: there the kernel offset of
+  # the two rounding faces is invalid and the shell after the rounding fails
+  # (the executable is still built for its probes).
+  if(NOT WIN32)
+    add_test(NAME geometry.y_tube_crotch COMMAND test_y_tube_crotch)
+    set_tests_properties(geometry.y_tube_crotch PROPERTIES TIMEOUT 600)
+  endif()
+
+  # The end of a shallow swept groove (a circle of radius 10, 1.5 deep,
+  # along a line or an arc) rounded wider than its end cap is high
+  # (mitcad#2154): below the circle's radius a torus piece, at it a sphere
+  # piece, the end cap gone and the volume the region of revolution's;
+  # above it a failure in words.
+  add_executable(test_dressup_groove_end tests/test_dressup_groove_end.cpp)
+  target_link_libraries(test_dressup_groove_end PRIVATE mitcad_geometry mitcad_geometry_analysis mitcad_warnings)
+  add_test(NAME geometry.dressup_groove_end COMMAND test_dressup_groove_end)
+  set_tests_properties(geometry.dressup_groove_end PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # A fillet whose edges lie in groups the geometry kernel rounds apart (a
+  # plate's three ribs, one 2 wide whose top a full round takes away), built
+  # group by group where they do not build at their exact size together
+  # (mitcad#2161): one valid solid, the wide ribs' material exact, the whole
+  # as the ribs rounded each alone.
+  add_executable(test_fillet_independent_groups tests/test_fillet_independent_groups.cpp)
+  target_link_libraries(test_fillet_independent_groups PRIVATE mitcad_geometry mitcad_geometry_analysis mitcad_warnings)
+  add_test(NAME geometry.fillet_independent_groups COMMAND test_fillet_independent_groups)
+  set_tests_properties(geometry.fillet_independent_groups PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # Two stacked profiles with a step, the vertical edges that bound the
+  # upper and the lower face rounded as one feature: at the exact size, no
+  # warning, equal to the same edges as two features (mitcad#2165).
+  add_executable(test_fillet_stacked_step tests/test_fillet_stacked_step.cpp)
+  target_link_libraries(test_fillet_stacked_step PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_stacked_step COMMAND test_fillet_stacked_step)
+  set_tests_properties(geometry.fillet_stacked_step PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # A rounding wider than the face beside its edge whose far edge goes on
+  # tangentially into a round face (GitHub #560, mitcad#2208): the ball
+  # takes the narrow face away and rolls on over the round face, with and
+  # without a cut corner it ends on, with the cut past the narrow face, and
+  # after another fillet; one valid solid without a note, the volume added
+  # exact.
+  add_executable(test_fillet_narrow_face_tangent_beyond tests/test_fillet_narrow_face_tangent_beyond.cpp)
+  target_link_libraries(test_fillet_narrow_face_tangent_beyond PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_narrow_face_tangent_beyond COMMAND test_fillet_narrow_face_tangent_beyond)
+  set_tests_properties(geometry.fillet_narrow_face_tangent_beyond PROPERTIES TIMEOUT 300)
 endif()

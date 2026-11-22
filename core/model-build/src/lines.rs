@@ -5,19 +5,21 @@
 //! or more sketches, whole sketches, `chain` adding the lines joined to
 //! them end to end), each a member along an edge (`edge.rs`) whose edge is
 //! the sketch line: it follows the line when the sketch changes. The
-//! corners are treated (`end_meets.rs`, [`Corner`]) unless `corners` is
-//! false: a shared miter where two ends meet in an L, a butt where an end
-//! meets another member's line (a T). Arcs, circles and splines are refused
-//! in words: members go along straight lines only. All of it is one undo
-//! step.
+//! joints get their conditions as `corners` says (mitcad#2200,
+//! `conditions.rs`): an L a shared miter (`mitre`, the default) or a butt
+//! (`butt`), a T its stem to the other member's near side, three or more
+//! ends at a point the first line's member running through; `none` leaves
+//! them square. The conditions are kept with the joints. Arcs, circles and
+//! splines are refused in words: members go along straight lines only. All
+//! of it is one undo step.
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::conditions::{ConditionsCrateOps, Corners, LineJoint, line_joints};
 use crate::edge::{Align, AlongCrateOps, AlongEdge};
-use crate::end_meets::{Corner, CornersCrateOps};
-use crate::geometry::{V3, cross, dot, norm, scale, sub, unit};
+use crate::geometry::{V3, dot, norm, scale, sub, unit};
 use crate::place::{Plan, refuse};
 use crate::prelude::*;
 use crate::{PlaceInput, Placed};
@@ -28,7 +30,7 @@ use mitcad_model::kernel::Kernel;
 use mitcad_model::{Document, ModelError};
 
 /// How near two line ends must be to meet, mm.
-const MEET: f64 = 1e-3;
+pub(crate) const MEET: f64 = 1e-3;
 
 /// Where members along sketch lines go (`build_place`'s `lines`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -48,10 +50,11 @@ pub struct AlongLines {
     /// How each member's section sits on its line; centered when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<Align>,
-    /// The corners treated (shared miters at L's, butts at T's); true when
-    /// left out.
+    /// The joints' conditions (mitcad#2200): `mitre` (the default) or
+    /// `butt` at the L's, the T's to the near side; `none` square. `true`
+    /// and `false` read as `mitre` and `none`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub corners: Option<bool>,
+    pub corners: Option<Corners>,
 }
 
 /// A sketch line a member goes along, in the BUILD host's coordinates.
@@ -76,7 +79,7 @@ impl Line {
     }
 
     /// Whether `p` is on the line between its ends, not at them.
-    fn holds_inside(&self, p: V3) -> bool {
+    pub(crate) fn holds_inside(&self, p: V3) -> bool {
         let d = sub(self.end, self.start);
         let length = norm(d);
         let Some(u) = unit(d) else {
@@ -336,12 +339,13 @@ impl<K: Kernel> LinesCrateOps<K> for Document<K> {
         let mut placed = placed.ok_or_else(|| refuse("no member was placed"))?;
         let count = members.len();
         let label = format!("{label} along sketch lines: {count}");
-        if lines.corners.unwrap_or(true) {
-            let corners = corners_of(&members, input.flip);
-            if !corners.is_empty() {
-                let left = self.treat_corners(&corners, &label)?;
-                placed.warnings.extend(left);
-            }
+        // The joints' conditions, kept with them (mitcad#2200).
+        let lines_placed: Vec<Line> = members.iter().map(|(_, l)| l.clone()).collect();
+        let joints = line_joints(&lines_placed, input.flip, lines.corners.unwrap_or_default());
+        if !joints.is_empty() {
+            let components: Vec<ComponentUid> = members.iter().map(|(c, _)| *c).collect();
+            let left = self.treat_line_joints(&joints, &components, &label)?;
+            placed.warnings.extend(left);
         }
         self.merge_undo(depth, &label);
         placed.members = members.iter().map(|(c, _)| *c).collect();
@@ -356,11 +360,29 @@ pub trait LinesBuild<K: Kernel> {
     /// picks (a member along an edge whose edge is the line), in order;
     /// for the preview, whose members' corners are square.
     fn line_inputs(&self, input: &PlaceInput) -> Result<Vec<PlaceInput>, ModelError>;
+
+    /// The joints of the lines `input.lines` picks and the conditions
+    /// `corners` gives them (mitcad#2200), members by their index in the
+    /// lines' order; for the preview.
+    fn line_joints(&self, input: &PlaceInput) -> Result<Vec<LineJoint>, ModelError>;
 }
 
 impl<K: Kernel> LinesBuild<K> for Document<K> {
     fn line_inputs(&self, input: &PlaceInput) -> Result<Vec<PlaceInput>, ModelError> {
         self.member_inputs(input)
+    }
+
+    fn line_joints(&self, input: &PlaceInput) -> Result<Vec<LineJoint>, ModelError> {
+        let lines = input
+            .lines
+            .as_ref()
+            .ok_or_else(|| refuse("no sketch lines"))?;
+        let found = self.plan_lines(lines)?;
+        Ok(line_joints(
+            &found,
+            input.flip,
+            lines.corners.unwrap_or_default(),
+        ))
     }
 }
 
@@ -383,67 +405,4 @@ pub(crate) fn check_lines(input: &PlaceInput) -> Result<(), ModelError> {
         ))),
         None => Ok(()),
     }
-}
-
-/// The corners of members along lines: two ends that meet alone at a point,
-/// not in line, an L (a shared miter); an end on another member's line
-/// between its ends, a T (a butt). Three or more ends at a point are left
-/// as they are. `flip`: each member's end A is at its line's end.
-pub(crate) fn corners_of(members: &[(ComponentUid, Line)], flip: bool) -> Vec<Corner> {
-    // Each member's ends: (member, end_b, point, direction of its line).
-    let mut ends = Vec::new();
-    for (i, (_, line)) in members.iter().enumerate() {
-        let d = unit(sub(line.end, line.start)).unwrap_or([0.0, 0.0, 1.0]);
-        let (a, b) = if flip {
-            (line.end, line.start)
-        } else {
-            (line.start, line.end)
-        };
-        ends.push((i, false, a, d));
-        ends.push((i, true, b, d));
-    }
-    let mut corners = Vec::new();
-    let mut done = BTreeSet::new();
-    for (k, &(i, ib, p, d)) in ends.iter().enumerate() {
-        // A T: the end on another member's line, inside it.
-        if let Some((j, _)) = members
-            .iter()
-            .enumerate()
-            .find(|(j, (_, line))| *j != i && line.holds_inside(p))
-        {
-            corners.push(Corner::Butt {
-                stem: members[i].0,
-                end_b: ib,
-                through: members[j].0,
-                at: p,
-            });
-            continue;
-        }
-        if done.contains(&k) {
-            continue;
-        }
-        let meeting: Vec<usize> = ends
-            .iter()
-            .enumerate()
-            .filter(|(m, e)| *m != k && e.0 != i && near(e.2, p))
-            .map(|(m, _)| m)
-            .collect();
-        let [m] = meeting.as_slice() else {
-            continue;
-        };
-        let (j, jb, _, e) = ends[*m];
-        // In line: they continue each other.
-        if norm(cross(d, e)) < 1e-6 {
-            continue;
-        }
-        done.insert(k);
-        done.insert(*m);
-        corners.push(Corner::Mitre {
-            p: members[i].0,
-            pb: ib,
-            q: members[j].0,
-            qb: jb,
-        });
-    }
-    corners
 }

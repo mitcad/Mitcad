@@ -46,8 +46,8 @@ body's three faces at each corner, valid, the result and the stored body
 within 0.0011 mm of each other about the corners (0.018 mm before); with
 MitCad's dressup the item gives the stored state's 223 faces (221 before).
 
-Test: geometry/tests/test_fillet_end_edge_turn.cpp, on the case
-`notch-lip-corners` of MITCAD_GEOMETRY_CASES.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1430.
 
 Failures (mitcad#1986): the piece cut from the turn and the roll on the
 end edge fail with OCCT's reports of a computation it cannot make

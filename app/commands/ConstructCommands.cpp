@@ -307,6 +307,48 @@ bool keepPerpendicular(QJsonObject& report, CommandState& state) {
   return false;
 }
 
+// The plane a sketch lies in, for a plane input given the sketch's profile
+// or the sketch itself (mitcad#2167): the sketch's own plane reference (an
+// origin or construction plane, a planar face), so that the new plane
+// follows it. A sketch off that plane (a placement's offset), on a curved
+// face or one the model does not answer for stays as picked, and the model
+// then says that it is no plane.
+SelectionItem sketchPlaneItem(const SelectionItem& item, const CommandContext& context) {
+  if (item.kind != SelectKind::Profile && item.kind != SelectKind::Sketch) {
+    return item;
+  }
+  try {
+    const QJsonObject sketch = context.queryObject(
+        {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), item.owner}});
+    if (sketch.value(QStringLiteral("surface")).isObject()) {
+      return item;
+    }
+    SelectionItem plane = itemOf(sketch.value(QStringLiteral("plane")), context);
+    if (!plane.isValid() || !isPlanar(plane)) {
+      return item;
+    }
+    plane.occurrence = item.occurrence;
+    // In the plane, not moved off it by the sketch's placement: in the
+    // design's own coordinates both frames compare as they are.
+    if (item.occurrence.isEmpty()) {
+      const auto own = frameOf(item, context);
+      const auto carrier = frameOf(plane, context);
+      if (own && carrier &&
+          (!own->normal.IsParallel(carrier->normal, 1e-9) ||
+           std::abs(gp_Vec(carrier->origin, own->origin).Dot(gp_Vec(carrier->normal))) > 1e-6)) {
+        return item;
+      }
+    }
+    qDebug().noquote() << QStringLiteral("Construction plane: %1 of %2 taken as its sketch's plane: %3")
+                              .arg(item.kind == SelectKind::Profile ? QStringLiteral("a profile")
+                                                                    : QStringLiteral("the sketch"),
+                                   item.owner, plane.logDescription());
+    return plane;
+  } catch (const std::exception&) {
+    return item;
+  }
+}
+
 InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
   const QString key = QString::fromLatin1(field.key);
   const QString name = QObject::tr(field.label);
@@ -316,9 +358,17 @@ InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
   };
   switch (field.kind) {
   case Field::Plane:
-    return selectionInput(key, name, kPlaneKinds, 1, 1)
+    // A sketch's profile clicked in the view, or the sketch picked in the
+    // Browser or the timeline, stands for the plane the sketch lies in
+    // (mitcad#2167).
+    return selectionInput(key, name, kPlaneKinds | SelectKind::Profile | SelectKind::Sketch, 1, 1)
         .withTooltip(QObject::tr("A plane or a planar face"))
-        .withAccepts(isPlanar);
+        .withAccepts([](const SelectionItem& item) {
+          return isPlanar(item) || item.kind == SelectKind::Profile || item.kind == SelectKind::Sketch;
+        })
+        .withConvertNow([](const SelectionItem& item, const CommandState&, const CommandContext& context) {
+          return sketchPlaneItem(item, context);
+        });
   case Field::Line:
     return selectionInput(key, name, SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve, 1, 1)
         .withTooltip(QObject::tr("An axis, a straight edge or a sketch line"))

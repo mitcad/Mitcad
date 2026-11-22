@@ -47,14 +47,9 @@ failures OCCT reports a computation it cannot make with
 (ChFi3d_IsComputationFailure, 0016), the cut is not made and the gap is
 not filled, which its caller reports as before (no piece; OCCT's blend
 there). Any other failure (a broken invariant, a signal) is rethrown.
-Test: geometry/tests/port/p0055-kpart-blend-cut-by-face-beyond.cpp (ctest
-geometry.port.0055): a block's top edge rounded with 3 past a round hole of
-radius 2 through its side face whose top lies 1.5 under the edge (the
-contact leaves the side across the hole's rim and comes back), and the same
-hole through the top: built, valid, the blend cut by the hole's wall; the
-hole 4 under the edge (no gap) as stock. The case is complete with 0057
-(the gaps next to a closed spine's start, filled in order): the test fails
-without 0055 and still with 0055 alone, and passes from 0057 on.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0055.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index e1836771..7e7f2ec0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

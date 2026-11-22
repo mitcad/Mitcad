@@ -19,9 +19,9 @@ its angle already.
 
 On a reported fin's top chamfered over slight creases and rounded with
 0.2: the walk after each arc's torus passes onto the spline's top.
-Test: geometry/tests/test_fillet_fin_top_creases.cpp (ctest
-geometry.fillet_fin_top_creases; with patch 1301; without this patch the
-rounding fails on both contours).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1300.
 
 The condition (mitcad#1986) is geometric, not the case's: every crease
 0980 judges (two faces at an edge taken for tangent) is classified as the

@@ -3,12 +3,19 @@
 # drawing-hole-callout.json: a block with a counterbored hole through it
 # (F3, its drill the parameter drill) seen end on in Drawing1's top view at
 # 1:1, the hole's centre at sheet (150, 150).
-#   1. Hole Callout (the Text group): the hole's rim, then where the text
-#      goes: the callout writes the hole's lines, Ø6.6 THRU and the
-#      counterbore's ⌴ Ø11 ↧ 6.8, on a leader.
+#   1. Hole Callout (the Text group): the hole's rim on its right, then
+#      where the text goes, up and left of the hole: the callout writes the
+#      hole's lines, Ø6.6 THRU and the counterbore's ⌴ Ø11 ↧ 6.8, on a
+#      leader that points at the hole's centre, its arrow on the hole's
+#      left (mitcad#2212).
 #   2. Selected, its panel shows its own texts (none) and the hole's lines;
 #      2 PLACES typed into Text After goes after the last line.
-#   3. The drill made 8: the callout follows, its own text kept.
+#   3. TYP typed into Text Before goes in front of the first line; a line
+#      break alone added after it puts TYP on a line of its own above the
+#      hole's lines (mitcad#2212).
+#   4. The drill made 8: the callout follows, its own texts kept.
+# A separate drag in each direction holds the pointer before release and
+# compares the preview arrow to the settled one (mitcad#2253).
 # Run by tools/ui-drawing-hole-callout-test.sh (Linux),
 # tools/ui-windows-drawing-hole-callout-test.ps1 (Windows) and
 # tools/ui-macos-drawing-hole-callout-test.sh (macOS).
@@ -19,7 +26,9 @@ wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
 wait-log '^Drawing view 1 at '
 wait-idle
 
-# 1. The callout on the hole's rim, its text up and right of it.
+# 1. The callout on the hole's rim (its right), its text up and left of
+#    it: the arrow where the line from the leader's shoulder (120, 170) to
+#    the centre crosses the rim, (147.3, 151.8), on the left.
 mark
 command drawing.hole_callout
 wait-log '^Drawing tool: Hole Callout'
@@ -27,13 +36,50 @@ drawing-sheet-click 153.3 150
 wait-log '^Drawing picked '
 wait-log '^Drawing placing view'
 wait-idle
-drawing-sheet-click 175 175
+drawing-sheet-click 120 170
 wait-log '^Drawing command: (?=.*"cmd":"add_drawing_annotation")(?=.*"type":"hole_callout")'
 wait-log '^Drawing annotations drawn: 1 = .6[.]6 THRU / . .11 . 6[.]8$'
+wait-log '^Drawing hole callout 1 arrow at 147[.][0-9]+,151[.][0-9]+$'
+expect-no-log '^Drawing hole callout 1 arrow at 15[0-9][.]'
 expect-no-log '^Drawing command refused'
 wait-idle
 key Escape
 wait-log '^Drawing tool: selection'
+wait-idle
+
+# Bring the callout to the right. The shoulder moves from (120,170) to
+# about (175,175): its leader snaps to 45° about (150,150).
+mark
+drawing-sheet-pointer press 109 172.5
+drawing-sheet-pointer move 164 177.5
+wait-log '^Drawing snap: leader at 45 degrees$'
+capture firstRight '^Drawing hole callout 1 drag arrow at (152[.]3[0-9]+,152[.]3[0-9]+)$'
+expect-no-log '^Drawing annotation 1 dragged by '
+drawing-sheet-pointer release 164 177.5
+wait-log '^Drawing hole callout 1 arrow at ${firstRight:re}$'
+wait-idle
+
+# Drag the text from right to left, then back. The arrow meets the
+# opposite side of the hole before the button is released each time.
+mark
+drawing-sheet-pointer press 184 178
+drawing-sheet-pointer move 134 178
+wait-log '^Drawing snap: leader at 135 degrees$'
+capture left '^Drawing hole callout 1 drag arrow at (147[.]6[0-9]+,152[.]3[0-9]+)$'
+expect-no-log '^Drawing annotation 1 dragged by '
+drawing-sheet-pointer release 134 178
+wait-log '^Drawing hole callout 1 arrow at ${left:re}$'
+wait-idle
+mark
+drawing-sheet-pointer press 115 178
+drawing-sheet-pointer move 165 178
+wait-log '^Drawing snap: leader at 45 degrees$'
+capture right '^Drawing hole callout 1 drag arrow at (152[.]3[0-9]+,152[.]3[0-9]+)$'
+expect-no-log '^Drawing annotation 1 dragged by '
+drawing-sheet-pointer release 165 178
+wait-log '^Drawing hole callout 1 arrow at ${right:re}$'
+wait-idle
+key Escape
 wait-idle
 
 # 2. Its panel: no own texts, the hole's lines; Text After typed.
@@ -51,8 +97,34 @@ wait-log '^Drawing annotations drawn: 1 = .6[.]6 THRU / . .11 . 6[.]8 2 PLACES$'
 expect-no-log '^Drawing command refused'
 wait-idle
 
-# 3. The drill made 8: the callout follows the hole.
+# 3. TYP typed into Text Before: in front of the first line. Then only a
+#    line break added after it: TYP on a line of its own above. (No mark
+#    first: the panel shown again after step 2's edit may be logged.)
+wait-log '^Drawing panel hole callout: before , after 2 PLACES, replace none, '
+wait-log '^Drawing panel drawingAnnotationBefore at '
+wait-idle
+click-logged '^Drawing panel drawingAnnotationBefore at '
+type 'TYP'
+key Tab
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_annotation")(?=.*"before":"TYP")'
+wait-log '^Drawing annotations drawn: 1 = TYP .6[.]6 THRU / . .11 . 6[.]8 2 PLACES$'
+expect-no-log '^Drawing command refused'
+wait-log '^Drawing panel hole callout: before TYP, after 2 PLACES, replace none, '
+wait-idle
+mark
+click-logged '^Drawing panel drawingAnnotationBefore at '
+key ctrl+a
+key Right
+key Return
+key Tab
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_annotation")(?=.*"before":"TYP.n")'
+wait-log '^Drawing annotations drawn: 1 = TYP / .6[.]6 THRU / . .11 . 6[.]8 2 PLACES$'
+wait-log '^Drawing panel hole callout: before TYP.n, after 2 PLACES, replace none, '
+expect-no-log '^Drawing command refused'
+wait-idle
+
+# 4. The drill made 8: the callout follows the hole.
 mark
 model-command '{"cmd":"set_parameter","name":"drill","value":8}'
-wait-log '^Drawing annotations drawn: 1 = .8 THRU / . .11 . 6[.]8 2 PLACES$'
+wait-log '^Drawing annotations drawn: 1 = TYP / .8 THRU / . .11 . 6[.]8 2 PLACES$'
 expect-never 'TestDriver: FAIL'

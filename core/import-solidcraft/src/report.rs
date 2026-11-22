@@ -112,6 +112,11 @@ pub struct BodyReport {
     /// World coordinates.
     pub bbox_min: [f64; 3],
     pub bbox_max: [f64; 3],
+    /// Whether the geometry kernel's checker finds the body valid: checked
+    /// only when the expected values ask for it (`"valid": true`,
+    /// mitcad#2175); none when not checked or the kernel cannot check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -334,7 +339,7 @@ impl SolidcraftReport {
         }
         for b in &self.bodies {
             out += &format!(
-                "  body {} ({}{}): volume {:.3} mm3, box [{:.3}, {:.3}, {:.3}] .. [{:.3}, {:.3}, {:.3}]\n",
+                "  body {} ({}{}): volume {:.3} mm3, box [{:.3}, {:.3}, {:.3}] .. [{:.3}, {:.3}, {:.3}]{}\n",
                 b.name,
                 b.body,
                 if b.path.is_empty() {
@@ -348,7 +353,12 @@ impl SolidcraftReport {
                 b.bbox_min[2],
                 b.bbox_max[0],
                 b.bbox_max[1],
-                b.bbox_max[2]
+                b.bbox_max[2],
+                match b.valid {
+                    Some(true) => ", valid",
+                    Some(false) => ", not valid",
+                    None => "",
+                }
             );
         }
         for n in &self.notes {

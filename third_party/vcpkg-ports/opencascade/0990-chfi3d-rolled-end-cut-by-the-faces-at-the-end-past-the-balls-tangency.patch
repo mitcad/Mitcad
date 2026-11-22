@@ -66,11 +66,8 @@ reports of a computation it cannot make (ChFi3d_IsComputationFailure,
 0016): a shorter walk is tried, and where none succeeds the end is left as
 before. Any other failure (a broken invariant, a signal) is rethrown.
 
-Test: geometry/tests/test_fillet_rolled_end_cut.cpp (ctest
-geometry.fillet_rolled_end_cut): a slot's end wall over a groove, the
-groove's rim on the wall's strip rounded with 10 (rolling on the strip's
-top edges), cut by the notch walls at both ends: built and valid. Fails
-without the patch, passes with it (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0990.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

@@ -135,6 +135,7 @@ qt_add_executable(mitcad
   framework/TitleBar.cpp
   framework/TitleBar.hpp
   framework/UserText.hpp
+  framework/ViewHintPlace.hpp
   # Command definitions: one registration per toolbar family (U4).
   commands/CommandFactories.hpp
   commands/Commands.hpp
@@ -865,7 +866,9 @@ if(BUILD_TESTING)
   if(UNIX AND NOT APPLE)
     find_program(MITCAD_XVFB_RUN_EXECUTABLE xvfb-run)
     if(MITCAD_XVFB_RUN_EXECUTABLE)
-      set(default_shortcuts_prefix "${MITCAD_XVFB_RUN_EXECUTABLE}" -a -s "-screen 0 1280x1024x24")
+      # Without WAYLAND_DISPLAY, or the app picks the desktop's Wayland
+      # session over xvfb-run's display (mitcad#2031).
+      set(default_shortcuts_prefix env -u WAYLAND_DISPLAY "${MITCAD_XVFB_RUN_EXECUTABLE}" -a -s "-screen 0 1280x1024x24")
     endif()
   endif()
   add_test(NAME app.default_shortcuts COMMAND ${default_shortcuts_prefix} $<TARGET_FILE:mitcad> --ui=qt --no-recovery --no-mcp)
@@ -1454,6 +1457,8 @@ target_sources(mitcad PRIVATE
 # found by a glob that may find none (pageHtml then names the file the
 # build lacks).
 target_sources(mitcad PRIVATE
+  web/DocumentContext.hpp
+  web/WebBodies.cpp
   web/WebGlb.cpp
   web/WebGlb.hpp
   web/WebPage.cpp
@@ -2786,6 +2791,20 @@ target_sources(mitcad PRIVATE sketch/SketchFieldStyle.cpp sketch/SketchFieldStyl
 # one undo step while the sketch is as it was refused.
 target_sources(mitcad PRIVATE sketch/SketchReplace.cpp)
 
+# Linux natively on Wayland (mitcad#2031, GitHub mitcad/Mitcad#434): Qt's
+# platform chosen at start (Wayland in a Wayland session, X11 elsewhere,
+# Qt's EGL integration on X11) and the start-up's Display platform: line.
+# OCCT's port draws through EGL on Linux (third_party/vcpkg-ports, its
+# config sets OpenCASCADE_WITH_EGL): the 3D view then attaches to Qt's EGL
+# context and surface (MITCAD_OCCT_EGL, OcctViewer.cpp). An OCCT built for
+# GLX keeps the hidden GLX window and X11 everywhere.
+target_sources(mitcad PRIVATE framework/DisplayPlatform.cpp framework/DisplayPlatform.hpp)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND OpenCASCADE_WITH_EGL)
+  find_package(OpenGL REQUIRED COMPONENTS EGL)
+  target_compile_definitions(mitcad PRIVATE MITCAD_OCCT_EGL)
+  target_link_libraries(mitcad PRIVATE OpenGL::EGL)
+endif()
+
 # The Rib's and Web's Draft Angle (mitcad#2102, GitHub mitcad/Mitcad#488):
 # its input right after Thickness and `draft_angle` written only when not 0.
 target_sources(mitcad PRIVATE commands/RibDraft.cpp commands/RibDraft.hpp)
@@ -2796,7 +2815,81 @@ target_sources(mitcad PRIVATE commands/RibDraft.cpp commands/RibDraft.hpp)
 # commands the row menus and drops run.
 target_sources(mitcad PRIVATE browser/BrowserOrder.cpp browser/BrowserOrder.hpp)
 
-# The Discord button (mitcad#2123, app/COMMANDS.md "Discord"): an icon
-# button right of the Boost development button that opens MitCad's Discord
-# server, the action help.discord (Help › MitCad on Discord).
+# The Discord button (mitcad#2123, app/COMMANDS.md "Discord"): a pill right
+# of the Boost development button that opens MitCad's Discord server, the
+# action help.discord (Help › MitCad on Discord); since mitcad#2159 in
+# Discord's blurple with Discord's logo mark (third_party/brand-marks, its
+# source and terms in its README; the resource :/brand/discord-mark.svg),
+# its × and Preferences' setting.
 target_sources(mitcad PRIVATE framework/DiscordButton.cpp framework/DiscordButton.hpp)
+# Boundary Fill (mitcad#2149, app/COMMANDS.md "Boundary Fill"): the space
+# solids, surfaces and planes close off filled, its closed regions picked
+# by their dots in the view; home Solid › Create, again in Surface › Modify.
+target_sources(mitcad PRIVATE commands/BoundaryFillCommands.cpp)
+
+set(MITCAD_DISCORD_MARK "${PROJECT_SOURCE_DIR}/third_party/brand-marks/discord-mark.svg")
+set_source_files_properties("${MITCAD_DISCORD_MARK}" PROPERTIES QT_RESOURCE_ALIAS "discord-mark.svg")
+qt_add_resources(mitcad brand_marks PREFIX /brand FILES "${MITCAD_DISCORD_MARK}")
+
+
+# The design window's native windows (mitcad#2152, GitHub mitcad/Mitcad#529):
+# the test steps expect-design-native and expect-screen-beside-cards, which
+# app.ui-windows-space-mouse-3dxware runs with the 3DxWare runtime's
+# stand-in (MITCAD_TEST_3DXWARE).
+target_sources(mitcad PRIVATE framework/TestDriverNativeWindows.cpp)
+
+# The hatch over Section Analysis' caps (mitcad#2146, app/COMMANDS.md
+# "Section Analysis"): lines in the section plane itself, cut at the caps'
+# triangulation, read by the unit test section_hatch.
+target_sources(mitcad PRIVATE view/SectionHatch.cpp view/SectionHatch.hpp)
+
+# Preferences › General › Extrude starts with (mitcad#2164, GitHub
+# mitcad/Mitcad#496, app/COMMANDS.md "Extrude"): Automatic or New Body, read
+# when a new Extrude starts (CommandSession::startAutoOperation).
+target_sources(mitcad PRIVATE framework/ExtrudeStartPreference.cpp framework/ExtrudeStartPreference.hpp)
+
+# Extend to Meet (mitcad#2178, app/COMMANDS.md "Extend to Meet"): two lines
+# or arcs extended or shortened to one shared corner point, the results the
+# model chooses from for the tool's preview and its Tab.
+target_sources(mitcad PRIVATE sketch/ExtendToMeet.cpp sketch/ExtendToMeet.hpp)
+
+# Draft Analysis (mitcad#2166, GitHub mitcad/Mitcad#535, app/COMMANDS.md
+# "Draft Analysis"): the definition, the draft_analysis query and its answer
+# in words, and the three classes the view draws over the bodies.
+target_sources(mitcad PRIVATE commands/DraftAnalysis.cpp commands/DraftAnalysis.hpp)
+
+# Selection sets (mitcad#2192, GitHub mitcad/Mitcad#493, app/COMMANDS.md
+# "Selection Sets"): what of a selection or of Browser rows a set takes, as
+# the model's members, for Create Selection Set and a set's row menu.
+target_sources(mitcad PRIVATE browser/SelectionSets.cpp browser/SelectionSets.hpp)
+
+# The UI test driver's steps by area (mitcad#2173): each file has its steps'
+# specs and their chain, TestDriver.cpp the common steps and the helpers the
+# areas share (TestDriverSupport.hpp). The check's UI test selection gives a
+# test that declares TestDriver.cpp only the area files whose steps it uses.
+target_sources(mitcad PRIVATE
+  framework/TestDriverSupport.hpp
+  framework/TestDriverDocumentWindows.cpp
+  framework/TestDriverModel.cpp
+  framework/TestDriverViewShapes.cpp
+  framework/TestDriverViewPixels.cpp
+  framework/TestDriverViewCamera.cpp
+  framework/TestDriverNativeControls.cpp
+  framework/TestDriverSketch.cpp
+  framework/TestDriverPointer.cpp
+  framework/TestDriverPicks.cpp
+  framework/TestDriverWidgets.cpp
+  framework/TestDriverCommands.cpp
+  framework/TestDriverEnvironment.cpp
+  framework/TestDriverFiles.cpp)
+
+# Save of a new design (mitcad#2183, app/COMMANDS.md "Save"): On this
+# computer or To a project, asked when a remote project is known, with
+# Remember my choice and Preferences › General › Save of a new design;
+# the question is read by the unit test new_design_save.
+target_sources(mitcad PRIVATE files/NewDesignSave.cpp files/NewDesignSave.hpp)
+
+# An expression checked while it is typed (mitcad#2181): Add User
+# Parameter's field and Edit Parameters' Expression cells show the model's
+# words and mark the unknown name in the field.
+target_sources(mitcad PRIVATE framework/ExpressionCheck.hpp)

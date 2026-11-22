@@ -51,12 +51,9 @@ here to ChFi3d_Builder_0.hxx: a Standard_Failure thrown as such,
 StdFail_NotDone, Standard_ConstructionError or Standard_NotImplemented):
 the ride fails and both stay bad, so the fillet fails as before. Any other
 failure (a broken invariant, a signal) is rethrown.
-Test: geometry/tests/test_fillet_roof_slab.cpp (geometry.fillet_roof_slab);
-geometry/tests/port/p0016-ride-on-overlap.cpp (ctest geometry.port.0016): a
-plate 1 thick whose two top rims are rounded with 0.8, convex (the balls
-cannot make one rounding over the top): built, valid, the top consumed;
-the same with the slot's floor rims, concave; and a plate 2 thick (0.8
-fits: two roundings as stock).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0016.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 3b50a0d0..78ee9980 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

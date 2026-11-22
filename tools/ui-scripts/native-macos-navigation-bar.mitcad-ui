@@ -48,7 +48,7 @@ wait-log 'Native navigation bar states: .*Comment Pins on \(View menu on\)'
 # View menu's style; the View menu's default style is the bar's again.
 mark
 native-popup navigationBar_view.visual_style 'Wireframe'
-wait-log 'Native navigation bar styles: Shaded \| Shaded with Visible Edges Only \| Shaded with Hidden Edges \| Wireframe \| Wireframe with Hidden Edges'
+wait-log 'Native navigation bar styles: Shaded \| Shaded with Visible Edges Only \| Shaded with Hidden Edges \| Wireframe \| Wireframe with Hidden Edges \| Wireframe with Visible Edges Only'
 wait-log 'Visual style Wireframe'
 wait-log 'Native navigation bar states: .*Visual Style Wireframe$'
 mark

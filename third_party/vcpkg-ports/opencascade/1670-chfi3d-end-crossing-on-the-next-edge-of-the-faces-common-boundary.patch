@@ -39,13 +39,8 @@ other face: the result had a free edge, an open shell.
   towards the crossing, the whole of it removed with the corner (as the
   edges between a prolonged edge's end and the vertex are).
 
-Test: geometry/tests/test_fillet_end_past_split_edge.cpp,
-test_end_past_split_edge (ctest geometry.fillet_end_past_split_edge): a
-flange's foot rounded with 6.5, 7 and 8 past an end cap 2 short of its
-tip: one valid closed solid, every edge on two faces, the exact volume; 7
-and 8 left a free edge without the patch, 6.5 (the boundary) built before
-it too. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1670.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 0a110e17..39865abe 100644

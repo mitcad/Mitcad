@@ -4,7 +4,8 @@
 # found 25.4 times too small), on sketch-inch-entry.json (Sketch1, made in
 # mm: a construction line and a circle dimensioned 20 mm, d1; the design
 # then set to inches). Every check reads the stored value in mm:
-#   1. Add User Parameter starts in inches; bar = 0.875 is 22.225 mm.
+#   1. The Parameters window's empty row starts in inches (mitcad#2202);
+#      bar = 0.875 is 22.225 mm.
 #   2. In Sketch1 the circle's dimension made in mm, set to 0.25 * 2 in
 #      its value editor: 0.5 in, 12.7 mm (it was 0.5 mm when the dimension
 #      kept its unit while the editor read the expression in inches).
@@ -21,15 +22,16 @@ wait-idle
 mark
 command solid.parameters
 focus-dialog '^Parameters$'
-button '^Add User Parameter$'
-wait-log '^Add User Parameter dialog opened: unit in$'
-focus-dialog '^Add User Parameter$'
-focus-widget parameterName
+wait-log '^Parameters new row: unit in, after none$'
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
 type bar
-focus-widget parameterExpression
+key Tab
 type 0.875
 key Return
-wait-log '^Added parameter bar = 0[.]875 in [(]in[)]$'
+wait-log '^Created user parameter bar = 0[.]875 in [(]in[)] in the new row$'
+# The new empty row took the keyboard: Escape leaves it, then the window.
+key Escape
 focus-dialog '^Parameters$'
 key Escape
 focus-main

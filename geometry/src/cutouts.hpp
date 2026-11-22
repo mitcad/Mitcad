@@ -22,6 +22,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <TopoDS_Shape.hxx>
@@ -197,5 +198,45 @@ bool put_walls_back(Cutouts& cutouts, const Shape& chamfered, const std::string&
 // apart (mitcad#1613), for the caller to take when nothing else builds.
 ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Shape& input,
                        ShapePtr* unmerged = nullptr);
+
+// A rounding of a concave edge wider than a narrow face beside it whose far
+// edge goes on tangentially into a convex face beyond (a step's riser that
+// runs into a round face, mitcad#2208): the ball takes the narrow face away
+// and rolls on over the face beyond, touching it and the edge's other face.
+// Continuing the narrow face past its far edge (fill_overflow) would keep
+// the ball on the narrow face's surface instead, and the space filled
+// between that surface and the face beyond, cut out again, would leave the
+// rounding hanging beside the face beyond as a sheet. The body here has the
+// narrow face replaced by the face beyond continued along its own surface
+// until it meets the edge's other face (the material between the narrow
+// face, the face beyond continued and the other face's surface taken away),
+// so that the rounding of the new edge between the other face and the face
+// beyond, at the same size, is that rounding; the material taken away lies
+// inside what the rounding adds where it takes the whole narrow face away
+// (the caller checks that its result holds the whole input).
+struct FacesBeyondGrown {
+  // The body with the narrow faces replaced, its faces named after the
+  // input's.
+  ShapePtr body;
+  // The sets of its edges (as `owner` of the input's): the new edges
+  // between the other faces and the faces beyond in place of the picked
+  // edges beside the narrow faces.
+  std::vector<int> owner;
+  // The names of the new edges and of their vertices, each with the name
+  // of the input's edge or vertex it stands for.
+  std::vector<std::pair<std::string, std::string>> renames;
+};
+
+// The body for the rounding of the selected edges (`owner`, by edge: the
+// set index, negative for none) reaching `contact` along their faces, with
+// each narrow face beside a concave selected edge replaced as above: a face
+// of one selected edge whose far edges (its edges that do not meet that
+// edge) are all nearer the edge than `contact` and all go on tangentially
+// into convex faces beyond. The edge's faces and the faces beyond are
+// planes, cylinders, cones, spheres or tori. None when there is no such
+// face, or the material to take away is not bounded by the narrow face, the
+// face beyond and the other face's surface near the edge.
+std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std::vector<int>& owner,
+                                                   double contact);
 
 } // namespace mitcad::geometry::detail

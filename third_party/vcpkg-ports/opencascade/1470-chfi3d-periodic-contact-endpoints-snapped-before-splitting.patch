@@ -10,14 +10,8 @@ rim of a boss rounded at its foot and rim acquired a wire extending past
 a full turn, an unorientable torus face and a wrong volume. The existing
 parameter precision and all geometric assertions stay unchanged.
 
-Test: geometry/tests/test_fillet_boss_foot_rim.cpp, test_seam_on_the_top,
-test_seam_at_the_foot_end and test_seam_below_the_top (ctest
-geometry.fillet_boss_foot_rim), their seven configurations: valid, closed,
-the volume within 2e-5 mm3 and the areas as for 1340. Without the patch
-two of them come out invalid on macOS (an unorientable torus face, a wrong
-volume), so its before/after run needs that platform (mitcad#1986). The
-neighbours: geometry.fillet_ride_against and the periodic-seam and
-crossing-contact cases of geometry.suite.fillet_results.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1470.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

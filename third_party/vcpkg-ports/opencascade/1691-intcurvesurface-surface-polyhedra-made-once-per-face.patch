@@ -17,11 +17,8 @@ the polyhedra of each face for its edge/face intersections: the same
 polyhedra, so the same intersection points. The kept polyhedra are listed
 in an NCollection_List (OCCT's containers, mitcad#1986).
 
-Test: geometry/tests/test_kernel_repeated_work.cpp
-(geometry.kernel_repeated_work: the intersections with the kept polyhedra
-are those made without them). The speed itself: none, because the gain (a
-third of a closed offset's time) is below what a bound in a test of
-seconds can tell on a loaded machine.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1691.
 diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx
 index cedd7477..3c1e57f3 100644
 --- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx

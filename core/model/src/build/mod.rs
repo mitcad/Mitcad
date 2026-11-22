@@ -189,6 +189,11 @@ pub struct BuildRecord {
     /// to the designation (or with the suffix) counts as automatic then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub named_after: Option<String>,
+    // Profiles in parallel (mitcad#2201).
+    /// A profile placed in parallel: along its target, a long face against
+    /// the target's side; its joint's slide is bound to `from`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parallel: bool,
 }
 
 /// What a placement's offset along a profile is measured from

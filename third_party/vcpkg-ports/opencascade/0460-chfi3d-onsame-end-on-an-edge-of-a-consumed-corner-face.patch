@@ -39,13 +39,8 @@ bodies of a stored design that has this corner do (its blend faces within
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_corners.cpp,
-test_foot_rounding_ending_on_a_rounding_of_its_radius (ctest
-geometry.suite.fillet_corners): the end feet of a boss rounded with 2, the
-radius of the foot roundings beside them, the end section that rounding's
-end arc. Its failure without the patch is still to be shown: with it and
-the 40 later patches that change the same lines reverted at the port's
-tip, OCCT does not build (tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0460.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

@@ -14,6 +14,9 @@
 #     and shows its FireRating as inherited.
 #   - The component's Mark edited in place (W-20); FireRating picked from
 #     its own type's values (EI60), as a choice.
+#   - The component's standing Part number and Description rows (empty,
+#     mitcad#2138): the Part number typed in place is stored, the empty
+#     Description is not.
 #   - The body's menu shows the body's level too: an imported value (ifc)
 #     edited shows that it differs from its source; the computed volume is
 #     listed, read-only, and never saved.
@@ -122,6 +125,9 @@ ui_expect_new "Property sets row: occurrence Pset_WallCommon/FireRating = EI30 (
   "the component's FireRating, inherited"
 ui_expect_new "Property sets row: component Identity/Mark = W-12 (user)" "the component's Mark"
 ui_expect_new "Property sets component Identity/Mark value at" "its cells are logged"
+ui_expect_new "Property sets row: component Identity/Part number =  ()" \
+  "the component's standing Part number row, empty, nothing stored (mitcad#2138)"
+ui_expect_new "Property sets row: component Identity/Description =  ()" "and its Description row"
 
 echo "--- A value edited in place"
 ui_mark
@@ -129,6 +135,13 @@ ui_step "Mark = W-20"                    edit_value "component Identity/Mark" "W
 ui_expect_new "Property component Identity/Mark set: W-20" "the edit is a model command"
 ui_expect_new "Property sets row: component Identity/Mark = W-20 (user)" "the component's Mark is W-20"
 ui_expect_new "Property sets row: occurrence Identity/Mark = W-13 (user, overrides)" "Wall:1 keeps its own"
+
+echo "--- The standing Part number typed in place (mitcad#2138)"
+ui_mark
+ui_step "Part number = WP-100"           edit_value "component Identity/Part number" "WP-100"
+ui_expect_new "Property component Identity/Part number set: WP-100" "the standing row's edit is a model command"
+ui_expect_new "Property sets row: component Identity/Part number = WP-100 (user)" "stored, in its own row"
+ui_expect_new "Property sets row: component Identity/Description =  ()" "the Description still stands empty"
 
 echo "--- An own type's value picked as a choice"
 ui_mark
@@ -195,6 +208,8 @@ ui_key ctrl+s
 ui_expect_new "Saved $FILE" "saved"
 expect_file '[.properties[] | select(.owner == "C1") | .sets[] | select(.name == "Identity") | .properties[0].value]' \
   '["W-20"]' "the component's Mark saved"
+expect_file '[.properties[] | select(.owner == "C1") | .sets[] | select(.name == "Identity") | .properties[] | .key]' \
+  '["Mark","Part number"]' "the typed Part number saved, the empty Description not (mitcad#2138)"
 expect_file '[.properties[] | select(.owner == "F2.b0") | .sets[0].properties[0] | [.value, .source, .imported]]' \
   '[["R-2","ifc","R-1"]]' "the body's Reference with its source's value"
 expect_file '[.properties[].sets[].name] | index("Computed")' 'null' "no computed set in the file"

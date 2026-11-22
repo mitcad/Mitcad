@@ -48,6 +48,14 @@ use mitcad_import_base::scaffold::{CandidateCore, substitute};
 /// it tells apart are millimetres off).
 pub(super) const TOLERANCE: f64 = 1e-5;
 
+/// A fillet's own distance (owner 20.11.2026, mitcad#2038): OCCT's corner
+/// of one rounding beside a concave edge bulged out of the body, and
+/// FreeCAD's stored fillet still has that bulge; the port's patch 1805 keeps
+/// the corner inside, which moves the replayed fillet up to 4.6e-5 from the
+/// stored one on the reported bend design. The owner chose the corrected
+/// result: fillets are compared within 1e-4 (0.01 % of their size).
+pub(super) const FILLET_TOLERANCE: f64 = 1e-4;
+
 /// A sketch the import made: its Mitcad feature and the entities of
 /// FreeCAD's geometry.
 #[derive(Debug, Clone)]
@@ -817,7 +825,16 @@ impl<K: Kernel> Importer<'_, '_, K> {
             freecad_center: theirs.center,
             freecad_solids: their_solids,
             distance,
-            pass: distance <= TOLERANCE && solids == their_solids,
+            pass: distance
+                <= if matches!(
+                    object.type_name.as_str(),
+                    "PartDesign::Fillet" | "Part::Fillet"
+                ) {
+                    FILLET_TOLERANCE
+                } else {
+                    TOLERANCE
+                }
+                && solids == their_solids,
         })
     }
 

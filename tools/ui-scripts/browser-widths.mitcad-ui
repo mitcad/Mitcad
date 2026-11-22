@@ -4,6 +4,8 @@
 # a 200 x 200 mm plate in the root (Body1) and an empty component Short
 # placed once (Short:1). The window 1260 px wide, the plate seen from the
 # top and zoomed in until it fills the view.
+#   0. Without a saved choice the Browser starts with Rows, on Windows,
+#      Linux and macOS alike (mitcad#2144).
 #   1. Rows (Preferences › Display, the limit 33 % by default): a component
 #      renamed to a long name widens the rows and the card so that the name
 #      shows in full (the card as wide as its widest row, more than 260 px).
@@ -27,6 +29,9 @@ wait-idle
 wheel 50 50 15
 wait-idle
 sleep 300
+
+# 0. Rows without a saved choice (the runs start with fresh settings).
+expect-ever '^Browser background: rows$'
 
 # 1. Rows, the limit at its default.
 mark

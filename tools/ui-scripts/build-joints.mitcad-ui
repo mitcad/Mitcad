@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: MIT
+# Joint conditions of profiles along sketch lines (mitcad#2200), on
+# build-joints.json (Sketch1: a rectangle 600 x 400 of four lines from the
+# origin and a line from the middle of the bottom one to the middle of the
+# top one) with the profile library the runner makes (a 20 mm square
+# profile, centered on its axis):
+#   1. Profile, Method Along sketch lines, Corners Butt, Sketch1 picked
+#      whole: the panel lists the joints, at each L the line picked first
+#      running through, the middle line's ends stopping at the sides of the
+#      bottom and the top profiles; Place makes five profiles in one undo
+#      step: the bottom one 620 long (it runs through at both its corners),
+#      the right one 400, the top one 600, the left one 380, the middle one
+#      380.
+#   2. Ends: a click on the right profile near its bottom end shows its L
+#      with the bottom profile, Butt, the bottom one running through; Joint
+#      Butt with Runs Through This component swaps it: OK in one undo step,
+#      the right profile 420 long (through to the outer corner), the bottom
+#      one 600.
+#   3. A click on the middle profile near its bottom end shows its T: Near
+#      Side; Joint Far Side, then Shift + click on the same profile near its
+#      top end applies Far Side there at once (the choice stayed): one undo
+#      step, the middle profile 400 long, through the top one to its outer
+#      side.
+# Run by tools/ui-build-joints-test.sh (Linux),
+# tools/ui-windows-build-joints-test.ps1 (Windows) and
+# tools/ui-macos-build-joints-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+expect-ever '^Browser [^ ]+/Sketches/Sketch1 at '
+
+# 1. Profile along sketch lines, Corners Butt.
+mark
+command build.profile
+wait-log '^BUILD profile starts with ' 60
+wait-idle
+mark
+qt-choice input_profile_how 'Along sketch lines: a profile on each line'
+wait-log '^Message band: hint Profile: select lines[.]' 30
+wait-idle
+mark
+click-logged '^Panel Profile input lines_corners=butt at '
+wait-idle
+mark
+click-logged '^Panel Profile input lines_pick at '
+wait-idle
+mark
+click-logged '^Browser [^ ]+/Sketches/Sketch1 at '
+wait-log '^BUILD profile along sketch lines: .*F1.* picked$' 30
+wait-log '^Inspect Profile: along sketch lines: 5 profile[(]s[)], .*corners butt; .*joints: L butt through 1, L butt through 1, L butt through 2, L butt through 3, T near_side through 1, T near_side through 3$' 60
+wait-idle
+capture-undo-depth start
+mark
+key Return
+wait-log '^Placed .*; 5 profile[(]s[)] along sketch lines' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number bottom '{"query": "build_parts"}' parts.0.length
+expect-near ${bottom} 620
+capture-model-number right '{"query": "build_parts"}' parts.1.length
+expect-near ${right} 400
+capture-model-number top '{"query": "build_parts"}' parts.2.length
+expect-near ${top} 600
+capture-model-number left '{"query": "build_parts"}' parts.3.length
+expect-near ${left} 380
+capture-model-number middle '{"query": "build_parts"}' parts.4.length
+expect-near ${middle} 380
+key Escape
+wait-idle
+
+# 2. Ends: the right profile's L with the bottom one, swapped.
+mark
+command build.ends
+wait-log '^Command Ends started' 20
+wait-idle
+mark
+click-logged '^Panel Ends input part at '
+wait-log '^Pick places:' 20
+click-view-point 600,40,0
+wait-log '^BUILD ends of [^:]+: end a in L with [^:]+: butt, [^ ]+ runs through$' 30
+wait-log '^Inspect Ends: [^ ]+ end a: .*, joint L with [^ ]+: butt through [^ ]+; ' 30
+wait-idle
+mark
+click-logged '^Panel Ends input joint=butt at '
+wait-log '^Inspect Ends: [^ ]+ end a: .*, joint L with [^ ]+: butt through [^ ]+, set butt; ' 30
+wait-idle
+mark
+qt-choice input_joint_through 'This component'
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^Ends of .*: end a joint butt with [^,]+, [^ ]+ runs through$' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number right '{"query": "build_parts"}' parts.1.length
+expect-near ${right} 420
+capture-model-number bottom '{"query": "build_parts"}' parts.0.length
+expect-near ${bottom} 600
+
+# 3. The middle profile's T: Far Side chosen, then Shift + click at its
+# other end applies it at once.
+mark
+click-logged '^Panel Ends input part at '
+wait-log '^Pick places:' 20
+click-view-point 300,40,0
+wait-log '^BUILD ends of [^:]+: end a in T with [^:]+: near_side$' 30
+wait-idle
+mark
+click-logged '^Panel Ends input joint=far_side at '
+wait-log '^Inspect Ends: [^ ]+ end a: .*, joint T with [^ ]+: near_side, set far_side; ' 30
+wait-idle
+capture-undo-depth start
+mark
+click-logged '^Panel Ends input part at '
+wait-log '^Pick places:' 20
+click-view-point 300,360,0 left shift
+wait-log '^BUILD ends of [^:]+: end b in T with [^:]+: near_side$' 30
+wait-log '^Ends of .*: end b joint far_side with [^,]+$' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number middle '{"query": "build_parts"}' parts.4.length
+expect-near ${middle} 400
+expect-never 'TestDriver: FAIL'

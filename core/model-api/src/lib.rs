@@ -212,6 +212,16 @@ mod sketch_auto_constrain;
 mod mesh_tools;
 // Sketch blocks: Create, Insert, Explode and Edit Block (mitcad#2110).
 mod sketch_blocks;
+// Boundary Fill's closed regions of surfaces and planes (mitcad#2149).
+mod boundary_regions;
+// Groups of user parameters: their commands and query (mitcad#2180).
+mod parameter_groups;
+// Selection sets: named links to bodies, occurrences and features
+// (mitcad#2192).
+mod selection_sets;
+// Which bodies a print service may take: library parts not for print
+// services left out (mitcad#2214).
+mod print_service;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -271,6 +281,8 @@ pub mod prelude {
     pub(crate) use super::parameters_csv::ParametersCsvOps;
     pub(crate) use super::policy::PolicyCrateOps;
     pub(crate) use super::print::PrintOps;
+    // Draft Analysis (mitcad#2166).
+    pub(crate) use super::print::DraftOps;
     pub(crate) use super::print_profiles::PrintProfilesCrateOps;
     pub(crate) use super::print_profiles::PrintProfilesOps;
     pub(crate) use super::properties::PropertiesCrateOps;
@@ -364,9 +376,47 @@ impl From<ModelError> for ApiError {
                     .with_detail(error.to_string())
                     .text(),
             ),
+            // An expression refused, in words without the parser's offset
+            // (mitcad#2181); parameter_refusal adds the near miss.
+            ModelError::Parameter(mitcad_model::ParameterError::Table(ref table)) => {
+                match table.message(None) {
+                    Some(words) => Self(words_with_detail(words, error.to_string())),
+                    None => Self(error.to_string()),
+                }
+            }
             error => Self(error.to_string()),
         }
     }
+}
+
+/// A refusal of a parameter command (mitcad#2181): an expression refused
+/// in words a person reads, with the near miss of an unknown name among
+/// `parameters` ("Did you mean table_length?"), and the model's own text
+/// (with the parser's byte offset) as the agents' detail; any other
+/// refusal as [`ApiError::from`] gives it.
+fn parameter_refusal(
+    parameters: &mitcad_model::expr::ParameterTable,
+    error: ModelError,
+) -> ApiError {
+    if let ModelError::Parameter(mitcad_model::ParameterError::Table(table)) = &error
+        && let Some(words) = parameters.refusal_message(table)
+    {
+        return ApiError(words_with_detail(words, error.to_string()));
+    }
+    ApiError::from(error)
+}
+
+/// `message`, what a person reads, with the agents' `detail` in its
+/// `[placed: …]` line (mitcad#1612). Made without the id check of
+/// `FeatureError::new`: the names in it are the user's own parameter
+/// names, which may look like a sketch's ids (`p1`, `c2`).
+fn words_with_detail(message: String, detail: String) -> String {
+    notice::FeatureError {
+        message,
+        places: Vec::new(),
+        detail,
+    }
+    .text()
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(value: Value, what: &str) -> Result<T, ApiError> {
@@ -471,6 +521,10 @@ named_enum! {
             // Allowed values (mitcad#798): a list, null or [] removes it.
             #[serde(default, deserialize_with = "limits::present")]
             values: Option<Value>,
+            // Its group (mitcad#2180, `parameter_groups.rs`): a path nested
+            // with `/`, made when it does not exist; empty for none.
+            #[serde(default)]
+            group: String,
         },
         "set_parameter" => SetParameter {
             name: String,
@@ -497,6 +551,9 @@ named_enum! {
             // Allowed values (mitcad#798): a list, null or [] removes it.
             #[serde(default, deserialize_with = "limits::present")]
             values: Option<Value>,
+            // Its group (mitcad#2180): a path, "" takes it out of its group.
+            #[serde(default)]
+            group: Option<String>,
         },
         "set_units" => SetUnits {
             length: String,
@@ -761,6 +818,7 @@ named_enum! {
         },
         // The Flat Pattern as a DXF drawing (mitcad#210, `exchange.rs`).
         "export_flat_pattern_dxf" => ExportFlatPatternDxf(exchange::ExportFlatPatternCommand),
+        "export_bend_table" => ExportBendTable(exchange::ExportBendTableCommand),
         // Drawings: views with dimensions and a hole table (mitcad#471, `drawing.rs`).
         "export_drawing" => ExportDrawing(drawing::ExportDrawingCommand),
         // A body's print bed face (mitcad#731, `document/print_bed.rs`).
@@ -1413,6 +1471,24 @@ named_enum! {
             #[serde(default)]
             base: Option<String>,
         },
+        // The closed regions tool bodies and planes bound, for Boundary
+        // Fill's panel (mitcad#2149, `boundary_regions.rs`).
+        "boundary_regions" => BoundaryRegions(boundary_regions::BoundaryRegionsQuery),
+        // The user parameters' groups (mitcad#2180, `parameter_groups.rs`).
+        "parameter_groups" => ParameterGroups(parameter_groups::GroupsQuery),
+        // Draft Analysis: the bodies' faces by their draft from a pull
+        // direction (mitcad#2166, `print.rs`).
+        "draft_analysis" => DraftAnalysis(print::DraftQuery),
+        // The design's selection sets with their members (mitcad#2192,
+        // `selection_sets.rs`).
+        "selection_sets" => SelectionSets,
+        // Which bodies a print service may take (mitcad#2214,
+        // `print_service.rs`).
+        "print_service_check" => PrintServiceCheck(print_service::PrintServiceQuery),
+        // A point file for Insert Points (mitcad#2232, `sketch.rs`).
+        "points_info" => PointsInfo {
+            path: String,
+        },
     }
 }
 
@@ -1598,6 +1674,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                                    "owner": params.owner(p.id()),
                                    "dependencies": dependencies,
                                    "favorite": self.is_favorite_parameter(p.name())});
+                            // Its group, when it is in one (mitcad#2180).
+                            if let Some(group) = self.parameter_groups().group_of(p.id()) {
+                                value["group"] = json!(group);
+                            }
                             // The table columns it looks values up in
                             // (mitcad#667): `Screws.dk`.
                             value["table_dependencies"] = json!(tables::table_dependencies(p));
@@ -1617,6 +1697,14 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                             let rules = table.rules_using(p.name());
                             if !rules.is_empty() {
                                 value["rules"] = json!(rules);
+                            }
+                            // What keeps a user parameter from being
+                            // deleted, in words (mitcad#2202).
+                            if p.kind().as_str() == "user" {
+                                let users = self.state().parameter_users(p.name());
+                                if !users.is_empty() {
+                                    value["used_by"] = json!(users);
+                                }
                             }
                             value
                         })
@@ -1679,6 +1767,15 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     },
                     None => None,
                 };
+                // Each sketch's outline set (mitcad#2194), found once: its
+                // regions' keys, and whether its closed curves cross.
+                let mut outlines: std::collections::BTreeMap<
+                    FeatureUid,
+                    Option<(
+                        std::collections::BTreeSet<mitcad_model::topo::RegionKey>,
+                        bool,
+                    )>,
+                > = std::collections::BTreeMap::new();
                 Value::Array(
                     self.profiles()
                         .into_iter()
@@ -1695,6 +1792,27 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                                                "region": p.region, "consumed": p.consumed});
                             if p.face_bounded {
                                 value["face_bounded"] = json!(true);
+                            }
+                            // In its sketch's outline set or not (a hole,
+                            // which Show profiles leaves unfilled), or the
+                            // sketch's closed curves cross (mitcad#2194).
+                            let outline = outlines.entry(p.sketch).or_insert_with(|| {
+                                self.sketch_output(p.sketch).map(|o| {
+                                    let set = o.outline_set();
+                                    let keys = set
+                                        .regions
+                                        .iter()
+                                        .map(|&i| o.region_info[i].profile.key.clone())
+                                        .collect();
+                                    (keys, set.crossing)
+                                })
+                            });
+                            match outline {
+                                Some((_, true)) => value["curves_cross"] = json!(true),
+                                Some((keys, false)) if !p.face_bounded => {
+                                    value["outline"] = json!(keys.contains(&p.region));
+                                }
+                                _ => {}
                             }
                             // Its area and centre (sketch coordinates), to
                             // tell regions apart without their keys
@@ -1893,10 +2011,16 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     None | Some("") | Some("list") => {
                         self.bom_list_with(&properties, group_identical)
                     }
-                    Some("structured") => {
-                        self.bom_view_with(&properties, mitcad_model::BomView::Structured)
-                    }
-                    Some("parts") => self.bom_view_with(&properties, mitcad_model::BomView::Parts),
+                    Some("structured") => self.bom_view_with(
+                        &properties,
+                        mitcad_model::BomView::Structured,
+                        group_identical,
+                    ),
+                    Some("parts") => self.bom_view_with(
+                        &properties,
+                        mitcad_model::BomView::Parts,
+                        group_identical,
+                    ),
                     Some(other) => {
                         return Err(ApiError(format!(
                             "there is no view {other}; the views are list, structured and parts"
@@ -2192,6 +2316,18 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 path.as_deref(),
                 base.as_deref(),
             )?,
+            // Boundary Fill's closed regions (mitcad#2149).
+            Query::BoundaryRegions(query) => boundary_regions::query(self, &query)?,
+            // The user parameters' groups (mitcad#2180).
+            Query::ParameterGroups(_) => parameter_groups::groups_json(self),
+            // Draft Analysis (mitcad#2166).
+            Query::DraftAnalysis(query) => self.draft_analysis_json(&query)?,
+            // Selection sets (mitcad#2192).
+            Query::SelectionSets => selection_sets::sets_json(self),
+            // Which bodies a print service may take (mitcad#2214).
+            Query::PrintServiceCheck(query) => print_service::query(self, &query)?,
+            // A point file for Insert Points (mitcad#2232).
+            Query::PointsInfo { path } => sketch::points_info_json(&path)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2554,6 +2690,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 step,
                 strict,
                 values,
+                group,
             } => {
                 let unit = unit.as_deref().map(parse_unit).transpose()?;
                 let limits = limits::LimitInput {
@@ -2564,16 +2701,26 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     values,
                 }
                 .apply_to(mitcad_model::expr::ParamLimits::default())?;
+                // In its group in the same undo step (mitcad#2180).
                 match expression_of(value, expression)? {
                     Expression::Number(value) => {
                         let unit = unit.unwrap_or(Unit::of_length(
                             self.parameters().context().default_length_unit,
                         ));
                         let text = value_to_expression(value, unit);
-                        self.add_parameter_with_limits(&name, &text, Some(unit), &comment, limits)?;
+                        self.add_parameter_in_group(
+                            &name,
+                            &text,
+                            Some(unit),
+                            &comment,
+                            limits,
+                            &group,
+                        )
+                        .map_err(|e| parameter_refusal(self.parameters().table(), e))?;
                     }
                     Expression::Text(text) => {
-                        self.add_parameter_with_limits(&name, &text, unit, &comment, limits)?;
+                        self.add_parameter_in_group(&name, &text, unit, &comment, limits, &group)
+                            .map_err(|e| parameter_refusal(self.parameters().table(), e))?;
                     }
                 }
                 json!({})
@@ -2590,6 +2737,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 step,
                 strict,
                 values,
+                group,
             } => {
                 let unit = unit.as_deref().map(parse_unit).transpose()?;
                 let mut changed = Vec::new();
@@ -2626,8 +2774,9 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                             Expression::Text(text) => text,
                         }),
                     };
-                    changed =
-                        self.set_parameter_limits(&name, limits, expression.as_deref(), unit)?;
+                    changed = self
+                        .set_parameter_limits(&name, limits, expression.as_deref(), unit)
+                        .map_err(|e| parameter_refusal(self.parameters().table(), e))?;
                 } else if value.is_some() || expression.is_some() || unit.is_some() {
                     changed = if value.is_none() && expression.is_none() {
                         // Only a new unit: the expression stays.
@@ -2637,22 +2786,24 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                             .and_then(|id| self.parameters().get(id))
                             .map(|p| p.expression().to_owned())
                             .ok_or_else(|| ApiError(format!("unknown parameter {name}")))?;
-                        self.set_parameter_expression(&name, &expression, unit)?
+                        self.set_parameter_expression(&name, &expression, unit)
+                            .map_err(|e| parameter_refusal(self.parameters().table(), e))?
                     } else {
                         match expression_of(value, expression)? {
                             // From the table's change set: a text parameter's
                             // value is always 0 (mitcad#758).
-                            Expression::Number(value) if unit.is_none() => {
-                                self.set_parameter_value(&name, value)?
-                            }
+                            Expression::Number(value) if unit.is_none() => self
+                                .set_parameter_value(&name, value)
+                                .map_err(|e| parameter_refusal(self.parameters().table(), e))?,
                             Expression::Number(value) => {
                                 let unit = unit.expect("checked");
                                 let text = value_to_expression(value, unit);
-                                self.set_parameter_expression(&name, &text, Some(unit))?
+                                self.set_parameter_expression(&name, &text, Some(unit))
+                                    .map_err(|e| parameter_refusal(self.parameters().table(), e))?
                             }
-                            Expression::Text(text) => {
-                                self.set_parameter_expression(&name, &text, unit)?
-                            }
+                            Expression::Text(text) => self
+                                .set_parameter_expression(&name, &text, unit)
+                                .map_err(|e| parameter_refusal(self.parameters().table(), e))?,
                         }
                     };
                 }
@@ -2666,6 +2817,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 }
                 if let Some(favorite) = favorite {
                     self.set_parameter_favorite(&name, favorite)?;
+                }
+                // Its group (mitcad#2180, `parameter_groups.rs`).
+                if let Some(group) = group {
+                    self.set_parameters_group(std::slice::from_ref(&name), &group)?;
                 }
                 let mut answer = json!({"changed": changed});
                 if !moves.is_empty() {
@@ -3052,6 +3207,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 json!({})
             }
             Command::ExportFlatPatternDxf(command) => self.export_flat_pattern_command(command)?,
+            Command::ExportBendTable(command) => self.export_bend_table_command(command)?,
             Command::ExportDrawing(command) => self.export_drawing_command(command)?,
             Command::SetPrintBedFace { uid, face } => {
                 self.set_print_bed_face(uid, face.as_deref())?;
@@ -3262,6 +3418,12 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 add_remarks(&mut value, &remark_notices(item.remarks, item.entry.uid));
                 if !item.entry.component.is_root() {
                     value["component"] = json!(item.entry.component);
+                }
+                // The component a new-component operation makes, which its
+                // bodies are in (mitcad#2185): the timeline marks it in
+                // that component's colour, at once after an edit.
+                if let Some(made) = self.assembly().created_by(item.entry.uid) {
+                    value["made_component"] = json!(made);
                 }
                 // What the importer said about it (mitcad#170): also its
                 // last notice, as information.

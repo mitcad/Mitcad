@@ -50,11 +50,16 @@ The state line names the next step, and its button does it:
   is the case on Windows with Claude Desktop from the Microsoft Store,
   which MitCad finds as the installed package `Claude_pzs8sxrjxfjjc` and
   which registers no `.mcpb` association. The line below says where:
-  **In Claude Desktop: Settings › Extensions › Advanced settings ›
-  Install Extension…, then choose** the saved extension (on Windows
-  `%LOCALAPPDATA%\Mitcad\Mitcad\assistant-setup\mitcad-desktop.mcpb`);
-  **Show in Explorer** shows that file selected. Do not double-click it:
-  Windows has no application for it. **Open Claude Desktop** opens Claude
+  **In Claude Desktop, open Extensions in Settings (under Desktop app in
+  newer versions), then drag** the saved extension (on Windows
+  `%LOCALAPPDATA%\Mitcad\Mitcad\assistant-setup\mitcad-desktop.mcpb`)
+  **onto that page or use Advanced settings › Install Extension…**. Both
+  routes are on the Extensions page in every layout of Claude Desktop's
+  settings; when those settings look different, Anthropic's article
+  [Getting started with local MCP servers on Claude Desktop](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop)
+  shows where the Extensions page is now. **Show in Explorer** shows that
+  file selected, ready to drag. Do not double-click it: Windows has no
+  application for it. **Open Claude Desktop** opens Claude
   Desktop through its `claude://` link; when Claude Desktop is no longer
   there, the line becomes **Install Claude Desktop first**. Approve the
   installation in Claude Desktop and enable the extension, then start a
@@ -99,7 +104,9 @@ The state line names the next step, and its button does it:
   off and on in Claude Desktop, or start a new chat**, with **Open Claude
   Desktop**: MitCad's extension is installed in Claude Desktop (MitCad
   reads Claude Desktop's extensions folder), but Claude Desktop is not
-  connected now. Nothing needs to be installed again.
+  connected now. The switch is on the Extensions page in Claude Desktop's
+  Settings (under Desktop app in newer versions). Nothing needs to be
+  installed again.
 - A failure: one short line in the error colour saying what to do, with
   **Try again**. The details (a client's error output, for instance) are
   in the line's tooltip.
@@ -1705,11 +1712,16 @@ along its true line and without gaps. Edges are drawn against the depth
 of the faces with a small tolerance; transparent bodies are drawn
 faintly after the others. As in the 3D view (mitcad#1773), a seam (where
 a round face closes on itself) and the line between pieces of one face
-(faces whose names differ only in their `#k` piece numbers) are not drawn
-where the surface runs on smoothly across them (normals within 0.01 rad);
-a seam at a crease (a closed profile with a sharp corner, extruded as one
-face) is. The model keeps these edges: `edges`, selections and features
-that name them are unchanged.
+(faces whose names differ only in their `#k` piece numbers, wherever
+these stand) are not drawn where the surface runs on smoothly across them
+(normals within 0.01 rad); a seam at a crease (a closed profile with a
+sharp corner, extruded as one face) is. Pieces that lie on clearly
+different analytic surfaces, such as the cylinder and the torus of a
+circle swept along a line and a tangent arc, keep the line between them
+(mitcad#2148): the geometry kernel tells the picture which faces form one
+surface (`Kernel::face_surface_groups`), by the 3D view's own rule. The
+model keeps these edges: `edges`, selections and features that name them
+are unchanged.
 Pictures larger than about two million pixels are drawn without the 2x2
 supersampling that smooths the edges of smaller ones.
 
@@ -1823,8 +1835,13 @@ The result's `overlay` gives `type`, `color` and per type:
   `thin_triangles`, `thin_area` (mm²), and `bodies`: per body `thinnest`,
   `at`, `to`, `regions`, `thin_triangles` and `thin_area`, as
   `print_thickness` answers (with `triangles: false`).
-- `draft`: `pull` (unit), `angle`, `area`, `under_area`, `share`, and
-  `bodies`: per body `area`, `under_area`, `share` and `triangles`.
+- `draft`: `pull` (unit), `angle`, `area`, `under_area`, `share`,
+  `positive_area` and `negative_area` (the faces with the draft along the
+  pull and only against it, Draft Analysis' other two classes, mitcad#2166), and
+  `bodies`: per body `area`, `under_area`, `share`, `triangles` (the count
+  drawn), `positive_area` and `negative_area`. The `draft_analysis` query
+  ([Draft analysis](../core/model-api/src/commands.md#draft-analysis))
+  gives all three classes with their triangles.
 - `failed`: `features` (each failed feature's `feature`, `name`, `error`
   and `bodies`), `bodies` (those marked in the picture), `not_drawn`
   (marked bodies the picture does not draw, e.g. hidden ones; draw them

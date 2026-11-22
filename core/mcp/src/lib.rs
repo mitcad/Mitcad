@@ -46,6 +46,11 @@ pub use schemas::{command_schema, schema_commands};
 // it in a later entry.
 mod array_refs;
 pub use array_refs::{check_refs, has_refs, resolve_entry};
+// The defaults MCP gives a new feature where the design file's default
+// keeps designs saved before a choice as they were (mitcad#2162: a new
+// loft merges its tangent edges).
+mod new_feature_defaults;
+pub use new_feature_defaults::new_feature_defaults;
 
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <QAbstractScrollArea>
+#include <QAbstractSpinBox>
 #include <QAbstractTextDocumentLayout>
 #include <QAction>
 #include <QApplication>
@@ -47,6 +48,7 @@
 #include <QSignalBlocker>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QTextEdit>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -76,6 +78,29 @@
 
 namespace mitcad {
 namespace {
+
+// A field the user types text in, which a new message does not scroll out
+// of view (revealMessage, mitcad#1884): an editable line, spin box, combo
+// box or text. A choice, a button or a list with the keyboard does not hold
+// the page (mitcad#2118).
+bool takesTypedText(const QWidget* widget) {
+  if (const auto* line = qobject_cast<const QLineEdit*>(widget)) {
+    return !line->isReadOnly();
+  }
+  if (const auto* spin = qobject_cast<const QAbstractSpinBox*>(widget)) {
+    return !spin->isReadOnly();
+  }
+  if (const auto* combo = qobject_cast<const QComboBox*>(widget)) {
+    return combo->isEditable();
+  }
+  if (const auto* text = qobject_cast<const QTextEdit*>(widget)) {
+    return !text->isReadOnly();
+  }
+  if (const auto* plain = qobject_cast<const QPlainTextEdit*>(widget)) {
+    return !plain->isReadOnly();
+  }
+  return false;
+}
 
 // A fixed choice's label in the interface language (mitcad#1460): the
 // command definitions give the labels of their fixed choices in English,
@@ -380,7 +405,26 @@ QString choiceLabel(const QString& label) {
     // commands/SheetCommands.cpp: Convert to Sheet Metal's Miter (mitcad#1949).
     QT_TRANSLATE_NOOP("Choice", "Earlier Face Runs Past"), QT_TRANSLATE_NOOP("Choice", "Later Face Runs Past"),
     // drawings/: a drawing's dimensioning Standard (mitcad#2047).
-    QT_TRANSLATE_NOOP("Choice", "ISO"), QT_TRANSLATE_NOOP("Choice", "ASME")};
+    QT_TRANSLATE_NOOP("Choice", "ISO"), QT_TRANSLATE_NOOP("Choice", "ASME"),
+    // commands/SweepCommands.cpp, SurfaceCommands.cpp: a loft's Tangent Edges
+    // (mitcad#2162; Keep is listed above).
+    QT_TRANSLATE_NOOP("Choice", "Merge"),
+    // commands/BuildCommands.cpp: Profile's Corners along sketch lines and
+    // Ends' Joint and Runs Through (mitcad#2200).
+    QT_TRANSLATE_NOOP("Choice", "Miter: the ends that meet cut on the bisector, to the outer corner"),
+    QT_TRANSLATE_NOOP("Choice", "Butt: the line picked first runs through, the other stops at its side"),
+    QT_TRANSLATE_NOOP("Choice", "Square: every end as drawn"), QT_TRANSLATE_NOOP("Choice", "As it is"),
+    QT_TRANSLATE_NOOP("Choice", "Miter: both ends cut on the bisector, to the outer corner"),
+    QT_TRANSLATE_NOOP("Choice", "Butt: one runs through to the outer corner, the other stops at its side"),
+    QT_TRANSLATE_NOOP("Choice", "Square: as drawn"),
+    QT_TRANSLATE_NOOP("Choice", "Near Side: to the side of the component it meets"),
+    QT_TRANSLATE_NOOP("Choice", "Far Side: through to the far side of the component it meets"),
+    QT_TRANSLATE_NOOP("Choice", "This component"), QT_TRANSLATE_NOOP("Choice", "The component it meets"),
+    // commands/BuildCommands.cpp: Profile's Parallel placement, its Across
+    // and its length matching the target (mitcad#2201).
+    QT_TRANSLATE_NOOP("Choice", "Parallel: along a profile, long faces in contact"),
+    QT_TRANSLATE_NOOP("Choice", "Centered on the side"), QT_TRANSLATE_NOOP("Choice", "On the slot nearest the click"),
+    QT_TRANSLATE_NOOP("Choice", "Match target: as long as the profile it lies along")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -718,7 +762,10 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
   });
   // Keep the widget signals for existing test and UI callers, and forward
   // them through the same presenter actions the native inspector uses.
+  // Whether the latest change of the inputs was typed (m_typed, mitcad#2118):
+  // a text field holds the page for a new message only then.
   connect(this, &CommandPanel::textEdited, this, [this](const QString& key, const QString& value) {
+    m_typed = true;
     auto call = CommandPresenter::actions().textEdited;
     if (call) {
       call(key, value);
@@ -731,24 +778,28 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
     }
   });
   connect(this, &CommandPanel::choiceChanged, this, [this](const QString& key, const QString& value) {
+    m_typed = false;
     auto call = CommandPresenter::actions().choiceChanged;
     if (call) {
       call(key, value);
     }
   });
   connect(this, &CommandPanel::checkChanged, this, [this](const QString& key, bool value) {
+    m_typed = false;
     auto call = CommandPresenter::actions().checkChanged;
     if (call) {
       call(key, value);
     }
   });
   connect(this, &CommandPanel::selectionActivated, this, [this](const QString& key) {
+    m_typed = false;
     auto call = CommandPresenter::actions().selectionActivated;
     if (call) {
       call(key);
     }
   });
   connect(this, &CommandPanel::selectionCleared, this, [this](const QString& key) {
+    m_typed = false;
     auto call = CommandPresenter::actions().selectionCleared;
     if (call) {
       call(key);
@@ -1538,6 +1589,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     row.targets = new CutTargetsPanel;
     row.targets->setScope(scope.object(input.id));
     connect(row.targets, &CutTargetsPanel::scopeChanged, this, [this, key](const QJsonObject& value) {
+      m_typed = false;
       auto call = CommandPresenter::actions().objectChanged;
       if (call) { call(key, value); }
     });
@@ -1572,6 +1624,8 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     // A line of text and its buttons (mitcad#655): 3D Print's update bar
     // and import line.
     row.noteRow = new NoteRow;
+    // The row's tooltip on its buttons (mitcad#2222).
+    row.noteRow->setActionTooltip(input.tooltip);
     connect(row.noteRow, &NoteRow::actionClicked, this, [this, key](int index) { emit noteActionClicked(key, index); });
     // The pointer over the row paints what it is about (mitcad#1643).
     connect(row.noteRow, &NoteRow::hovered, this, [this, key](bool on) {
@@ -2218,6 +2272,11 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
                                          ? QString()
                                          : QStringLiteral(" (%1: %2)")
                                                .arg(noticeLevelName(note.noticeLevel), note.notice));
+      // Its buttons' tooltip as they show it (mitcad#2222).
+      if (!row.noteRow->buttons().empty() && !row.noteRow->buttons().front()->toolTip().isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Panel %1 tooltip %2: %3")
+                                  .arg(m_def.name, row.key, row.noteRow->buttons().front()->toolTip());
+      }
       if (!m_shownRows.isEmpty()) {
         scheduleLogLayout(); // its buttons moved or came
       }
@@ -2357,6 +2416,18 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
                       QStringLiteral("QTextEdit { color: %1; background: transparent; }"));
   }
   if (message == m_messageText && level == m_messageLevel) {
+    // The same error again, OK off for it, after rows shown above it moved
+    // the box (mitcad#2118: Operation Cut showed the Affected components
+    // list over it, which put the box below the page's view and left OK
+    // off with no word of why in sight): brought into view again. The same
+    // message where it was moves nothing (a page the user scrolled stays).
+    if (boxed && level == NoticeLevel::Error && !m_revealMessage && !m_message->isHidden()) {
+      if (m_message->mapTo(this, QPoint(0, 0)).y() != m_revealedMessageTop) {
+        m_revealMessage = true;
+        qDebug().noquote() << QStringLiteral("Panel %1 message moved: brought into view again").arg(m_def.name);
+        scheduleLogFit();
+      }
+    }
     return;
   }
   m_messageText = message;
@@ -2496,6 +2567,7 @@ void CommandPanel::revealMessage() {
   auto* area = parentWidget() != nullptr ? qobject_cast<QScrollArea*>(parentWidget()->parentWidget()) : nullptr;
   if (area == nullptr || area->widget() != this || m_message->isHidden()) {
     m_revealMessage = false;
+    m_revealedMessageTop = m_message->mapTo(this, QPoint(0, 0)).y();
     return;
   }
   settleLayout();
@@ -2519,8 +2591,15 @@ void CommandPanel::revealMessage() {
     value = wanted.top() - kRoom; // higher than the page: from its first line
   }
   bool held = false;
+  // Only a field the user is typing in holds the page (mitcad#2118): a
+  // choice, a button or a list with the keyboard, or a text field that got
+  // the keyboard when the panel opened (an edited Extrude's Offset at the
+  // top) while the change came from a choice (Operation Cut), kept an error
+  // under a list of cut targets out of view while OK was off for it. The
+  // text typed last holds it until a choice, a check or a pick follows.
   const QWidget* focused = QApplication::focusWidget();
-  if (focused != nullptr && focused != m_message && isAncestorOf(focused) && focused->isVisible()) {
+  if (m_typed && focused != nullptr && focused != m_message && isAncestorOf(focused) && focused->isVisible() &&
+      takesTypedText(focused)) {
     const QRect field(focused->mapTo(this, QPoint(0, 0)), focused->size());
     // A field in sight now; one scrolled away is not being watched.
     if (field.bottom() >= was && field.top() < was + view) {
@@ -2545,6 +2624,7 @@ void CommandPanel::revealMessage() {
   }
   const bool whole = wanted.top() >= value && wanted.bottom() < value + view;
   m_revealMessage = held && !whole;
+  m_revealedMessageTop = m_message->mapTo(this, QPoint(0, 0)).y();
   QString shown = QStringLiteral("in view");
   if (m_revealMessage) {
     shown = QStringLiteral("partly in view, the field typed in kept in view");
@@ -2614,8 +2694,16 @@ QWidget* CommandPanel::takeButtons() {
 }
 
 void CommandPanel::setPreviewReport(const QJsonObject& report) {
+  // The whole report (mitcad#2118): a preview that failed before its cut's
+  // targets were found says why on the list's line.
   for (const auto& row : m_rows) {
-    if (row->targets != nullptr) { row->targets->setPreview(report.value(QStringLiteral("cut_targets")).toObject()); }
+    if (row->targets != nullptr) { row->targets->setPreviewResult(report); }
+  }
+}
+
+void CommandPanel::setPreviewComputing(bool computing) {
+  for (const auto& row : m_rows) {
+    if (row->targets != nullptr) { row->targets->setComputing(computing); }
   }
 }
 

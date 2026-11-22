@@ -69,5 +69,10 @@ ui_expect_log 'Docked toolbar panel hidden (Start)' "Home: the Start page withou
 ui_expect_log 'Start page left by the design' "the design's tab leads back"
 ui_expect_log 'Docked toolbar panel shown' "the toolbar panel back"
 ui_expect_log 'TestDriver: done' "the Docked workspaces"
+# The toolbar panel on the screen after the Start page (mitcad#2031):
+# the shared script also takes a window not exposed (Windows' session 0).
+grep -qE '^Toolbar panel after the Start page: shown at [0-9]+,[0-9]+ [0-9]+x[0-9]+ [(]Docked; the window exposed, ' "$UI_LOG" ||
+  ui_fail "the toolbar panel not shown in an exposed window after the Start page: $(grep '^Toolbar panel after the Start page: ' "$UI_LOG" | tail -1)"
+echo "ok   the toolbar panel shown in the exposed window after the Start page"
 grep -E '^(Docked top bar: |Ribbon workspace: |Drawing docks |TestDriver: dock )' "$UI_LOG" | sed 's/^/     /'
 ui_finish 'UI Docked workspaces test'

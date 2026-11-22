@@ -21,13 +21,8 @@ point or along a segment; the array is read again after such a pair, so
 every later pair sees the wire as the fixes left it, as before. The array
 is OCCT's NCollection_Array1 (mitcad#1986).
 
-Test: geometry/tests/port/p1050-self-intersecting-wire-many-edges.cpp
-(ctest geometry.port.1050): one crossing of a closed wire is split into 4
-new edges at one vertex, two crossings far apart are both split (the edges
-are read again after the first fix), a polygon without crossings is left as
-it is, and a wire of 6 000 edges with one crossing is fixed within 6 s
-(reading each pair's edges by number from the sequence grew with the cube
-of the edges).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1050.
 diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx
 index dcbbe969..52e66148 100644
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx

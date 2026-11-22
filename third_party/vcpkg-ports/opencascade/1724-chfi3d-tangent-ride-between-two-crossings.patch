@@ -33,14 +33,8 @@ A rider whose spine is closed (a plate's rim rounded all round) is not
 made so: a walk over a part of a periodic spine wrote past the spine's
 law arrays; the pair fails as before.
 
-Test: geometry/tests/test_fillet_tangent_ride.cpp,
-test_tower_behind_the_back_edge (ctest geometry.fillet_tangent_ride): a
-half-cylinder tower 2.3 and 2.5 from the plate's back edge, its foot
-rounded with 2 and the edge with 1, both orders: valid, the volume of the
-two made one after the other within a millionth (the fillet failed without
-the patch). It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py, reverted together with 1725, 1727, 1728, 1729,
-which change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1724.
 
 Failures (mitcad#1986): the rider's walk between the crossings fails with
 OCCT's reports of a computation it cannot make

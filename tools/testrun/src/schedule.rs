@@ -299,6 +299,55 @@ fn better(value: f64, rank: f64, best: Option<(usize, f64, f64)>) -> bool {
     }
 }
 
+/// The first claim on memory (mitcad#2177): of the ready tests that may
+/// start now or that only memory keeps waiting (`refusals`, `admit`'s
+/// answers in the same order), the one ranked highest, where its
+/// prediction is within `cap` (the most the budget can be: a test larger
+/// than that waits for an empty machine as before). The index into
+/// `candidates`. The tests ranked below it start only where they leave it
+/// its room (`leaves_room`), so that the test at the head of the longest
+/// chain (the cargo test build, which the Rust tests wait for) starts as
+/// soon as the memory comes free instead of smaller tests taking it again
+/// and again (in a bundle check it waited 9 to 12 minutes and then ran
+/// nearly alone for 14).
+pub fn claimant(
+    candidates: &[Candidate],
+    refusals: &[Result<(), Refusal>],
+    cap: u64,
+) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for (index, (c, refusal)) in candidates.iter().zip(refusals).enumerate() {
+        if !matches!(refusal, Ok(()) | Err(Refusal::Memory)) || c.prediction.memory > cap {
+            continue;
+        }
+        match best {
+            Some(b) if candidates[b].rank >= c.rank => {}
+            _ => best = Some(index),
+        }
+    }
+    best
+}
+
+/// Whether a candidate (other than the claimant) may start beside the
+/// claim: when its prediction and the claimant's fit the budget beside the
+/// running tests. A test of the priority lane passes the claim of a test
+/// outside it (the lane goes first, as in `pick`).
+pub fn leaves_room(
+    c: &Candidate,
+    claimant: &Candidate,
+    running: &Running,
+    limits: &Limits,
+) -> bool {
+    if c.lane && !claimant.lane {
+        return true;
+    }
+    running
+        .memory
+        .saturating_add(c.prediction.memory)
+        .saturating_add(claimant.prediction.memory)
+        <= limits.budget
+}
+
 /// Each test's rank: its predicted wall time plus the largest rank of the
 /// tests that wait for it (`successors`), so that the tests at the head of
 /// long chains start first. A cycle counts as no successor.
@@ -903,6 +952,55 @@ mod tests {
         let long = test(1000.0, 4.0, 1.0);
         let tests = [long, test(95.0, 0.5, 8.0)];
         assert_eq!(pick(&tests, &busy, &now, &LIMITS), Some(0));
+    }
+
+    #[test]
+    fn the_longest_chain_has_the_first_claim_on_memory() {
+        // A 4 GiB test runs; the build at the head of the longest chain
+        // (13 GiB) does not fit the 16 GiB budget beside it, a small test
+        // does.
+        let busy = running(&[test(300.0, 1.0, 4.0)]);
+        let now = Now::default();
+        let build = test(900.0, 8.0, 13.0);
+        let small = test(100.0, 1.0, 0.1);
+        let lock = ["cargo_build".to_owned()];
+        let mut locked = test(5000.0, 1.0, 1.0);
+        locked.locks = &lock;
+        let mut busy_locked = busy.clone();
+        busy_locked.locks = lock.to_vec();
+        let huge = test(9000.0, 1.0, 40.0);
+        let tests = [build.clone(), small.clone(), locked, huge];
+        let refusals: Vec<_> = tests
+            .iter()
+            .map(|c| admit(c, &busy_locked, &now, &LIMITS))
+            .collect();
+        assert_eq!(refusals[0], Err(Refusal::Memory));
+        assert_eq!(refusals[1], Ok(()));
+        assert_eq!(refusals[2], Err(Refusal::Lock));
+        // Not the locked test (not memory keeps it), nor the one larger
+        // than the budget can ever be: the build.
+        assert_eq!(claimant(&tests, &refusals, LIMITS.budget), Some(0));
+        // The small test would take the room the build waits for.
+        assert!(!leaves_room(&small, &build, &busy, &LIMITS));
+        // When the running test ends, both fit.
+        assert!(leaves_room(&small, &build, &Running::default(), &LIMITS));
+        // The priority lane passes the claim of a test outside it, not of
+        // one inside it.
+        let mut urgent = small.clone();
+        urgent.lane = true;
+        assert!(leaves_room(&urgent, &build, &busy, &LIMITS));
+        let mut lane_build = build.clone();
+        lane_build.lane = true;
+        assert!(!leaves_room(&urgent, &lane_build, &busy, &LIMITS));
+        // Of two that may start, the higher rank claims; none without a
+        // candidate memory alone keeps or that fits at all.
+        let refusals = [Ok(()), Ok(())];
+        assert_eq!(
+            claimant(&[small.clone(), build], &refusals, LIMITS.budget),
+            Some(1)
+        );
+        let refusals = [Err(Refusal::Cpu)];
+        assert_eq!(claimant(&[small], &refusals, LIMITS.budget), None);
     }
 
     #[test]

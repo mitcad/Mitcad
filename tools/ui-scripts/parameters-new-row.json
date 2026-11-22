@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/parameters-new-row.mitcad-ui (mitcad#2202): the user parameters used = 20 mm (the length of First block, so it cannot be deleted), spare = 5 mm (used by nothing) and slide = 30 mm between 10 mm and 50 mm in 1 mm steps (a slider), in this creation order, and the box First block."},
+  {"cmd": "add_parameter", "name": "used", "unit": "mm", "expression": "20 mm"},
+  {"cmd": "add_parameter", "name": "spare", "unit": "mm", "expression": "5 mm"},
+  {"cmd": "add_parameter", "name": "slide", "unit": "mm", "expression": "30 mm"},
+  {"cmd": "set_parameter", "name": "slide", "min": "10 mm", "max": "50 mm", "step": "1 mm"},
+  {"cmd": "add_feature", "name": "First block", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": "used", "width": "10 mm", "height": "5 mm", "operation": "new_body"}}
+]

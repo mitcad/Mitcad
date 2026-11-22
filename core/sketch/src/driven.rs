@@ -5,12 +5,15 @@
 //! A driving dimension's value may use the reference parameter of a driven
 //! dimension of the same sketch (`(d1 - d2) / 2`) when that value cannot
 //! move what the driven dimension measures: the measured value is then
-//! known before the dimensions that use it are solved. The sketch is solved
-//! in stages ([`solve_staged`]):
+//! known before the dimensions that use it are solved. So may a pattern's
+//! spacings or angle (mitcad#2057): a pattern is a user like a driving
+//! dimension, keyed by its own id (patterns and dimensions share the
+//! numbers). The sketch is solved in stages ([`solve_staged`]):
 //!
-//! 1. with every driving dimension that uses such a reference (a *user*)
-//!    left out: the driven dimensions none of the users can move measure
-//!    their final values here;
+//! 1. with every driving dimension and pattern that uses such a reference
+//!    (a *user*) left out ([`SketchDef::holding`]: a held pattern's copies
+//!    stay where they are, as free entities): the driven dimensions none of
+//!    the users can move measure their final values here;
 //! 2. with the users whose references are all known put back, at the values
 //!    those references give: the driven dimensions only they could move
 //!    measure; and so on, until
@@ -21,13 +24,18 @@
 //! dimensions, curves' points, patterns and offsets, leaving out the
 //! entities the first stage already fixes (fully constrained or fixed):
 //! geometry that is fixed without the users stays where it is when they
-//! are put back, so it carries no influence. A connection is not always an
-//! influence, so this errs on the side of a refusal: a refused case is
-//! accepted once the measured geometry is fully constrained without its
-//! users, or is not connected to theirs. A driven dimension that one of
-//! its users can move, directly or through other driven dimensions and
-//! their users, is a circular dependency ([`driven_cycle`]), which the
-//! model refuses with the dimensions named.
+//! are put back, so it carries no influence. A pattern that is a user
+//! moves its copies: its own binding does not join its originals with
+//! them for what it moves (that would make every pattern of originals that
+//! are not fully constrained look like a cycle), while copies joined to
+//! other geometry by constraints or dimensions still carry that geometry
+//! along. A connection is not always an influence, so this errs on the side
+//! of a refusal: a refused case is accepted once the measured geometry is
+//! fully constrained without its users, or is not connected to theirs. A
+//! driven dimension that one of its users can move, directly or through
+//! other driven dimensions and their users, is a circular dependency
+//! ([`driven_cycle`]), which the model refuses with the dimensions and
+//! patterns named.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,9 +46,9 @@ use crate::pattern::PatternKind;
 use crate::solve::{SolveError, Solved};
 use crate::{ConstraintUid, Dimension, DimensionKind, EntityIndex, Ref};
 
-/// For each driving dimension whose value uses reference parameters of
-/// driven dimensions of the same sketch (directly or through other
-/// parameters), those driven dimensions.
+/// For each driving dimension or pattern whose values use reference
+/// parameters of driven dimensions of the same sketch (directly or through
+/// other parameters), those driven dimensions.
 pub type DrivenUses = BTreeMap<ConstraintUid, BTreeSet<ConstraintUid>>;
 
 /// A circular dependency: steps `(driven, user)`, where `user` can move
@@ -55,15 +63,42 @@ pub struct DrivenCycle(pub Vec<(ConstraintUid, ConstraintUid)>);
 const SAME: f64 = 1e-6;
 
 impl<P: Clone> SketchDef<P> {
-    /// This definition with the dimensions `held` left out of the solve
-    /// (inactive).
+    /// This definition with the dimensions and patterns `held` left out of
+    /// the solve: the dimensions inactive, the patterns taken out, so that
+    /// their copies are free entities that stay where they are (a pattern
+    /// has no inactive state that is saved).
     pub fn holding(&self, held: &BTreeSet<ConstraintUid>) -> SketchDef<P> {
         let mut def = self.clone();
         for d in def.dimensions.iter_mut().filter(|d| held.contains(&d.id)) {
             d.active = false;
         }
+        def.patterns.retain(|p| !held.contains(&p.id));
         def
     }
+}
+
+/// The entities of `ids` that `settled` does not hold.
+fn unsettled(mut ids: Vec<EntityUid>, settled: &BTreeSet<EntityUid>) -> Vec<EntityUid> {
+    ids.retain(|e| !settled.contains(e));
+    ids
+}
+
+/// The unsettled entities of some references, curves with their points.
+fn free_refs(
+    index: &EntityIndex<'_>,
+    refs: Vec<Ref>,
+    settled: &BTreeSet<EntityUid>,
+) -> Vec<EntityUid> {
+    let mut ids = Vec::new();
+    for r in refs {
+        ids.push(r.uid());
+        if let Ref::Curve(c) = r
+            && let Some(e) = index.get(c)
+        {
+            ids.extend(e.kind.points());
+        }
+    }
+    unsettled(ids, settled)
 }
 
 impl<P> SketchDef<P> {
@@ -88,50 +123,33 @@ impl<P> SketchDef<P> {
         }
     }
 
-    /// For each driven dimension `uses` names, the users that can move what
-    /// it measures; `settled` are the entities the solve without the users
-    /// fixes ([`SketchDef::settled`]). See the module comment.
-    pub fn driven_influence(
+    fn dimension_moves(&self, d: &Dimension<P>) -> bool {
+        d.value.is_some() && self.dimension_applied(d)
+    }
+
+    /// The entities that move together, with every binding of the sketch
+    /// but the pattern `without`'s; `settled` entities join nothing.
+    fn moving_groups(
         &self,
-        uses: &DrivenUses,
         settled: &BTreeSet<EntityUid>,
-    ) -> BTreeMap<ConstraintUid, BTreeSet<ConstraintUid>> {
+        without: Option<ConstraintUid>,
+    ) -> Groups {
         let index = EntityIndex::new(&self.entities);
-        // The unsettled entities of some references, curves with their
-        // points.
-        let free = |refs: Vec<Ref>| -> Vec<EntityUid> {
-            let mut ids = Vec::new();
-            for r in refs {
-                ids.push(r.uid());
-                if let Ref::Curve(c) = r
-                    && let Some(e) = index.get(c)
-                {
-                    ids.extend(e.kind.points());
-                }
-            }
-            ids.retain(|e| !settled.contains(e));
-            ids
-        };
-        let unsettled = |mut ids: Vec<EntityUid>| {
-            ids.retain(|e| !settled.contains(e));
-            ids
-        };
         let mut groups = Groups::default();
         // A curve moves with its points.
         for e in self.entities.iter().filter(|e| !e.is_point()) {
             let mut ids = vec![e.id];
             ids.extend(e.kind.points());
-            groups.join(&unsettled(ids));
+            groups.join(&unsettled(ids, settled));
         }
         for c in self.constraints.iter().filter(|c| c.active) {
-            groups.join(&free(c.kind.refs()));
+            groups.join(&free_refs(&index, c.kind.refs(), settled));
         }
-        let applied = |d: &Dimension<P>| d.value.is_some() && self.dimension_applied(d);
-        for d in self.dimensions.iter().filter(|d| applied(d)) {
-            groups.join(&free(self.dimension_refs(d)));
+        for d in self.dimensions.iter().filter(|d| self.dimension_moves(d)) {
+            groups.join(&free_refs(&index, self.dimension_refs(d), settled));
         }
         // Copies move with their originals, offsets with their sources.
-        for p in &self.patterns {
+        for p in self.patterns.iter().filter(|p| Some(p.id) != without) {
             let mut ids: Vec<EntityUid> = p.entities.iter().map(|r| r.uid()).collect();
             for copy in &p.copies {
                 ids.extend(copy.entities.iter().flat_map(|(a, b)| [a.uid(), b.uid()]));
@@ -139,37 +157,68 @@ impl<P> SketchDef<P> {
             if let PatternKind::Circular { center, .. } = &p.kind {
                 ids.push(*center);
             }
-            groups.join(&unsettled(ids));
+            groups.join(&unsettled(ids, settled));
         }
         for o in &self.offsets {
             let mut ids = o.curves.clone();
             ids.extend(o.made());
             ids.extend(&o.helpers);
-            groups.join(&unsettled(ids));
+            groups.join(&unsettled(ids, settled));
         }
+        groups
+    }
+
+    /// For each driven dimension `uses` names, the users (driving
+    /// dimensions and patterns) that can move what it measures; `settled`
+    /// are the entities the solve without the users fixes
+    /// ([`SketchDef::settled`]). See the module comment: a pattern moves
+    /// its copies, in the groups its own binding does not join; a
+    /// dimension its entities' groups, with every binding.
+    pub fn driven_influence(
+        &self,
+        uses: &DrivenUses,
+        settled: &BTreeSet<EntityUid>,
+    ) -> BTreeMap<ConstraintUid, BTreeSet<ConstraintUid>> {
+        let index = EntityIndex::new(&self.entities);
+        let mut shared = self.moving_groups(settled, None);
+        // Each pattern user's own groups.
+        let mut own: BTreeMap<ConstraintUid, Groups> = self
+            .patterns
+            .iter()
+            .filter(|p| uses.contains_key(&p.id))
+            .map(|p| (p.id, self.moving_groups(settled, Some(p.id))))
+            .collect();
         // What each user moves: the groups of its unsettled entities (an
-        // inactive one moves nothing).
+        // inactive dimension moves nothing).
         let mut moves: BTreeMap<ConstraintUid, BTreeSet<EntityUid>> = BTreeMap::new();
         for d in self.dimensions.iter().filter(|d| uses.contains_key(&d.id)) {
-            let ids = if applied(d) {
-                free(self.dimension_refs(d))
+            let ids = if self.dimension_moves(d) {
+                free_refs(&index, self.dimension_refs(d), settled)
             } else {
                 Vec::new()
             };
-            moves.insert(d.id, ids.into_iter().map(|e| groups.find(e)).collect());
+            moves.insert(d.id, ids.into_iter().map(|e| shared.find(e)).collect());
+        }
+        for p in self.patterns.iter().filter(|p| uses.contains_key(&p.id)) {
+            let groups = own.get_mut(&p.id).expect("made for every pattern user");
+            let ids = unsettled(p.copy_ids().into_iter().collect(), settled);
+            moves.insert(p.id, ids.into_iter().map(|e| groups.find(e)).collect());
         }
         let fed: BTreeSet<ConstraintUid> = uses.values().flatten().copied().collect();
         let mut out = BTreeMap::new();
         for d in self.dimensions.iter().filter(|d| fed.contains(&d.id)) {
-            let measured: BTreeSet<EntityUid> = free(self.dimension_refs(d))
-                .into_iter()
-                .map(|e| groups.find(e))
-                .collect();
-            let by = moves
-                .iter()
-                .filter(|(_, moved)| !moved.is_disjoint(&measured))
-                .map(|(user, _)| *user)
-                .collect();
+            let refs = free_refs(&index, self.dimension_refs(d), settled);
+            let mut by = BTreeSet::new();
+            for (user, moved) in &moves {
+                let groups = match own.get_mut(user) {
+                    Some(groups) => groups,
+                    None => &mut shared,
+                };
+                let measured: BTreeSet<EntityUid> = refs.iter().map(|e| groups.find(*e)).collect();
+                if !moved.is_disjoint(&measured) {
+                    by.insert(*user);
+                }
+            }
             out.insert(d.id, by);
         }
         out
@@ -283,11 +332,13 @@ pub fn driven_cycle(
 }
 
 impl DrivenCycle {
-    /// The refusal, naming the dimensions and their parameters
-    /// (`k6 (d2) uses d3 and can move what the driven dimension k7 (d3)
-    /// measures, so d3 would depend on itself. …`).
+    /// The refusal, naming the dimensions, the patterns and their
+    /// parameters (`k6 (d2) uses d3 and can move what the driven dimension
+    /// k7 (d3) measures, so d3 would depend on itself. …`; a pattern:
+    /// `the pattern k12 (d5, d7) uses d5 and can move …`).
     pub fn describe(&self, def: &SketchDef, name: &dyn Fn(ParamId) -> String) -> String {
         let dimension = |id: ConstraintUid| def.dimensions.iter().find(|d| d.id == id);
+        let pattern = |id: ConstraintUid| def.patterns.iter().find(|p| p.id == id);
         let reference = |id: ConstraintUid| {
             dimension(id)
                 .and_then(|d| d.reference)
@@ -303,22 +354,45 @@ impl DrivenCycle {
             .map(|i| {
                 let (driven, user) = self.0[i];
                 let next = self.0[(i + 1) % n].0;
-                format!(
-                    "{user} ({}) uses {} and can move what the driven dimension {driven} ({}) \
-                     measures",
-                    value(user),
-                    reference(next),
-                    reference(driven)
-                )
+                match pattern(user) {
+                    Some(p) => {
+                        let values: Vec<String> =
+                            p.values().into_iter().map(|v| name(*v)).collect();
+                        format!(
+                            "the pattern {user} ({}) uses {} and can move what the driven \
+                             dimension {driven} ({}) measures",
+                            values.join(", "),
+                            reference(next),
+                            reference(driven)
+                        )
+                    }
+                    None => format!(
+                        "{user} ({}) uses {} and can move what the driven dimension {driven} \
+                         ({}) measures",
+                        value(user),
+                        reference(next),
+                        reference(driven)
+                    ),
+                }
             })
             .collect();
-        format!(
-            "{}, so {} would depend on itself. A driving dimension can use a driven \
-             dimension of its own sketch only when it cannot move what that one measures: \
-             constrain that geometry fully without it, or measure geometry it does not move",
-            steps.join("; "),
-            reference(self.0.first().map_or(ConstraintUid(0), |s| s.0))
-        )
+        let first = reference(self.0.first().map_or(ConstraintUid(0), |s| s.0));
+        if self.0.iter().any(|(_, user)| pattern(*user).is_some()) {
+            format!(
+                "{}, so {first} would depend on itself. A pattern's spacing or angle can use \
+                 a driven dimension of its own sketch only when its copies cannot move what \
+                 that one measures: measure the originals or other geometry, not the copies or \
+                 what is constrained to them",
+                steps.join("; ")
+            )
+        } else {
+            format!(
+                "{}, so {first} would depend on itself. A driving dimension can use a driven \
+                 dimension of its own sketch only when it cannot move what that one measures: \
+                 constrain that geometry fully without it, or measure geometry it does not move",
+                steps.join("; ")
+            )
+        }
     }
 }
 
@@ -433,7 +507,13 @@ pub fn solve_staged(
             let users: Vec<String> = uses
                 .iter()
                 .filter(|(_, ds)| ds.contains(d))
-                .map(|(user, _)| user.to_string())
+                .map(|(user, _)| {
+                    if def.patterns.iter().any(|p| p.id == *user) {
+                        format!("the pattern {user}")
+                    } else {
+                        user.to_string()
+                    }
+                })
                 .collect();
             let reference = def
                 .dimensions

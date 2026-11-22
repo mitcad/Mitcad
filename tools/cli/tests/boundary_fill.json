@@ -51,5 +51,13 @@
   {"cmd": "edit_feature", "uid": "F7", "def": {"type": "boundary_fill", "tools": ["F5.b0", "F6.b0"],
     "cells": [[55, 0, 10]], "operation": "join", "participants": ["F4.b0"], "remove_tools": true}},
   {"expect": {"feature": "BoundaryFill2", "status": "ok", "bodies": 5}},
-  {"expect": {"body": "F4.b0", "volume": 10800, "bbox": {"min": [40, -10, 0], "max": [80, 30, 15]}}}
+  {"expect": {"body": "F4.b0", "volume": 10800, "bbox": {"min": [40, -10, 0], "max": [80, 30, 15]}}},
+
+  {"comment": "A plane as a tool (mitcad#2149): the plane x = 70 divides the joined plate; BoundaryFill3 (F8) cuts the region beyond it (10 x 20 x 10) out of the plate, whose faces there are the plane's."},
+  {"cmd": "add_feature", "def": {"type": "boundary_fill", "tools": ["F4.b0"],
+    "planes": [{"origin": [70, 0, 0], "normal": [1, 0, 0]}],
+    "cells": [[75, 10, 5]], "operation": "cut", "participants": ["F4.b0"]}},
+  {"expect": {"feature": "BoundaryFill3", "status": "ok", "bodies": 5}},
+  {"expect": {"body": "F4.b0", "volume": 8800, "has_face": "F8:plane1",
+    "bbox": {"min": [40, -10, 0], "max": [70, 30, 15]}}}
 ]

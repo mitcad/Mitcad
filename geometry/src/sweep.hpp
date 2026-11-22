@@ -125,6 +125,11 @@ std::vector<TopoDS_Face> target_faces(const Target& target);
 // behind the start.
 double reach(const Target& target, const gp_Dir& along, const Bnd_Box& start);
 
+// Whether a sweep along `along` from the start (whose bounds are `start`)
+// finds the target wholly behind it, where `reach` throws (mitcad#2118). A
+// sweep parallel to a target plane is not behind it.
+bool lies_behind(const Target& target, const gp_Dir& along, const Bnd_Box& start);
+
 // The shape a sweep is split with to end at the target, large enough to
 // cross everything within `around` and the target's own faces (planes and
 // extended faces are bounded).

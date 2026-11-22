@@ -130,10 +130,10 @@ fn pending_changes_run_once() {
     assert_eq!((said.format, said.reads_up_to), (28, PINNED));
     assert!(missing.newer.is_none());
     let past = SolidcraftFile::from_json(
-        r#"{"format": "solidcraft/58", "name": "A", "params": [], "features": []}"#,
+        r#"{"format": "solidcraft/64", "name": "A", "params": [], "features": []}"#,
     )
     .unwrap();
-    assert_eq!(past.newer.as_ref().map(|n| n.format), Some(58));
+    assert_eq!(past.newer.as_ref().map(|n| n.format), Some(64));
     assert!(past.upgrades.is_empty(), "{:?}", past.upgrades);
     assert!(SolidcraftFile::from_json(r#"{"format": "solidcraft/0"}"#).is_err());
     assert!(SolidcraftFile::from_json(r#"{"format": "other/3"}"#).is_err());
@@ -281,14 +281,26 @@ fn motion_data_is_kept() {
     assert_eq!(d.exploded_views()[0]["name"], "E");
 }
 
-/// A design of format 57 (SolidCraft 0.43.0, mitcad#1994) reads as it is:
-/// nothing to upgrade, its newer inputs typed.
+/// The steps of formats 58 to 63 (SolidCraft 0.45.0, mitcad#2153), in the
+/// order they run.
+const STEPS_58_TO_63: [&str; 7] = [
+    "extrude-from-slanted-face",
+    "sketch-reference-placements",
+    "surface-sweep-exact-spline-path",
+    "sheet-edge-names",
+    "sheet-face-names",
+    "sheet-hem-gap",
+    "sheet-surface-convert",
+];
+
+/// A design of format 57 (SolidCraft 0.43.0, mitcad#1994) reads with only
+/// the steps of formats 58 to 63 run on it, its newer inputs typed.
 #[test]
 fn a_format_57_design_reads_its_inputs() {
     use crate::kinds::{AxisRef, BoxPrimitive, Extrude, Hole, Revolve, Thread};
     let file = design("format-57-holes-threads-revolve.solidcraft.json");
     assert_eq!(file.saved_format, 57);
-    assert!(file.upgrades.is_empty(), "{:?}", file.upgrades);
+    assert_eq!(file.upgrades, STEPS_58_TO_63, "{:?}", file.upgrades);
     assert!(file.newer.is_none());
     let d = &file.design;
     let by_name = |n: &str| d.features.iter().find(|f| f.name == n).unwrap();
@@ -363,15 +375,15 @@ fn a_format_50_design_gets_the_steps_of_51_to_57() {
     assert!(tapped.def.get("old_surface_start").is_none());
 }
 
-/// A design a newer SolidCraft saved (format 58) is read as far as this
+/// A design a newer SolidCraft saved (format 64) is read as far as this
 /// reader reads it: a section it does not know and a parameter it cannot
 /// read are left out and named, a feature of a kind it does not know keeps
 /// its place (mitcad#1994).
 #[test]
 fn a_newer_design_is_read_around_what_it_cannot_read() {
-    let file = design("format-58-newer.solidcraft.json");
+    let file = design("format-64-newer.solidcraft.json");
     let newer = file.newer.as_ref().unwrap();
-    assert_eq!((newer.format, newer.reads_up_to), (58, PINNED));
+    assert_eq!((newer.format, newer.reads_up_to), (64, PINNED));
     assert!(file.upgrades.is_empty());
     assert_eq!(
         file.left_out,
@@ -392,7 +404,7 @@ fn a_newer_design_is_read_around_what_it_cannot_read() {
     // A feature without an id or a type keeps its place with one of its
     // own; a section that does not read as this reader reads it is left
     // out.
-    let v = json!({"format": "solidcraft/60", "name": "A", "params": [], "features": [
+    let v = json!({"format": "solidcraft/64", "name": "A", "params": [], "features": [
         {"id": 4, "name": "Known", "type": "box"},
         {"name": "Nameless kind"}],
         "occurrences": "not a list"});
@@ -460,4 +472,158 @@ fn the_newer_references_read() {
             ..
         }
     ));
+}
+
+/// A design SolidCraft 0.45.0 saves (format 63, mitcad#2153) reads as it
+/// is: nothing to upgrade, no warning, its newer fields typed and its
+/// newer inputs named.
+#[test]
+fn a_format_63_design_reads_as_it_is() {
+    use crate::kinds::{BoundingSolid, Extrude, Fillet, SheetHem};
+    let file = design("format-63-hem-slanted-fillet-bounding.solidcraft.json");
+    assert_eq!(file.saved_format, 63);
+    assert!(file.upgrades.is_empty(), "{:?}", file.upgrades);
+    assert!(file.newer.is_none());
+    let d = &file.design;
+    let by_name = |n: &str| d.features.iter().find(|f| f.name == n).unwrap();
+    // The hems' gaps as saved (no doubling), the rule's own `hem_gap` and
+    // material.
+    let hem: SheetHem = by_name("Hem1").typed().unwrap();
+    assert_eq!(hem.gap.as_ref().map(|g| g.as_str()), Some("3 mm"));
+    let hem: SheetHem = by_name("Hem2").typed().unwrap();
+    assert!(hem.gap.is_none());
+    let rule = d.sheet_rule(None).unwrap();
+    assert_eq!(rule.name, "Plate");
+    assert_eq!(
+        rule.hem_gap.as_ref().map(|g| g.as_str()),
+        Some("Thickness / 2")
+    );
+    assert_eq!(rule.material.as_deref(), Some("Aluminium 5052-H32"));
+    // The flange's and hems' edge names are the model's already.
+    assert_eq!(by_name("Hem1").edge_names, ["F2:side:l1|F2:top"]);
+    // From Object on the slanted bevel starts on it: no `from_level`.
+    let peg: Extrude = by_name("Peg").typed().unwrap();
+    assert_eq!(peg.extent.from, Some([20.0, 135.0, 15.0]));
+    assert!(!peg.extent.from_level);
+    // Each edge at its own radius, an input each after the radius.
+    let round: Fillet = by_name("Round").typed().unwrap();
+    let radii: Vec<&str> = round.edge_radii.iter().map(|r| r.as_str()).collect();
+    assert_eq!(radii, ["2", "3 mm"]);
+    assert!(!round.tangent_chain);
+    assert_eq!(by_name("Round").param_names.len(), 3);
+    // Six side margins after the single one (`0` when the file has none).
+    let envelope: BoundingSolid = by_name("Envelope").typed().unwrap();
+    let margins: Vec<&str> = envelope
+        .margins
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|m| m.as_str())
+        .collect();
+    assert_eq!(margins, ["1", "1", "2", "2", "0", "5"]);
+    assert!(!envelope.contents);
+    let labels: Vec<&str> = crate::inputs::inputs(&by_name("Envelope").def)
+        .into_iter()
+        .map(|i| i.label)
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Margin",
+            "-X margin",
+            "+X margin",
+            "-Y margin",
+            "+Y margin",
+            "-Z margin",
+            "+Z margin"
+        ]
+    );
+    assert_eq!(by_name("Envelope").param_names.len(), 7);
+}
+
+/// The same design as format 57: the steps of formats 58 to 63 run on it.
+/// The hem's own gap and the rule's `hem_gap` read as SolidCraft 0.43.0
+/// read them, the inside radius itself, so both are doubled; a rule
+/// without `hem_gap` gets twice the old default; the From Object start
+/// keeps the older level (mitcad#2153).
+#[test]
+fn a_format_57_design_gets_the_steps_of_58_to_63() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/designs/format-63-hem-slanted-fillet-bounding.solidcraft.json");
+    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    v["format"] = json!("solidcraft/57");
+    let file = SolidcraftFile::from_value(v.clone()).unwrap();
+    assert_eq!(file.upgrades, STEPS_58_TO_63);
+    let d = &file.design;
+    let by_name = |n: &str| d.features.iter().find(|f| f.name == n).unwrap();
+    assert_eq!(by_name("Hem1").def["gap"], "2 * (3 mm)");
+    assert!(by_name("Hem2").def.get("gap").is_none());
+    assert_eq!(d.sheet["rules"][0]["hem_gap"], "2 * (Thickness / 2)");
+    assert_eq!(by_name("Peg").def["extent"]["from_level"], true);
+    // A rule saved without `hem_gap` gets twice the old default 0.01 mm.
+    v["sheet"]["rules"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("hem_gap");
+    let file = SolidcraftFile::from_value(v).unwrap();
+    let rule = file.design.sheet_rule(None).unwrap();
+    assert_eq!(rule.hem_gap.as_ref().map(|g| g.as_str()), Some("0.02 mm"));
+}
+
+/// The fields of formats 58 to 63 the import maps or notes read typed: a
+/// sweep's path across sketches, a plane at an angle about an origin of
+/// expressions, a construction plane's captured placement, a move turned
+/// about an edge, Recognize Sheet Metal, a conversion's new fields and an
+/// import kept as records (mitcad#2153).
+#[test]
+fn the_fields_of_formats_58_to_63_read() {
+    use crate::kinds::{
+        GeoRef, Import, Move, PathEntry, PlaneRef, SheetConvert, SheetRecognize, Sweep,
+    };
+    let sweep: Sweep = serde_json::from_value(json!({"sketch": 1, "path_sketch": 2,
+        "path": ["l1", {"sketch": 3, "curve": "l2"}]}))
+    .unwrap();
+    assert_eq!(sweep.path[0].split(2), (2, "l1"));
+    assert_eq!(sweep.path[1].split(2), (3, "l2"));
+    assert_eq!(sweep.path[0], PathEntry::OfPathSketch("l1".to_owned()));
+    let turned: PlaneRef = serde_json::from_value(json!({"type": "at_angle",
+        "base": {"type": "origin", "name": "XY"}, "axis_origin": ["w / 2", 0, 5], "axis_dir": [1, 0, 0],
+        "angle": "30 deg"}))
+    .unwrap();
+    let PlaneRef::AtAngle { axis_origin, .. } = turned else {
+        panic!("{turned:?}")
+    };
+    assert_eq!(axis_origin[0].as_str(), "w / 2");
+    assert_eq!(axis_origin[1].as_str(), "0");
+    let construction: PlaneRef = serde_json::from_value(json!({"type": "construction",
+        "feature": 4, "placement": crate::document::IDENTITY}))
+    .unwrap();
+    assert!(matches!(
+        construction,
+        PlaneRef::Construction {
+            feature: 4,
+            placement: Some(_)
+        }
+    ));
+    let turn: Move = serde_json::from_value(json!({"bodies": ["B"], "translate": [0, 0, 0],
+        "rotate_axis": [0, 0, 1], "angle": "90 deg",
+        "rotate_about": {"type": "edge", "at": [1, 2, 3]}}))
+    .unwrap();
+    assert!(matches!(turn.rotate_about, Some(GeoRef::Edge { .. })));
+    let recognized: SheetRecognize =
+        serde_json::from_value(json!({"body": "Plate", "face": [1, 2, 3], "rule": "R1"})).unwrap();
+    assert_eq!(recognized.face, Some([1.0, 2.0, 3.0]));
+    assert!(recognized.skip.is_empty() && recognized.bends.is_empty());
+    let convert: SheetConvert = serde_json::from_value(json!({"body": "Box", "face": [0, 0, 0],
+        "faces": [[1, 0, 0]], "engrave": [[2, 0, 0]], "direction": "outside"}))
+    .unwrap();
+    assert_eq!(convert.faces.len(), 1);
+    assert_eq!(convert.engrave.len(), 1);
+    assert_eq!(convert.direction, "outside");
+    let records: Import =
+        serde_json::from_value(json!({"file": "part.rec", "step": "", "records": {"bodies": []}}))
+            .unwrap();
+    assert!(records.has_records());
+    let step: Import = serde_json::from_value(json!({"file": "part.step", "step": "ISO"})).unwrap();
+    assert!(!step.has_records());
 }

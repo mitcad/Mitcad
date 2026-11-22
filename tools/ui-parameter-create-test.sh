@@ -121,8 +121,11 @@ ui_expect_new "Add User Parameter opened for dimension width: name gap, unit mm"
 ui_focus_dialog '^Add User Parameter$'
 ui_mark
 ui_step "expression 15 deg"              ui_type_text "15 deg"
+# Checked while it is typed (mitcad#2181): the problem under the field,
+# Create disabled, so Return makes nothing.
+ui_expect_new "Add User Parameter expression problem: expected length" "an angle in millimetres is refused"
+ui_expect_new "; Create disabled" "Create disabled while it is refused"
 ui_key Return
-ui_expect_new "Add User Parameter gap refused: " "an angle in millimetres is refused"
 since_mark "Created user parameter" && ui_fail "a refused parameter was made"
 ui_mark
 ui_step "expression 12"                  ui_type_text "12"

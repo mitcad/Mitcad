@@ -30,17 +30,8 @@ the fin's top edges of 0980's case keep their stretch and build as before.
 
 Upstream: new.
 
-Test: none, because no synthetic body reached its failure (mitcad#1986).
-The stretch this patch drops fails the walk where the next edge's analytic
-piece starts a hair past a vertex of tangent edges, as the design's faces
-split it. Tried with the patch's code traced and with the patch reverted:
-the tower on a slab of test_fillet_vanishing_own_edge.cpp (0961's
-synthetic case; the tower's corner 0.2 to 0.8, its foot 1.5 to 5, the
-rounding 0.1 to 0.8, the foot's torus 0 to 0.001 off the side; 231 bodies)
-and a bore with a round pocket at its rim drop the stretch, but each
-builds alike with it (the material taken within 1e-5). Verified on the
-design's replayed and stored bodies only, where the rounding fails with
-0980 and without 1001.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1001.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index bfc749d9..865a08f3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

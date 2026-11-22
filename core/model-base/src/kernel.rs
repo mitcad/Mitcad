@@ -1225,6 +1225,31 @@ pub trait Kernel: Send {
         Err(KernelError::Unsupported("boundary fill"))
     }
 
+    /// Boundary Fill with surface bodies and planes among the tools
+    /// (mitcad#2149): the closed regions that the faces of all the tools
+    /// and the planes bound together (the faces divide space once; a
+    /// region is a part of space that they close off all round, faces
+    /// that close nothing off left out). A plane is cut to a square that
+    /// reaches past the tools, the points and the planes' crossings; its
+    /// pieces are named `<feature>:plane<i>` (`i` from 1, in the order of
+    /// the planes), the tools' pieces keep their names as in
+    /// [`Kernel::boundary_cells`]. Every closed region comes with a point
+    /// inside it, in a deterministic geometric order; each point asked
+    /// about is placed in the region holding it, or on a face, or in an
+    /// open region with the places of the gap it leaks through. The tools
+    /// are not changed.
+    fn boundary_regions(
+        &self,
+        _feature: FeatureUid,
+        _tools: &[&Self::Shape],
+        _planes: &[DatumPlane],
+        _points: &[Vec3],
+    ) -> Result<BoundaryRegions<Self::Shape>, KernelError> {
+        Err(KernelError::Unsupported(
+            "boundary fill with surfaces and planes",
+        ))
+    }
+
     // Patch, Stitch and Thicken: surface bodies filled, sewn and made solid
     // (mitcad#456; `crate::surfaces`).
 
@@ -1346,12 +1371,16 @@ pub trait Kernel: Send {
     /// curves (all open or all closed), smooth or `ruled`; `closed` runs
     /// from the last section back to the first. Faces
     /// `<feature>:side(<curve>)` after the first section's curves.
+    /// `merge_tangent_edges` (Tangent Edges: Merge, mitcad#2162): each
+    /// chain's runs of tangent curves joined first, as
+    /// [`crate::sweeps::LoftSpec::merge_tangent_edges`].
     fn loft_sheet(
         &self,
         _feature: FeatureUid,
         _sections: &[Vec<crate::sweeps::PathCurve>],
         _ruled: bool,
         _closed: bool,
+        _merge_tangent_edges: bool,
     ) -> Result<Self::Shape, KernelError> {
         Err(KernelError::Unsupported("surface lofts of curves"))
     }
@@ -2298,6 +2327,20 @@ pub trait Kernel: Send {
         _shapes: &[(&Self::Shape, &Transform)],
     ) -> Result<Vec<Self::Shape>, KernelError> {
         Err(KernelError::Unsupported("transforms of many shapes"))
+    }
+
+    // Surface groups of faces for model_render's edges (mitcad#2148).
+
+    /// A surface number for each face, in the order [`Kernel::faces`]
+    /// lists them: faces that the 3D view takes as one smooth surface share
+    /// one (pieces of one face joined by an edge the view leaves out as a
+    /// smooth seam; not pieces that lie on provably different analytic
+    /// surfaces, such as a sweep's cylinder and the torus it runs into),
+    /// every other face has its own. `model_render`'s raster draws an edge
+    /// inside one group only where the surface creases. Unsupported where
+    /// each face is its own.
+    fn face_surface_groups(&self, _shape: &Self::Shape) -> Result<Vec<u32>, KernelError> {
+        Err(KernelError::Unsupported("surface groups of faces"))
     }
 }
 
@@ -3394,6 +3437,36 @@ pub struct EmbossWrapSpec<'a> {
 pub struct BoundaryCell<S> {
     pub shape: S,
     pub holders: Vec<usize>,
+}
+
+/// A closed region of [`Kernel::boundary_regions`]: its solid and a point
+/// inside it.
+#[derive(Debug, Clone)]
+pub struct BoundaryRegion<S> {
+    pub shape: S,
+    pub point: Vec3,
+}
+
+/// Where a point asked about lies among the regions of
+/// [`Kernel::boundary_regions`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum BoundaryPlace {
+    /// Inside the closed region of this index.
+    Region(usize),
+    /// On a face of the tools or a plane.
+    OnFace,
+    /// In a region that is not closed off: points along the edges of the
+    /// gap it leaks through (where the surfaces end), none when they were
+    /// not found.
+    Open { gap: Vec<Vec3> },
+}
+
+/// What [`Kernel::boundary_regions`] gives: every closed region, and for
+/// each point asked about where it lies.
+#[derive(Debug, Clone)]
+pub struct BoundaryRegions<S> {
+    pub regions: Vec<BoundaryRegion<S>>,
+    pub places: Vec<BoundaryPlace>,
 }
 
 /// What [`Kernel::unstitch`] gives: the body left when the faces are taken

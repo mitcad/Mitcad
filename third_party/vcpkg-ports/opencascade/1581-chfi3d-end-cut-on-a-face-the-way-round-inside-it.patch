@@ -22,12 +22,8 @@ was grown over the blend's face (area 73.7 against the file's 55.2 mm2),
 On the design's stored body before the item: the cylinder's face as the
 file's (its cut within 0.0007 mm of the file's).
 
-Test: geometry/tests/test_fillet_torus_side_ends.cpp, test_reported_body
-(ctest geometry.fillet_torus_side_ends): on the stored case
-`fillet-torus-side-ends` of MITCAD_GEOMETRY_CASES; documented to fail
-without this patch (the tip's rounding 0.27 mm off the stored body). No
-synthetic body, as for 1580. It fails without the patch (shown 2026-11-20
-by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1581.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 1c76e91f..9f9f82dd 100644

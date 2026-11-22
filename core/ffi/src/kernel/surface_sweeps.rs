@@ -50,13 +50,15 @@ pub mod ffi {
             extents: &[f64],
             parallel: bool,
         ) -> Result<SharedPtr<Shape>>;
-        /// A surface through the sections (one chain each).
+        /// A surface through the sections (one chain each); `merge_tangent`:
+        /// each chain's tangent curves joined first (mitcad#2162).
         fn loft_sheet(
             feature: &str,
             curves: &[SweepCurve],
             chains: &[usize],
             ruled: bool,
             closed: bool,
+            merge_tangent: bool,
         ) -> Result<SharedPtr<Shape>>;
         /// The chains moved by the screw motion about the axis (x, y, z,
         /// dx, dy, dz) that rises `pitch` per turn for `revolutions` turns

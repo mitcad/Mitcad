@@ -88,6 +88,7 @@ MaterialData materialOf(const Appearance& a) {
       m.textureRotation = static_cast<float>(a.texture.rotation);
       m.texturePlanar = a.texture.planar;
       m.textureUv = a.texture.uv;
+      m.textureGrain = a.texture.grain;
     }
   }
   return m;

@@ -24,3 +24,5 @@ mod edit_preview_through_tests;
 mod joint_holder_tests;
 // Flexible subassemblies without joints of their own (mitcad#2016).
 mod flexible_free_parts_tests;
+// A new joint keeps what earlier joints hold where it is (mitcad#2199).
+mod earlier_joint_kept_tests;

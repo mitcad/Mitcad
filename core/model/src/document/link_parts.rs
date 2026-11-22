@@ -500,6 +500,14 @@ impl<K: Kernel> Document<K> {
     ) -> Result<LinkPartsSet, ModelError> {
         let link = self.plain_design_link(component)?;
         let name = self.state.assembly.name(component);
+        // Kept with its components (mitcad#2209): the parent's joints may
+        // join them, which chosen parts would take apart.
+        if link.tree.is_some() {
+            return Err(invalid(format!(
+                "{name} keeps the components of its design; to link chosen parts of it, insert \
+                 the design again with Choose parts"
+            )));
+        }
         let folder = base
             .map(Path::to_path_buf)
             .or_else(|| self.source_directory());

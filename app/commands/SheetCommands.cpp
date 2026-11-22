@@ -16,6 +16,7 @@
 #include "framework/ModelMessages.hpp"
 #include "framework/UserText.hpp"
 
+#include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -40,9 +41,27 @@ QString key(const char* text) { return QString::fromLatin1(text); }
 
 const Choices kSides = {{QStringLiteral("front"), QStringLiteral("Front")},
                         {QStringLiteral("back"), QStringLiteral("Back")}};
-const Choices kReliefs = {{QStringLiteral("rectangular"), QStringLiteral("Rectangular")},
-                          {QStringLiteral("round"), QStringLiteral("Round")},
-                          {QStringLiteral("tear"), QStringLiteral("Tear")}};
+const Choices kBendReliefs = {{QStringLiteral("rectangular"), QStringLiteral("Rectangular")},
+                              {QStringLiteral("round"), QStringLiteral("Round")}};
+const Choices kCornerReliefs = {{QStringLiteral("rectangular"), QStringLiteral("Rectangular")},
+                                {QStringLiteral("round"), QStringLiteral("Round")},
+                                {QStringLiteral("tear"), QStringLiteral("Tear")}};
+
+InputDef bendReliefInput(const QString& id, const QString& label) {
+  return choiceInput(id, label, kBendReliefs, QStringLiteral("round"))
+      .withChoices([id](const CommandState& state) {
+        Choices choices = kBendReliefs;
+        for (auto& choice : choices) {
+          choice.second = QCoreApplication::translate("Choice", choice.second.toUtf8().constData());
+        }
+        // Keep the saved value until the user chooses a supported relief.
+        if (state.choice(id) == QStringLiteral("tear")) {
+          choices.append({QStringLiteral("tear"), QObject::tr("Legacy Tear Slot")});
+        }
+        return choices;
+      });
+}
+
 const Choices kLengthModes = {{QStringLiteral("tangent"), QStringLiteral("Tangent Length")},
                               {QStringLiteral("inner"), QStringLiteral("Inner Length")},
                               {QStringLiteral("outer"), QStringLiteral("Outer Length")},
@@ -429,14 +448,16 @@ QVector<InputDef> overrideInputs(bool relief) {
     const auto own = [](const CommandState& s) { return s.checked(QStringLiteral("custom_relief")); };
     inputs << checkInput(QStringLiteral("custom_relief"), QObject::tr("Own Bend Relief"), false)
                   .withTooltip(QObject::tr("Off: the rules' bend relief"))
-           << choiceInput(QStringLiteral("relief_type"), QObject::tr("Relief Shape"), kReliefs, QStringLiteral("round"))
+           << bendReliefInput(QStringLiteral("relief_type"), QObject::tr("Relief Shape"))
                   .withVisible(own)
            << valueInput(QStringLiteral("relief_width"), QObject::tr("Relief Width"), ValueKind::Length,
                          QStringLiteral("1 mm"))
                   .withVisible(own)
            << valueInput(QStringLiteral("relief_depth"), QObject::tr("Relief Depth"), ValueKind::Length,
                          QStringLiteral("2 mm"))
-                  .withVisible(own);
+                  .withVisible([own](const CommandState& state) {
+                    return own(state) && state.choice(QStringLiteral("relief_type")) != QStringLiteral("tear");
+                  });
   }
   return inputs;
 }
@@ -595,18 +616,24 @@ QVector<InputDef> ruleInputs(std::function<bool(const CommandState&)> shown, boo
           .withVisible(shown),
   };
   if (reliefs) {
-    inputs << choiceInput(QStringLiteral("bend_relief"), QObject::tr("Bend Relief"), kReliefs, QStringLiteral("round"))
+    inputs << bendReliefInput(QStringLiteral("bend_relief"), QObject::tr("Bend Relief"))
+                  .withTooltip(QObject::tr("Used where a flange, bend or fold ends inside the sheet"))
                   .withHeading(QObject::tr("Reliefs"))
            << valueInput(QStringLiteral("bend_relief_width"), QObject::tr("Bend Relief Width"), ValueKind::Length,
                          QStringLiteral("1 mm"))
            << valueInput(QStringLiteral("bend_relief_depth"), QObject::tr("Bend Relief Depth"), ValueKind::Length,
                          QStringLiteral("2 mm"))
-           << choiceInput(QStringLiteral("corner_relief"), QObject::tr("Corner Relief"), kReliefs,
+                  .withVisible([](const CommandState& state) {
+                    return state.choice(QStringLiteral("bend_relief")) != QStringLiteral("tear");
+                  })
+           << choiceInput(QStringLiteral("corner_relief"), QObject::tr("Corner Relief"), kCornerReliefs,
                           QStringLiteral("round"))
+                  .withTooltip(QObject::tr("Used by Corner Relief where two bends meet"))
            << valueInput(QStringLiteral("corner_relief_width"), QObject::tr("Corner Relief Width"),
                          ValueKind::Length, QStringLiteral("1 mm"))
            << valueInput(QStringLiteral("corner_relief_depth"), QObject::tr("Corner Relief Depth"),
-                         ValueKind::Length, QStringLiteral("2 mm"));
+                         ValueKind::Length, QStringLiteral("2 mm"))
+                  .withVisible([](const CommandState&) { return false; });
   }
   return inputs;
 }
@@ -2082,7 +2109,7 @@ CommandDef sheetCornerReliefCommand(const CommandContext& context) {
           .withAccepts(isPanelFace),
       checkInput(QStringLiteral("custom_relief"), QObject::tr("Own Corner Relief"), false)
           .withTooltip(QObject::tr("Off: the rules' corner relief")),
-      choiceInput(QStringLiteral("relief_type"), QObject::tr("Relief Shape"), kReliefs, QStringLiteral("round"))
+      choiceInput(QStringLiteral("relief_type"), QObject::tr("Relief Shape"), kCornerReliefs, QStringLiteral("round"))
           .withVisible(own),
       valueInput(QStringLiteral("relief_width"), QObject::tr("Relief Size"), ValueKind::Length, QStringLiteral("2 mm"))
           .withTooltip(QObject::tr("A round relief's diameter, a rectangular one's side"))
@@ -2356,6 +2383,107 @@ CommandDef sheetCutCommand(const CommandContext& context) {
 }
 
 // ---------------------------------------------------------------------------
+// Perforate
+
+CommandDef sheetPerforateCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("sheet.perforate");
+  def.name = QObject::tr("Perforate");
+  def.icon = QStringLiteral("perforate");
+  def.tooltip = QObject::tr("Cuts a grid of holes through a sheet or within a sketch outline");
+  def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("hole"), QStringLiteral("grid")};
+  def.featureType = QStringLiteral("sheet_perforate");
+  def.inputs = {
+      selectionInput(QStringLiteral("body"), QObject::tr("Body"), SelectKind::Body | SelectKind::Face, 1, 1)
+          .withTooltip(QObject::tr("Pick a sheet-metal body or one of its faces"))
+          .withAccepts([&context](const SelectionItem& item) {
+            if (item.kind == SelectKind::Face) {
+              return isPanelFace(item) || isBendFace(item) || isWall(item);
+            }
+            try {
+              for (const QJsonValue& value : context.queryArray(QStringLiteral("sheet_bodies"))) {
+                if (str(value.toObject(), "body") == item.owner) {
+                  return true;
+                }
+              }
+            } catch (const std::exception&) {
+            }
+            return false;
+          })
+          .withConvert([](const SelectionItem& item) {
+            SelectionItem body{SelectKind::Body, item.owner, QString(), QString()};
+            body.occurrence = item.occurrence;
+            return body;
+          }),
+      valueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("5 mm"))
+          .withStepMinimum(0.0, true),
+      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withTooltip(QObject::tr("The distance between neighboring hole centers"))
+          .withStepMinimum(0.0, true),
+      valueInput(QStringLiteral("margin"), QObject::tr("Margin"), ValueKind::Length, QString())
+          .withTooltip(QObject::tr("The clearance from the hole edges to the outline, cutouts and bends"))
+          .withAuto([](const CommandState&, const CommandContext&) { return QObject::tr("Same as Diameter"); })
+          .withStepMinimum(0.0),
+      choiceInput(QStringLiteral("pattern"), QObject::tr("Pattern"),
+                  {{QStringLiteral("staggered"), QStringLiteral("Staggered")},
+                   {QStringLiteral("square"), QStringLiteral("Square")}},
+                  QStringLiteral("staggered")),
+      selectionInput(QStringLiteral("stationary"), QObject::tr("Fixed Panel"), SelectKind::Face, 0, 1)
+          .withTooltip(QObject::tr("The flat face whose axes set the grid direction"))
+          .withAccepts(isPanelFace),
+      selectionInput(QStringLiteral("outline"), QObject::tr("Outline"), SelectKind::Profile, 0, 0)
+          .withTooltip(QObject::tr("Closed profiles of a sketch on a flat face of the sheet")),
+  };
+  def.enabled = [&context] { return hasSheets(context); };
+  def.build = [&context](const CommandState& state, const CommandContext&) {
+    Built result;
+    const QString body = state.items(QStringLiteral("body")).first().owner;
+    result.def = {{QStringLiteral("type"), QStringLiteral("sheet_perforate")},
+                  {QStringLiteral("body"), body},
+                  {QStringLiteral("diameter"), state.expression(QStringLiteral("diameter"))},
+                  {QStringLiteral("pitch"), state.expression(QStringLiteral("pitch"))},
+                  {QStringLiteral("pattern"), state.choice(QStringLiteral("pattern"))}};
+    if (!state.text(QStringLiteral("margin")).trimmed().isEmpty()) {
+      result.def.insert(QStringLiteral("margin"), state.expression(QStringLiteral("margin")));
+    }
+    const Selection& fixed = state.items(QStringLiteral("stationary"));
+    if (!fixed.isEmpty()) {
+      if (fixed.first().owner != body) {
+        return Built::failure(QObject::tr("Select a fixed panel on the chosen sheet."), QStringLiteral("stationary"));
+      }
+      const QJsonObject panel = pickedPanel(fixed.first(), context, result, QStringLiteral("stationary"));
+      if (!result.error.isEmpty()) {
+        return result;
+      }
+      result.def.insert(QStringLiteral("stationary"), panel);
+    }
+    const Selection& profiles = state.items(QStringLiteral("outline"));
+    if (!profiles.isEmpty()) {
+      result.def.insert(QStringLiteral("outline"), QJsonObject{{QStringLiteral("profiles"), refsOf(profiles)}});
+    }
+    return result;
+  };
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
+    const QString body = str(feature, "body");
+    state.setItems(QStringLiteral("body"), {SelectionItem{SelectKind::Body, body, QString(), QString()}});
+    for (const char* field : {"diameter", "pitch", "margin"}) {
+      const QString id = key(field);
+      if (feature.contains(id)) {
+        loadValue(state, id, feature.value(id), feature, model);
+      }
+    }
+    state.setChoice(QStringLiteral("pattern"), feature.value(QStringLiteral("pattern")).toString(QStringLiteral("staggered")));
+    const QJsonObject fixed = feature.value(QStringLiteral("stationary")).toObject();
+    if (!fixed.isEmpty()) {
+      state.setItems(QStringLiteral("stationary"), {panelFace(body, fixed)});
+    }
+    const QJsonObject outline = feature.value(QStringLiteral("outline")).toObject();
+    state.setItems(QStringLiteral("outline"), profilesOf(outline.value(QStringLiteral("profiles")).toArray()));
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
 // Flat Pattern: a document item, not a timeline feature (a model command).
 
 CommandDef sheetFlatPatternCommand(const CommandContext& context) {
@@ -2453,6 +2581,7 @@ void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext&
   registry.add(sheetCornerRoundCommand(context));
   registry.add(sheetCornerChamferCommand(context));
   registry.add(sheetCutCommand(context));
+  registry.add(sheetPerforateCommand(context));
   registry.add(sheetUnfoldCommand(context));
   registry.add(sheetRefoldCommand(context));
   registry.add(sheetFlatPatternCommand(context));

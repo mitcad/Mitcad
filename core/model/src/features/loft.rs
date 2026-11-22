@@ -270,10 +270,33 @@ pub struct LoftDef<P = ParamId> {
     /// a centre line and without a frame.
     #[serde(default, skip_serializing_if = "is_perpendicular")]
     pub orientation: SweepOrientation,
+    /// Tangent Edges (mitcad#2162): each section's runs of tangent edges
+    /// joined into one smooth edge (`merge`), or kept (`keep`, left out).
+    #[serde(default, skip_serializing_if = "is_keep")]
+    pub tangent_edges: TangentEdges,
 }
 
 fn is_perpendicular(orientation: &SweepOrientation) -> bool {
     *orientation == SweepOrientation::Perpendicular
+}
+
+/// What a loft does with a section's edges that meet tangentially (Tangent
+/// Edges, mitcad#2162). `Merge` joins each run of them into one smooth edge
+/// (within 1e-8 mm, by arc length), so that the side is one face between
+/// such runs, tangent-continuous across their former joins and named after
+/// the run's first edge; `Keep` keeps every edge its own face. Left out it
+/// is `Keep`, as designs saved before the choice built; a new loft from the
+/// panel or MCP takes `Merge`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TangentEdges {
+    Merge,
+    #[default]
+    Keep,
+}
+
+fn is_keep(tangent_edges: &TangentEdges) -> bool {
+    *tangent_edges == TangentEdges::Keep
 }
 
 impl<P> LoftDef<P> {
@@ -306,6 +329,7 @@ impl<P> LoftDef<P> {
             participants: self.participants.clone(),
             frame: self.frame.clone(),
             orientation: self.orientation,
+            tangent_edges: self.tangent_edges,
         })
     }
 }
@@ -630,6 +654,7 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
             end: ends[1],
             centerline_frame,
             centerline_parallel: self.orientation == SweepOrientation::Parallel,
+            merge_tangent_edges: self.tangent_edges == TangentEdges::Merge,
         };
         let tool = ctx.kernel.loft(&spec).map_err(|e| e.to_string())?;
         if self.surface {
@@ -673,7 +698,13 @@ impl LoftDef {
         }
         let sheet = ctx
             .kernel
-            .loft_sheet(ctx.uid, &sections, self.ruled, self.closed)
+            .loft_sheet(
+                ctx.uid,
+                &sections,
+                self.ruled,
+                self.closed,
+                self.tangent_edges == TangentEdges::Merge,
+            )
             .map_err(|e| e.to_string())?;
         surface_sweeps::output(ctx, vec![sheet])
     }

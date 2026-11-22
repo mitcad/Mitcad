@@ -69,10 +69,11 @@ A library holds data only:
 | `name`, `description` | For people |
 | `library_version` | The library's own version. It is the same as its tag (`v1.0.0`) |
 | `license` | An SPDX licence expression for every component without a licence of its own |
+| `non_printable` | Optional, `true` or `false`: the components are not for print services ([Not for print services](#not-for-print-services)). Printable when left out |
 | `authors`, `homepage`, `sources` | For the attribution and the data's origin |
 | `units` | `mm` |
 | `categories` | `id` and `name` of the groups that components belong to. Optional: `parent` ([Groups](#groups)) |
-| `components` | Required: `id`, `path` (a `.mitcad` file) and `name`. Optional: `category` (one id or a list, [Groups](#groups)), `categories`, `standard`, `description`, `keywords` (or `tags`), `preview` (a PNG), `row_previews`, `license` (instead of the library's), `designation`, `supplier`, `part_number`, `supplier_url`, `rows` (the rows' standards and suppliers' articles, [Standards and suppliers of rows](#standards-and-suppliers-of-rows)), `build` and `mounts` ([Mount frames](#mount-frames)) |
+| `components` | Required: `id`, `path` (a `.mitcad` file) and `name`. Optional: `category` (one id or a list, [Groups](#groups)), `categories`, `standard`, `description`, `keywords` (or `tags`), `preview` (a PNG), `row_previews`, `license` (instead of the library's), `non_printable` (instead of the library's), `designation`, `supplier`, `part_number`, `supplier_url`, `rows` (the rows' standards and suppliers' articles, [Standards and suppliers of rows](#standards-and-suppliers-of-rows)), `build` and `mounts` ([Mount frames](#mount-frames)) |
 | `suppliers` | Optional: the suppliers the rows' articles name, each `id`, `name` and `url` ([Standards and suppliers of rows](#standards-and-suppliers-of-rows)) |
 | `replaces` | Optional: the ids the library had before (`["mitcad-fasteners"]`). An index's library of such an id is not listed beside this one ([A community index](#a-community-index)) |
 | `materials`, `printers`, `processes` | Optional: the library's materials and print profiles, each `id` and `path` ([Materials and print profiles](#materials-and-print-profiles)) |
@@ -110,6 +111,56 @@ combination comes first; a combination that is no row of an open table
 takes the pattern, with `{config}` empty.
 
 MitCad ignores unknown fields. Thus newer libraries stay readable.
+
+### Not for print services
+
+Some suppliers do not allow their parts to be printed as a service.
+`non_printable` says so (mitcad#2214):
+
+```json
+{
+  "format": "mitcad-library",
+  "version": 1,
+  "id": "example-handles",
+  "name": "Example handles",
+  "license": "CC-BY-4.0",
+  "non_printable": true,
+  "components": [
+    {"id": "handle-120", "path": "handles/handle-120.mitcad", "name": "Handle 120"},
+    {"id": "spacer", "path": "handles/spacer.mitcad", "name": "Spacer", "non_printable": false}
+  ]
+}
+```
+
+- On the library, `"non_printable": true` covers every component.
+- On a component, it is used instead of the library's: `true` for one
+  component of a printable library, `false` for one component of a
+  non-printable library.
+- Left out: the library's value. Without either, the component is
+  printable.
+- The value is `true` or `false`. Any other value (`"yes"`, `1`, `null`)
+  refuses the manifest with the reason
+  (`non_printable is true or false, not "yes"`).
+
+The library's authors set the flag by hand. MitCad never sets it, and
+never infers it from `supplier` or `license`. The libraries that come
+with MitCad are printable.
+
+The flag goes with the component into the design. Each inserted part's
+library record keeps `non_printable`, and so does a Build source's
+record. Thus the flag holds when you open the design without the
+library, and it goes with a copy of the part. Only the bodies of such a
+component and its occurrences are not for print services, also when the
+component is in a subassembly. The design, its own bodies and the other
+components stay printable. A design is never non-printable as a whole.
+
+The flag is only for print services, such as a future MitCad cloud print
+service. It does not stop your own export or **Send to Slicer**. Insert
+from Library, the Build tab's pickers and the component's properties
+show "Not for print services" for such a part. The `print_service_check`
+query tells which bodies a print service may take
+([commands.md](../core/model-api/src/commands.md#print-service-check-mitcad2214),
+[print-service.md](print-service.md)).
 
 ### Standards and suppliers of rows
 

@@ -206,6 +206,26 @@ pub struct ManifestComponent {
     /// suppliers of rows*).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rows: BTreeMap<String, LibraryRow>,
+    /// Not for print services (mitcad#2214): `true` or `false`, over the
+    /// library's `non_printable`; left out: the library's.
+    #[serde(
+        default,
+        deserialize_with = "print_flag",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub non_printable: Option<bool>,
+}
+
+/// A manifest's `non_printable` (mitcad#2214): `true` or `false`; any
+/// other value refuses the manifest with the reason.
+fn print_flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    use serde::de::Error;
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Bool(flag) => Ok(Some(flag)),
+        other => Err(D::Error::custom(format!(
+            "non_printable is true or false, not {other}"
+        ))),
+    }
 }
 
 impl ManifestComponent {
@@ -364,6 +384,15 @@ pub struct Manifest {
     /// offers, or a clone of it, is not listed beside this one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replaces: Vec<String>,
+    /// Not for print services (mitcad#2214): every component's bodies must
+    /// not be sent to a cloud print service, unless a component says
+    /// `false`. Set by hand by the library's authors; never inferred.
+    #[serde(
+        default,
+        deserialize_with = "print_flag",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub non_printable: Option<bool>,
 }
 
 /// A material or print profile a manifest lists (mitcad#640): its id and
@@ -510,6 +539,15 @@ impl Manifest {
             .clone()
             .or_else(|| self.license.clone())
             .filter(|l| !l.trim().is_empty())
+    }
+
+    /// Whether a component is not for print services (mitcad#2214): its
+    /// own `non_printable`, else the library's; printable by default.
+    pub fn non_printable_of(&self, component: &ManifestComponent) -> bool {
+        component
+            .non_printable
+            .or(self.non_printable)
+            .unwrap_or(false)
     }
 
     /// The group of the category `id` (mitcad#527): its parents' names,

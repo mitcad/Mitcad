@@ -30,14 +30,8 @@ corner failed (the blends intersecting).
 - Compute: the corners of two stripes one of which is a tangent ride's are
   made before the others, so that such a corner finds U's end not made yet.
 
-Test: geometry/tests/test_fillet_tangent_ride.cpp, test_wall_end_corners
-(ctest geometry.fillet_tangent_ride): the end edges rounded past the
-ride's point (1.2 and 1.5 beside the rounding of 2, 1.7 beside the
-rounding of 1), prism and box, both orders: valid, the volume within a
-millionth; and geometry.fillet_top_chains, test_tower_top with the legs'
-edges and test_thirteen_sets on the stored case `fillet-wall-run-on`. It
-fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py,
-reverted together with 1781, which changes the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1723.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 8993987a..8843c75d 100644

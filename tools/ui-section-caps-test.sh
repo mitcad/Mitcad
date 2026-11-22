@@ -7,6 +7,8 @@
 # check-all sources: core/model/src/document/analyses.rs
 # check-all sources: app/framework/SectionPreview.cpp app/framework/SectionPreview.hpp
 # check-all sources: app/framework/CommandSessionVisibility.cpp app/commands/FilletCommands.cpp
+# check-all sources: app/view/SectionHatch.cpp app/view/SectionHatch.hpp app/framework/TestDriver.cpp
+# check-all sources: tools/ui-scripts/section-caps.mitcad-ui tools/ui-scripts/section-caps.json
 # The caps of Section Analysis through the real UI (mitcad#382), on a design
 # of the root and two components, each with a block:
 #   - Each component's caps take its timeline colour (the band under its
@@ -31,6 +33,13 @@
 #   - A section turned about an axis (mitcad#823): YZ turned 45 degrees
 #     about Z through a 10 mm cube's middle reads 141.42 mm²; kept, edited
 #     with its Axis and Angle, and saved with them.
+#   - The hatch lies in the section plane (mitcad#2146): the look line's
+#     largest distance of the hatch from the plane is 0 (within 0.000001
+#     mm) for the blocks' caps, and for a 2000 x 1000 x 500 mm block cut
+#     across and turned 30 degrees and flipped, by the shared input script
+#     tools/ui-scripts/section-caps.mitcad-ui on the design that mitcad-cli
+#     makes (tools/ui-scripts/section-caps.json; also run by
+#     tools/ui-windows-section-caps-test.ps1).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-section-caps-test.sh [screenshot.png]
@@ -97,6 +106,10 @@ echo "$CAPS" | grep -q "$PART hatch $HATCH at 135 deg, [1-9][0-9]* lines" ||
 echo "$CAPS" | grep -q "$OTHER hatch $HATCH at 45 deg, [1-9][0-9]* lines" ||
   ui_fail "Other's caps are not $OTHER with a hatch at 45 degrees: $CAPS"
 echo "ok   caps: $CAPS"
+# The hatch in the plane (mitcad#2146), in each group: 0.000000 mm off it.
+[ "$(echo "$CAPS" | grep -o ' lines, [0-9.]* mm off the plane' | grep -c ' lines, 0\.000000 mm off the plane')" = 3 ] ||
+  ui_fail "the hatch is not in the section plane: $CAPS"
+echo "ok   the hatch lies in the section plane"
 # The hatch is darker than the cap, in each group.
 echo "$CAPS" | sed 's/.*\[\(.*\)\] in.*/\1/; s/; /\n/g' | while read -r cap hatch colour _; do
   [ "$hatch" = hatch ] || ui_fail "unexpected caps entry: $cap $hatch $colour"
@@ -288,5 +301,23 @@ a = json.load(open(sys.argv[1]))["analyses"][0]
 print(a["plane"], a["axis"], round(a["angle"], 6))' "$CUBE") || ui_fail "no analyses in the file"
 [ "$turned" = "yz z 0.785398" ] || ui_fail "the file's turned section: $turned"
 echo "ok   saved with its axis and angle"
+
+# The hatch of a large body's caps in the section plane (mitcad#2146): the
+# shared input script, as the Windows test runs it.
+echo "--- A large body's hatch in the section plane"
+ui_stop_app
+SCRIPTS=$(cd "$(dirname "$0")/ui-scripts" && pwd)
+"$CLI" run "$SCRIPTS/section-caps.json" --save "$WORK/large.mitcad" > "$WORK/cli-large.log" 2>&1 ||
+  { cat "$WORK/cli-large.log"; ui_fail "mitcad-cli (large block)"; }
+MITCAD_TEST_WORK=$WORK MITCAD_TEST_STEP_MS=100 MITCAD_TEST_INPUT=$SCRIPTS/section-caps.mitcad-ui \
+  ui_start_app --ui=qt --no-mcp --open "$WORK/large.mitcad"
+for _ in $(seq 1 1500); do
+  kill -0 "$UI_RUNNER" 2> /dev/null || break
+  sleep 0.2
+done
+kill -0 "$UI_RUNNER" 2> /dev/null && ui_fail 'section caps driver timed out'
+wait "$UI_RUNNER" || ui_fail 'the section caps driver failed'
+UI_RUNNER=""
+ui_expect_log 'TestDriver: done' "the large block's hatch in the plane, across and turned"
 
 ui_finish "UI section caps test"

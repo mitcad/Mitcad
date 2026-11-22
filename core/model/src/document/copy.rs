@@ -1470,7 +1470,7 @@ pub(super) fn keep_measurement_sides(
 }
 
 /// Fields of definitions that are texts, not references.
-const TEXT_FIELDS: [&str; 5] = ["name", "source", "text", "font", "brep"];
+pub(super) const TEXT_FIELDS: [&str; 5] = ["name", "source", "text", "font", "brep"];
 
 fn remap_value(value: &mut Value, uids: &HashMap<String, String>) {
     match value {

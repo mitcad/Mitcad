@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include <QFontMetricsF>
 #include <QHelpEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -20,6 +21,7 @@
 #include "Diagnostics.hpp"
 #include "HandleStep.hpp"
 #include "Theme.hpp"
+#include "ViewHintPlace.hpp"
 
 namespace mitcad {
 namespace {
@@ -144,6 +146,14 @@ ManipulatorOverlay::ManipulatorOverlay(OcctViewer& viewer, const QString& comman
     publishBoxes();
     logPlaces();
   });
+  // The hint keeps below the cards over the view's top, which move with
+  // the window's width and the notice card, and below the view's banner
+  // (mitcad#2190).
+  connect(&viewer, &OcctViewer::overlayInsetsChanged, this, &ManipulatorOverlay::placeHint);
+  m_banner = viewer.findChild<QWidget*>(QStringLiteral("modeBanner"), Qt::FindDirectChildrenOnly);
+  if (m_banner) {
+    m_bannerFilter.install(m_banner);
+  }
 }
 
 ManipulatorOverlay::~ManipulatorOverlay() = default;
@@ -370,9 +380,37 @@ void ManipulatorOverlay::setHint(const QString& text) {
     return;
   }
   m_hint = text;
-  update();
   qDebug().noquote() << (text.isEmpty() ? QStringLiteral("View hint %1 cleared").arg(m_command)
                                         : QStringLiteral("View hint %1: %2").arg(m_command, text));
+  placeHint();
+}
+
+QRectF ManipulatorOverlay::hintRect() const {
+  if (m_hint.isEmpty()) {
+    return {};
+  }
+  const QSizeF pill = QFontMetricsF(font()).boundingRect(m_hint).adjusted(-14, -7, 14, 7).size();
+  const QRectF banner = m_banner && m_banner->isVisible() ? QRectF(m_banner->geometry()) : QRectF();
+  return viewHintRect(QSizeF(m_viewer.size()), m_viewer.overlayInsets(), banner, pill);
+}
+
+void ManipulatorOverlay::placeHint() {
+  update();
+  const QRectF box = hintRect();
+  if (box.isEmpty()) {
+    m_hintLogged.clear(); // logged again when a hint shows
+    return;
+  }
+  // Where it is in the window, for UI tests: below the cards over the
+  // view's top (mitcad#2190).
+  const QRect rect = box.toAlignedRect();
+  const QPoint at = m_viewer.mapTo(m_viewer.window(), rect.topLeft());
+  const QString place =
+      QStringLiteral("View hint at %1,%2 %3x%4").arg(at.x()).arg(at.y()).arg(rect.width()).arg(rect.height());
+  if (place != m_hintLogged) {
+    m_hintLogged = place;
+    qDebug().noquote() << place;
+  }
 }
 
 double ManipulatorOverlay::pixelSize(const gp_Pnt& at) const {
@@ -658,6 +696,20 @@ void ManipulatorOverlay::setHandlesShown(bool shown) {
 }
 
 bool ManipulatorOverlay::eventFilter(QObject* watched, QEvent* event) {
+  if (m_banner && watched == m_banner.data()) {
+    // The view's banner came, went or moved: the hint keeps below it.
+    switch (event->type()) {
+    case QEvent::Show:
+    case QEvent::Hide:
+    case QEvent::Move:
+    case QEvent::Resize:
+      placeHint();
+      break;
+    default:
+      break;
+    }
+    return false;
+  }
   if (watched != &m_viewer) {
     return QWidget::eventFilter(watched, event);
   }
@@ -681,6 +733,7 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
   switch (event->type()) {
   case QEvent::Resize:
     resize(m_viewer.size());
+    placeHint();
     return false;
   case QEvent::ToolTip: {
     // A value box says what a click on it does (mitcad#1181).
@@ -1047,16 +1100,19 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
   }
   painter.setOpacity(1.0);
   if (!m_hint.isEmpty()) {
-    // A pill at the top of the view, over the model.
-    const QRectF text = painter.fontMetrics().boundingRect(m_hint).adjusted(-14, -7, 14, 7);
-    const QRectF box(QPointF((width() - text.width()) / 2.0, 16.0), text.size());
+    // A pill at the top of the view, over the model, below the cards
+    // floating over the view's top and the view's banner (mitcad#2190).
+    painter.setFont(font());
+    const QRectF box = hintRect();
     painter.setPen(Qt::NoPen);
     QColor pill = kInk;
     pill.setAlpha(215);
     painter.setBrush(pill);
     painter.drawRoundedRect(box, box.height() / 2.0, box.height() / 2.0);
     painter.setPen(Qt::white);
-    painter.drawText(box, Qt::AlignCenter, m_hint);
+    const QRectF text = box.adjusted(14, 0, -14, 0);
+    painter.drawText(text, Qt::AlignCenter,
+                     painter.fontMetrics().elidedText(m_hint, Qt::ElideMiddle, static_cast<int>(text.width())));
   }
 }
 

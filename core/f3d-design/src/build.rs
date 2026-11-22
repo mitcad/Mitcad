@@ -3396,6 +3396,10 @@ impl Builder<'_> {
             _ if it.class == DERIVED_CONTEXT => self.derived_context(it),
             // Drafts (mitcad#1363).
             _ if it.class == drafts::DRAFT => self.draft(it, &rl),
+            // Sheet-metal Unfold and Refold (mitcad#2117).
+            _ if matches!(it.class.as_str(), sheet::UNFOLD | sheet::REFOLD) => {
+                self.unfold_refold(it)
+            }
             _ => Detail::empty(),
         }
     }

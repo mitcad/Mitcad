@@ -114,6 +114,8 @@ pub mod abandon;
 pub mod flex;
 // Flex drape: a Flex item let hang, its chain and its nodes (mitcad#1713).
 pub mod flex_drape;
+// Surface groups of faces for model_render's edges (mitcad#2148).
+pub mod surface_groups;
 
 use std::sync::Arc;
 
@@ -867,6 +869,14 @@ impl Kernel for OcctKernel {
             } => PrimitiveInput {
                 kind: PrimitiveKind::Torus,
                 sizes: [major_radius, minor_radius, 0.0],
+            },
+            PrimitiveShape::Cone {
+                radius,
+                top_radius,
+                height,
+            } => PrimitiveInput {
+                kind: PrimitiveKind::Cone,
+                sizes: [radius, top_radius, height],
             },
         };
         transform::ffi::primitive(
@@ -1934,6 +1944,59 @@ impl Kernel for OcctKernel {
             .collect())
     }
 
+    fn boundary_regions(
+        &self,
+        feature: FeatureUid,
+        tools: &[&Self::Shape],
+        planes: &[DatumPlane],
+        points: &[Vec3],
+    ) -> Result<mitcad_model::BoundaryRegions<Self::Shape>, KernelError> {
+        let list = shape_list(tools)?;
+        let flat_planes: Vec<f64> = planes
+            .iter()
+            .flat_map(|p| {
+                let n = p.normal();
+                [
+                    p.origin[0],
+                    p.origin[1],
+                    p.origin[2],
+                    n[0],
+                    n[1],
+                    n[2],
+                    p.x_axis[0],
+                    p.x_axis[1],
+                    p.x_axis[2],
+                ]
+            })
+            .collect();
+        let names: Vec<String> = (1..=planes.len())
+            .map(|i| format!("{feature}:plane{i}"))
+            .collect();
+        let flat: Vec<f64> = points.iter().flatten().copied().collect();
+        let found = boundary_fill::ffi::boundary_regions(&list, &flat_planes, &names, &flat)
+            .map_err(failed)?;
+        let triple = |xyz: Vec<f64>| -> Vec<Vec3> { xyz.as_chunks::<3>().0.to_vec() };
+        let regions = (0..found.region_count())
+            .map(|i| mitcad_model::BoundaryRegion {
+                shape: found.region(i),
+                point: triple(found.region_point(i))
+                    .first()
+                    .copied()
+                    .unwrap_or([0.0; 3]),
+            })
+            .collect();
+        let places = (0..found.place_count())
+            .map(|i| match found.place_kind(i) {
+                0 => mitcad_model::BoundaryPlace::Region(found.place_region(i)),
+                1 => mitcad_model::BoundaryPlace::OnFace,
+                _ => mitcad_model::BoundaryPlace::Open {
+                    gap: triple(found.place_gap(i)),
+                },
+            })
+            .collect();
+        Ok(mitcad_model::BoundaryRegions { regions, places })
+    }
+
     // Patch, Stitch and Thicken: surface bodies filled, sewn and made solid
     // (mitcad#456; surfaces.rs).
 
@@ -2109,13 +2172,21 @@ impl Kernel for OcctKernel {
         sections: &[Vec<mitcad_model::PathCurve>],
         ruled: bool,
         closed: bool,
+        merge_tangent_edges: bool,
     ) -> Result<Self::Shape, KernelError> {
         let (curves, counts) = surface_sweeps::chains(sections);
         // OCCT's loft does not look at its progress range (mitcad#1922).
         let feature = feature.to_string();
         abandon::abandonable(move || {
-            surface_sweeps::ffi::loft_sheet(&feature, &curves, &counts, ruled, closed)
-                .map_err(failed)
+            surface_sweeps::ffi::loft_sheet(
+                &feature,
+                &curves,
+                &counts,
+                ruled,
+                closed,
+                merge_tangent_edges,
+            )
+            .map_err(failed)
         })
     }
 
@@ -3335,6 +3406,13 @@ impl Kernel for OcctKernel {
             .collect();
         let mapped = transform::ffi::transform_shapes(&list, &maps).map_err(failed)?;
         Ok((0..mapped.size()).map(|i| mapped.at(i)).collect())
+    }
+
+    // Surface groups of faces for model_render's edges (mitcad#2148;
+    // surface_groups.rs).
+
+    fn face_surface_groups(&self, shape: &Self::Shape) -> Result<Vec<u32>, KernelError> {
+        surface_groups::ffi::face_surface_groups(occt(shape)?).map_err(failed)
     }
 }
 

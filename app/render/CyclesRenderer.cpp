@@ -2,6 +2,7 @@
 // The renderer on Cycles (docs/rendering.md). Cycles' headers need C++20,
 // so this file is compiled on its own (mitcad_cycles_renderer) and nothing
 // else includes them.
+#include "render/GrainProjection.hpp"
 #include "render/RenderCamera.hpp"
 #include "render/RenderDevices.hpp"
 #include "render/Renderer.hpp"
@@ -958,6 +959,33 @@ private:
         corners[i] = ccl::make_float2(data.uvs[v * 2], data.uvs[v * 2 + 1]);
       }
     }
+    const bool grain = body.material.textureGrain ||
+                       std::any_of(body.faces.begin(), body.faces.end(),
+                                   [](const FaceMaterial& group) { return group.material.textureGrain; });
+    if (grain) {
+      // Along the grain (mitcad#2186, GrainProjection.hpp): each corner's
+      // grain coordinates (mm) as a UV map of their own, and its face's
+      // grain directions, the tangent frame of a normal map. A vector
+      // attribute holds packed_float3 (12 bytes, Attribute::data_sizeof),
+      // not float3: written as float3 they overran their buffers.
+      const GrainMesh frames = grainMeshOf(data);
+      auto* coordinates =
+          mesh->attributes.add(ccl::ustring(kGrainUvAttribute), ccl::TypeFloat2, ccl::ATTR_ELEMENT_CORNER)
+              ->data_for_write<ccl::float2>();
+      auto* alongU = mesh->attributes.add(ccl::ustring(kGrainUAttribute), ccl::TypeVector, ccl::ATTR_ELEMENT_CORNER)
+                         ->data_for_write<ccl::packed_float3>();
+      auto* alongV = mesh->attributes.add(ccl::ustring(kGrainVAttribute), ccl::TypeVector, ccl::ATTR_ELEMENT_CORNER)
+                         ->data_for_write<ccl::packed_float3>();
+      for (std::size_t i = 0; i < data.indices.size(); ++i) {
+        const std::size_t v = data.indices[i];
+        if (v * 2 + 1 >= frames.coordinates.size()) {
+          continue;
+        }
+        coordinates[i] = ccl::make_float2(frames.coordinates[v * 2], frames.coordinates[v * 2 + 1]);
+        alongU[i] = ccl::packed_float3(ccl::make_float3(frames.u[v * 3], frames.u[v * 3 + 1], frames.u[v * 3 + 2]));
+        alongV[i] = ccl::packed_float3(ccl::make_float3(frames.v[v * 3], frames.v[v * 3 + 1], frames.v[v * 3 + 2]));
+      }
+    }
     // New nodes of a scene that is rendering: the managers must hear of them.
     mesh->tag_update(&scene, true);
     entry.mesh = mesh;
@@ -1189,7 +1217,18 @@ private:
     // By the mesh's texture coordinates: a normal map's tangents are the
     // UV map's.
     bool uv = false;
+    // Along the grain (mitcad#2186): the grain UV map (geometryOf), and
+    // the face's directions in which the image's u and v grow (the
+    // rotation turns them), read from the mesh per point.
+    bool grain = false;
+    ccl::ShaderOutput* grainU = nullptr;
+    ccl::ShaderOutput* grainV = nullptr;
   };
+
+  // The names of the grain attributes geometryOf gives a mesh.
+  static constexpr const char* kGrainUvAttribute = "mitcad_grain";
+  static constexpr const char* kGrainUAttribute = "mitcad_grain_u";
+  static constexpr const char* kGrainVAttribute = "mitcad_grain_v";
 
   static Projection projectionOf(ccl::ShaderGraph& graph, const MaterialData& m) {
     Projection projection;
@@ -1232,6 +1271,48 @@ private:
     const Axis z{0, 0, 1};
     if (m.texturePlanar) {
       projection.planes = {plane("X", "Y", x, y)};
+      return projection;
+    }
+    if (m.textureGrain) {
+      // Along the grain (mitcad#2186): the grain coordinates (mm) through
+      // the same texture mapping, turned by the rotation and divided by
+      // the repeat; the tangent frame the face's directions, turned.
+      auto* grainMap = graph.create_node<ccl::UVMapNode>();
+      grainMap->set_attribute(ccl::ustring(kGrainUvAttribute));
+      auto* mapping = graph.create_node<ccl::MappingNode>();
+      mapping->set_mapping_type(ccl::NODE_MAPPING_TYPE_TEXTURE);
+      mapping->set_rotation(ccl::make_float3(0.0f, 0.0f, m.textureRotation));
+      mapping->set_scale(ccl::make_float3(m.textureSize[0], m.textureSize[1], 1.0f));
+      graph.connect(grainMap->output("UV"), mapping->input("Vector"));
+      Projection::Plane along;
+      along.coordinates = mapping->output("Vector");
+      projection.planes = {along};
+      projection.grain = true;
+      const auto attribute = [&graph](const char* name) {
+        auto* node = graph.create_node<ccl::AttributeNode>();
+        node->set_attribute(ccl::ustring(name));
+        return node->output("Vector");
+      };
+      ccl::ShaderOutput* u = attribute(kGrainUAttribute);
+      ccl::ShaderOutput* v = attribute(kGrainVAttribute);
+      // a * fa + b * fb, as `turned` for the constant axes.
+      const auto mixed = [&graph](ccl::ShaderOutput* a, float fa, ccl::ShaderOutput* b, float fb) {
+        auto* first = graph.create_node<ccl::VectorMathNode>();
+        first->set_math_type(ccl::NODE_VECTOR_MATH_SCALE);
+        first->set_scale(fa);
+        graph.connect(a, first->input("Vector1"));
+        auto* second = graph.create_node<ccl::VectorMathNode>();
+        second->set_math_type(ccl::NODE_VECTOR_MATH_SCALE);
+        second->set_scale(fb);
+        graph.connect(b, second->input("Vector1"));
+        auto* sum = graph.create_node<ccl::VectorMathNode>();
+        sum->set_math_type(ccl::NODE_VECTOR_MATH_ADD);
+        graph.connect(first->output("Vector"), sum->input("Vector1"));
+        graph.connect(second->output("Vector"), sum->input("Vector2"));
+        return sum->output("Vector");
+      };
+      projection.grainU = mixed(u, cosine, v, sine);
+      projection.grainV = mixed(u, -sine, v, cosine);
       return projection;
     }
     projection.planes = {plane("Y", "Z", y, z), plane("X", "Z", x, z), plane("X", "Y", x, y)};
@@ -1340,6 +1421,19 @@ private:
       graph.connect(b, node->input("Vector2"));
       return node->output("Vector");
     };
+    // The same for a direction the mesh gives per point (along the grain,
+    // mitcad#2186).
+    const auto alongOutput = [&](ccl::ShaderOutput* axis) {
+      auto* onNormal = vectorMath(ccl::NODE_VECTOR_MATH_PROJECT);
+      graph.connect(axis, onNormal->input("Vector1"));
+      graph.connect(normal, onNormal->input("Vector2"));
+      auto* across = vectorMath(ccl::NODE_VECTOR_MATH_SUBTRACT);
+      graph.connect(axis, across->input("Vector1"));
+      graph.connect(onNormal->output("Vector"), across->input("Vector2"));
+      auto* length1 = vectorMath(ccl::NODE_VECTOR_MATH_NORMALIZE);
+      graph.connect(across->output("Vector"), length1->input("Vector1"));
+      return length1->output("Vector");
+    };
     const std::vector<ccl::ShaderOutput*> colors = images(graph, projection, file, ccl::u_colorspace_data);
     std::vector<ccl::ShaderOutput*> normals;
     for (std::size_t i = 0; i < projection.planes.size(); ++i) {
@@ -1351,7 +1445,9 @@ private:
       auto* parts = graph.create_node<ccl::SeparateXYZNode>();
       graph.connect(unpacked->output("Vector"), parts->input("Vector"));
       const Projection::Plane& plane = projection.planes[i];
-      normals.push_back(sum(sum(scaled(along(plane.u), parts->output("X")), scaled(along(plane.v), parts->output("Y"))),
+      ccl::ShaderOutput* uAxis = projection.grain ? alongOutput(projection.grainU) : along(plane.u);
+      ccl::ShaderOutput* vAxis = projection.grain ? alongOutput(projection.grainV) : along(plane.v);
+      normals.push_back(sum(sum(scaled(uAxis, parts->output("X")), scaled(vAxis, parts->output("Y"))),
                             scaled(normal, parts->output("Z"))));
     }
     auto* world = graph.create_node<ccl::VectorTransformNode>();

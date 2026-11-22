@@ -35,11 +35,9 @@ On the stored design (99ef321f item 22, both ends of the outline) the
 result is valid, the boolean differences with the file's body are empty
 both ways and the new faces match the file's (the pivot torus 0.220835
 against 0.220833 mm^2).
-Test: geometry/tests/test_fillet_corners.cpp,
-test_rounding_pivots_about_a_crease_over_a_sliver (ctest
-geometry.suite.fillet_corners): a bar with a concave arc meeting it with a
-small overlap and its rim rounded, the end face's outline rounded (no
-result without the patch).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1220.
 
 Failures (mitcad#1986): the torus's quarter as a face
 (BRepLib_MakeFace) and its section by the solid (BRepAlgoAPI_Section)

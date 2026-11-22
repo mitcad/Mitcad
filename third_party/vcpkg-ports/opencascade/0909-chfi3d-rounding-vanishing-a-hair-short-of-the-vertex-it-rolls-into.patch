@@ -25,13 +25,8 @@ roll on and failed, and the stripe with it.
 
 Upstream: new.
 
-Test: none, because no synthetic body reached its failure (mitcad#1986).
-Tried with the patch's code traced and with it switched off: a lens end
-rolling on both edges (test_fillet_lens_overflow), the port test of 0341
-and 44 variants of test_fillet_rolled_end_cut's slot reach
-ChFi3d_RollsIntoVertex, and each builds alike without the patch: their
-walks reach the vertex. Verified on the design's replayed body only, where
-the contacts met 0.005 before the vertex (core/import/docs/f3d-rounds-3.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0909.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index a69bc793..f517a95c 100644

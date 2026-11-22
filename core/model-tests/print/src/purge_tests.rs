@@ -8,6 +8,8 @@ use serde_json::{Map, Value, json};
 
 use crate::print_files_tests::{command, design, design_of, export_to, project};
 use mitcad_model::Document;
+use mitcad_model::print_files::installed::SlicerFolder;
+use mitcad_model::print_keys::Dialect;
 use mitcad_model::print_purge::{PurgeValues, colour_defaults, computed};
 use mitcad_model::testing::MockKernel;
 use mitcad_model_api::DocumentApi;
@@ -315,7 +317,7 @@ fn exports_write_the_table_with_the_pairs_set_by_hand() {
             json!(["0", "150", text(back / 2.0), "0"]),
             "{dialect}"
         );
-        assert_eq!(settings["flush_multiplier"], "2", "{dialect}");
+        assert_eq!(settings["flush_multiplier"], json!(["2"]), "{dialect}");
         assert_eq!(
             settings["flush_volumes_vector"],
             json!([text(pla.out), text(pla.into), text(abs.out), text(abs.into)]),
@@ -397,7 +399,7 @@ fn a_bambu_projects_table_becomes_the_pairs_of_its_materials() {
         written["flush_volumes_matrix"],
         json!(["0", "100", "150", "0"])
     );
-    assert_eq!(written["flush_multiplier"], "2");
+    assert_eq!(written["flush_multiplier"], json!(["2"]));
 }
 
 #[test]
@@ -444,5 +446,123 @@ fn a_prusaslicer_projects_table_becomes_the_pairs_of_its_materials() {
             .any(|l| l.contains("purge volumes")),
         "{:?}",
         imported.report.left_out
+    );
+}
+
+/// The `flush_volumes_matrix` and `flush_multiplier` of a Bambu-family
+/// export, with the number of tables the matrix holds (each the same).
+fn tables_and_multiplier(written: &Map<String, Value>, slots: usize) -> (usize, Value) {
+    let matrix = written["flush_volumes_matrix"].as_array().unwrap();
+    let table = slots * slots;
+    assert_eq!(matrix.len() % table, 0, "{matrix:?}");
+    for other in matrix.chunks(table) {
+        assert_eq!(other, &matrix[..table], "{matrix:?}");
+    }
+    (matrix.len() / table, written["flush_multiplier"].clone())
+}
+
+#[test]
+fn the_bambu_multiplier_has_an_entry_per_extruder() {
+    // mitcad#2207: a printer imported from the slicer with two extruders
+    // (two nozzle diameters) gets the multiplier as a list of two, as many
+    // as the purge tables, the multiplier set in each entry; Bambu Studio
+    // 2.9 crashes slicing such a project with one text.
+    let settings = json!({
+        "printer_settings_id": "Bench Duo 0.4 nozzle",
+        "printable_area": ["0x0", "180x0", "180x180", "0x180"],
+        "nozzle_diameter": ["0.4", "0.4"],
+        "print_settings_id": "Standard",
+        "layer_height": "0.2",
+        "filament_settings_id": ["Generic PLA", "Generic PETG"],
+        "filament_type": ["PLA", "PETG"],
+        "filament_colour": ["#FFFFFF", "#000000"],
+        "flush_multiplier": ["1", "1"],
+    });
+    let data = project(
+        "BambuStudio-02.00.00.00",
+        vec![(
+            "Metadata/project_settings.config",
+            settings.to_string().into_bytes(),
+        )],
+        Vec::new(),
+    );
+    let mut doc = design_of("duo.3mf", &data, &[0, 1]);
+    // No slicer's presets: the printer's own nozzles (its block kept for
+    // Bambu Studio) count.
+    doc.set_slicer_folders(Some(Vec::new()));
+    let (_, back) = export_to(&mut doc, "duo.3mf", "bambu_studio");
+    let written = bambu_settings(&back);
+    assert_eq!(written["nozzle_diameter"].as_array().map(Vec::len), Some(2));
+    assert_eq!(tables_and_multiplier(&written, 2), (2, json!(["1", "1"])));
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": "C0", "set": "Print Process",
+               "key": "flush_multiplier", "value": 2}),
+    );
+    let (_, back) = export_to(&mut doc, "duo-set.3mf", "bambu_studio");
+    assert_eq!(
+        tables_and_multiplier(&bambu_settings(&back), 2),
+        (2, json!(["2", "2"]))
+    );
+
+    // A printer of one nozzle: one entry.
+    let mut doc = design();
+    doc.set_slicer_folders(Some(Vec::new()));
+    let (_, back) = export_to(&mut doc, "solo.3mf", "bambu_studio");
+    let written = bambu_settings(&back);
+    assert_eq!(written["nozzle_diameter"], json!(["0.4"]));
+    assert_eq!(tables_and_multiplier(&written, 2), (1, json!(["1"])));
+}
+
+#[test]
+fn a_printer_named_by_a_two_extruder_preset_gets_an_entry_per_extruder() {
+    // mitcad#2207: the design's printer names only the slicer's preset
+    // (`printer_settings_id` "Bench 0.4 nozzle") and keeps one nozzle
+    // diameter; the slicer loads the preset's two extruders. A fixture
+    // data folder of Bambu Studio has that preset, its nozzles from the
+    // base it inherits.
+    let folder = mitcad_model::testing::unique_temp_dir("purge-preset").join("BambuStudio");
+    let machine = folder.join("system").join("Bench").join("machine");
+    std::fs::create_dir_all(&machine).unwrap();
+    let write = |file: &str, preset: Value| {
+        std::fs::write(machine.join(file), preset.to_string()).unwrap();
+    };
+    write(
+        "fdm_bench_common.json",
+        json!({"type": "machine", "name": "fdm_bench_common", "instantiation": "false",
+               "nozzle_diameter": ["0.4", "0.4"], "printer_model": "Bench Duo"}),
+    );
+    write(
+        "Bench 0.4 nozzle.json",
+        json!({"type": "machine", "name": "Bench 0.4 nozzle", "inherits": "fdm_bench_common"}),
+    );
+    let mut doc = design();
+
+    // The preset not found: one entry, as the printer's one nozzle says.
+    doc.set_slicer_folders(Some(Vec::new()));
+    let (_, back) = export_to(&mut doc, "preset-none.3mf", "bambu_studio");
+    assert_eq!(
+        tables_and_multiplier(&bambu_settings(&back), 2),
+        (1, json!(["1"]))
+    );
+
+    // Found: two tables and two entries; the design's nozzle stays its
+    // own.
+    doc.set_slicer_folders(Some(vec![SlicerFolder {
+        dialect: Dialect::BambuStudio,
+        folder: folder.clone(),
+        flatpak: false,
+    }]));
+    let (_, back) = export_to(&mut doc, "preset-duo.3mf", "bambu_studio");
+    let written = bambu_settings(&back);
+    assert_eq!(written["printer_settings_id"], "Bench 0.4 nozzle");
+    assert_eq!(written["nozzle_diameter"], json!(["0.4"]));
+    assert_eq!(tables_and_multiplier(&written, 2), (2, json!(["1", "1"])));
+
+    // Another slicer's project: only its own data folder counts.
+    let (_, back) = export_to(&mut doc, "preset-qidi.3mf", "qidi_studio");
+    assert_eq!(
+        tables_and_multiplier(&bambu_settings(&back), 2),
+        (1, json!(["1"]))
     );
 }

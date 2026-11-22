@@ -25,15 +25,8 @@ next one, for the face at the end to cut it.
 
 Upstream: new.
 
-Test: none, because no synthetic body reached its case (mitcad#1986).
-Tried with the patch's code traced: none of the OCCT-only geometry tests'
-bodies (43 programs) nor 198 variants of their dimensions has a contact
-leave its face onto a face along the spine before the spine's end; a step
-over a floor split into a strip beside it (the step's foot rounded, the
-ball rolling on the step's top edge) does, but its stripe fails with and
-without the patch. Verified on the stored design's bodies
-(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded
-with 0.86).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0903.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 65a9de67..85d13d89 100644

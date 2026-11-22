@@ -43,11 +43,8 @@ into the pad's cylinder.
   keeps in the face beyond as a dangling edge.
 - Elsewhere nothing changes. No catch is added.
 
-Test: geometry.fillet_corner_walk_over_vertex
-(geometry/tests/test_fillet_corner_walk_over_vertex.cpp) with the case
-fillet-corner-walk-over-vertex of MITCAD_GEOMETRY_CASES, and
-cli.fcstd_bend_reported (tools/cli/fcstd-bend-reported-test.cmake), the
-reported bent guide with its bend radius set to 20, 24, 25, 30 and 32.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1801.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 index b97f104c..7e752f18 100644

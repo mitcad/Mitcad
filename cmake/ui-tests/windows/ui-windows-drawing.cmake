@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # File > Export Drawing (mitcad#471): the dialog with its defaults, a
-# typed SVG file, A3 chosen, the drawing written (3 views, 2 bodies,
-# A3, 1:1), the choices kept.
+# typed SVG file, A3 chosen, the drawing written (3 views, 2 bodies in
+# 2 placements, A3, 1:1), the choices kept.
 add_test(NAME app.ui-windows-drawing
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass
           -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-test.ps1"

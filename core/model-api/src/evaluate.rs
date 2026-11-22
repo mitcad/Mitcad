@@ -82,7 +82,8 @@ impl<K: Kernel> EvaluateOps<K> for Document<K> {
             }
             None => None,
         };
-        let parsed = Expr::parse(&query.expression).map_err(|e| ApiError(e.to_string()))?;
+        let parsed = Expr::parse(&query.expression)
+            .map_err(|e| ApiError(super::words_with_detail(e.message(), e.to_string())))?;
         // The table columns it looks values up in (mitcad#667): `Screws.dk`.
         let table_references: Vec<String> = parsed
             .table_references()
@@ -93,7 +94,7 @@ impl<K: Kernel> EvaluateOps<K> for Document<K> {
         if unit.is_text() {
             let text = parsed
                 .eval_text(params.table(), &context)
-                .map_err(|e| ApiError(e.to_string()))?;
+                .map_err(|e| refused(&e, params, query))?;
             return Ok(json!({
                 "text": text,
                 "references": parsed.references(),
@@ -103,7 +104,7 @@ impl<K: Kernel> EvaluateOps<K> for Document<K> {
         }
         let value = parsed
             .eval_as(params.table(), &context, unit)
-            .map_err(|e| ApiError(e.to_string()))?;
+            .map_err(|e| refused(&e, params, query))?;
         if !value.value.is_finite() {
             return Err(ApiError(format!(
                 "{} is not a finite value",
@@ -123,7 +124,10 @@ impl<K: Kernel> EvaluateOps<K> for Document<K> {
             let (limited_value, _, limited) = params
                 .table()
                 .try_expression(id, &query.expression)
-                .map_err(|e| ApiError(e.to_string()))?;
+                .map_err(|e| match params.table().refusal_message(&e) {
+                    Some(words) => ApiError(super::words_with_detail(words, e.to_string())),
+                    None => ApiError(e.to_string()),
+                })?;
             out["limited"] = json!(limited.map(Limited::as_str));
             out["limited_value"] = json!(limited_value.value);
             out["limited_text"] = json!(expr::format_value(
@@ -134,6 +138,22 @@ impl<K: Kernel> EvaluateOps<K> for Document<K> {
         }
         Ok(out)
     }
+}
+
+/// An expression that does not evaluate, in words a person reads
+/// (mitcad#2181): without the parser's byte offset, an unknown name with
+/// its near miss among the parameters ("Did you mean table_length?"); the
+/// model's text with the offset as the agents' detail.
+fn refused(
+    error: &expr::EvalError,
+    params: &mitcad_model::Parameters,
+    query: &EvaluateQuery,
+) -> ApiError {
+    let own = query.parameter.as_deref().unwrap_or_default();
+    ApiError(super::words_with_detail(
+        params.table().eval_message(error, own),
+        error.to_string(),
+    ))
 }
 
 #[cfg(test)]

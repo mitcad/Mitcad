@@ -585,7 +585,8 @@ public:
   void setPreviewReport(const QJsonObject& report) override {
     for (Row& row : m_rows) {
       if (row.targets) {
-        row.targets->setPreview(report.value(QStringLiteral("cut_targets")).toObject());
+        // The whole report, as the Qt panel's (mitcad#2118).
+        row.targets->setPreviewResult(report);
         row.targetsView->refresh();
       }
     }

@@ -41,7 +41,10 @@ expect-model-busy true
 
 # The size typed: the slow preview is dropped, the job asked to stop and
 # cancelled; the typed size is taken ("Panel field size: 2", evaluated)
-# and its preview starts, held in turn.
+# and its preview starts, held in turn. The size is taken before any new
+# preview starts: the dropped job's end no longer restarts the 8 mm
+# preview ahead of it (mitcad#2189: that preview, held by the gate, kept
+# the size waiting, line 51 failed under load).
 mark
 qt-type-now input_size '2'
 wait-log '^Preview Pipe: dropped after [0-9]+ ms for a typed value$' 30

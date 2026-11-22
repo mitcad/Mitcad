@@ -415,6 +415,48 @@ fn closed_and_surface_lofts_come_in_as_definitions() {
 }
 
 #[test]
+fn a_loft_merges_its_tangent_edges_where_the_dump_says_so() {
+    // Tangent Edges (mitcad#2162): the dump's isTangentEdgesMerged true is
+    // `merge`; false or left out keeps them (the field left out).
+    let section = |i: i64| {
+        json!({"_type": "LoftSection", "index": i,
+               "entity": {"kind": "profile", "sketch": format!("Sketch{}", i + 1),
+                          "sketch_timeline_index": i, "area": 8.0, "centroid": [2.0, 1.0, 0.0]}})
+    };
+    for merged in [Some(true), Some(false), None] {
+        let mut detail = json!({"loftSections": [section(0), section(1)], "isClosed": false,
+                                "isSolid": true, "operation": "NewBodyFeatureOperation"});
+        if let Some(merged) = merged {
+            detail["isTangentEdgesMerged"] = json!(merged);
+        }
+        let loft =
+            json!({"index": 2, "name": "Loft1", "objectType": "LoftFeature", "detail": detail});
+        let dump = dump(json!({
+            "schema": "mitcad-f3d-dump", "schema_version": 2,
+            "source": {"mode": "f3d_stream", "file": "lofts.f3d"},
+            "timeline": {"items": [rectangle_sketch(0), rectangle_sketch(1), loft]}
+        }));
+        let mut doc = Document::new(MockKernel::default());
+        let report = import(&mut doc, &dump);
+        assert_eq!(
+            report.items[2].outcome,
+            Outcome::Parametric,
+            "{}",
+            report.text()
+        );
+        let query = json!({"query": "feature", "uid": "F3"}).to_string();
+        let answer: Value = serde_json::from_str(&doc.query(&query).unwrap()).unwrap();
+        let def = &answer["def"];
+        let expected = if merged == Some(true) {
+            json!("merge")
+        } else {
+            Value::Null
+        };
+        assert_eq!(def["tangent_edges"], expected, "{def}");
+    }
+}
+
+#[test]
 fn a_loft_section_of_edges_is_the_face_they_go_round() {
     // A tangent condition is taken only at a section of edges: here the
     // loop round the block's top, as a Path of its BRepEdges (cm).

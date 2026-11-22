@@ -186,7 +186,7 @@ echo "ok   the slicer got the 3MF"
 expect_3mf '.flush_volumes_matrix' '["0","140","500","0"]' \
   "the table: computed from white to black, set by hand from black to white"
 expect_3mf '.flush_volumes_vector' '["70","95","210","70"]' "each filament's values, out and in"
-expect_3mf '.flush_multiplier' '"1"' "the multiplier the slicer applies"
+expect_3mf '.flush_multiplier' '["1"]' "the multiplier the slicer applies, one per extruder"
 ui_focus_main
 ui_mark
 ui_key ctrl+s

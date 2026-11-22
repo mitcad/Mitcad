@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <QAction>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QMenu>
@@ -24,6 +25,7 @@
 #include "browser/Bindings.hpp"
 #include "browser/BrowserController.hpp"
 #include "browser/ConvertToFeatures.hpp"
+#include "browser/SelectionSets.hpp"
 #include "build/BuildModel.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/Icons.hpp"
@@ -520,6 +522,16 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
       qDebug().noquote() << "Context menu checked: Transparent";
     }
   }
+  // Create Selection Set (mitcad#2192): when every item selected is one a
+  // set takes (bodies, components, sketches, construction geometry,
+  // joints, features; not faces, edges or vertices).
+  if (!windowReadOnly()) {
+    const QJsonArray setMembers = m_controller->selectionSetMembers(selection);
+    if (!setMembers.isEmpty() && !setMembersOf(selection).isEmpty()) {
+      addCall(QStringLiteral("selection-set"), tr("Create Selection Set"),
+              [this, setMembers] { m_controller->createSelectionSet(setMembers); });
+    }
+  }
   // A feature selected as its faces (mitcad#28) has no row of its own.
   if (selection.size() == 1 && first.kind != SelectKind::Feature && (onBody(first) || !feature.isEmpty())) {
     addCall(QStringLiteral("browser"), tr("Find in Browser"), [this, first] { m_controller->findInBrowser(first); });
@@ -535,9 +547,13 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
         if (!windowReadOnly()) {
           addCall(QStringLiteral("update"), tr("Update Link"), [this, component] { updateLink(component); });
           addCall(QStringLiteral("update"), tr("Update All Links"), [this] { updateLink(QString()); });
-          // Linked parts of the design only (mitcad#2130).
-          addCall(QStringLiteral("component"), tr("Choose Linked Parts…"),
-                  [this, component] { chooseLinkedParts(component); });
+          // Linked parts of the design only (mitcad#2130); not of one
+          // linked with its components (mitcad#2209), whose Browser row
+          // says why.
+          if (!c.linkTree) {
+            addCall(QStringLiteral("component"), tr("Choose Linked Parts…"),
+                    [this, component] { chooseLinkedParts(component); });
+          }
         }
         break;
       }

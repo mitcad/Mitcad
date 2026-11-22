@@ -18,6 +18,7 @@ pub mod ffi {
         Cylinder,
         Sphere,
         Torus,
+        Cone,
     }
 
     /// Sizes as in `mitcad::geometry::PrimitiveSpec` (a, b, c).

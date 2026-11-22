@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# Horizontal/Vertical takes the other direction when only that can be
+# added (mitcad#2184), on sketch-horizontal-vertical-other.json's Sketch1:
+# the fixed point p1 (-10, 6) and p2 (10, 0) held on the fixed
+# construction line along y = 0; 1 degree of freedom. The points are
+# nearer to level, which their held heights conflict with.
+#   1. Horizontal/Vertical (Shift+V), p1, then the pointer on p2: the
+#      glyph by the cursor is plumb (`vertical_points`).
+#   2. The click adds a vertical alignment, no refusal; p2 slides under p1
+#      to (-10, 0) and the sketch is fully constrained.
+#   3. One undo step takes it away.
+# The clicks stay within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit, also in session 0's 1024x768 window on Windows. Run
+# by tools/ui-sketch-horizontal-vertical-other-test.sh (Linux),
+# tools/ui-windows-sketch-horizontal-vertical-other-test.ps1 (Windows) and
+# tools/ui-macos-sketch-horizontal-vertical-other-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+wait-log '^Sketch Sketch1: 1 DOF$'
+key F6
+wait-idle
+capture-undo-depth baseline
+
+# 1. The tool, p1, then the pointer on p2: plumb is what it would add.
+mark
+key shift+v
+wait-log '^Sketch tool Horizontal/Vertical$'
+sketch-click -10 6
+sketch-move 10 0
+wait-log '^Horizontal/Vertical would add vertical_points on p1, p2$'
+screenshot '${MITCAD_TEST_WORK}/sketch-horizontal-vertical-other-hover.png'
+
+# 2. The click: plumb, not refused.
+sketch-click 10 0
+wait-log '^Horizontal/Vertical: horizontal_points on p1, p2 cannot be added; vertical_points instead$'
+wait-log '^Added constraint vertical_points k[0-9]+ on p1, p2$'
+wait-log '^Sketch Sketch1: 0 DOF, fully constrained$'
+expect-no-log 'Horizontal/Vertical not added|does not take'
+key Escape
+wait-idle
+capture-model-number p2x '{"query":"sketch","uid":"F1"}' entities.1.at.0
+expect-near ${p2x} -10 0 0.000001
+capture-model-number p2y '{"query":"sketch","uid":"F1"}' entities.1.at.1
+expect-near ${p2y} 0 0 0.000001
+
+# 3. One undo step.
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+expect-undo-depth ${baseline} 0
+wait-log '^Sketch Sketch1: 1 DOF$'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

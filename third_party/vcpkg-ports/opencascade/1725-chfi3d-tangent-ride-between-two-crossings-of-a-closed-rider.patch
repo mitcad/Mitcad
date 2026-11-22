@@ -26,13 +26,8 @@ blends intersecting).
   only. An open rider of one edge, or whose crossings lie beside two
   edges, keeps the line's parameters as before.
 
-Test: geometry/tests/test_fillet_tangent_ride.cpp,
-test_tower_behind_a_rounded_rim (ctest geometry.fillet_tangent_ride): the
-plate's corners rounded in plan so that the back edge's rounding is a
-closed contour, the tower 2.3 and 2.5 from it at the middle and 3 off it,
-both orders: valid, the volume within a millionth (the fillet failed
-without the patch). It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1725.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index b520a65c..de923c1e 100644

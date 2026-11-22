@@ -1951,6 +1951,9 @@ fn resolve_path_edges(item: &mut TimelineItem, at: &At, out: &mut Resolved) {
                 | "DeleteFaceFeature"
                 // A flange's edge (mitcad#211).
                 | "FlangeFeature"
+                // An Unfold's stationary face and its bends' faces
+                // (mitcad#2117).
+                | "UnfoldFeature"
         )
     ) {
         return;

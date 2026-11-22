@@ -198,6 +198,12 @@ impl<K: Kernel> Document<K> {
         let component = placed.component;
         let name = self.state.assembly.occurrence_name(occurrence);
         let link = self.plain_link(component, &name)?;
+        // Kept with its components (mitcad#2209): shown in full.
+        if show && link.tree.is_some() {
+            return Err(invalid(format!(
+                "{name} keeps the components of its design, so it is not shown by its envelope"
+            )));
+        }
         match (show, detail) {
             (true, Some(detail)) => check_detail(detail).map_err(invalid)?,
             (false, Some(_)) => {
@@ -595,6 +601,7 @@ impl DocState {
             // The same parts of the design (mitcad#2130).
             parts: link.parts.clone(),
             unlinked: Vec::new(),
+            tree: None,
         });
         Ok(made)
     }

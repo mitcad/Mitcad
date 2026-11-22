@@ -115,6 +115,97 @@ pub(super) struct PortFrame {
 pub(super) fn port_frame(state: &SheetState, reference: &BoundaryRef) -> Result<PortFrame, String> {
     let edge = boundary(state, reference)?;
     let (a, b) = line(edge)?;
+    port_frame_between(state, reference, a, b)
+}
+
+/// The edges of a boundary's loop, and the boundary's place in it.
+fn boundary_loop<'a>(
+    state: &'a SheetState,
+    reference: &BoundaryRef,
+) -> Result<(&'a [MaterialEdge], usize), String> {
+    let selected = boundary(state, reference)?;
+    let patch = chart(state, reference.panel)?;
+    let edges = patch
+        .regions
+        .iter()
+        .flat_map(|r| &r.loops)
+        .map(|l| l.edges.as_slice())
+        .find(|l| l.iter().any(|e| std::ptr::eq(e, selected)))
+        .ok_or("the sheet flange's boundary lies in no loop of its panel")?;
+    let at = edges
+        .iter()
+        .position(|e| std::ptr::eq(e, selected))
+        .expect("the selected edge is in its loop");
+    Ok((edges, at))
+}
+
+/// Whether a boundary edge of a domain is joined to another domain.
+fn is_joined(state: &SheetState, domain: SheetDomainRef, e: &MaterialEdge) -> bool {
+    state.joins.iter().any(|p| {
+        [&p.first, &p.second]
+            .iter()
+            .any(|s| s.boundary.domain == domain && s.boundary.piece == e.piece)
+    })
+}
+
+/// A boundary's straight run ([`collinear_run`]): the loop positions of its
+/// edges, and its first and last point.
+pub(super) type Run = (Vec<usize>, [f64; 2], [f64; 2]);
+
+/// The straight run a flange's boundary goes on along (mitcad#2117,
+/// `SheetFlangeDef::run`): the loop positions of the boundary's edge and of
+/// the edges before and after it that continue it in a line and are joined
+/// to no other domain, and the run's two ends in the boundary's own
+/// direction (its first and last point).
+pub(super) fn collinear_run(state: &SheetState, reference: &BoundaryRef) -> Result<Run, String> {
+    let (edges, at) = boundary_loop(state, reference)?;
+    let domain = SheetDomainRef::Panel(reference.panel);
+    let (a, b) = line(&edges[at])?;
+    let dir = g2::unit(g2::sub(b, a));
+    let on_line = |p: [f64; 2]| g2::cross(dir, g2::sub(p, a)).abs() <= TOLERANCE;
+    let continues = |e: &MaterialEdge| {
+        !is_joined(state, domain, e)
+            && line(e).is_ok_and(|(p, q)| {
+                g2::cross(dir, g2::unit(g2::sub(q, p))).abs() <= 1e-9 && on_line(p) && on_line(q)
+            })
+    };
+    let n = edges.len();
+    let mut members = vec![at];
+    for step in [1, n - 1] {
+        let mut i = (at + step) % n;
+        while !members.contains(&i) && continues(&edges[i]) {
+            members.push(i);
+            i = (i + step) % n;
+        }
+    }
+    let (mut first, mut last) = ((0.0, a), (g2::dot(g2::sub(b, a), dir), b));
+    for &i in &members {
+        let (p, q) = line(&edges[i])?;
+        for x in [p, q] {
+            let t = g2::dot(g2::sub(x, a), dir);
+            if t < first.0 {
+                first = (t, x);
+            }
+            if t > last.0 {
+                last = (t, x);
+            }
+        }
+    }
+    members.sort_unstable();
+    Ok((members, first.1, last.1))
+}
+
+/// [`port_frame`] of the straight boundary from `a` to `b` in the chart of
+/// `reference`'s panel (a run of several edges, [`collinear_run`]).
+pub(super) fn port_frame_between(
+    state: &SheetState,
+    reference: &BoundaryRef,
+    a: [f64; 2],
+    b: [f64; 2],
+) -> Result<PortFrame, String> {
+    if g2::dist(a, b) <= TOLERANCE {
+        return Err("sheet material boundary has zero length".into());
+    }
     let patch = chart(state, reference.panel)?;
     let (frame, parity) = plane(patch)?;
     let along = g2::unit(g2::sub(b, a));
@@ -555,6 +646,8 @@ fn relief_tool(
     };
     let back = tangent - relief.depth;
     match relief.kind {
+        // Saved Tear bend reliefs retain their original contour and curve
+        // identities. New Tear bend reliefs are refused when authored.
         ReliefKind::Rectangular | ReliefKind::Tear => {
             rectangle(feature, slot, [back, v0], [outside, v1])
         }
@@ -1219,29 +1312,98 @@ pub(super) fn outline_overreach(
     frame: &PortFrame,
     tangent: f64,
 ) -> Result<(f64, f64), String> {
-    let selected = boundary(state, reference)?;
-    let patch = chart(state, reference.panel)?;
-    let Some(edges) = patch
-        .regions
-        .iter()
-        .flat_map(|r| &r.loops)
-        .map(|l| &l.edges)
-        .find(|l| l.iter().any(|e| std::ptr::eq(e, selected)))
-    else {
+    outline_overreach_run(state, reference, frame, tangent, false)
+}
+
+/// Whether the panel goes on along the bend line past each end of the
+/// boundary (or of its straight run, `run`), at the start and at the end of
+/// the port frame's axial `0..width` (mitcad#2117,
+/// `SheetFlangeDef::relieve_ends`): the outline turns away from the material
+/// there (a concave corner, its next boundary running outward), or goes on
+/// straight past the end. An end whose outline turns into the material (a
+/// convex corner) is free.
+pub(super) fn concave_ends(
+    state: &SheetState,
+    reference: &BoundaryRef,
+    frame: &PortFrame,
+    run: bool,
+) -> Result<(bool, bool), String> {
+    let (edges, at) = boundary_loop(state, reference)?;
+    let members = if run {
+        collinear_run(state, reference)?.0
+    } else {
+        vec![at]
+    };
+    let map = frame.to_operation;
+    let near = |p: [f64; 2], q: [f64; 2]| g2::dist(p, q) <= 1e3 * TOLERANCE;
+    let n = edges.len();
+    let ends = |i: usize| {
+        line(&edges[i])
+            .ok()
+            .map(|(a, b)| (map.point(a), map.point(b)))
+            .or_else(|| {
+                edges[i]
+                    .curve
+                    .ends()
+                    .ok()
+                    .map(|(a, b)| (map.point(a), map.point(b)))
+            })
+    };
+    // The outline's next point past the end at `from` (its neighbour's
+    // other end), and whether the panel goes on beyond `from` axially
+    // (`beyond`: the sign of the axial direction past that end).
+    let goes_on = |from: [f64; 2], beyond: f64| -> bool {
+        let Some(at) = members
+            .iter()
+            .copied()
+            .find(|&i| ends(i).is_some_and(|(a, b)| near(a, from) || near(b, from)))
+        else {
+            return false;
+        };
+        let next = [1, n - 1].into_iter().find_map(|s| {
+            let i = (at + s) % n;
+            if members.contains(&i) {
+                return None;
+            }
+            let (a, b) = ends(i)?;
+            if near(a, from) {
+                Some(b)
+            } else if near(b, from) {
+                Some(a)
+            } else {
+                None
+            }
+        });
+        let Some(q) = next else {
+            return false;
+        };
+        let outward = q[0] - from[0];
+        let along = (q[1] - from[1]) * beyond;
+        outward > 1e3 * TOLERANCE || (outward > -1e3 * TOLERANCE && along > 1e3 * TOLERANCE)
+    };
+    Ok((goes_on([0.0, 0.0], -1.0), goes_on([0.0, frame.width], 1.0)))
+}
+
+/// [`outline_overreach`] from the ends of the boundary's straight run
+/// ([`collinear_run`]) where `run` is set (mitcad#2117).
+pub(super) fn outline_overreach_run(
+    state: &SheetState,
+    reference: &BoundaryRef,
+    frame: &PortFrame,
+    tangent: f64,
+    run: bool,
+) -> Result<(f64, f64), String> {
+    let Ok((edges, at)) = boundary_loop(state, reference) else {
         return Ok((0.0, 0.0));
     };
-    let at = edges
-        .iter()
-        .position(|e| std::ptr::eq(e, selected))
-        .expect("the selected edge is in its loop");
-    let map = frame.to_operation;
-    let joined = |e: &MaterialEdge| {
-        state.joins.iter().any(|p| {
-            [&p.first, &p.second]
-                .iter()
-                .any(|s| s.boundary.domain == patch.domain && s.boundary.piece == e.piece)
-        })
+    let members = if run {
+        collinear_run(state, reference)?.0
+    } else {
+        vec![at]
     };
+    let domain = SheetDomainRef::Panel(reference.panel);
+    let map = frame.to_operation;
+    let joined = |e: &MaterialEdge| is_joined(state, domain, e);
     let near = |p: [f64; 2], q: [f64; 2]| g2::dist(p, q) <= 1e3 * TOLERANCE;
     // The axial coordinates the outline reaches from the boundary's end at
     // `from` to its crossing of the setback line, or none.
@@ -1252,9 +1414,15 @@ pub(super) fn outline_overreach(
                 .ok()
                 .map(|(a, b)| (map.point(a), map.point(b)))
         };
-        let step = [1, n - 1]
-            .into_iter()
-            .find(|s| ends((at + s) % n).is_some_and(|(a, b)| near(a, from) || near(b, from)))?;
+        // The edge of the run that ends at `from`.
+        let at = members
+            .iter()
+            .copied()
+            .find(|&i| ends(i).is_some_and(|(a, b)| near(a, from) || near(b, from)))?;
+        let step = [1, n - 1].into_iter().find(|s| {
+            let i = (at + s) % n;
+            !members.contains(&i) && ends(i).is_some_and(|(a, b)| near(a, from) || near(b, from))
+        })?;
         let mut reached = Vec::new();
         let mut p = from;
         let mut i = (at + step) % n;
@@ -1297,18 +1465,36 @@ pub(crate) fn flange<K: Kernel>(
 ) -> Result<FeatureOutput<K::Shape>, String> {
     // Several edges, or a corner gap to an existing flange's wall: the
     // mitred walls of mitcad#1872.
-    if !d.boundaries.is_empty()
+    let several = !d.boundaries.is_empty()
         || d.corner_gap.is_some()
         || d.miter.is_some()
-        || !d.corner_miters.is_empty()
-    {
+        || !d.corner_miters.is_empty();
+    // Along a straight run of boundaries (mitcad#2117): one bend over all
+    // of it, so the bend needs a setback line to cut back to.
+    if d.run && (several || d.profile.is_some() || d.position == SheetPosition::Edge) {
+        return Err(
+            "a sheet flange along a run of boundaries is one flange on one edge, with no \
+             profile, set back from the boundary (not at position edge)"
+                .into(),
+        );
+    }
+    if several {
         return super::flange_edges::flange_edges(d, ctx);
     }
     let (mut state, rules) = read(ctx, d.body)?;
     // The fold's own allowance in place of the rules' (mitcad#1939).
     let rules = rules.with_fold_allowance(d.allowance.as_ref());
     free(&state, &d.boundary)?;
-    let frame = port_frame(&state, &d.boundary).map_err(|e| {
+    let run = if d.run {
+        Some(collinear_run(&state, &d.boundary)?)
+    } else {
+        None
+    };
+    let frame = match &run {
+        Some((_, first, last)) => port_frame_between(&state, &d.boundary, *first, *last),
+        None => port_frame(&state, &d.boundary),
+    }
+    .map_err(|e| {
         if d.hem.is_some() && e.contains("straight") {
             hem_refusal(
                 d,
@@ -1348,6 +1534,21 @@ pub(crate) fn flange<K: Kernel>(
     // than the boundary overhangs past them (mitcad#242).
     let (lo, hi) = match &profile {
         Some(wall) => (wall.start, wall.end),
+        // Ends where the panel goes on along the bend line take the bend
+        // relief inside the span (mitcad#2117).
+        None if d.relieve_ends && d.offsets.is_none() && d.width.is_none() => {
+            let (lo, hi) = flange_span(d, frame.width)?;
+            let w = d.relief.as_ref().unwrap_or(&rules.bend_relief).width;
+            let (at_start, at_end) = concave_ends(&state, &d.boundary, &frame, d.run)?;
+            let span = (if at_start { w } else { lo }, if at_end { w } else { hi });
+            if span.0 + span.1 >= frame.width - TOLERANCE {
+                return Err(format!(
+                    "the bend reliefs at the ends of a {:.4} mm boundary leave no flange",
+                    frame.width
+                ));
+            }
+            span
+        }
         None => flange_span(d, frame.width)?,
     };
     let (start, end) = (lo.max(0.0), hi.max(0.0));
@@ -1375,7 +1576,7 @@ pub(crate) fn flange<K: Kernel>(
     let reach = if d.position == SheetPosition::Edge {
         (0.0, 0.0)
     } else {
-        outline_overreach(&state, &d.boundary, &frame, tangent)?
+        outline_overreach_run(&state, &d.boundary, &frame, tangent, d.run)?
     };
     let reach = (
         if whole.0 { reach.0 } else { 0.0 },
@@ -3325,7 +3526,7 @@ mod tests {
     }
 
     #[test]
-    fn tear_uses_exact_entered_gap_and_round_depth_includes_its_tip() {
+    fn legacy_tear_retains_its_slot_and_round_depth_includes_its_tip() {
         let tear = relief_tool(
             FeatureUid(8),
             100,
@@ -3576,6 +3777,7 @@ mod tests {
                 first: 0.2,
                 last: 0.8,
             },
+            None,
         )
         .unwrap();
         assert!(inherited.contains(&alias));
@@ -3589,10 +3791,73 @@ mod tests {
                 ParamSpan {
                     first: 2.0,
                     last: 3.0
-                }
+                },
+                None,
             )
             .is_err()
         );
+    }
+
+    /// Two fragments of one piece, each a curve of its own with the range
+    /// 0..1 (a cut along an existing side leaves it so, mitcad#2117), one
+    /// also aliased to the side's curve: a source span holds in both by
+    /// parameter, so the output edge decides: the fragment it lies on, or
+    /// every fragment where it lies on both. Without it, or on neither, the
+    /// span stays ambiguous.
+    #[test]
+    fn fragments_of_one_piece_are_told_apart_by_the_output_edge() {
+        let mut state = empty_state();
+        let piece = generated(FeatureUid(2), 10);
+        let side = generated(FeatureUid(3), 4);
+        let line = |start: [f64; 2], end: [f64; 2]| BoundedCurve2 {
+            geometry: SegmentGeometry::Line { start, end },
+            range: ParamSpan {
+                first: 0.0,
+                last: 1.0,
+            },
+        };
+        let lower = MaterialEdge {
+            piece: piece.clone(),
+            curve: line([0.0, -24.0], [0.0, 4.0]),
+        };
+        let upper = MaterialEdge {
+            piece: piece.clone(),
+            curve: line([0.0, 4.0], [0.0, 6.0]),
+        };
+        let regions = vec![MaterialRegion {
+            loops: vec![MaterialLoop {
+                edges: vec![lower.clone(), upper.clone()],
+            }],
+        }];
+        state.lineage.push(CurveLineage {
+            boundary: BoundaryPieceRef {
+                domain: domain(0),
+                piece: piece.clone(),
+            },
+            curve_generation: CurveLineage::generation(&lower.curve),
+            aliases: vec![piece.clone(), side.clone()],
+            sources: Vec::new(),
+        });
+        let span = ParamSpan {
+            first: 0.25,
+            last: 0.75,
+        };
+        let inherited = |on: Option<&BoundedCurve2>| {
+            inherited_aliases(&state.lineage, domain(0), &regions, &piece, span, on)
+        };
+        assert!(inherited(None).is_err());
+        assert_eq!(
+            inherited(Some(&line([0.0, -20.0], [0.0, 0.0]))).unwrap(),
+            [piece.clone(), side.clone()]
+        );
+        assert_eq!(
+            inherited(Some(&line([0.0, 4.5], [0.0, 5.5]))).unwrap(),
+            std::slice::from_ref(&piece)
+        );
+        // One output edge along both: it answers for both names.
+        let both = inherited(Some(&line([0.0, -24.0], [0.0, 6.0]))).unwrap();
+        assert!(both.contains(&side) && both.contains(&piece), "{both:?}");
+        assert!(inherited(Some(&line([5.0, 0.0], [5.0, 4.0]))).is_err());
     }
 
     /// Rules of thickness 2.5, bend radius 2.5 and K-factor 0.44 (the
@@ -4112,6 +4377,131 @@ mod tests {
         assert_eq!(
             fold_end(&square, 50.0, 1.0, centred).unwrap(),
             FoldEnd::Flush
+        );
+    }
+
+    /// A flange's run (mitcad#2117): a 250 x 100 panel whose bottom side is
+    /// two collinear curves (0 from x = 0 to 125, 1 on to 250), then its
+    /// right (2), top (3) and left (4) sides. From either bottom curve the
+    /// run is both, from x = 0 to 250 in that curve's direction, its port
+    /// frame as wide; a side that nothing continues is its own run; the
+    /// run's square ends reach nothing past them; a curve joined to another
+    /// domain ends the run.
+    #[test]
+    fn a_boundary_runs_on_along_its_collinear_boundaries() {
+        let mut state = empty_state();
+        let points = [
+            [0.0, 0.0],
+            [125.0, 0.0],
+            [250.0, 0.0],
+            [250.0, 100.0],
+            [0.0, 100.0],
+        ];
+        state.charts = vec![SheetPatch {
+            domain: domain(0),
+            regions: vec![polygon(FeatureUid(3), 0, &points).unwrap()],
+            embedding: SheetEmbedding::Plane {
+                front_frame: SketchFrame {
+                    origin: [0.0, 0.0, 0.0],
+                    x_axis: [1.0, 0.0, 0.0],
+                    y_axis: [0.0, 1.0, 0.0],
+                },
+                front_to_back_sign: MaterialParity::Positive,
+            },
+        }];
+        let reference = |slot: u32| BoundaryRef {
+            panel: PanelId {
+                feature: FeatureUid(2),
+                slot: 0,
+            },
+            curve: SheetCurveId::Generated {
+                feature: FeatureUid(3),
+                slot,
+            },
+            piece: None,
+            range: None,
+        };
+        for slot in [0, 1] {
+            let (members, first, last) = collinear_run(&state, &reference(slot)).unwrap();
+            assert_eq!(members, [0, 1], "from curve {slot}");
+            assert_eq!(
+                (first, last),
+                ([0.0, 0.0], [250.0, 0.0]),
+                "from curve {slot}"
+            );
+            let frame = port_frame_between(&state, &reference(slot), first, last).unwrap();
+            assert!((frame.width - 250.0).abs() < 1e-9, "{}", frame.width);
+            let reach = outline_overreach_run(&state, &reference(slot), &frame, -2.0, true);
+            assert_eq!(reach.unwrap(), (0.0, 0.0));
+        }
+        let (members, first, last) = collinear_run(&state, &reference(2)).unwrap();
+        assert_eq!(members, [2]);
+        assert_eq!((first, last), ([250.0, 0.0], [250.0, 100.0]));
+        // The second bottom curve joined to a bend: the first runs alone.
+        let bend = SheetDomainRef::Bend(BendId {
+            feature: FeatureUid(5),
+            slot: 0,
+        });
+        let mut joined = link(domain(0), bend, 0);
+        joined.first.boundary.piece = generated(FeatureUid(3), 1);
+        state.joins = vec![joined];
+        let (members, _, last) = collinear_run(&state, &reference(0)).unwrap();
+        assert_eq!(members, [0]);
+        assert_eq!(last, [125.0, 0.0]);
+    }
+
+    /// The ends of a flange's boundary where the panel goes on along the
+    /// bend line (mitcad#2117, `relieve_ends`): a 150 x 100 panel with a tab
+    /// below its bottom from x = 100 to 150. The bottom side from x = 0 to
+    /// 100 (curve 0) ends at the tab's side, which runs outward (a concave
+    /// corner: relieved), and starts at the panel's left side, which runs
+    /// into the material (convex: free). The top side (curve 4) has convex
+    /// corners at both ends.
+    #[test]
+    fn ends_where_the_panel_goes_on_are_concave() {
+        let mut state = empty_state();
+        let points = [
+            [0.0, 0.0],
+            [100.0, 0.0],
+            [100.0, -20.0],
+            [150.0, -20.0],
+            [150.0, 100.0],
+            [0.0, 100.0],
+        ];
+        state.charts = vec![SheetPatch {
+            domain: domain(0),
+            regions: vec![polygon(FeatureUid(3), 0, &points).unwrap()],
+            embedding: SheetEmbedding::Plane {
+                front_frame: SketchFrame {
+                    origin: [0.0, 0.0, 0.0],
+                    x_axis: [1.0, 0.0, 0.0],
+                    y_axis: [0.0, 1.0, 0.0],
+                },
+                front_to_back_sign: MaterialParity::Positive,
+            },
+        }];
+        let reference = |slot: u32| BoundaryRef {
+            panel: PanelId {
+                feature: FeatureUid(2),
+                slot: 0,
+            },
+            curve: SheetCurveId::Generated {
+                feature: FeatureUid(3),
+                slot,
+            },
+            piece: None,
+            range: None,
+        };
+        let frame = port_frame(&state, &reference(0)).unwrap();
+        let ends = concave_ends(&state, &reference(0), &frame, false).unwrap();
+        // The frame's axial start is one end of the boundary: the concave
+        // one at x = 100 is relieved, the convex one at x = 0 is not.
+        let at_tab = (frame.origin[0] - 100.0).abs() < 1e-9;
+        assert_eq!(ends, if at_tab { (true, false) } else { (false, true) });
+        let frame = port_frame(&state, &reference(4)).unwrap();
+        assert_eq!(
+            concave_ends(&state, &reference(4), &frame, false).unwrap(),
+            (false, false)
         );
     }
 }

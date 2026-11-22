@@ -23,12 +23,8 @@ On a closed spine:
 
 Before, the cone of the case came in four or five faces.
 
-Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow),
-test_chamfer_of_a_boss_beyond_a_plate_corner: Its failure without the
-patch is still to be shown: with it and the 35 later patches that change
-the same lines reverted at the port's tip, OCCT does not build (tried
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0146.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 610133a8..506a3516 100644

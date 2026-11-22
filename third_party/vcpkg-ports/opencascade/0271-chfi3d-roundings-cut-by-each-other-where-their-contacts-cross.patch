@@ -43,13 +43,9 @@ fails with OCCT's reports of a computation it cannot make
 (ChFi3d_IsComputationFailure, 0016): it is marked failed (its spine's
 status an error) and the trim is not made, which fails the fillet as
 before. Any other failure (a broken invariant, a signal) is rethrown.
-Test: geometry/tests/port/p0271-roundings-cut-where-contacts-cross.cpp
-(ctest geometry.port.0271): a block 20 x 12 x 10 whose long sides are
-concave arcs of radius 20, the top 5.8 wide in the middle, both top edges
-rounded with 4 (and 5 wide, rounded with 4 and 3): built, valid, the top in
-two pieces, the body that of each edge rounded alone, the two in common
-(without the patch: not built). The boundary: rounded with 2.8, the
-contacts apart, the top one face, as stock.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0271.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 4702ab59..4ab2512c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

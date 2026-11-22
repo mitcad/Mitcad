@@ -38,11 +38,12 @@ pub mod document {
     #[cfg(any(test, feature = "testing"))]
     pub use crate::document::ResultVersions;
     pub use crate::document::{
-        Carried, DocResolver, FrameAt, MaterialWrite, MoveDestination, MovedDestination,
-        MovedOccurrence, ReparentPlan, TimelineBefore, check_minimum_wall, check_overhang_angle,
-        deleted_views, feature_level, feature_notices, feature_notices_placed, library_kind,
-        normalized_color, noted_message, noted_status, print_material, purge_defaults_json,
-        status_message, status_text, with_warnings, writable_library,
+        Carried, DEFAULT_DRAFT_ANGLE, DocResolver, FrameAt, MaterialWrite, MoveDestination,
+        MovedDestination, MovedOccurrence, ReparentPlan, TimelineBefore, check_draft_angle,
+        check_minimum_wall, check_overhang_angle, deleted_views, feature_level, feature_notices,
+        feature_notices_placed, library_kind, normalized_color, noted_message, noted_status,
+        print_material, purge_defaults_json, status_message, status_text, with_warnings,
+        writable_library,
     };
     // Remarks (mitcad#1914).
     pub use crate::document::remark_notices;

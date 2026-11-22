@@ -34,14 +34,19 @@ class RenderMode;
 // The display settings of the view (U5), kept in the user's settings
 // (group "view").
 struct ViewSettings {
-  // Automatic follows the system: the default gradient in light mode, a
-  // dark one in dark mode. It comes last: the settings keep the number.
+  // Automatic (Follow System in Preferences) follows MitCad's theme, as
+  // the window's chrome does (isDarkTheme, mitcad#2145): the default
+  // gradient while the theme is light, a dark one while it is dark. It
+  // comes last: the settings keep the number.
   enum class Background { Gradient, Light, White, Dark, Custom, Automatic };
 
   VisualStyle style = VisualStyle::ShadedVisibleEdges;
   bool perspective = false;
   bool componentColors = false;
-  Background background = Background::Gradient;
+  // Follow System on every platform (mitcad#2145; macOS only before): a
+  // dark window never sits over a light view by default, also after
+  // Preferences › Restore Defaults.
+  Background background = Background::Automatic;
   // Custom: the default gradient's colours (sRGB).
   QColor top = QColor(247, 248, 250);
   QColor bottom = QColor(223, 227, 234);
@@ -101,6 +106,10 @@ struct ViewSettings {
   void save() const;
   // The background's colours (a gradient from top to bottom, or `top`).
   void colors(QColor& top, QColor& bottom, bool& gradient) const;
+  // Follow System's gradient for a dark or a light theme (mitcad#2145): the
+  // one place of its colours, which colors() and the test driver's
+  // expect-view-background read.
+  static void automaticColors(bool dark, QColor& top, QColor& bottom);
 };
 
 // The View menu (U5): standard views and Home, Look At, the camera's

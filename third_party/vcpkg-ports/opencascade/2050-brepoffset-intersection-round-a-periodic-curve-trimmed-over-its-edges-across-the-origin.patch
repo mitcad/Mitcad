@@ -1,0 +1,689 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offsets: an intersection of two offsets that runs all round a periodic
+curve (a circle where a plane cuts a cylinder) is trimmed to the arcs over
+the edges it is the image of, also where they cross the curve's origin;
+and patch 1160's rule also holds for a line and a conic whose edges leave
+their common vertex in the same direction (mitcad#2050).
+
+The case (GitHub #466): a plate with rounded corners and a cylinder joined
+on its top on the axis of one corner, of the corner's radius, so that the
+cylinder continues a quarter of the corner's side (one face after the join,
+or two faces on one surface). The concave edge round the cylinder's foot
+then runs three quarters round, from one end of that quarter to the other,
+and the plate's top ends in a point of no angle at each of its ends: the
+top's straight edge along the plate's side and the concave arc leave the
+point in the same direction, and below it the side meets the cylinder
+tangentially. The shell of the plate with the cylinder's top and the
+plate's bottom removed, inside or outside, and its closed offsets, were not
+done (the thick solid with fewer faces than the body: BRepOffset_UnknownError,
+"the offset faces do not close up") with the intersection join, or not
+valid with the foot's faces apart; with the arc join they were valid, and so
+were the offsets of the same plate with a smaller cylinder on the axis, or
+with a larger corner (the foot's edge a whole circle).
+
+BRepOffset_Inter3d intersects the offsets of the top and the cylinder,
+enlarged, into a whole circle (its origin where the enlarged cylinder's
+seam cuts it), and TrimEdge cut it to the range from the smallest to the
+largest parameter of the vertices on it: from the origin to one end of the
+foot's edge, over the corner quarter the foot does not run along, instead
+of the three quarters across the origin. TrimEdge now takes the edges the
+intersection is the image of (the new parameter theBuild, the map of
+intersections of the edges); for an edge all round a periodic curve, the new
+TrimOverOrigins splits the curve at its vertices into arcs, keeps those whose
+middles project inside the range of one of those edges (IsOverOrigins), and
+trims the edge to them where they make one run round the curve and not all
+of it. Where the run crosses the origin and a vertex lies there (where the
+cylinder's seam cuts the circle), the edge is cut there in two, the edge up
+to that vertex and a second from it (the new parameter theSecond; TrimEdges
+adds the second to the intersections of the edges the first is the image
+of, to the new edges and to their origins): one edge across the origin lay
+past the period of the cylinder's offset on it, its face invalid. TrimEdges
+and TrimEdge no longer remove from AsDes, as a piece without intersections,
+an edge whose vertices are in AsDes (BRepAlgo_AsDes::Remove throws
+Standard_ConstructionError on it, which with the split ended every offset
+of the case). Where the
+arcs are no such run, where the run is the range from the smallest to the
+largest parameter, where it crosses the origin with no vertex there, and
+for edges that do not run all round a periodic curve, it is as before.
+
+At the points of no angle, BRepOffset_Inter2d::ConnexIntByInt leaves the
+images of the top's two edges on the top's offset, a line and a circle
+touching there, unintersected with each other, as 1160 does for curves that
+are not lines or conics (the new LeaveInOneDirection: the edges' tangents,
+pointing away from their common vertex, within 1e-3 rad of each other); the
+vertex is where each crosses the offset of the tangential edge below. Where
+the edges leave the vertex in opposite directions (a rounding between planes
+cut by a plane, the images continuing each other) it is as before.
+MeetAlongTangentEdge also takes such a vertex with a fourth edge, a seam
+of one of the faces beyond the two running on from the tangential edge:
+in the reporter's design the merged face's seam starts at one of the
+points of no angle (its corner's arc starts there), and the line and the
+circle were intersected there, tangentially. There the walk round the
+cylinder's offset also passes from the seam to the tangential edge it runs
+on from; neither has an image of its own, and ConnexIntByInt put their
+common vertex, the offset of the original one (10 mm up), on both offset
+edges, which lie on one line: the tangential edge's offset then reached
+past where the offset of the foot crosses that line (8 mm up), into the
+seam's, and the shell was not done (the closed offset 442 mm3 instead of
+24035). The new SeamRunsOnFromTangentEdge leaves that vertex out where
+another edge of the face at the vertex has an image: the offset edges get
+their ends where the foot's offset and the top's cross them, from the walks
+round the cylinder's offset and round the side's.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2050.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+index e0af368f..bcea430a 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+@@ -54,7 +54,9 @@
+ #include <GeomConvert_CompCurveToBSplineCurve.hxx>
+ #include <GeomLib.hxx>
+ #include <GeomProjLib.hxx>
++#include <gp.hxx>
+ #include <gp_Pnt.hxx>
++#include <gp_Vec.hxx>
+ #include <IntRes2d_IntersectionPoint.hxx>
+ #include <IntRes2d_IntersectionSegment.hxx>
+ #include <IntTools_Tools.hxx>
+@@ -1871,7 +1873,8 @@ void BRepOffset_Inter2d::Compute(
+ //            (consecutive edges of theF at theV) meet along a tangential
+ //            edge ending at theV: theV is a vertex of three edges, theE1,
+ //            theE2 and an edge whose two faces are tangent all along it,
+-//            the faces beyond theE1 and theE2 (a face of a loft split by
++//            the faces beyond theE1 and theE2, and at most a seam of one
++//            of those faces besides (mitcad#2050) (a face of a loft split by
+ //            the seam of a circle; mitcad#1199). The offsets of those two
+ //            faces share the offset of that edge, so the images of theE1
+ //            and theE2 on the offset of theF (where those faces' offsets
+@@ -1896,7 +1899,10 @@ static bool MeetAlongTangentEdge(const TopoDS_Face&        theF,
+       aVEdges.Add(it.Value());
+     }
+   }
+-  if (aVEdges.Extent() != 3 || !aVEdges.Contains(theE1) || !aVEdges.Contains(theE2))
++  // Three edges, or four where the fourth is a seam of a face beyond theE1
++  // or theE2 running on from the tangential edge (mitcad#2050).
++  if (aVEdges.Extent() < 3 || aVEdges.Extent() > 4 || !aVEdges.Contains(theE1)
++      || !aVEdges.Contains(theE2))
+   {
+     return false;
+   }
+@@ -1924,6 +1930,7 @@ static bool MeetAlongTangentEdge(const TopoDS_Face&        theF,
+   {
+     return false;
+   }
++  int aNbTangential = 0, aNbSeams = 0;
+   for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator it(aVEdges); it.More(); it.Next())
+   {
+     const TopoDS_Edge& aE = TopoDS::Edge(it.Key());
+@@ -1931,20 +1938,26 @@ static bool MeetAlongTangentEdge(const TopoDS_Face&        theF,
+     {
+       continue;
+     }
++    if (BRep_Tool::IsClosed(aE, TopoDS::Face(aF[0])) || BRep_Tool::IsClosed(aE, TopoDS::Face(aF[1])))
++    {
++      ++aNbSeams;
++      continue;
++    }
+     const NCollection_List<BRepOffset_Interval>& aLI = theAnalyse.Type(aE);
+     if (aLI.Extent() != 1 || aLI.First().Type() != ChFiDS_Tangential || !theAnalyse.HasAncestor(aE))
+     {
+       return false;
+     }
+     const NCollection_List<TopoDS_Shape>& aLF = theAnalyse.Ancestors(aE);
+-    if (aLF.Extent() != 2)
++    if (aLF.Extent() != 2
++        || !((aLF.First().IsSame(aF[0]) && aLF.Last().IsSame(aF[1]))
++             || (aLF.First().IsSame(aF[1]) && aLF.Last().IsSame(aF[0]))))
+     {
+       return false;
+     }
+-    return (aLF.First().IsSame(aF[0]) && aLF.Last().IsSame(aF[1]))
+-           || (aLF.First().IsSame(aF[1]) && aLF.Last().IsSame(aF[0]));
++    ++aNbTangential;
+   }
+-  return false;
++  return aNbTangential == 1 && aNbSeams == aVEdges.Extent() - 3;
+ }
+ 
+ //=======================================================================
+@@ -1966,6 +1979,109 @@ static bool IsAnalyticOn(const TopoDS_Edge& theE, const TopoDS_Face& theF)
+          || aType == GeomAbs_Hyperbola || aType == GeomAbs_Parabola;
+ }
+ 
++//=======================================================================
++// function : LeaveInOneDirection
++// purpose  : Whether theE1 and theE2 leave their common vertex theV in
++//            the same direction (within 1e-3 rad): the face they bound
++//            ends at theV in a point of no angle, as the top of a plate
++//            where a cylinder standing on it continues a rounded corner's
++//            side meets the plate's straight side (mitcad#2050).
++//=======================================================================
++static bool LeaveInOneDirection(const TopoDS_Edge&   theE1,
++                                const TopoDS_Edge&   theE2,
++                                const TopoDS_Vertex& theV)
++{
++  gp_Vec aD[2];
++  for (int k = 0; k < 2; k++)
++  {
++    const TopoDS_Edge& aE = k == 0 ? theE1 : theE2;
++    if (BRep_Tool::Degenerated(aE))
++    {
++      return false;
++    }
++    TopoDS_Vertex aV1, aV2;
++    TopExp::Vertices(aE, aV1, aV2);
++    if (aV1.IsNull() || aV2.IsNull() || aV1.IsSame(aV2))
++    {
++      return false;
++    }
++    const bool bAtStart = aV1.IsSame(theV);
++    if (!bAtStart && !aV2.IsSame(theV))
++    {
++      return false;
++    }
++    const BRepAdaptor_Curve aC(aE);
++    gp_Pnt                  aP;
++    gp_Vec                  aD1;
++    aC.D1(bAtStart ? aC.FirstParameter() : aC.LastParameter(), aP, aD1);
++    if (aD1.Magnitude() < gp::Resolution())
++    {
++      return false;
++    }
++    aD[k] = bAtStart ? aD1 : aD1.Reversed();
++  }
++  return aD[0].Angle(aD[1]) < 1.e-3;
++}
++
++//=======================================================================
++// function : SeamRunsOnFromTangentEdge
++// purpose  : Whether, of theE1 and theE2 (consecutive edges of theF at
++//            theV, neither with an image of its own), one is a seam of theF
++//            and the other an edge where theF meets a face tangentially,
++//            the seam running on from it, and another edge of theF at theV
++//            has an image (mitcad#2050: a cylinder continuing a plate's
++//            rounded corner, its seam starting where the cylinder meets the
++//            plate's side; the offset of the concave edge round its foot
++//            has an image). The offsets of the two lie on one line, and
++//            their common vertex (the offset of theV) is not where they
++//            meet in the offset: that is where the image of the other edge
++//            crosses that line, which the walks round the faces find.
++//=======================================================================
++static bool SeamRunsOnFromTangentEdge(
++  const TopoDS_Face&                                                              theF,
++  const TopoDS_Edge&                                                              theE1,
++  const TopoDS_Edge&                                                              theE2,
++  const TopoDS_Vertex&                                                            theV,
++  const BRepOffset_Analyse&                                                       theAnalyse,
++  const NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theBuild,
++  const NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>&
++    theMVE)
++{
++  if (theV.IsNull() || theE1.IsSame(theE2))
++  {
++    return false;
++  }
++  const bool bSeam1 = BRep_Tool::IsClosed(theE1, theF);
++  const bool bSeam2 = BRep_Tool::IsClosed(theE2, theF);
++  if (bSeam1 == bSeam2)
++  {
++    return false;
++  }
++  const TopoDS_Edge& aE = bSeam1 ? theE2 : theE1;
++  if (!theAnalyse.HasAncestor(aE))
++  {
++    return false;
++  }
++  const NCollection_List<BRepOffset_Interval>& aLI = theAnalyse.Type(aE);
++  if (aLI.Extent() != 1 || aLI.First().Type() != ChFiDS_Tangential)
++  {
++    return false;
++  }
++  const NCollection_List<TopoDS_Shape>* pLE = theMVE.Seek(theV);
++  if (pLE == nullptr)
++  {
++    return false;
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator it(*pLE); it.More(); it.Next())
++  {
++    if (!it.Value().IsSame(theE1) && !it.Value().IsSame(theE2) && theBuild.IsBound(it.Value()))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
+ //=================================================================================================
+ 
+ bool BRepOffset_Inter2d::ConnexIntByInt(
+@@ -2249,15 +2365,20 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+       }
+       if (DoInter && aChoice == 1 && !NE1seq.IsEmpty() && !NE2seq.IsEmpty()
+           && MeetAlongTangentEdge(FI, CurE, NextE, Vref, Analyse)
+-          && !(IsAnalyticOn(TopoDS::Edge(NE1seq.Last()), FIO)
+-               && IsAnalyticOn(TopoDS::Edge(NE2seq.First()), FIO)))
++          && (!(IsAnalyticOn(TopoDS::Edge(NE1seq.Last()), FIO)
++                && IsAnalyticOn(TopoDS::Edge(NE2seq.First()), FIO))
++              || LeaveInOneDirection(CurE, NextE, Vref)))
+       {
+         // The images of CurE and NextE are tangent where they meet, and
+         // not both analytic: their intersection here is ill-conditioned
+         // (micrometres off along them, or none, or several). Their common
+         // vertex is where each crosses the offset of the tangential edge,
+         // on the offsets of the faces beyond them, transversally
+-        // (mitcad#1199).
++        // (mitcad#1199). So too where they are analytic but leave the
++        // vertex in the same direction, the face ending there in a point
++        // of no angle (a line touching a circle on the circle's outside,
++        // the face between them): the offset failed there with the
++        // intersection (mitcad#2050).
+         CurE = anIdx <= aSeq.Length() ? aSeq(anIdx) : TopoDS_Edge();
+         continue;
+       }
+@@ -2331,7 +2452,7 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+           FacesWithVerts.Add(FI);
+         }
+       }
+-      else
++      else if (!SeamRunsOnFromTangentEdge(FI, CurE, NextE, Vref, Analyse, Build, MVE))
+       {
+         TopoDS_Vertex V = CommonVertex(CEO, NEO);
+         if (!V.IsNull())
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index 56529837..50cc6eb1 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -101,7 +101,10 @@
+ #include <BOPAlgo_MakerVolume.hxx>
+ #include <BOPTools_AlgoTools.hxx>
+ 
++#include <algorithm>
+ #include <cstdio>
++#include <utility>
++#include <vector>
+ // POP for NT
+ #ifdef OCCT_DEBUG
+   #include <OSD_Chronometer.hxx>
+@@ -289,7 +292,10 @@ static bool TrimEdge(
+   TopoDS_Edge&                                                              NE,
+   const occ::handle<BRepAlgo_AsDes>&                                        AsDes2d,
+   occ::handle<BRepAlgo_AsDes>&                                              AsDes,
+-  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theETrimEInf);
++  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theETrimEInf,
++  const NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>* theBuild =
++    nullptr,
++  TopoDS_Edge* theSecond = nullptr);
+ 
+ static bool TrimEdges(
+   const TopoDS_Shape&                                                            theShape,
+@@ -5553,7 +5559,7 @@ bool TrimEdges(
+         {
+           if (theNewEdges.Add(NE))
+           {
+-            if (!TrimEdge(TopoDS::Edge(NE), theAsDes2d, theAsDes, theETrimEInf))
++            if (!TrimEdge(TopoDS::Edge(NE), theAsDes2d, theAsDes, theETrimEInf, &theBuild))
+             {
+               return false;
+             }
+@@ -5573,14 +5579,59 @@ bool TrimEdges(
+             {
+               if (!theAsDes2d->Descendant(NEC).IsEmpty())
+               {
+-                if (!TrimEdge(NEC, theAsDes2d, theAsDes, theETrimEInf))
++                TopoDS_Edge aSecond;
++                if (!TrimEdge(NEC, theAsDes2d, theAsDes, theETrimEInf, &theBuild, &aSecond))
+                 {
+                   return false;
+                 }
++                if (!aSecond.IsNull())
++                {
++                  // The edge trimmed across its curve's origin in two
++                  // (mitcad#2050): the second piece goes with it wherever
++                  // it is the intersection of an edge.
++                  theNewEdges.Add(aSecond);
++                  NCollection_List<TopoDS_Shape>* pLEOr = theEdgesOrigins.Bound(
++                    aSecond,
++                    NCollection_List<TopoDS_Shape>());
++                  if (const NCollection_List<TopoDS_Shape>* pLNEC = theEdgesOrigins.Seek(NEC))
++                  {
++                    for (NCollection_List<TopoDS_Shape>::Iterator itO(*pLNEC); itO.More(); itO.Next())
++                    {
++                      AppendToList(*pLEOr, itO.Value());
++                    }
++                  }
++                  for (NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>::
++                         Iterator itB(theBuild);
++                       itB.More();
++                       itB.Next())
++                  {
++                    bool bHas = false;
++                    for (TopExp_Explorer aExpB(itB.Value(), TopAbs_EDGE); aExpB.More() && !bHas;
++                         aExpB.Next())
++                    {
++                      bHas = aExpB.Current().IsSame(NEC);
++                    }
++                    if (bHas)
++                    {
++                      BRep_Builder    aBB;
++                      TopoDS_Compound aC;
++                      aBB.MakeCompound(aC);
++                      for (TopExp_Explorer aExpB(itB.Value(), TopAbs_EDGE); aExpB.More();
++                           aExpB.Next())
++                      {
++                        aBB.Add(aC, aExpB.Current());
++                      }
++                      aBB.Add(aC, aSecond);
++                      itB.ChangeValue() = aC;
++                    }
++                  }
++                }
+               }
+               else
+               {
+-                if (theAsDes->HasAscendant(NEC))
++                // (an edge already trimmed, with its vertices in AsDes,
++                // stays: BRepAlgo_AsDes::Remove refuses it; mitcad#2050)
++                if (theAsDes->HasAscendant(NEC) && !theAsDes->HasDescendant(NEC))
+                 {
+                   theAsDes->Remove(NEC);
+                 }
+@@ -5631,7 +5682,7 @@ bool TrimEdges(
+           NE.Orientation(aS.Orientation());
+           if (theNewEdges.Add(NE))
+           {
+-            if (!TrimEdge(TopoDS::Edge(NE), theAsDes2d, theAsDes, theETrimEInf))
++            if (!TrimEdge(TopoDS::Edge(NE), theAsDes2d, theAsDes, theETrimEInf, &theBuild))
+             {
+               return false;
+             }
+@@ -5655,16 +5706,167 @@ bool TrimEdges(
+   return true;
+ }
+ 
++//=======================================================================
++// function : IsOverOrigins
++// purpose  : Whether the point projects onto the curve of one of the
++//            edges theOrigins inside that edge's range (mitcad#2050).
++//=======================================================================
++static bool IsOverOrigins(const gp_Pnt& thePnt, const NCollection_List<TopoDS_Shape>& theOrigins)
++{
++  for (NCollection_List<TopoDS_Shape>::Iterator it(theOrigins); it.More(); it.Next())
++  {
++    const TopoDS_Edge& aE = TopoDS::Edge(it.Value());
++    if (BRep_Tool::Degenerated(aE))
++    {
++      continue;
++    }
++    double                        aF = 0., aL = 0.;
++    const occ::handle<Geom_Curve> aC = BRep_Tool::Curve(aE, aF, aL);
++    if (aC.IsNull() || aL - aF < Precision::PConfusion())
++    {
++      continue;
++    }
++    GeomAPI_ProjectPointOnCurve aProj(thePnt, aC);
++    if (aProj.NbPoints() == 0)
++    {
++      continue;
++    }
++    double aU = aProj.LowerDistanceParameter();
++    if (aC->IsPeriodic())
++    {
++      aU = ElCLib::InPeriod(aU, aF, aF + aC->Period());
++    }
++    const double aMargin = 1.e-6 * (aL - aF);
++    if (aU > aF + aMargin && aU < aL - aMargin)
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++//=======================================================================
++// function : TrimOverOrigins
++// purpose  : For an edge running all round a periodic curve (the
++//            intersection of two offsets cut along a whole circle, as a
++//            plane cuts a cylinder), the range between its vertices
++//            (theParams, any order) that lies over the edges it is the
++//            image of: the vertices split the curve into arcs, and those
++//            whose middles project inside the range of one of those edges
++//            are kept, where they make one run round the curve and not all
++//            of it. That run may cross the curve's origin, which the range
++//            from the smallest to the largest parameter cannot: an arc of
++//            three quarters of a circle round a cylinder's foot came out as
++//            the quarter left over (mitcad#2050). Where the run crosses the
++//            origin, theV0 is the vertex there (null where there is none).
++//            False where the arcs kept are not one such run.
++//=======================================================================
++static bool TrimOverOrigins(const TopoDS_Edge&                                theNE,
++                            const NCollection_List<TopoDS_Shape>&             theOrigins,
++                            std::vector<std::pair<double, TopoDS_Vertex>>&    theParams,
++                            double&                                           theUMin,
++                            double&                                           theUMax,
++                            TopoDS_Vertex&                                    theV1,
++                            TopoDS_Vertex&                                    theV2,
++                            TopoDS_Vertex&                                    theV0)
++{
++  double                        aF = 0., aL = 0.;
++  const occ::handle<Geom_Curve> aC = BRep_Tool::Curve(theNE, aF, aL);
++  if (aC.IsNull() || !aC->IsPeriodic() || theParams.size() < 2)
++  {
++    return false;
++  }
++  const double aPeriod = aC->Period();
++  for (std::pair<double, TopoDS_Vertex>& aP : theParams)
++  {
++    aP.first = ElCLib::InPeriod(aP.first, aF, aF + aPeriod);
++  }
++  std::sort(theParams.begin(),
++            theParams.end(),
++            [](const std::pair<double, TopoDS_Vertex>& theA,
++               const std::pair<double, TopoDS_Vertex>& theB) { return theA.first < theB.first; });
++  // Vertices at one parameter count once.
++  std::vector<std::pair<double, TopoDS_Vertex>> aParams;
++  for (const std::pair<double, TopoDS_Vertex>& aP : theParams)
++  {
++    if (aParams.empty() || aP.first - aParams.back().first > Precision::PConfusion())
++    {
++      aParams.push_back(aP);
++    }
++  }
++  if (aParams.size() > 1
++      && aParams.back().first - aParams.front().first > aPeriod - Precision::PConfusion())
++  {
++    aParams.pop_back();
++  }
++  const size_t aNb = aParams.size();
++  if (aNb < 2)
++  {
++    return false;
++  }
++  // The arc i runs from aParams[i] to the next one round the curve.
++  std::vector<bool> aKept(aNb, false);
++  size_t            aNbKept = 0;
++  for (size_t i = 0; i < aNb; ++i)
++  {
++    const double aU1 = aParams[i].first;
++    const double aU2 = i + 1 < aNb ? aParams[i + 1].first : aParams[0].first + aPeriod;
++    aKept[i]         = IsOverOrigins(aC->Value(0.5 * (aU1 + aU2)), theOrigins);
++    aNbKept += aKept[i] ? 1 : 0;
++  }
++  if (aNbKept == 0 || aNbKept == aNb)
++  {
++    return false;
++  }
++  size_t aStart = aNb, aNbStarts = 0;
++  for (size_t i = 0; i < aNb; ++i)
++  {
++    if (aKept[i] && !aKept[(i + aNb - 1) % aNb])
++    {
++      aStart = i;
++      ++aNbStarts;
++    }
++  }
++  if (aNbStarts != 1)
++  {
++    return false;
++  }
++  const size_t aEnd = (aStart + aNbKept) % aNb; // the vertex the run ends at
++  theUMin           = aParams[aStart].first;
++  theUMax           = aParams[aEnd].first;
++  if (theUMax <= theUMin)
++  {
++    theUMax += aPeriod;
++  }
++  theV1 = aParams[aStart].second;
++  theV2 = aParams[aEnd].second;
++  theV0.Nullify();
++  if (theUMax > aF + aPeriod + Precision::PConfusion())
++  {
++    if (aParams.front().first - aF < Precision::PConfusion())
++    {
++      theV0 = aParams.front().second;
++    }
++    else if (aF + aPeriod - aParams.back().first < Precision::PConfusion())
++    {
++      theV0 = aParams.back().second;
++    }
++  }
++  return true;
++}
++
+ //=======================================================================
+ // function : TrimEdge
+ // purpose  : Trim the edge of the largest of descendants in AsDes2d.
+ //           Order in AsDes two vertices that have trimmed the edge.
+ //=======================================================================
+ bool TrimEdge(
+-  TopoDS_Edge&                                                              NE,
+-  const occ::handle<BRepAlgo_AsDes>&                                        AsDes2d,
+-  occ::handle<BRepAlgo_AsDes>&                                              AsDes,
+-  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theETrimEInf)
++  TopoDS_Edge&                                                                    NE,
++  const occ::handle<BRepAlgo_AsDes>&                                              AsDes2d,
++  occ::handle<BRepAlgo_AsDes>&                                                    AsDes,
++  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>&       theETrimEInf,
++  const NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>* theBuild,
++  TopoDS_Edge*                                                                    theSecond)
+ {
+   TopoDS_Edge   aSourceEdge;
+   TopoDS_Vertex V1, V2;
+@@ -5688,7 +5890,8 @@ bool TrimEdge(
+   //
+   if (LE.Extent() > 1)
+   {
+-    NCollection_List<TopoDS_Shape>::Iterator it(LE);
++    std::vector<std::pair<double, TopoDS_Vertex>> aParams;
++    NCollection_List<TopoDS_Shape>::Iterator      it(LE);
+     for (; it.More(); it.Next())
+     {
+       TopoDS_Vertex V = TopoDS::Vertex(it.Value());
+@@ -5719,6 +5922,94 @@ bool TrimEdge(
+         UMax = U;
+         V2   = V;
+       }
++      aParams.push_back(std::make_pair(U, V));
++    }
++    //
++    // An edge all round a periodic curve: the run of arcs between its
++    // vertices over the edges it is the image of, which may cross the
++    // curve's origin (mitcad#2050).
++    double                        aCF = 0., aCL = 0.;
++    const occ::handle<Geom_Curve> aCurve = BRep_Tool::Curve(NE, aCF, aCL);
++    if (theBuild != nullptr && !aCurve.IsNull() && aCurve->IsPeriodic()
++        && aT2 - aT1 > aCurve->Period() - Precision::PConfusion())
++    {
++      NCollection_List<TopoDS_Shape> aOrigins;
++      for (NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator itB(
++             *theBuild);
++           itB.More();
++           itB.Next())
++      {
++        if (itB.Key().ShapeType() != TopAbs_EDGE)
++        {
++          continue;
++        }
++        for (TopExp_Explorer aExpB(itB.Value(), TopAbs_EDGE); aExpB.More(); aExpB.Next())
++        {
++          if (aExpB.Current().IsSame(NE))
++          {
++            aOrigins.Append(itB.Key());
++            break;
++          }
++        }
++      }
++      double        aUMin = 0., aUMax = 0.;
++      TopoDS_Vertex aV1, aV2, aV0;
++      if (!aOrigins.IsEmpty()
++          && TrimOverOrigins(NE, aOrigins, aParams, aUMin, aUMax, aV1, aV2, aV0)
++          && !(aV1.IsSame(V1) && aV2.IsSame(V2)))
++      {
++        const double aPeriod = aCurve->Period();
++        if (aUMax <= aCF + aPeriod + Precision::PConfusion())
++        {
++          UMin = aUMin;
++          UMax = aUMax;
++          V1   = aV1;
++          V2   = aV2;
++        }
++        else if (theSecond != nullptr && !aV0.IsNull() && !aV0.IsSame(aV1) && !aV0.IsSame(aV2))
++        {
++          // Across the origin: NE up to the origin's vertex, and a second
++          // edge from it, so that neither crosses the seam of a periodic
++          // surface the curve runs round (an edge across it would not lie
++          // in one period of the surface's parameters).
++          NE.Free(true);
++          BRep_Builder       B;
++          TopAbs_Orientation Or = NE.Orientation();
++          NE.Orientation(TopAbs_FORWARD);
++          TopoDS_Edge aSecond;
++          BOPTools_AlgoTools::MakeSplitEdge(NE, aV0, aCF, aV2, aUMax - aPeriod, aSecond);
++          TopoDS_Vertex VF, VL;
++          TopExp::Vertices(NE, VF, VL);
++          B.Remove(NE, VF);
++          B.Remove(NE, VL);
++          B.Add(NE, aV1.Oriented(TopAbs_FORWARD));
++          B.Add(NE, aV0.Oriented(TopAbs_REVERSED));
++          B.Range(NE, aUMin, aCF + aPeriod);
++          NE.Orientation(Or);
++          aSecond.Orientation(Or);
++          AsDes->Add(NE, aV1.Oriented(TopAbs_FORWARD));
++          AsDes->Add(NE, aV0.Oriented(TopAbs_REVERSED));
++          AsDes->Add(aSecond, aV0.Oriented(TopAbs_FORWARD));
++          AsDes->Add(aSecond, aV2.Oriented(TopAbs_REVERSED));
++          if (AsDes->HasAscendant(NE))
++          {
++            const NCollection_List<TopoDS_Shape> aFaces = AsDes->Ascendant(NE);
++            for (NCollection_List<TopoDS_Shape>::Iterator itF(aFaces); itF.More(); itF.Next())
++            {
++              AsDes->Add(itF.Value(), aSecond);
++            }
++          }
++          BRepLib::SameParameter(NE, aSameParTol, true);
++          BRepLib::SameParameter(aSecond, aSameParTol, true);
++          if (!theETrimEInf.IsBound(NE))
++          {
++            theETrimEInf.Bind(NE, aSourceEdge);
++          }
++          theETrimEInf.Bind(aSecond, aSourceEdge);
++          *theSecond = aSecond;
++          return true;
++        }
++      }
+     }
+     //
+     if (V1.IsNull() || V2.IsNull())
+@@ -5752,7 +6043,9 @@ bool TrimEdge(
+     BRepAdaptor_Curve aBAC(NE);
+     if (aBAC.GetType() == GeomAbs_Line)
+     {
+-      if (AsDes->HasAscendant(NE))
++      // (as in TrimEdges: an edge with its vertices in AsDes stays,
++      // mitcad#2050)
++      if (AsDes->HasAscendant(NE) && !AsDes->HasDescendant(NE))
+       {
+         AsDes->Remove(NE);
+       }

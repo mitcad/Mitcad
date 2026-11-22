@@ -44,8 +44,9 @@ timeline features. A whole-body Flat Pattern is a derived browser item with
 DXF export. Native modelling, the command UI and parametric `.ipt` and `.f3d`
 import are all part of the parent scope.
 
-The initial allowance law is a K-factor. Bend tables can be added as another
-typed law later; they are not required in addition to K-factor support. The
+The initial allowance law is a K-factor. A table of measured bend allowances
+can be added as another typed law later. The Bend Table export instead
+reports the bends already calculated for a particular sheet. The
 initial surface family is planar panels and constant-radius cylindrical bends.
 Conical, doubly curved, variable-thickness and stretched material, embossing and
 arbitrary B-rep-to-sheet recognition are outside this contract. Unsupported
@@ -91,8 +92,8 @@ action, with one Undo step. A missing or suppressed rule is an error.
 | `bend_radius` | Default inside radius; positive and resolvable by the kernel. A zero-radius mathematical crease is not silently substituted for a bend. |
 | `allowance` | Initially `{type: "k_factor", k: P}` with finite, dimensionless `0 <= k <= 1`. |
 | `reference_side` | `front` or `back`: the named material surface lying on the base sketch. |
-| `bend_relief` | A typed rectangular, round or tear relief with dimensional defaults. |
-| `corner_relief` | A typed relief and gap/size defaults for junctions of bends. |
+| `bend_relief` | A rectangular or round slot and default dimensions for a flange, bend or fold that ends inside the sheet. |
+| `corner_relief` | A shape and size for the Corner Relief feature. Multi-edge flanges use their own mitres and corner gaps. |
 
 The sketch's right-handed frame defines positive normal `n`. Front-to-back
 material direction is `+n`: with `reference_side = front`, the front is at
@@ -239,6 +240,11 @@ ambiguous alias rather than selecting the first curve. Geometry returns local
 fragment tokens and proven source spans; the model allocates persistent IDs.
 Source spans describe coverage, not an affine map to an output curve's parameter.
 An exact conic-to-spline conversion may change that parameterization.
+Fragments of one curve can carry the same piece, each a curve with a range of
+its own (a cut along an existing side leaves two, mitcad#2117), so a source
+span can lie in several by parameter: then the output edge decides, the
+fragment its geometry lies on, or the names of every fragment it lies on; a
+span on none of them stays an ambiguous alias.
 
 If a cut disconnects a sheet, retain the original `BodyUid` for the first piece
 under the existing deterministic body-split convention and allocate other
@@ -411,14 +417,19 @@ Rectangular relief is a finite-width slot with a straight end; round relief is
 a slot with a semicircular end, with its entered depth measured to the furthest
 tip. Both enter the bend region far enough to separate the moving material
 from adjacent stationary material. Validate width, depth, available material
-and tangency. Tear relief is an explicit slit/topological separation policy,
-not a Boolean with a numerically zero-width box. Where a valid solid needs a
-finite clearance, the required gap is an exposed parameter and is exported;
-the kernel cannot invent an undocumented manufacturing gap. The exact tear
+and tangency. A tear would slit the bend zone through the thickness and leave
+the material on both sides intact. The chart kernel trims positive-area
+regions and the unfolded slit would create coincident opposing walls in a
+single solid. The flat pattern also needs a single cut line for the slit.
+New bend reliefs therefore offer Rectangular and Round. The exact tear
 construction must pass the early geometry proof before its UI is enabled.
+Any finite clearance required by a valid solid would be an explicit size
+in the flat pattern. Saved Tear bend reliefs keep their original rectangular
+slots and contour references with a compatibility warning.
 
-Corner relief acts on the selected junction of labelled bends, and defaults
-are evaluated from the rules rather than copied as untracked constants. Every
+Corner Relief acts on the selected junction of labelled bends. It follows
+the bound Sheet Rules unless the feature specifies its own relief. Flanges
+on several edges use their own mitres and corner gaps. Every
 relief contour retains its producing feature and endpoint provenance through
 unfolding, cuts and refolding. Tests cover all three shapes and short-flange,
 overlapping-relief and disappearing-junction failures.
@@ -663,8 +674,10 @@ Decisions made while implementing the production Cut and the reliefs:
   The Flat Pattern item stays with the original body id; a pattern whose fixed
   panel went to the other piece is `invalid` and names the missing panel.
 - **Bend reliefs** are those of #207 (Flange end offsets, Fold lines ending
-  inside material): rectangular and tear slots of the entered width (tear is a
-  slot of the exact entered gap) and round slots whose depth includes the tip.
+  inside material): rectangular slots of the entered width and round slots
+  whose depth includes the tip. A saved bend `tear` retains the same
+  square-ended slot it made in earlier versions and is shown as **Legacy
+  Tear Slot** when editing it.
   Their contours are generated curves of the bend feature and keep that
   provenance through later cuts, Unfold and Refold; the CLI fixture
   `sheet_corner_relief` cuts across a Flange's relief slot with the bend open.
@@ -678,7 +691,8 @@ Decisions made while implementing the production Cut and the reliefs:
   the minimum separation of the two bend zones. The placement at the
   centreline intersection is a MitCad decision; importers translate other
   placements explicitly. `depth` is used by bend reliefs only; the corner
-  relief's size is `width`. Defaults come from the bound rules'
+  relief's size is `width`. Sheet Rules keeps the old corner-relief depth
+  field in the definition and hides it in the panel. Defaults come from the bound rules'
   `corner_relief`. A relief that removes a whole domain ("the flange is too
   short for it") or disconnects the sheet is refused, as is one reaching a
   seam of a third, folded bend; a relief that removes nothing warns.
@@ -1180,11 +1194,15 @@ sheets unfold, refold and have a Flat Pattern:
   left corner of the developed material's box, `margin + d/2` in; a hole
   is kept on a panel, off every bend's strip, and `margin + d/2` or more
   from every boundary of the material and of the strips (seams between
-  panels of one plane are inside the material). One trim and one solid
+  panels of one plane are inside the material). A sketch Outline is
+  clipped to the flat faces it lies on and developed with those panels.
+  The grid starts at the developed outline's lower left and the margin
+  applies to its outer and inner loops. One trim and one solid
   take all holes; fields of thousands of holes are possible but each hole
   is part of the B-rep. CLI `sheet_perforate`: an L contour flange,
   staggered 33 holes (`9400 - 212.5 pi`), square 28 (`9400 - 150 pi`), the
   Flat Pattern (`4700 - 85 pi`), Unfold, a thickness edit, reopened.
+  CLI `sheet_perforate_outline` checks the clipped field and the DXF holes.
 
 ### Implementation notes (mitcad#1378)
 
@@ -1985,7 +2003,7 @@ Each phase publishes its own evidence while the parent tracks the full scope.
 | mitcad#206: rules and Face | Parametric rules and Face with holes/islands; atomic state; mock lifecycle/cache tests; actual thickness, area, ownership and named faces; old-file and copy compatibility. |
 | mitcad#207: folded features | Flange, Bend, Fold, Corner Round and Corner Chamfer; all length/position/sign/offset modes; minimum-length checks; early nonlinear development/cut/refold proof above; persistent names after rule edits. |
 | mitcad#208: configurations and Flat | Partial Unfold/Refold, whole-body derived Flat Pattern, graph/overlap checks, fixed-frame stability and valid round-trip correspondence. Actual OCCT L/U/Z cases; repeated instance display and no extra physical body. |
-| mitcad#209: cuts and reliefs | Production thickness-normal Cut crossing one/two bends, holes and multiple contours; cuts between Unfold and Refold; rectangular/round/tear and corner reliefs; invalid boundary/short-flange cases; rule edits after cuts. |
+| mitcad#209: cuts and reliefs | Production thickness-normal Cut crossing one/two bends, holes and multiple contours; cuts between Unfold and Refold; rectangular and round bend reliefs, and rectangular, round and tear corner reliefs; invalid boundary/short-flange cases; rule edits after cuts. |
 | mitcad#210: UI and DXF | Every command and browser rule edit; live preview/Cancel/Undo; native and retained UI coverage; fixed orientation; DXF contour, hole, bend direction/layer/unit round trips; invalid export refused. |
 | mitcad#211: imports and final acceptance | Coordinated `.ipt` Face/Flange/Bend/Fold/Cut/corners and sheet-hole replay, `.f3d` flange replay, truthful fallback diagnostics, reference matching and scoped corpus evidence; every parent acceptance row satisfied. |
 

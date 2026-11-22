@@ -325,6 +325,18 @@ public:
   // back: workspace block, tab row and groups". The document frame calls it
   // as its tabs show or hide; nothing in the Floating layout.
   void updateStartToolbar();
+  // The last design closed with Preferences › General › Quit MitCad when
+  // the last design is closed off (mitcad#2142; WindowManager::closeDesign):
+  // after the save question the design goes, and the window stays on the
+  // Start page with no design open ("Last design closed: Start page"). An
+  // empty untitled design waits under the page, but no tab, title or
+  // Window menu entry names it; New, Open, a save of it (Save As) or leaving
+  // the page (a command of the view) start from it. False when the save
+  // question is cancelled or the close waits for a running command.
+  bool closeToStartPage();
+  // Whether the window holds a design: false between closeToStartPage and
+  // the next design (New, Open, the Start page left).
+  bool hasDesign() const { return !m_noDesign; }
 
   // Fetches the library sources with Auto-update in the background, one
   // after another, without a dialog (mitcad#576; MainWindowLibraries.cpp):
@@ -777,6 +789,18 @@ private:
   // band, its stub too; the history keeps it. Logged `Status line cleared
   // (another design)` and `Message band cleared (another design)`.
   void clearDesignMessages();
+  // The status line empty (another design, an error put right).
+  void clearStatusLine();
+  // What errors were about was put right (mitcad#2181,
+  // MessageCenter::resolve): an error about `subject` or a subject within
+  // it goes from the message band and the Docked status line. Logged
+  // `Status line cleared (put right)` for the status line.
+  void resolveMessages(const QString& subject);
+  // An error shown about a failed feature that computes now (mitcad#2181):
+  // put right, after the design was read again (refreshScene).
+  void resolveFixedFeatureErrors();
+  // runParameterCommand without its message subject (mitcad#2181).
+  bool runParameterCommandIn(const QJsonObject& command, const QString& name);
   // The result store (P7d, framework/ResultCache.hpp): the document's
   // results that were costly to compute go to the store as a job, for the
   // document named `label` (after Save); and what a recompute took from
@@ -1182,7 +1206,6 @@ private:
   void flexSessionPreviewShown();
   QString m_flexClickUid;     // the Flex item the last click was on
   quint64 m_flexClickNumber = 0;
-  QElapsedTimer m_flexClickTime;
   flex::FlexEditController* m_flexEdit = nullptr;
 
   // Let It Hang (mitcad#1713, MainWindowGravity.cpp,
@@ -1224,9 +1247,12 @@ private:
   // over the bodies, computed again when it, its bodies or the design
   // change (the model keeps the results by the bodies' content and the
   // settings), soon after the refresh; overhangs and walls as model jobs.
+  // A shown Draft Analysis (mitcad#2166) likewise: its classes over the
+  // bodies.
   void followPrintAnalysis();
   void computePrintAnalysis(quint64 generation);
-  void presentPrintAnalysis(const QString& name, const Inspection& result, const QString& error);
+  void presentPrintAnalysis(const QString& kind, const QString& name, const Inspection& result,
+                            const QString& error);
   void showPrintOverlay(const QJsonObject& overlay);
   QByteArray m_printKey;       // what the overlay shows: the analysis, the design, its bodies' shapes
   quint64 m_printGeneration = 0; // a newer one drops a computation that waits
@@ -1313,6 +1339,10 @@ private:
   // modelBodies, or with `unclipped`, the bodies before their clip with
   // what the plane cuts (no face looks).
   std::vector<BodyDisplay> displayBodies(SectionTargets* unclipped) const;
+  // The bytes of an appearance's embedded texture image of `map` (the
+  // `appearance_image` query; empty when it has none): a design's own, or
+  // a built-in wood's or panel's (mitcad#2186).
+  QByteArray embeddedImage(const QString& id, const QString& map) const;
   // The cut bodies' shapes from the kept clips, the missing ones clipped
   // here (on the UI thread, after the worker stopped) and kept.
   void useClips(const SectionTargets& cut, std::vector<BodyDisplay>& bodies) const;
@@ -1336,13 +1366,21 @@ private:
   // Cosmetic threads on the shown bodies (the threads query).
   void showThreads(const std::vector<BodyDisplay>& bodies);
 
-  void newDocument();
+  // New Design: the window that shows the new design (this one or a new
+  // one), or null when it was cancelled or deferred.
+  MainWindow* newDocument();
+  // An untitled design with no file, no changes, no features and no bodies,
+  // and no job computing (WindowManager::reusable, mitcad#2168).
+  bool emptyUntitledDesign() const;
   bool deferForNativeCommand(std::function<void()> action);
   void clearNativeCommandContinuation();
   QMetaObject::Connection m_nativeCommandContinuation;
   void openDocument();
   bool save();
   bool saveAs();
+  // Save As's file dialog, without the project picker: Save on This
+  // Computer… of a new design's save (mitcad#2183).
+  bool saveAsFile();
   // A version recorded (recordVersion), or why not.
   struct VersionRecord {
     // What the status bar says after the save ("Saved bracket.mitcad as
@@ -1434,7 +1472,15 @@ private:
   // in a project chosen in the project picker (mitcad#174) or a new one
   // (the picker's New Project...); the window shows that file and the one
   // the design came from stays where it was.
-  void saveToProject();
+  // True when the design was saved.
+  bool saveToProject();
+  // Save of a design that has no file yet (mitcad#2183,
+  // app/files/NewDesignSave.hpp): the preference Save of a new design; Ask
+  // asks On this computer or To a project when a remote project is known
+  // (remoteProjectKnown), else Save As as before.
+  bool saveNewDesign();
+  // A Cloud project is current, known or in the projects folder.
+  bool remoteProjectKnown() const;
   // The design saved into the project at `root`: as `target` (the picker's
   // place), else under its name in the project's top, its name asked in the
   // picker when another design has it there (an untitled design's always).
@@ -1695,6 +1741,12 @@ private:
   // Insert SVG (mitcad#473): an SVG drawing into a new sketch, or the
   // edited one.
   void insertSvg();
+  // Insert Points (mitcad#2232, files/MainWindowFiles.cpp): a .csv, .txt
+  // or .dat file's x y coordinates as one spline or as points, an airfoil
+  // at its chord and angle of attack, into a new sketch on a plane or the
+  // edited one; `interactive` asks the dialog (else the defaults).
+  void insertPoints();
+  bool importPointFile(const QString& path, bool interactive, QString* error);
   void insertMesh();
   void insertDxf();
   void insertComponent(const QString& path = QString());
@@ -1761,6 +1813,12 @@ private:
   // against its oldest MitCad, and opened in the pane.
   void showTutorials();
   void openListedTutorial(const QString& url, const QJsonObject& tutorial);
+  // The pane opened in the window of the design the tutorial is worked in
+  // (mitcad#2168): this one; over the Start page the empty untitled design
+  // under it (the page left), or else a new design (New Design: a new
+  // window, or this one after its unsaved-changes question; cancelled, no
+  // tutorial).
+  void openTutorialInDesign(const QString& folder, const QString& page, const QString& title);
   bool showTutorialPane(const BrowserComponentInfo& component, const QString& folder, const QString& page,
                         const QString& title);
   void ensureTutorialPane();
@@ -2163,6 +2221,9 @@ private:
   // The next document installed leaves a shown Start page shown (the
   // untitled design restarted in new default units, mitcad#1452).
   bool m_keepStartPage = false;
+  // No design open: the last one closed to the Start page (closeToStartPage,
+  // mitcad#2142) and no other since.
+  bool m_noDesign = false;
   // The remote of the current project: sync, sending versions, its state
   // in the indicator (P12 remote).
   RemoteController* m_remote = nullptr;
@@ -2316,6 +2377,12 @@ private:
   QString m_statusSource;
   QString m_nextStatusSource;
   QString m_freshSourceError;
+  // What the status line's error is about (mitcad#2181,
+  // MessageEntry::subject: `parameter/<name>`, `feature/<uid>`; empty for
+  // none), and the subject of the parameter command that runs, which its
+  // refusal takes (runParameterCommand).
+  QString m_statusSubject;
+  QString m_nextStatusSubject;
   QLabel* m_statusIcon = nullptr;
   // What the status shows is a hint (showHint), not a warning or an error:
   // an open drawing clears it (mitcad#1008, updateDrawingChrome).
@@ -2915,7 +2982,12 @@ private:
   // goes into the design's file for file managers (mitcad#1539,
   // designPreviewPng).
   void createStartPage();
+  // Leaving the page logs "Start page left for <tab>" and, once the
+  // layouts placed it, "Toolbar panel after the Start page: shown at x,y
+  // wxh (<layout>; the window exposed, platform <name>)" or "not shown
+  // (<layout>: <why>; ...)" (logToolbarPanelAfterStart, mitcad#2031).
   void updateStartPage(const QString& tab);
+  void logToolbarPanelAfterStart();
   bool startPageShown() const;
   void leaveStartPage();
   // The 3D view as a design's preview, 256 px at most a side; null while

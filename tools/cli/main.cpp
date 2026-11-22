@@ -37,6 +37,8 @@
 #include "drawing.hpp"
 // Display meshings compared face by face (mitcad#644).
 #include "mesh_compare.hpp"
+// glTF files written as File > Export writes them (mitcad#2210).
+#include "gltf.hpp"
 // A mixed installation at start-up (mitcad#1454).
 #include "framework/UserText.hpp"
 #include "update/InstallationCheck.hpp"
@@ -332,8 +334,8 @@ const char* const kUsage = R"(usage:
                     [--deviation MM --angle DEG] [--ascii]
                     [--coordinates design|component|<coordinate system>] [--occurrence <path>]
       Writes bodies at the timeline marker (all, or the listed uids or
-      names) to a .step/.stp, .iges/.igs, .stl, .obj, .brep, .3mf or .usdz
-      file. STEP and IGES keep body names and imported colours;
+      names) to a .step/.stp, .iges/.igs, .stl, .obj, .brep, .3mf, .usdz,
+      .glb or .gltf file. STEP and IGES keep body names and imported colours;
       --refinement or --deviation and --angle set the STL, OBJ, 3MF and
       USDZ triangulation: the refinements (medium by default) bound each
       doubly curved face at about 5 000, 20 000 and 50 000 triangles (a
@@ -345,6 +347,16 @@ const char* const kUsage = R"(usage:
       bodies as shaded meshes in the components' hierarchy, with their
       appearances and textures (relative texture paths from the design's
       folder).
+      A .glb or .gltf file is the file File > Export writes: the visible
+      bodies (or the listed ones, every placement of each) in the
+      component tree as nested nodes, one mesh per body and look that its
+      placements share, appearances and textures, metres, Y up; a .gltf
+      file has its .bin buffer and images beside it. --refinement or
+      --deviation and --angle set its triangulation as for STL (a doubly
+      curved face at about 20 000 triangles at most); --unit, --schema,
+      --ascii, --coordinates and --occurrence are refused. It prints the
+      body nodes (a body placed twice counts twice), triangles, files and
+      bytes written.
       Every format has the bodies where the design shows them (a STEP
       file of moved components is an assembly); --coordinates component
       writes each body once in its component's coordinates, --coordinates
@@ -377,7 +389,9 @@ const char* const kUsage = R"(usage:
                     [--per-body] [--polygonal] [--json]
   mitcad-cli export-drawing <file.mitcad> <out.pdf|out.svg|out.dxf|out.dwg> --drawing <d>
                     [--sheet N] [--title <text>] [--json]
-      Writes a drawing of the shown bodies (or the listed uids or names):
+      Writes a drawing of the shown bodies (or the listed uids or names),
+      each at every placement the design shows (a component placed many
+      times: one body, many placements; prints both counts):
       the front, top and right views (third angle; --first-angle) with
       hidden lines removed (--hidden draws them dashed), an isometric
       view and a section view when asked, the overall sizes of the views,
@@ -831,6 +845,11 @@ int export_bodies(const std::vector<std::string>& args) {
   }
   if (a.positional.size() != 2) {
     return usage("export needs a design and an output file");
+  }
+  // glTF (mitcad#2210): File > Export's writer, not the model's export
+  // command (gltf.cpp).
+  if (mitcad::cli::is_gltf_file(a.positional[1])) {
+    return mitcad::cli::export_gltf(a);
   }
   std::string command = R"({"cmd": "export", "path": )" + json_string(a.positional[1]);
   if (const std::string* bodies = a.option("--bodies")) {

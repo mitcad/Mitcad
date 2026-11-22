@@ -641,8 +641,8 @@ void TestDriver::testAssistantSetup(const QString& mode) {
           status->text() != QStringLiteral("Install the extension in Claude Desktop") ||
           setup->text() != QStringLiteral("Show in Explorer") || !openDesktop->isVisibleTo(dialog) ||
           openDesktop->text() != QStringLiteral("Open Claude Desktop") || !result->isVisibleTo(dialog) ||
-          !result->text().startsWith(QStringLiteral("In Claude Desktop: Settings ")) ||
-          !result->text().contains(QStringLiteral("Advanced settings")) || !result->text().contains(QStringLiteral("Install Extension")) ||
+          !result->text().contains(QStringLiteral("Extensions")) || !result->text().contains(QStringLiteral("drag")) ||
+          !result->text().contains(QStringLiteral("Install Extension")) ||
           !result->text().contains(QDir::toNativeSeparators(bundle)) || !QFileInfo(bundle).isFile()) {
         problem = QStringLiteral("packaged Claude Desktop without an extension handler did not offer the extension's "
                                  "installation: ") + status->text() + QStringLiteral(" / ") + result->text();
@@ -868,6 +868,27 @@ void TestDriver::testAssistantSetup(const QString& mode) {
     fail(m_line, QStringLiteral("unknown assistant setup test mode")); return;
   }
   qInfo().noquote() << QStringLiteral("Assistant setup UI: %1").arg(mode);
+}
+
+// This file's steps (mitcad#2173): their specs and their chain.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    {"expect-assistant-setup", 1, 1, TestDriver::kIdle},
+    {"agent-menu", 2, 2, TestDriver::kIdle},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kAssistantSteps{
+    kStepSpecs, std::size(kStepSpecs), &TestDriver::runAssistantStep};
+
+void TestDriver::runAssistantStep(const QString& name, const QStringList& a, int) {
+  if (name == QLatin1String("expect-assistant-setup")) {
+    testAssistantSetup(a.at(0));
+  } else if (name == QLatin1String("agent-menu")) {
+    agentMenuChoice(a.at(0), a.at(1));
+  }
 }
 
 } // namespace mitcad

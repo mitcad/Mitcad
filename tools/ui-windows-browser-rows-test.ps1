@@ -4,8 +4,8 @@
 # Floating layout (mitcad#419) in the build VM (tools/ui-windows-lib.ps1 says
 # how the input is posted); the Linux test is tools/ui-browser-rows-test.sh:
 #   1. A 200 x 200 mm plate (mitcad-cli), seen from the top and zoomed in
-#      until it fills the view; the Browser starts on its card (the default
-#      since mitcad#1990, also set in the settings).
+#      until it fills the view; the Browser starts on its card (set in the
+#      settings: Rows is the default, mitcad#2144).
 #   2. Preferences > Display > Browser background: Rows (Alt+B, Down, OK):
 #      applied at once and saved; a place beside the rows is logged.
 #   3. A click there selects the plate's face behind the rows; a click on
@@ -32,7 +32,7 @@ Ui-Init $App $Out $QtBin @{ 'tools.preferences.display' = 'F8'; 'view.top' = 'F7
 # The middle button orbits (the drag beside the rows). No Projects card:
 # the Browser's card starts below the floating rows and has the room down
 # to the timeline. The Browser on its card, for the choice of Rows (the
-# default on Windows, mitcad#429).
+# default, mitcad#2144).
 $ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
 Add-Content -Encoding ascii $ini @('[view]', 'navigationScheme=middle-orbit', '[projects]', 'panel=false', 'panelTopBar=false',
   '[appearance]', 'browserBackground=card')

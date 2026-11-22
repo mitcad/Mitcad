@@ -44,15 +44,8 @@ makes it.
   taken from its curve, its interference's parameter and the piece's spine
   parameter set there when the end is built.
 
-Test: geometry/tests/test_fillet_crease_end_corner.cpp (ctest
-geometry.fillet_crease_end_corner): test_cut_cylinder_rims_at_30_degrees
-and test_cut_cylinder_rims_at_45_degrees, a cylinder cut at a crease with
-a block below the cut face, its rims rounded with 1.5: valid, the horn
-tori of area R^2 (pi / 2 - psi) (pi / 2 - 1) (invalid without the patch);
-the boundary test_cut_cylinder_rims_without_the_block, the tori cut by the
-cut face as before; and test_reported_body on the stored case
-`tube-end-crease-corners`. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1620.
 
 Failures (mitcad#1986): the section of the turned ball's patch by the
 solid (BRepAlgoAPI_Section) fails with OCCT's reports of a computation it

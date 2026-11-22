@@ -157,13 +157,19 @@ public:
     commandLine->AppendSwitch("use-mock-keychain");
 #elif defined(__linux__)
     commandLine->AppendSwitchWithValue("password-store", "basic");
-    // The same windowing system as Qt's (mitcad#1716): Qt runs on xcb
-    // (app/main.cpp; XWayland on a Wayland desktop), and a Chromium left to
-    // itself may pick Wayland beside it. Not when the command line names
-    // one already.
-    if (QGuiApplication::platformName() == QLatin1String("xcb") && !commandLine->HasSwitch("ozone-platform")) {
-      commandLine->AppendSwitchWithValue("ozone-platform", "x11");
-      qInfo().noquote() << QStringLiteral("Component browser: CEF on X11 as Qt (ozone-platform x11)");
+    // The same windowing system as Qt's (mitcad#1716): Qt runs on xcb or,
+    // in a Wayland session, on Wayland (app/main.cpp, mitcad#2031), and a
+    // Chromium left to itself may pick the other one beside it. Not when
+    // the command line names one already.
+    if (!commandLine->HasSwitch("ozone-platform")) {
+      const QString platform = QGuiApplication::platformName();
+      if (platform == QLatin1String("xcb")) {
+        commandLine->AppendSwitchWithValue("ozone-platform", "x11");
+        qInfo().noquote() << QStringLiteral("Component browser: CEF on X11 as Qt (ozone-platform x11)");
+      } else if (platform.startsWith(QLatin1String("wayland"))) {
+        commandLine->AppendSwitchWithValue("ozone-platform", "wayland");
+        qInfo().noquote() << QStringLiteral("Component browser: CEF on Wayland as Qt (ozone-platform wayland)");
+      }
     }
 #endif
   }

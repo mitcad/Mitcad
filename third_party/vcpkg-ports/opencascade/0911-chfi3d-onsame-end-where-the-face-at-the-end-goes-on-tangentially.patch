@@ -36,15 +36,8 @@ file's within 1e-5.
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_tangent_end_face.cpp,
-test_rounding_cut_by_a_face_going_on_tangentially_from_the_pin (ctest
-geometry.fillet_tangent_end_face): a pin standing out of a wedge whose sides
-are tangent to it, its foot rounded along its arc on the wedge's top: valid,
-one torus, the material added the ring at the foot within the sides' planes
-within 1e-6 (4.514 against 4.764 and invalid without the patch by its
-documentation). It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py, reverted together with 1560, which changes the
-same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0911.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index aa0c4bd0..9927b376 100644

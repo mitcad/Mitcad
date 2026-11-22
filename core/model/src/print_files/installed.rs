@@ -1159,6 +1159,117 @@ pub fn resolve_preset_file(
     Ok(None)
 }
 
+/// The extruders of a printer as the slicer `dialect` loads it
+/// (mitcad#2207): the `nozzle_diameter` entries of its printer preset in
+/// that slicer's data folders among `folders`, with what the preset
+/// inherits and includes filled in. The preset is the first of `names`
+/// that is one (the user's own of an account first, then the system
+/// presets), else the first printer preset meant to be chosen whose
+/// `printer_model` (its own or inherited) is `model`: every nozzle of a
+/// printer model has the same extruders. Printer models' own files
+/// (`type` `machine_model`) are no printer presets. None when no preset is
+/// found or it names no nozzle. Read only.
+pub fn printer_extruders(
+    folders: &[SlicerFolder],
+    dialect: Dialect,
+    names: &[&str],
+    model: Option<&str>,
+) -> Option<usize> {
+    folders
+        .iter()
+        .filter(|s| s.dialect == dialect)
+        .find_map(|slicer| PrinterPresets::of(&slicer.folder).extruders(names, model))
+}
+
+/// The printer presets of a slicer's data folder (`machine`, the user's of
+/// every account and the system presets), read once.
+struct PrinterPresets<'a> {
+    folder: &'a Path,
+    files: BTreeMap<PathBuf, Map<String, Value>>,
+    /// The printer presets' paths, the user's first.
+    order: Vec<PathBuf>,
+}
+
+impl<'a> PrinterPresets<'a> {
+    fn of(folder: &'a Path) -> PrinterPresets<'a> {
+        let mut paths = Vec::new();
+        for account in entries(&folder.join(USER_DIR)) {
+            json_files(&account.path().join("machine"), 1, &mut paths);
+        }
+        for vendor in entries(&folder.join(SYSTEM_DIR)) {
+            json_files(&vendor.path().join("machine"), 2, &mut paths);
+        }
+        let mut files = BTreeMap::new();
+        let mut order = Vec::new();
+        for path in paths {
+            let Some(map) = read_preset_file(&path) else {
+                continue;
+            };
+            if text_of(&map, "type").as_deref() != Some("machine_model") {
+                order.push(path.clone());
+            }
+            files.insert(path, map);
+        }
+        PrinterPresets {
+            folder,
+            files,
+            order,
+        }
+    }
+
+    /// The preset of `path` with what it inherits and includes.
+    fn resolved(&self, path: &Path) -> Option<Map<String, Value>> {
+        resolve_preset_from_files(self.folder, path, &self.files)
+            .ok()
+            .map(|r| r.map)
+    }
+
+    /// See [`printer_extruders`].
+    fn extruders(&self, names: &[&str], model: Option<&str>) -> Option<usize> {
+        let named = |name: &str| {
+            self.order.iter().find(|p| {
+                self.files
+                    .get(*p)
+                    .and_then(|m| text_of(m, "name"))
+                    .as_deref()
+                    == Some(name)
+            })
+        };
+        let by_name = names
+            .iter()
+            .map(|n| n.trim())
+            .filter(|n| !n.is_empty())
+            .find_map(named)
+            .and_then(|path| self.resolved(path));
+        let preset = by_name.or_else(|| {
+            let model = model.map(str::trim).filter(|m| !m.is_empty())?;
+            // Meant to be chosen unless `instantiation` is false (the
+            // slicer's rule, as in `SystemIndex::of`).
+            let chosen = |map: &Map<String, Value>| match map.get("instantiation") {
+                Some(Value::Bool(false)) => false,
+                Some(Value::String(t)) => !t.trim().eq_ignore_ascii_case("false"),
+                _ => true,
+            };
+            self.order
+                .iter()
+                .filter(|p| self.files.get(*p).is_some_and(chosen))
+                .filter_map(|p| self.resolved(p))
+                .find(|m| text_of(m, "printer_model").as_deref() == Some(model))
+        })?;
+        match preset.get("nozzle_diameter")? {
+            Value::Array(items) if !items.is_empty() => Some(items.len()),
+            Value::String(text) => {
+                let n = text
+                    .split([',', ';'])
+                    .filter(|t| !t.trim().is_empty())
+                    .count();
+                (n > 0).then_some(n)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1854,5 +1965,94 @@ mod tests {
             &json!({"name": "Plain", "nozzle_temperature": ["200"]}),
         );
         assert_eq!(resolve_preset_file(&plain, &folders, None).unwrap(), None);
+    }
+
+    /// mitcad#2207: a printer's extruders as the slicer loads its preset,
+    /// by the preset's name (a system one through its base and templates,
+    /// a user one through the system preset it inherits from), else by its
+    /// printer model; never from a printer model's own file, a base, or
+    /// another slicer's folder.
+    #[test]
+    fn a_printers_extruders_are_those_of_its_preset() {
+        let folder = scratch("extruders").join("BambuStudio");
+        let machine = folder.join("system/Acme/machine");
+        write(
+            &machine.join("fdm_machine_common.json"),
+            &json!({"type": "machine", "name": "fdm_machine_common", "instantiation": "false",
+                    "nozzle_diameter": ["0.4"]}),
+        );
+        write(
+            &machine.join("duo_template.json"),
+            &json!({"type": "machine", "name": "Acme Duo template", "instantiation": "false",
+                    "nozzle_diameter": ["0.4", "0.4"]}),
+        );
+        write(
+            &machine.join("Acme Duo 0.4 nozzle.json"),
+            &json!({"type": "machine", "name": "Acme Duo 0.4 nozzle",
+                    "inherits": "fdm_machine_common", "include": ["Acme Duo template"],
+                    "printer_model": "Acme Duo"}),
+        );
+        write(
+            &machine.join("Acme Solo 0.4 nozzle.json"),
+            &json!({"type": "machine", "name": "Acme Solo 0.4 nozzle",
+                    "inherits": "fdm_machine_common", "printer_model": "Acme Solo"}),
+        );
+        // The printer model's own file, named as the model.
+        write(
+            &machine.join("Acme Duo.json"),
+            &json!({"type": "machine_model", "name": "Acme Duo",
+                    "nozzle_diameter": "0.4;0.6;0.8"}),
+        );
+        write(
+            &folder.join("user/default/machine/My Duo.json"),
+            &json!({"name": "My Duo", "inherits": "Acme Duo 0.4 nozzle", "from": "User"}),
+        );
+        let folders = vec![SlicerFolder {
+            dialect: Dialect::BambuStudio,
+            folder: folder.clone(),
+            flatpak: false,
+        }];
+        let bambu = Dialect::BambuStudio;
+        assert_eq!(
+            printer_extruders(&folders, bambu, &["Acme Duo 0.4 nozzle"], None),
+            Some(2)
+        );
+        assert_eq!(
+            printer_extruders(&folders, bambu, &["Acme Solo 0.4 nozzle"], None),
+            Some(1)
+        );
+        assert_eq!(
+            printer_extruders(&folders, bambu, &["My Duo"], None),
+            Some(2)
+        );
+        // A name not found: the first name that is a preset, else the
+        // model's presets.
+        assert_eq!(
+            printer_extruders(&folders, bambu, &["No such", "Acme Duo 0.4 nozzle"], None),
+            Some(2)
+        );
+        assert_eq!(
+            printer_extruders(&folders, bambu, &["No such"], Some("Acme Duo")),
+            Some(2)
+        );
+        // Not the printer model's own file, nor a base.
+        assert_eq!(
+            printer_extruders(&folders, bambu, &["Acme Duo"], None),
+            None
+        );
+        assert_eq!(
+            printer_extruders(&folders, bambu, &[], Some("No model")),
+            None
+        );
+        // Only the slicer's own folders.
+        assert_eq!(
+            printer_extruders(
+                &folders,
+                Dialect::OrcaSlicer,
+                &["Acme Duo 0.4 nozzle"],
+                None
+            ),
+            None
+        );
     }
 }

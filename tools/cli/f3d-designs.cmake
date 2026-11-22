@@ -218,10 +218,10 @@ set(designs
     # are joined after each feature (mitcad#1261), the inner cylinder is one
     # face whose seam lies under a crest, and #36's turn over the sliver
     # there carries its contact past the seam (port patch 1370, mitcad#1370).
-    # A rounding of three edges (#30) gives a self-intersecting wire, and the
-    # circular pattern after it (#31) none of the material the file's
-    # removes: they fall back.
-    "49ccc315|#34,#35,#36|#30,#31"
+    # A rounding of three edges (#30) and the circular pattern after it (#31)
+    # fell back until the port patches of mitcad#2038 and mitcad#2031 (1805
+    # rounds corners, so most likely 1805): both are parametric now.
+    "49ccc315|#30,#31,#34,#35,#36|"
     # A segment of a ring with a manifold and a lid on it (38 items, three
     # components placed by occurrences, mitcad#2094). Holes drill up from
     # the segment's flat face into passages along it: a hole of the

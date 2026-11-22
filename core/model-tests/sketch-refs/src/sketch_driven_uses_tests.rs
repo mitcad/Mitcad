@@ -276,8 +276,9 @@ fn a_dimension_that_moves_what_it_uses_is_refused() {
     assert!(error.contains("would depend on itself"), "{error}");
 }
 
-/// Only the sketch's driving dimensions may use its references: an offset
-/// distance of the same sketch may not.
+/// Only the sketch's driving dimensions and pattern values may use its
+/// references (mitcad#2057): an offset distance of the same sketch may
+/// not, and the refusal names it.
 #[test]
 fn other_values_of_the_sketch_still_may_not_use_its_references() {
     let (mut d, _) = rectangle(60.0, 40.0, "c4");
@@ -287,7 +288,7 @@ fn other_values_of_the_sketch_still_may_not_use_its_references() {
                "distance": "d3 / 4"}),
     );
     assert!(
-        error.contains("d3 is what") && error.contains("Sketch1 itself"),
+        error.contains("d3 is what") && error.contains("Sketch1's offset distance cannot use it"),
         "{error}"
     );
 }

@@ -19,12 +19,8 @@ variants with a restriction) is told from the walk between two faces by
 the builder's own flag set where those walks fail. The computation itself
 is unchanged.
 
-Test: geometry/tests/test_fillet_kernel.cpp (ctest
-geometry.suite.fillet_kernel), test_where_a_fillet_stops: it reads the
-stage the patch adds and does not build without it. Its failure without
-the patch is still to be shown: the patch does not revert at the port's
-tip without the more than 40 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0320.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
 index 2412599..6514a6a 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx

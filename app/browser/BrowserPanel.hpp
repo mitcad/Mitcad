@@ -113,6 +113,13 @@ struct BrowserNode {
     // the occurrences in no folder: uid and name its name, `occurrence` and
     // `component` those of the row it is under; its occurrences under it.
     ComponentFolder,
+    // Selection sets (mitcad#2192): the root's Selection Sets folder and a
+    // row per set (uid and name its name), each with its members' rows
+    // under it. A member's row is a row of its item's own type (Body,
+    // Component, Sketch, Datum, Joint or Feature) whose `selectionSet`
+    // names the set: it links to the item and leaves it in place.
+    SelectionSets,
+    SelectionSet,
   };
 
   Type type = Type::None;
@@ -153,14 +160,21 @@ struct BrowserNode {
   // in (of its parent's occurrences, of its component's Bodies folder);
   // empty when in none.
   QString folder;
+  // A member's row of a selection set (mitcad#2192): the set's name; empty
+  // for every other row. It stands for its item as the item's own row does
+  // (clicks, menu), but Find in Browser, owner marks, drags and folders
+  // never take it for that row.
+  QString selectionSet;
 
   bool isValid() const { return type != Type::None; }
+  bool isSetMember() const { return !selectionSet.isEmpty(); }
   bool isFolder() const {
     return type == Type::Bodies || type == Type::Sketches || type == Type::Construction ||
            type == Type::Origin || type == Type::Analyses || type == Type::Joints ||
            type == Type::MotionLinks || type == Type::Measurements || type == Type::Drawings ||
            type == Type::ImageReferences || type == Type::Features || type == Type::CamFolder ||
-           type == Type::BodyFolder || type == Type::SketchBlocks || type == Type::ComponentFolder;
+           type == Type::BodyFolder || type == Type::SketchBlocks || type == Type::ComponentFolder ||
+           type == Type::SelectionSets;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -293,8 +307,12 @@ public:
   QVector<BrowserNode> selectedNodes() const;
   QStringList selectedPresentationKeys() const;
   void setPresentationSelection(const QStringList& keys);
-  // The rows of a feature: its sketch or datum, or the bodies it made.
+  // The rows of a feature: its sketch or datum, or the bodies it made; not
+  // a selection set's links to them.
   QVector<BrowserNode> nodesOfFeature(const QString& feature) const;
+  // A selection set's member rows (mitcad#2192), in the set's order; none
+  // when the set has no row.
+  QVector<BrowserNode> setMemberNodes(const QString& set) const;
   // Expands to, selects and scrolls to the rows of a feature, its rows under
   // its sketches too; false when it has none (Find in Browser).
   bool reveal(const QString& feature);
@@ -569,6 +587,8 @@ private:
   QSet<QString> m_loggedTransparent;
   // The Sketch Blocks folder's rows as last logged (mitcad#2110).
   QString m_loggedSketchBlocks;
+  // The Selection Sets folder's rows as last logged (mitcad#2192).
+  QString m_loggedSelectionSets;
   // The owners' marks of setOwnerMarks (mitcad#1704) on the rows there are:
   // the row to scroll to (null: none marked).
   QTreeWidgetItem* applyOwnerMarks();

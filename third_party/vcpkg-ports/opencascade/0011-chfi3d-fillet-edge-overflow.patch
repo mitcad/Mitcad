@@ -46,13 +46,9 @@ spine's status ChFiDS_StartsolFailure, set before it throws; only that
 failure is taken for an overflow and handed to StartSolOverflow, whose own
 failure (no side) rethrows it. Any other failure of StartSol is rethrown
 at once: the stripe fails, as before the patch.
-Test: geometry/tests/test_fillet_overflow.cpp (the roundings over a narrow
-face of mitcad#121); geometry/tests/port/p0011-edge-overflow-start.cpp
-(ctest geometry.port.0011): a block with a step 2 high whose top edge and
-foot are each rounded with 3 (the contact leaves the step's face along the
-whole edge: built, valid, the step's face consumed), with 1.9 (inside the
-face, as stock), and a bar 2 x 2 whose edge is rounded with 5, wider than
-both its faces (no ball touches a face: fails, as stock).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0011.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 192f69f6..886899ca 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

@@ -814,6 +814,103 @@ fn a_boundary_surface_fills_a_loop_or_runs_through_a_network() {
     }
 }
 
+/// A loop of curves of three sketches, two planar and a 3D one, listed in
+/// any order (mitcad#2198): the kernel gets them joined end to end; with a
+/// chain of edges the curves run as one path before it; a loop that does
+/// not close is refused naming the sketch where it stops.
+#[test]
+fn a_boundary_loop_joins_curves_of_several_sketches_end_to_end() {
+    let mut doc = Document::new(MockKernel::default());
+    let first = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let second = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let a = line(&mut doc, first, [0.0, 0.0], [10.0, 0.0]);
+    let b = line(&mut doc, second, [10.0, 0.0], [0.0, 10.0]);
+    let created: Value = serde_json::from_str(
+        &doc.command(&json!({"cmd": "sketch3d.create"}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    let spatial = created["uid"].as_str().unwrap().to_owned();
+    let added: Value = serde_json::from_str(
+        &doc.command(
+            &json!({"cmd": "sketch3d.add_line", "sketch": spatial,
+                    "start": [0, 10, 0], "end": [0, 0, 0]})
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let c = added["made"][0].as_str().unwrap().to_owned();
+    // Listed first, 3D, second: filled first, second, 3D.
+    let uid = add(
+        &mut doc,
+        json!({"type": "boundary_surface", "boundary": [
+            {"sketch": first, "curves": [a], "continuity": "g1"},
+            {"sketch": spatial, "curves": [c]},
+            {"sketch": second, "curves": [b], "continuity": "g1"}]}),
+    );
+    ok(&doc, uid);
+    assert_eq!(
+        specs(&doc, "boundary_surface"),
+        [format!(
+            "boundary_surface({uid}: loop [curves {a} g1; curves {b} g1; curves {c} g0])"
+        )]
+    );
+    // Two of them do not close.
+    let open = add(
+        &mut doc,
+        json!({"type": "boundary_surface", "boundary": [
+            {"sketch": first, "curves": [a]}, {"sketch": second, "curves": [b]}]}),
+    );
+    let error = failure(&doc, open);
+    assert!(
+        error.contains("do not close into a loop") && error.contains("Sketch1"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_boundary_loop_runs_its_curves_as_one_path_before_a_chain_of_edges() {
+    let (mut b, walls) = block_and_walls();
+    let names = faces(&b.doc, walls);
+    let other = b.doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let l1 = line(&mut b.doc, b.sketch, [100.0, 0.0], [110.0, 0.0]);
+    let l2 = line(&mut b.doc, other, [120.0, 0.0], [110.0, 0.0]);
+    let l3 = line(&mut b.doc, b.sketch, [120.0, 0.0], [130.0, 0.0]);
+    let uid = add(
+        &mut b.doc,
+        json!({"type": "boundary_surface", "boundary": [
+            {"sketch": b.sketch, "curves": [l1]},
+            {"body": walls, "openings": [{"opening": {"faces": [names[0]]}}]},
+            {"sketch": b.sketch, "curves": [l3]},
+            {"sketch": other, "curves": [l2]}]}),
+    );
+    ok(&b.doc, uid);
+    // From the first free end: l1, l2, l3, then the edges.
+    assert_eq!(
+        specs(&b.doc, "boundary_surface"),
+        [format!(
+            "boundary_surface({uid}: loop [curves {l1} g0; curves {l2} g0; curves {l3} g0; 0 edges, 1 openings g0])"
+        )]
+    );
+    b.doc.undo();
+    // A sketch the loop passes twice, its curves in one entry: two runs.
+    let uid = add(
+        &mut b.doc,
+        json!({"type": "boundary_surface", "boundary": [
+            {"sketch": b.sketch, "curves": [l3, l1]},
+            {"body": walls, "openings": [{"opening": {"faces": [names[0]]}}]},
+            {"sketch": other, "curves": [l2]}]}),
+    );
+    ok(&b.doc, uid);
+    assert_eq!(
+        specs(&b.doc, "boundary_surface")[1..],
+        [format!(
+            "boundary_surface({uid}: loop [curves {l3} g0; curves {l2} g0; curves {l1} g0; 0 edges, 1 openings g0])"
+        )]
+    );
+}
+
 #[test]
 fn match_surface_rebuilds_a_face_against_a_chain_and_fair_surface_smooths_faces() {
     let (mut b, walls) = block_and_walls();

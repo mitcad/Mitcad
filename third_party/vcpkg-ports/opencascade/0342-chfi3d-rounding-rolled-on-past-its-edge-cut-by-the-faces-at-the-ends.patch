@@ -51,15 +51,9 @@ fails with OCCT's reports of a computation it cannot make
 stripe's own state is restored and its ends are left to OCCT's corners as
 before, which its caller is told. Any other failure (a broken invariant, a
 signal) is rethrown.
-Test: geometry/tests/test_fillet_corners.cpp (the ear on a boss);
-geometry/tests/port/p0342-rolled-on-past-its-edge.cpp (ctest
-geometry.port.0342): a second geometry, a rectangular ear on a flat wall
-(not a boss), its top a strip narrower than the radius between the wall
-and a chamfer on its outer edge, the top's edge with the wall rounded:
-built, valid, the blend cut by the ear's sides; a radius the strip holds
-as stock. The port test's case is complete with 0431 (the OnSame end of a
-blend rolling on an edge that ends with it): it fails without 0342 and
-still with 0342 alone, and passes from 0431 on.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0342.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 29d4a2082..471aab460 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

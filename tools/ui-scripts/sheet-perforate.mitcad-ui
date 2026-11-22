@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# A contour-flanged plate with an outline on its broad panel. Add a
+# staggered field, then edit to square and select the outline.
+expect-ever 'View area'
+command view.back
+wait-idle
+command view.fit
+wait-idle
+
+mark
+command sheet.perforate
+wait-log '^Command Perforate started' 30
+wait-log '^Pick places:' 30
+click-pick 'face F3[.]b0/[^ ]*sheet_(front|back)[(]0[)]'
+wait-log '^Preview Perforate: ok.*The perforation cuts 33 holes[.]$' 60
+button '^OK$'
+wait-log '^Added Perforate as F5$' 60
+wait-idle
+
+mark
+dblclick-logged '^Timeline SheetPerforate1 at '
+wait-log '^Editing F5 with Perforate$' 30
+wait-idle
+expect-choice-text pattern '^Staggered$'
+mark
+qt-choice input_pattern 'Square'
+wait-log '^Preview Perforate: ok.*The perforation cuts 28 holes[.]$' 60
+wait-idle
+
+mark
+click-logged '^Panel Perforate input outline at '
+wait-log '^Pick places:' 30
+click-pick 'profile F4/r[{]c[0-9]+[[]'
+wait-log '^Preview Perforate: ok.*The perforation cuts 11 holes[.]$' 60
+mark
+button '^OK$'
+wait-idle
+expect-model-bodies 1 9596.34954084936
+expect-never 'Failed features: [^n]'

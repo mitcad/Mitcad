@@ -875,11 +875,24 @@ QString noPartsText(const Shared& shared, const QString& role) {
 const Choices kPlaces = {{QStringLiteral("auto"), QStringLiteral("Automatic: where the click is")},
                          {QStringLiteral("side"), QStringLiteral("On a profile's side")},
                          {QStringLiteral("end"), QStringLiteral("On a profile's end")},
-                         {QStringLiteral("plane"), QStringLiteral("On a plane (as the first part)")}};
+                         {QStringLiteral("plane"), QStringLiteral("On a plane (as the first part)")},
+                         {QStringLiteral("parallel"), QStringLiteral("Parallel: along a profile, long faces in contact")}};
 const QHash<QString, QString> kPlaceIcons = {{QStringLiteral("auto"), QStringLiteral("build-place-auto")},
                                              {QStringLiteral("side"), QStringLiteral("build-place-side")},
                                              {QStringLiteral("end"), QStringLiteral("build-place-end")},
-                                             {QStringLiteral("plane"), QStringLiteral("build-place-plane")}};
+                                             {QStringLiteral("plane"), QStringLiteral("build-place-plane")},
+                                             {QStringLiteral("parallel"), QStringLiteral("build-place-parallel")}};
+// Parallel (mitcad#2201; Profile only): along the profile picked, a long
+// face on the side picked; Across centres it on the side or puts it on the
+// slot nearest the click; its Length matches the target's or is typed.
+const QString kParallel = QStringLiteral("parallel");
+const QString kAcross = QStringLiteral("across");
+const Choices kAcrosses = {{QStringLiteral("middle"), QStringLiteral("Centered on the side")},
+                           {QStringLiteral("slot"), QStringLiteral("On the slot nearest the click")}};
+const QString kMatch = QStringLiteral("match");
+const Choices kParallelFroms = {{QStringLiteral("a"), QStringLiteral("End A")},
+                                {QStringLiteral("b"), QStringLiteral("End B")},
+                                {QStringLiteral("middle"), QStringLiteral("Middle")}};
 // A ground placement's axis (at.direction): +X, +Y, +Z, -X, -Y or -Z of
 // the host, or a picked face's outward normal (mitcad#2000: no
 // at.direction; offered while a face is picked, and chosen by the pick).
@@ -951,12 +964,14 @@ const Choices kLengthButtons = {{QStringLiteral("face"), QStringLiteral("Auto: t
                                 {QStringLiteral("centre"), QStringLiteral("Auto: to its center")},
                                 {QStringLiteral("through"), QStringLiteral("Auto: through it")},
                                 {kTyped, QStringLiteral("Typed length")},
-                                {kToFace, QStringLiteral("Auto: to a face you pick, plus an offset")}};
+                                {kToFace, QStringLiteral("Auto: to a face you pick, plus an offset")},
+                                {kMatch, QStringLiteral("Match target: as long as the profile it lies along")}};
 const QHash<QString, QString> kLengthIcons = {{QStringLiteral("face"), QStringLiteral("build-length-face")},
                                               {QStringLiteral("centre"), QStringLiteral("build-length-centre")},
                                               {QStringLiteral("through"), QStringLiteral("build-length-through")},
                                               {kTyped, QStringLiteral("build-length-typed")},
-                                              {kToFace, QStringLiteral("build-length-to-face")}};
+                                              {kToFace, QStringLiteral("build-length-to-face")},
+                                              {kMatch, QStringLiteral("build-length-match")}};
 const QStringList kAutoModes = {QStringLiteral("face"), QStringLiteral("centre"), QStringLiteral("through")};
 // Auto: the model's default (mitcad#427: none on a square corner, as the
 // panel's turns are; shared on a corner at another angle at offset 0),
@@ -977,8 +992,9 @@ const Choices kTilts = {{QStringLiteral("x"), QStringLiteral("About x")},
 const QString kAt = QStringLiteral("at");
 
 // How a placement goes now: on the ground (a plane, a face, a point or the
-// origin), waiting for a pick on a part, or on a part's side or end.
-enum class Against { Ground, Pick, Side, End };
+// origin), waiting for a pick on a part, on a part's side or end, or along
+// a profile in parallel (mitcad#2201).
+enum class Against { Ground, Pick, Side, End, Parallel };
 
 bool isEndFace(const SelectionItem& item) {
   return item.name.endsWith(QStringLiteral(":end_a")) || item.name.endsWith(QStringLiteral(":end_b"));
@@ -987,13 +1003,16 @@ bool isEndFace(const SelectionItem& item) {
 Against against(const Shared& shared, const QString& role, const CommandState& state) {
   const QString place = state.choice(QStringLiteral("place"));
   if (place == QStringLiteral("plane") || (place != QStringLiteral("side") && place != QStringLiteral("end") &&
-                                            !shared.hasTargets(role))) {
+                                            place != kParallel && !shared.hasTargets(role))) {
     return Against::Ground;
   }
   const Selection& items = state.items(kAt);
   const std::optional<BuildPart> part = items.isEmpty() ? std::nullopt : shared.partAt(items.first().occurrence);
   if (!part) {
     return Against::Pick;
+  }
+  if (place == kParallel) {
+    return Against::Parallel;
   }
   if (place == QStringLiteral("side")) {
     return Against::Side;
@@ -1436,6 +1455,20 @@ Placement placement(const Shared& shared, const QString& role, const CommandStat
       const QString lie = state.choice(QStringLiteral("lie"));
       fields.insert(QStringLiteral("lie"), lie.isEmpty() ? QStringLiteral("flat") : lie);
     }
+  } else if (result.how == Against::Parallel) {
+    // Along the profile picked (mitcad#2201): the side the click picked,
+    // centred on it or on the slot nearest the click, from End A, End B or
+    // the Middle at the Offset (End A, 0 by default: flush), turned about
+    // its axis in quarter turns; no flip, no tilt.
+    at->insert(QStringLiteral("place"), kParallel);
+    at->insert(kAcross, state.choice(kAcross).isEmpty() ? QStringLiteral("middle") : state.choice(kAcross));
+    const QString offset = state.expression(QStringLiteral("offset"));
+    at->insert(QStringLiteral("offset"), offset.isEmpty() ? QStringLiteral("0 mm") : offset);
+    const QString from = state.choice(QStringLiteral("from"));
+    at->insert(QStringLiteral("from"), from == QStringLiteral("b") || from == QStringLiteral("middle")
+                                           ? from
+                                           : QStringLiteral("a"));
+    fields.insert(QStringLiteral("rotate"), angleValue(state.choice(QStringLiteral("rotate"))));
   } else {
     at->insert(QStringLiteral("place"), place == QStringLiteral("side") || place == QStringLiteral("end")
                                             ? place
@@ -1492,7 +1525,16 @@ Placement placement(const Shared& shared, const QString& role, const CommandStat
   fields.insert(kAt, *at);
   if (part.cutToLength()) {
     const QString mode = state.choice(QStringLiteral("length_mode"));
-    if (mode == kToFace) {
+    if (result.how == Against::Parallel) {
+      // In parallel (mitcad#2201): the target's length (no length sent),
+      // else the typed one.
+      if (mode == kTyped) {
+        fields.insert(QStringLiteral("length"), state.expression(QStringLiteral("length")));
+        result.lengthNote = QObject::tr("typed");
+      } else {
+        result.lengthNote = QObject::tr("matches the profile it lies along");
+      }
+    } else if (mode == kToFace) {
       // To a face picked anywhere, plus the offset (mitcad#1630); on the
       // ground too.
       const Selection& faces = state.items(kLengthFace);
@@ -1913,6 +1955,7 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
   if (!place.isEmpty()) {
     lines << (place == QStringLiteral("end")        ? QObject::tr("On the end")
               : place == QStringLiteral("side")     ? QObject::tr("On the side")
+              : place == kParallel                  ? QObject::tr("Along the profile, a long face on its side")
               : place == QStringLiteral("frame")    ? QObject::tr("On the component's frame")
               : place == QStringLiteral("grounded") ? QObject::tr("At the origin")
                                                     : QObject::tr("On the picked geometry"));
@@ -1951,7 +1994,13 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     // along it: centered between the slots, or on the slot nearest the
     // click.
     const QString across = acrossText(side);
-    if (!across.isEmpty()) {
+    if (place == kParallel) {
+      // In parallel (mitcad#2201) Across chooses, not the click.
+      if (!across.isEmpty()) {
+        lines << (str(side, "across") == QStringLiteral("middle") ? QObject::tr("Across: centered on the side")
+                                                                  : QObject::tr("Across: on the slot nearest the click"));
+      }
+    } else if (!across.isEmpty()) {
       lines << (str(side, "across") == QStringLiteral("middle")
                     ? QObject::tr("Across: centered on the side (click near a slot to place on it)")
                     : QObject::tr("Across: on a slot (click near the side's center line to center it)"));
@@ -2093,6 +2142,15 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
   }
   if (!spacing.isEmpty()) {
     result.log += setPreviewLog(answer, result.shape);
+  }
+  // In parallel (mitcad#2201): the target's frame it lies on, how it
+  // stands across the side, its turn and its length.
+  if (const QJsonObject parallel = answer.value(kParallel).toObject(); !parallel.isEmpty()) {
+    result.log += QStringLiteral("; parallel on %1, across %2, rotate %3 deg, length %4")
+                      .arg(str(parallel, "frame"),
+                           str(parallel, "across").isEmpty() ? QStringLiteral("the only slot") : str(parallel, "across"))
+                      .arg(parallel.value(QStringLiteral("rotate")).toDouble() * 180.0 / kPi, 0, 'f', 0)
+                      .arg(str(parallel, "length"));
   }
   // The part previewed (mitcad#418: a part chosen in the picker).
   result.log += QStringLiteral("; part %1").arg(part.name);
@@ -2276,7 +2334,15 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
   const auto ground = [how](const CommandState& state) { return how(state) == Against::Ground; };
   const auto onSide = [how](const CommandState& state) { return how(state) == Against::Side; };
   const auto onEnd = [how](const CommandState& state) { return how(state) == Against::End; };
+  // In parallel (mitcad#2201): Offset, From, Across and Rotate, no Flip.
+  const auto inParallel = [how](const CommandState& state) { return how(state) == Against::Parallel; };
+  const auto alongSide = [how](const CommandState& state) {
+    return how(state) == Against::Side || how(state) == Against::Parallel;
+  };
   const auto onPart = [how](const CommandState& state) {
+    return how(state) == Against::Side || how(state) == Against::End || how(state) == Against::Parallel;
+  };
+  const auto flips = [how](const CommandState& state) {
     return how(state) == Against::Side || how(state) == Against::End;
   };
   const auto cornered = [onEnd](const CommandState& state) { return onEnd(state) && turnsCorner(state); };
@@ -2328,8 +2394,13 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
       choiceInput(QStringLiteral("length_mode"), QObject::tr("Length"), kLengthButtons, QStringLiteral("face"))
           .withChoiceIcons(kLengthIcons)
           .withVisible(cut)
-          .withChoiceOffered([ground](const CommandState& state, const QString& mode) {
-            return !ground(state) || mode == kTyped || mode == kToFace;
+          // In parallel the target's length or a typed one (mitcad#2201);
+          // Match target nowhere else.
+          .withChoiceOffered([ground, inParallel](const CommandState& state, const QString& mode) {
+            if (inParallel(state)) {
+              return mode == kMatch || mode == kTyped;
+            }
+            return mode != kMatch && (!ground(state) || mode == kTyped || mode == kToFace);
           })
           .withTabCycle(kAutoModes)
           .withOnChange([shared](CommandState& state, const CommandContext& context) {
@@ -2434,7 +2505,7 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
   // On a side (mitcad#417): the click fills both; a typed offset moves
   // the part from its reference, a change of From keeps it in place.
   inputs.append(valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
-                    .withVisible(onSide)
+                    .withVisible(alongSide)
                     .withOnChange([](CommandState& state, const CommandContext&) {
                       if (!state.checked(kOffsetTyped)) {
                         state.setChecked(kOffsetTyped, true);
@@ -2444,14 +2515,25 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
                     })
                     .withTooltip(QObject::tr("The distance from the reference From names; 0 is flush, or centered")));
   inputs.append(choiceInput(QStringLiteral("from"), QObject::tr("From"), kSideFroms, QStringLiteral("a"))
-                    .withVisible(onSide)
+                    .withVisible(alongSide)
+                    // In parallel no Middle of Gap (mitcad#2201).
+                    .withChoiceOffered([inParallel](const CommandState& state, const QString& from) {
+                      return !inParallel(state) || from != QStringLiteral("gap");
+                    })
                     .withOnChange([shared](CommandState& state, const CommandContext& context) {
                       keepPlace(*shared, state, context);
                     })
                     .withTooltip(QObject::tr("What the offset is measured from; the component stays bound to it when "
                                              "what it is on changes length")));
+  // In parallel (mitcad#2201): centred on the side picked, or on its slot
+  // nearest the click.
+  inputs.append(choiceInput(kAcross, QObject::tr("Across"), kAcrosses, QStringLiteral("middle"))
+                    .withVisible(inParallel)
+                    .withTooltip(QObject::tr("Centered on the side, or its cross-section's center on the slot "
+                                             "nearest the click")));
   // On a part's side or end; on a plane or a face Rotate takes any angle
-  // (kGroundRotate, mitcad#2046).
+  // (kGroundRotate, mitcad#2046). In parallel it turns the face that rests
+  // on the side (mitcad#2201).
   inputs.append(choiceInput(QStringLiteral("rotate"), QObject::tr("Rotate"), kRotations, QStringLiteral("0"))
                     .withVisible(onPart)
                     .withTooltip(QObject::tr("About the component's axis, in 90 degree steps")));
@@ -2480,7 +2562,7 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
                       .withTooltip(
                           QObject::tr("The lean along the component it stands on, up to 80 degrees; 0 stands square")));
   }
-  inputs.append(flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withVisible(onPart));
+  inputs.append(flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withVisible(flips));
   if (role == QStringLiteral("linear")) {
     // A carriage's travel on its rail (mitcad#2088); empty: flush with
     // the rail's ends.
@@ -2502,7 +2584,28 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
   inputs.append(choiceInput(QStringLiteral("place"), QObject::tr("Placement"), kPlaces, QStringLiteral("auto"))
                     .withChoiceIcons(kPlaceIcons)
                     .withVisible([shared, role](const CommandState&) { return shared->hasTargets(role); })
-                    .withOnChange([shared, role](CommandState& state, const CommandContext&) {
+                    // Parallel is Profile's (mitcad#2201).
+                    .withChoiceOffered([role](const CommandState&, const QString& place) {
+                      return place != kParallel || role == QStringLiteral("profile");
+                    })
+                    .withOnChange([shared, role](CommandState& state, const CommandContext& context) {
+                      // In parallel the length matches the target and the
+                      // profile is flush with its end A by default;
+                      // elsewhere Match target is no mode (mitcad#2201).
+                      const QString mode = state.choice(QStringLiteral("length_mode"));
+                      if (state.choice(QStringLiteral("place")) == kParallel) {
+                        if (mode != kTyped) {
+                          state.setChoice(QStringLiteral("length_mode"), kMatch);
+                        }
+                        state.setChoice(QStringLiteral("from"), QStringLiteral("a"));
+                        state.setText(QStringLiteral("offset"), cmd::lengthText(0.0, context));
+                        state.setValue(QStringLiteral("offset"), kNaN);
+                        state.setChecked(kOffsetTyped, false);
+                        qInfo().noquote() << QStringLiteral("BUILD placement parallel: length %1")
+                                                 .arg(state.choice(QStringLiteral("length_mode")));
+                      } else if (mode == kMatch) {
+                        state.setChoice(QStringLiteral("length_mode"), QStringLiteral("face"));
+                      }
                       // What the pick takes changes with it: a pick it no
                       // longer takes is picked again.
                       const Selection& items = state.items(kAt);
@@ -2577,7 +2680,20 @@ const QString kLinesPick = QStringLiteral("lines_pick");
 const QString kLinesChain = QStringLiteral("lines_chain");
 const QString kLinesAlign = QStringLiteral("lines_align");
 const QString kLinesCorners = QStringLiteral("lines_corners");
-const Choices kLineAligns = {{QStringLiteral("center"), QStringLiteral("Centered on the line")},
+// Corners (mitcad#2200): the L's mitered, butted (the line picked first runs
+// through) or left square, as icon buttons, their labels the tooltips; the
+// T's stop at the other profile's near side unless Square.
+const QString kCornersMitre = QStringLiteral("mitre");
+const QString kCornersButt = QStringLiteral("butt");
+const QString kCornersSquare = QStringLiteral("none");
+const Choices kLinesCornerKinds = {
+    {kCornersMitre, QStringLiteral("Miter: the ends that meet cut on the bisector, to the outer corner")},
+    {kCornersButt, QStringLiteral("Butt: the line picked first runs through, the other stops at its side")},
+    {kCornersSquare, QStringLiteral("Square: every end as drawn")}};
+const QHash<QString, QString> kLinesCornerIcons = {{kCornersMitre, QStringLiteral("build-joint-mitre")},
+                                                   {kCornersButt, QStringLiteral("build-joint-butt")},
+                                                   {kCornersSquare, QStringLiteral("build-joint-square")}};
+const Choices kLineAligns ={{QStringLiteral("center"), QStringLiteral("Centered on the line")},
                              {QStringLiteral("above"), QStringLiteral("On top of the sketch plane")},
                              {QStringLiteral("below"), QStringLiteral("Under the sketch plane")},
                              {QStringLiteral("left_above"), QStringLiteral("Corner: left, on top")},
@@ -2632,9 +2748,10 @@ void addLineInputs(QVector<InputDef>& inputs) {
       choiceInput(kLinesAlign, QObject::tr("Align"), kLineAligns, QStringLiteral("center"))
           .withVisible(lines)
           .withTooltip(QObject::tr("How each profile's section sits on its line")),
-      checkInput(kLinesCorners, QObject::tr("Corners"), true)
+      choiceInput(kLinesCorners, QObject::tr("Corners"), kLinesCornerKinds, kCornersMitre)
+          .withChoiceIcons(kLinesCornerIcons)
           .withVisible(lines)
-          .withTooltip(QObject::tr("Miters where two lines meet at their ends, butts where a line ends on another")),
+          .withTooltip(QObject::tr("Where a line ends on another one's side, it stops at that side unless Square")),
   };
   // After Method and Place On (hidden along lines), before the other
   // placement inputs by clicks: Place On stays the first selection input,
@@ -3571,7 +3688,8 @@ LinesPlacement linesPlacement(const CommandState& state, const CommandContext& c
                     {QStringLiteral("chain"), state.checked(kLinesChain)},
                     {QStringLiteral("align"), state.choice(kLinesAlign).isEmpty() ? QStringLiteral("center")
                                                                                   : state.choice(kLinesAlign)},
-                    {QStringLiteral("corners"), state.checked(kLinesCorners)}};
+                    {QStringLiteral("corners"), state.choice(kLinesCorners).isEmpty() ? kCornersMitre
+                                                                                      : state.choice(kLinesCorners)}};
   if (path && !path->isEmpty()) {
     lines.insert(QStringLiteral("occurrence"), *path);
   }
@@ -3634,20 +3752,60 @@ Inspection inspectLines(const SharedPtr& shared, const CommandState& state, cons
       }
     }
   }
-  const bool corners = state.checked(kLinesCorners);
+  const QString corners = state.choice(kLinesCorners).isEmpty() ? kCornersMitre : state.choice(kLinesCorners);
   lines << QObject::tr("%n profile(s), one on each line", nullptr, count);
   lines << QObject::tr("Each follows its line when the sketch changes");
-  lines << (corners ? QObject::tr("Corners: miters at the ends that meet, butts where a line ends on another")
-                    : QObject::tr("Corners: left square"));
+  if (corners == kCornersButt) {
+    lines << QObject::tr("Corners: butts where two lines meet at their ends, the line picked first running through "
+                         "(marked in the view); a line ending on another one's side stops at that side");
+  } else if (corners == kCornersSquare) {
+    lines << QObject::tr("Corners: left square, every end as drawn");
+  } else {
+    lines << QObject::tr("Corners: miters where two lines meet at their ends; a line ending on another one's side "
+                         "stops at that side");
+  }
+  // The joints (mitcad#2200): which profile runs through each, marked on it
+  // beside the joint; the profiles numbered in the lines' order in the log.
+  QStringList joints;
+  bool three = false;
+  for (const QJsonValue& value : along.value(QStringLiteral("joints")).toArray()) {
+    const QJsonObject joint = value.toObject();
+    const QString kind = str(joint, "kind");
+    three = three || kind == QStringLiteral("three");
+    const QJsonValue through = joint.value(QStringLiteral("through"));
+    QString text = QStringLiteral("%1 %2").arg(kind, str(joint, "condition"));
+    if (through.isDouble()) {
+      const int i = through.toInt();
+      text += QStringLiteral(" through %1").arg(i + 1);
+      const std::optional<gp_Pnt> at = pointFrom(joint.value(QStringLiteral("at")));
+      if (at && i < frames.size() && i < lengths.size() && kind != QStringLiteral("T")) {
+        const build::Frame frame = build::frameOf(frames.at(i));
+        const double length = build::lengthOf(lengths.at(i));
+        if (frame.valid && std::isfinite(length)) {
+          const gp_Vec towards(*at, frame.origin.Translated(gp_Vec(frame.z) * (length / 2.0)));
+          if (towards.Magnitude() > 1e-6) {
+            const double by = std::min(60.0, towards.Magnitude() / 2.0);
+            markers.append(marker(QObject::tr("Runs through"), at->Translated(towards.Normalized() * by)));
+          }
+        }
+      }
+    }
+    joints << text;
+  }
+  if (three) {
+    lines << QObject::tr("Three or more ends at a point: the line picked first runs through, the others stop at "
+                         "its side");
+  }
   result.report = {{QStringLiteral("markers"), markers}};
   result.text = lines.join(QStringLiteral("<br>"));
   result.log = QStringLiteral("along sketch lines: %1 profile(s), lengths %2 mm (corners square in the preview); "
-                              "align %3, rotate %4, flip %5, corners %6; adds to %7; part %8")
+                              "align %3, rotate %4, flip %5, corners %6; adds to %7; part %8; joints: %9")
                    .arg(count)
                    .arg(shown.join(QStringLiteral(", ")))
                    .arg(state.choice(kLinesAlign), state.choice(QStringLiteral("rotate")),
-                        state.checked(QStringLiteral("flip")) ? QStringLiteral("on") : QStringLiteral("off"),
-                        corners ? QStringLiteral("on") : QStringLiteral("off"), host.name, part.name);
+                        state.checked(QStringLiteral("flip")) ? QStringLiteral("on") : QStringLiteral("off"), corners,
+                        host.name, part.name,
+                        joints.isEmpty() ? QStringLiteral("none") : joints.join(QStringLiteral(", ")));
   return result;
 }
 
@@ -7471,7 +7629,11 @@ const Choices kLengthEdits = {{kTyped, QStringLiteral("Detached: this length")},
                               {QStringLiteral("face"), QStringLiteral("Bound: to the face")},
                               {QStringLiteral("centre"), QStringLiteral("Bound: to the center")},
                               {QStringLiteral("through"), QStringLiteral("Bound: through")},
-                              {kToFace, QStringLiteral("Bound: to a face, plus an offset")}};
+                              {kToFace, QStringLiteral("Bound: to a face, plus an offset")},
+                              {kMatch, QStringLiteral("Match target: as long as the profile it lies along")}};
+// A profile placed in parallel (mitcad#2201): its length is the target's
+// or typed, never bound; kept by the pick.
+const QString kLengthParallel = QStringLiteral("parallel");
 
 CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
   CommandDef def;
@@ -7481,7 +7643,9 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
   def.tooltip = QObject::tr("Binds a component's length to the component it runs to, or makes it a number");
   def.keywords = {QStringLiteral("bind"), QStringLiteral("detach"), QStringLiteral("cut"), QStringLiteral("build")};
   const auto typed = [](const CommandState& state) { return state.choice(QStringLiteral("mode")) == kTyped; };
-  const auto bound = [](const CommandState& state) { return state.choice(QStringLiteral("mode")) != kTyped; };
+  const auto bound = [](const CommandState& state) {
+    return state.choice(QStringLiteral("mode")) != kTyped && state.choice(QStringLiteral("mode")) != kMatch;
+  };
   def.inputs = {
       selectionInput(kPart, QObject::tr("Component"), kPartKinds, 1, 1)
           .withOnPick([](const SelectionItem& item, CommandState& state, const CommandContext& model) {
@@ -7489,6 +7653,15 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
               if (std::isfinite(part->length)) {
                 state.setText(QStringLiteral("length"), cmd::lengthText(part->length, model));
                 state.setValue(QStringLiteral("length"), kNaN);
+              }
+              // In parallel (mitcad#2201): the target's length or typed.
+              const QJsonObject parallel = part->raw.value(kParallel).toObject();
+              state.setChecked(kLengthParallel, !parallel.isEmpty());
+              if (!parallel.isEmpty()) {
+                state.setChoice(QStringLiteral("mode"), str(parallel, "length") == kMatch ? kMatch : kTyped);
+                qInfo().noquote() << QStringLiteral("BUILD length of %1: in parallel, %2")
+                                         .arg(part->component, str(parallel, "length"));
+                return;
               }
               const QString mode = str(part->bound, "mode");
               state.setChoice(QStringLiteral("mode"), part->bound.isEmpty() ? kTyped : (mode.isEmpty() ? QStringLiteral("face") : mode));
@@ -7501,7 +7674,12 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
             }
           },
                       false),
-      choiceInput(QStringLiteral("mode"), QObject::tr("Length"), kLengthEdits, kTyped),
+      choiceInput(QStringLiteral("mode"), QObject::tr("Length"), kLengthEdits, kTyped)
+          // A profile placed in parallel: the target's length or typed;
+          // Match target for no other part (mitcad#2201).
+          .withChoiceOffered([](const CommandState& state, const QString& mode) {
+            return state.checked(kLengthParallel) ? (mode == kMatch || mode == kTyped) : mode != kMatch;
+          }),
       valueInput(QStringLiteral("length"), QObject::tr("Value"), ValueKind::Length, QStringLiteral("500 mm"))
           .withVisible(typed),
       // To a face (mitcad#1630) also a plane anywhere; the auto modes a face.
@@ -7531,6 +7709,16 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
     QStringList lines{QStringLiteral("<b>%1</b>").arg(part.shownName().toHtmlEscaped())};
     if (std::isfinite(part.length)) {
       lines << QObject::tr("Length %1 mm").arg(part.length, 0, 'f', 1);
+    }
+    // In parallel (mitcad#2201): the target's length or a number.
+    const QJsonObject parallel = part.raw.value(kParallel).toObject();
+    if (!parallel.isEmpty()) {
+      lines << (str(parallel, "length") == kMatch ? QObject::tr("Matches the profile it lies along")
+                                                  : QObject::tr("A number (typed)"));
+      result.text = lines.join(QStringLiteral("<br>"));
+      result.log = QStringLiteral("%1: %2 mm, parallel, %3")
+                       .arg(part.component, QString::number(part.length, 'f', 2), str(parallel, "length"));
+      return result;
     }
     if (!part.bound.isEmpty()) {
       const QJsonObject to = part.bound.value(QStringLiteral("to")).toObject();
@@ -7563,6 +7751,9 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
     QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("build_edit")}, {QStringLiteral("component"), part.component}};
     if (mode == kTyped) {
       command.insert(QStringLiteral("length"), state.expression(QStringLiteral("length")));
+    } else if (mode == kMatch) {
+      // In parallel: the target's length again (mitcad#2201).
+      command.insert(QStringLiteral("length"), QJsonObject{{kMatch, QStringLiteral("target")}});
     } else {
       QJsonObject bind;
       const Selection& targets = state.items(QStringLiteral("target"));
@@ -7609,8 +7800,9 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
       return false;
     }
     qInfo().noquote() << QStringLiteral("Length of %1: %2").arg(part.shownName(),
-                                                               mode == kTyped ? state.expression(QStringLiteral("length"))
-                                                                              : QStringLiteral("bound, ") + mode);
+                                                               mode == kTyped   ? state.expression(QStringLiteral("length"))
+                                                               : mode == kMatch ? QStringLiteral("matches the target")
+                                                                                : QStringLiteral("bound, ") + mode);
     return true;
   };
   return def;
@@ -7675,11 +7867,88 @@ QJsonObject meetsOf(const CommandState& state) {
   return chosenEnd(state).value(QStringLiteral("meets")).toObject();
 }
 
+// The joint the chosen end is in, an L or a T, with its condition
+// (mitcad#2200, build_end_meets' `joint`); empty: none.
+QJsonObject jointOf(const CommandState& state) {
+  return chosenEnd(state).value(QStringLiteral("joint")).toObject();
+}
+
+// Joint (mitcad#2200): the condition to give the chosen end's joint, as icon
+// buttons, their labels the tooltips; As it is leaves it. The choice stays
+// for the next end picked; the ones that fit the joint's kind are offered.
+const QString kJoint = QStringLiteral("joint");
+const QString kJointKeep = QStringLiteral("keep");
+const QString kJointMitre = QStringLiteral("mitre");
+const QString kJointButt = QStringLiteral("butt");
+const QString kJointSquare = QStringLiteral("square");
+const QString kJointNear = QStringLiteral("near_side");
+const QString kJointFar = QStringLiteral("far_side");
+const Choices kJoints = {
+    {kJointKeep, QStringLiteral("As it is")},
+    {kJointMitre, QStringLiteral("Miter: both ends cut on the bisector, to the outer corner")},
+    {kJointButt, QStringLiteral("Butt: one runs through to the outer corner, the other stops at its side")},
+    {kJointSquare, QStringLiteral("Square: as drawn")},
+    {kJointNear, QStringLiteral("Near Side: to the side of the component it meets")},
+    {kJointFar, QStringLiteral("Far Side: through to the far side of the component it meets")}};
+const QHash<QString, QString> kJointIcons = {{kJointKeep, QStringLiteral("build-joint-keep")},
+                                             {kJointMitre, QStringLiteral("build-joint-mitre")},
+                                             {kJointButt, QStringLiteral("build-joint-butt")},
+                                             {kJointSquare, QStringLiteral("build-joint-square")},
+                                             {kJointNear, QStringLiteral("build-joint-near-side")},
+                                             {kJointFar, QStringLiteral("build-joint-far-side")}};
+// A butt's profile that runs through: as it is, this one or the other.
+const QString kJointThrough = QStringLiteral("joint_through");
+const QString kThroughThis = QStringLiteral("this");
+const QString kThroughOther = QStringLiteral("other");
+const Choices kJointThroughs = {{kJointKeep, QStringLiteral("As it is")},
+                                {kThroughThis, QStringLiteral("This component")},
+                                {kThroughOther, QStringLiteral("The component it meets")}};
+
+// Whether the chosen end's joint keeps a condition: both profiles along
+// sketch lines.
+bool keepsJoint(const CommandState& state) {
+  const QJsonObject joint = jointOf(state);
+  return !joint.isEmpty() && str(joint, "problem").isEmpty();
+}
+
+// Whether a joint condition fits the chosen end's joint: an L takes Miter,
+// Butt and Square, a T Near Side, Far Side and Square.
+bool jointFits(const CommandState& state, const QString& condition) {
+  if (condition == kJointKeep || condition == kJointSquare) {
+    return true;
+  }
+  const bool l = str(jointOf(state), "kind") == QStringLiteral("L");
+  return l ? (condition == kJointMitre || condition == kJointButt) : (condition == kJointNear || condition == kJointFar);
+}
+
+// Whether OK sets the joint's condition: one is chosen, and it fits.
+bool setsJoint(const CommandState& state) {
+  const QString condition = state.choice(kJoint);
+  return keepsJoint(state) && !condition.isEmpty() && condition != kJointKeep && jointFits(state, condition);
+}
+
+// A condition in the panel's words.
+QString conditionText(const QString& condition) {
+  if (condition == kJointMitre) {
+    return QObject::tr("Miter");
+  }
+  if (condition == kJointButt) {
+    return QObject::tr("Butt");
+  }
+  if (condition == kJointNear) {
+    return QObject::tr("Near Side");
+  }
+  if (condition == kJointFar) {
+    return QObject::tr("Far Side");
+  }
+  return QObject::tr("Square");
+}
+
 // Whether Also the Component It Meets can be taken: an end meets this one
 // and its shared miter would not be refused.
 bool sharesMitre(const CommandState& state) {
   const QJsonObject meets = meetsOf(state);
-  return !meets.isEmpty() && meets.value(QStringLiteral("problem")).toString().isEmpty();
+  return !meets.isEmpty() && meets.value(QStringLiteral("problem")).toString().isEmpty() && !setsJoint(state);
 }
 
 // About's options: turns relative to what the end meets, the cut leaning
@@ -7746,8 +8015,11 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
                               {QStringLiteral("bore"), QObject::tr("A bore")},
                               {QStringLiteral("none"), QObject::tr("None")}};
   const auto bore = [](const CommandState& state) { return state.choice(QStringLiteral("machining")) == QStringLiteral("bore"); };
-  // The shared miter's angle and tilt are the corner's (mitcad#1940).
-  const auto ownCut = [](const CommandState& state) { return !state.checked(QStringLiteral("shared")); };
+  // The shared miter's angle and tilt are the corner's (mitcad#1940); a
+  // joint's condition makes its own cuts (mitcad#2200).
+  const auto ownCut = [](const CommandState& state) {
+    return !state.checked(QStringLiteral("shared")) && !setsJoint(state);
+  };
   def.inputs = {
       // None needed to inspect (mitcad#1940): the ends' labels and the
       // view's hint show before the pick; Apply still asks for one.
@@ -7765,10 +8037,25 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
                                             meets.isEmpty() ? QStringLiteral("meets no end")
                                                             : QStringLiteral("meets end %1 of %2")
                                                                   .arg(str(meets, "end"), str(meets, "component")));
+              // The joint it is in and its condition (mitcad#2200).
+              const QJsonObject joint = jointOf(state);
+              if (!joint.isEmpty()) {
+                qInfo().noquote() << QStringLiteral("BUILD ends of %1: end %2 in %3 with %4: %5%6%7")
+                                         .arg(part->component, end, str(joint, "kind"), str(joint, "component"),
+                                              str(joint, "condition"),
+                                              str(joint, "through").isEmpty()
+                                                  ? QString()
+                                                  : QStringLiteral(", %1 runs through").arg(str(joint, "through")),
+                                              str(joint, "problem").isEmpty() ? QString()
+                                                                              : QStringLiteral(" (not kept)"));
+              }
             }
           },
                       false)
-          .withTooltip(QObject::tr("Near the end to cut: the ends show A and B")),
+          // Shift + click applies the panel's values to the end at once
+          // (mitcad#2200, as BUILD's placements, mitcad#451).
+          .withShiftClickApplies()
+          .withTooltip(QObject::tr("Near the end to cut: the ends show A and B; Shift + click applies at once")),
       choiceInput(QStringLiteral("end"), QObject::tr("End"), kEnds, QStringLiteral("a"))
           .withOnChange([](CommandState& state, const CommandContext& model) {
             const QVector<BuildPart> parts = build::partsOf(state.items(kPart), model);
@@ -7776,6 +8063,19 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
               followEnd(parts.first(), state);
             }
           }),
+      // The joint's condition (mitcad#2200): for an end of a profile along a
+      // sketch line meeting another one in an L or a T.
+      choiceInput(kJoint, QObject::tr("Joint"), kJoints, kJointKeep)
+          .withChoiceIcons(kJointIcons)
+          .withChoiceOffered(
+              [](const CommandState& state, const QString& value) { return jointFits(state, value); })
+          .withVisible(keepsJoint)
+          .withTooltip(QObject::tr("The condition kept with the joint; the ends follow when the lines move")),
+      choiceInput(kJointThrough, QObject::tr("Runs Through"), kJointThroughs, kJointKeep)
+          .withVisible([](const CommandState& state) {
+            return setsJoint(state) && state.choice(kJoint) == kJointButt;
+          })
+          .withTooltip(QObject::tr("The component that runs through to the outer corner; As it is keeps it")),
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("45 deg"))
           .withTooltip(QObject::tr("From square, 0 up to 90 degrees"))
           .withEnabled(ownCut),
@@ -7800,6 +8100,8 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
           .withTooltip(QObject::tr("Empty: a plain bore")),
   };
   def.enabled = [&context] { return build::hasBuildParts(context); };
+  // The panel stays for the next end, its Joint as chosen (mitcad#2200).
+  def.repeats = true;
   // The ends' A and B labels (mitcad#1940): every profile's while the
   // panel is open, the chosen end's marked.
   def.previewMarkers = markersOf;
@@ -7821,7 +8123,7 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
     }
     result.report = {{QStringLiteral("markers"), markers}};
     if (parts.isEmpty()) {
-      result.viewHint = QObject::tr("Click a component near the end to cut: A or B");
+      result.viewHint = QObject::tr("Click a component near the end to cut: A or B; Shift+click applies at once");
       result.error = QObject::tr("Pick a component of the Build tab, near the end to cut.");
       result.log = QStringLiteral("waiting for a component; %1 end labels").arg(markers.size());
       return result;
@@ -7833,6 +8135,36 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
     }
     const QJsonObject end = chosenEnd(state);
     const QJsonObject meets = end.value(QStringLiteral("meets")).toObject();
+    // The joint and its condition (mitcad#2200): what it is now, what OK
+    // makes it.
+    const QJsonObject joint = end.value(QStringLiteral("joint")).toObject();
+    QString jointLog;
+    if (!joint.isEmpty()) {
+      const QString other = cmd::componentName(str(joint, "component"), model);
+      const QString now = conditionText(str(joint, "condition"));
+      const QString through = str(joint, "through");
+      QString line = str(joint, "kind") == QStringLiteral("L")
+                         ? QObject::tr("Joint: an L with end %1 of %2: %3")
+                               .arg(str(joint, "end").toUpper(), other.toHtmlEscaped(), now)
+                         : QObject::tr("Joint: a T with the side of %1: %2").arg(other.toHtmlEscaped(), now);
+      if (!through.isEmpty()) {
+        line += QObject::tr(", %1 runs through").arg(cmd::componentName(through, model).toHtmlEscaped());
+      }
+      lines << line;
+      const QString problem = str(joint, "problem");
+      const QString chosen = state.choice(kJoint);
+      if (!problem.isEmpty()) {
+        lines << QObject::tr("Joint: %1").arg(mitcad::modelMessage(problem).toHtmlEscaped());
+      } else if (setsJoint(state)) {
+        lines << QObject::tr("OK makes it %1, both components in one step").arg(conditionText(chosen));
+      } else if (!chosen.isEmpty() && chosen != kJointKeep) {
+        lines << QObject::tr("Joint: %1 is not for this joint; it stays as it is").arg(conditionText(chosen));
+      }
+      jointLog = QStringLiteral(", joint %1 with %2: %3%4%5")
+                     .arg(str(joint, "kind"), str(joint, "component"), str(joint, "condition"),
+                          through.isEmpty() ? QString() : QStringLiteral(" through %1").arg(through),
+                          setsJoint(state) ? QStringLiteral(", set %1").arg(chosen) : QString());
+    }
     QString meetLog;
     if (meets.isEmpty()) {
       // Why Also the Component It Meets is not offered, in words.
@@ -7881,12 +8213,12 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
         result.shape = build::arrowAlong(point->Translated(beyond * 3.0), gp_Dir(along), 40.0);
       }
     }
-    if (!state.checked(QStringLiteral("shared"))) {
+    if (!state.checked(QStringLiteral("shared")) && !setsJoint(state)) {
       lines << QObject::tr("Leans: %1").arg(tiltText(state).toHtmlEscaped());
     }
     result.text = lines.join(QStringLiteral("<br>"));
     result.log = QStringLiteral("%1 end %2: %3; %4; about %5%6; %7 end labels")
-                     .arg(part.component, state.choice(QStringLiteral("end")), endsText(part.ends), meetLog,
+                     .arg(part.component, state.choice(QStringLiteral("end")), endsText(part.ends) + jointLog, meetLog,
                           state.choice(QStringLiteral("tilt")),
                           state.checked(QStringLiteral("shared")) ? QStringLiteral(", shared") : QString())
                      .arg(markers.size());
@@ -7900,8 +8232,30 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
     }
     const BuildPart& part = parts.first();
     const QString end = state.choice(QStringLiteral("end"));
-    const bool shared = state.checked(QStringLiteral("shared"));
+    // The joint's condition (mitcad#2200): kept with the joint, both
+    // components in one step; then no cut of the panel's own.
+    const bool joint = setsJoint(state);
+    const bool shared = state.checked(QStringLiteral("shared")) && !joint;
     QJsonArray commands;
+    QString jointDone;
+    if (joint) {
+      const QString condition = state.choice(kJoint);
+      QJsonObject fields{{QStringLiteral("end"), end}, {QStringLiteral("condition"), condition}};
+      const QString through = state.choice(kJointThrough);
+      if (condition == kJointButt && through == kThroughThis) {
+        fields.insert(QStringLiteral("through"), part.component);
+      } else if (condition == kJointButt && through == kThroughOther) {
+        fields.insert(QStringLiteral("through"), str(jointOf(state), "component"));
+      }
+      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
+                                  {QStringLiteral("component"), part.component},
+                                  {kJoint, fields}});
+      jointDone = QStringLiteral("joint %1 with %2%3")
+                      .arg(condition, str(jointOf(state), "component"),
+                           fields.contains(QStringLiteral("through"))
+                               ? QStringLiteral(", %1 runs through").arg(str(fields, "through"))
+                               : QString());
+    }
     if (shared) {
       // The corner's shared miter (mitcad#1940): the model cuts and moves
       // both ends as a corner placement does.
@@ -7910,7 +8264,7 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
                                   {QStringLiteral("shared_mitre"), end}});
     }
     QJsonObject edit{{QStringLiteral("cmd"), QStringLiteral("build_edit")}, {QStringLiteral("component"), part.component}};
-    if (!shared) {
+    if (!shared && !joint) {
       const QJsonObject cut{{QStringLiteral("angle"), state.expression(QStringLiteral("angle"))},
                             {QStringLiteral("tilt"), state.choice(QStringLiteral("tilt"))}};
       edit.insert(QStringLiteral("ends"), QJsonObject{{end, cut}});
@@ -7947,11 +8301,12 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
     const QJsonObject meets = meetsOf(state);
     qInfo().noquote() << QStringLiteral("Ends of %1: end %2 %3%4")
                              .arg(part.shownName(), end,
-                                  shared ? QStringLiteral("shared miter with end %1 of %2")
-                                               .arg(str(meets, "end"), str(meets, "component"))
-                                         : QStringLiteral("%1 about %2")
-                                               .arg(state.expression(QStringLiteral("angle")),
-                                                    state.choice(QStringLiteral("tilt"))),
+                                  joint    ? jointDone
+                                  : shared ? QStringLiteral("shared miter with end %1 of %2")
+                                                 .arg(str(meets, "end"), str(meets, "component"))
+                                           : QStringLiteral("%1 about %2")
+                                                 .arg(state.expression(QStringLiteral("angle")),
+                                                      state.choice(QStringLiteral("tilt"))),
                                   machining == QStringLiteral("keep")
                                       ? QString()
                                       : QStringLiteral(", machining ") +
@@ -8088,6 +8443,21 @@ const QString kPlacementMin = QStringLiteral("min");
 const QString kPlacementMax = QStringLiteral("max");
 const QString kPlacementMinLoaded = QStringLiteral("loaded_min");
 const QString kPlacementMaxLoaded = QStringLiteral("loaded_max");
+// A profile placed in parallel (mitcad#2201): also its Across and its
+// quarter turn (Turn); no Middle of Gap.
+const QString kPlacementParallel = QStringLiteral("parallel");
+const QString kPlacementTurn = QStringLiteral("turn");
+
+// A part's build_parts `parallel` (mitcad#2201); empty for another part.
+QJsonObject parallelOf(const BuildPart& part) {
+  return part.raw.value(kParallel).toObject();
+}
+
+// Its Across as Placement offers it: `middle` also on a side with one slot.
+QString acrossOf(const BuildPart& part) {
+  const QString across = str(parallelOf(part), "across");
+  return across.isEmpty() ? QStringLiteral("middle") : across;
+}
 
 // A travel limit's text as Placement shows it: empty while it is the
 // default (build_parts' `limits`), else its length.
@@ -8137,6 +8507,16 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
                 if (!from.isEmpty()) {
                   state.setChoice(kPlacementFrom, from);
                 }
+                // In parallel (mitcad#2201): its Across and its turn.
+                const bool parallel = !parallelOf(*part).isEmpty();
+                state.setChecked(kPlacementParallel, parallel);
+                if (parallel) {
+                  state.setChoice(kAcross, acrossOf(*part));
+                  state.setChoice(kPlacementTurn, QString::number(part->rotate));
+                  qInfo().noquote() << QStringLiteral("BUILD placement of %1: in parallel on %2, across %3, turn %4")
+                                           .arg(part->component, str(parallelOf(*part), "frame"), acrossOf(*part))
+                                           .arg(part->rotate);
+                }
                 // Its offset from that reference, or off its plane or face
                 // (build_parts' `offset`), and there its turn (mitcad#2046).
                 const QJsonValue offset = part->raw.value(QStringLiteral("offset"));
@@ -8182,8 +8562,20 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
                                    "its normal")),
       choiceInput(kPlacementFrom, QObject::tr("From"), kSideFroms, QStringLiteral("a"))
           .withVisible([](const CommandState& state) { return !state.checked(kPlacementGround); })
+          // In parallel no Middle of Gap (mitcad#2201).
+          .withChoiceOffered([](const CommandState& state, const QString& from) {
+            return !state.checked(kPlacementParallel) || from != QStringLiteral("gap");
+          })
           .withTooltip(QObject::tr("What the offset is measured from; the component stays bound to it when "
                                    "what it is on changes length")),
+      // In parallel (mitcad#2201): centred on the side or on one slot, and
+      // the face that rests on the side turned in quarter turns.
+      choiceInput(kAcross, QObject::tr("Across"), kAcrosses, QStringLiteral("middle"))
+          .withVisible([](const CommandState& state) { return state.checked(kPlacementParallel); })
+          .withTooltip(QObject::tr("Centered on the side, or its cross-section's center on a slot of the side")),
+      choiceInput(kPlacementTurn, QObject::tr("Rotate"), kRotations, QStringLiteral("0"))
+          .withVisible([](const CommandState& state) { return state.checked(kPlacementParallel); })
+          .withTooltip(QObject::tr("About the component's axis, in 90 degree steps: the face that rests on the side")),
       valueInput(kPlacementRotate, QObject::tr("Rotate"), ValueKind::Angle, QStringLiteral("0 deg"))
           .withVisible([](const CommandState& state) { return state.checked(kPlacementGround); })
           .withTooltip(QObject::tr("About the component's axis, at any angle")),
@@ -8241,6 +8633,14 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
     result.log = QStringLiteral("%1 from %2, offset %3%4")
                      .arg(part.component, state.choice(kPlacementFrom), state.text(kPlacementOffset),
                           keeps ? QStringLiteral(" (kept in place)") : QString());
+    // In parallel (mitcad#2201): how it stands across the side and its turn.
+    if (!parallelOf(part).isEmpty()) {
+      const QString across = state.choice(kAcross) == QStringLiteral("slot") ? QObject::tr("on a slot of the side")
+                                                                            : QObject::tr("centered on the side");
+      const QString turned = QObject::tr("Along the profile, %1, rotated %2°").arg(across, state.choice(kPlacementTurn));
+      result.text += QStringLiteral("<br>") + turned.toHtmlEscaped();
+      result.log += QStringLiteral(", parallel across %1, turn %2").arg(state.choice(kAcross), state.choice(kPlacementTurn));
+    }
     // A carriage's travel (mitcad#2088): its limits, the defaults named.
     if (state.checked(kPlacementSlides)) {
       const QString min = state.text(kPlacementMin).trimmed();
@@ -8290,9 +8690,19 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
     if (!keeps) {
       at.insert(QStringLiteral("offset"), state.expression(kPlacementOffset));
     }
+    // In parallel (mitcad#2201): its Across and its turn, when changed.
+    const bool parallel = !parallelOf(part).isEmpty();
+    const bool acrossChanged = parallel && state.choice(kAcross) != acrossOf(part);
+    const bool turnChanged = parallel && state.choice(kPlacementTurn) != QString::number(part.rotate);
+    if (acrossChanged) {
+      at.insert(kAcross, state.choice(kAcross));
+    }
     QJsonObject edit{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
                      {QStringLiteral("component"), part.component},
                      {QStringLiteral("at"), at}};
+    if (turnChanged) {
+      edit.insert(QStringLiteral("rotate"), angleValue(state.choice(kPlacementTurn)));
+    }
     // A carriage's travel limits, when Min or Max changed (mitcad#2088):
     // both, an empty one its default.
     const bool travel = state.checked(kPlacementSlides) && travelChanged(state);
@@ -8315,6 +8725,10 @@ CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
                                                         ? QStringLiteral("default")
                                                         : state.text(kPlacementMax).trimmed())
                                          : QString());
+    if (acrossChanged || turnChanged) {
+      qInfo().noquote() << QStringLiteral("Placement of %1 in parallel: across %2, turn %3 deg")
+                               .arg(part.component, state.choice(kAcross), state.choice(kPlacementTurn));
+    }
     return true;
   };
   return def;

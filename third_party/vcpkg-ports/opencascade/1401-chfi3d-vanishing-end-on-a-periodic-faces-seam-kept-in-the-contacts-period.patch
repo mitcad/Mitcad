@@ -20,12 +20,8 @@ period at its last span, and the cylinder's wire crossed itself (an
 invalid result). The vertex's parameters are now taken in the period of
 the contact's end, a whole number of periods from the face's own.
 
-Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
-and the boss's foot rounded together with 1 (the convex one first, the
-concave one on its result, as MitCad's fillet and OCCT's fillet one after
-the other build them) on the synthetic bodies and on the case of
-MITCAD_GEOMETRY_CASES: valid, the volume the one after the other gives;
-36 checks fail without the patch.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1401.
 
 Upstream: new.
 

@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+# The Loft panel's Tangent Edges (mitcad#2162), on loft-tangent-edges.json
+# (Sketch1 F1: a circle R30; Sketch2 F3 50 mm up: a slot 160 x 40):
+#   1. Loft through the circle and the slot: the panel shows Tangent Edges
+#      with Merge chosen, and the loft builds.
+#   2. The loft (F4.b0) has one side face: three faces with its caps.
+# Run by tools/ui-loft-tangent-edges-test.sh (Linux),
+# tools/ui-windows-loft-tangent-edges-test.ps1 (Windows) and
+# tools/ui-macos-loft-tangent-edges-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+# Seen from the side and above: the slot 50 mm up does not hide the circle.
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The loft through the circle and the slot, Merge by default.
+mark
+command solid.loft
+wait-log '^Command Loft started'
+wait-idle
+expect-choice-text tangent_edges '^Merge$'
+click-pick 'profile F1/'
+wait-log '^Loft Profiles: 1 profile'
+wait-idle
+click-pick 'profile F3/'
+wait-log '^Loft Profiles: 2 profiles'
+wait-idle
+wait-log '^Preview Loft: ok' 60
+wait-idle
+expect-no-log '^Panel Loft error: '
+mark
+key Return
+wait-log '^Added loft [(]New Body[)] through 2 sections' 60
+wait-idle
+
+# 2. One side face and the two caps.
+capture-model-number faces '{"query":"properties","bodies":["F4.b0"]}' total.faces
+expect-near ${faces} 3 0 0

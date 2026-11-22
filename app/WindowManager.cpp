@@ -168,10 +168,7 @@ void WindowManager::present(MainWindow* window) {
 }
 
 bool WindowManager::reusable(MainWindow* window) const {
-  if (window == nullptr || window->modelBusy() || !window->m_filePath.isEmpty() || window->isModified()) return false;
-  const QJsonObject document = window->queryObject({{QStringLiteral("query"), QStringLiteral("document")}});
-  return document.value(QStringLiteral("features")).toInt() == 0 &&
-         document.value(QStringLiteral("bodies")).toInt() == 0;
+  return window != nullptr && window->emptyUntitledDesign();
 }
 
 MainWindow* WindowManager::newWindow(MainWindow* source) {
@@ -181,6 +178,8 @@ MainWindow* WindowManager::newWindow(MainWindow* source) {
 }
 
 MainWindow* WindowManager::newDocument(MainWindow* source) {
+  // A window with no design open (mitcad#2142) is reusable: its empty
+  // untitled design waits under the Start page.
   const bool current = QSettings().value(QStringLiteral("documents/openInCurrentWindow"), false).toBool();
   if (source != nullptr && (reusable(source) || current)) {
     if (source->deferForNativeCommand([this, source] { newDocument(source); })) return nullptr;
@@ -315,6 +314,25 @@ bool WindowManager::closeWindow(MainWindow* window) {
   return guarded && guarded->closeDocumentWindow();
 }
 
+bool WindowManager::quitsOnLastClose() { return GeneralSettings::load().quitOnLastClose; }
+
+bool WindowManager::closeDesign(MainWindow* window) {
+  if (window == nullptr || !windows().contains(window)) return true;
+  // Another window with a design: this one goes, as before (a window that
+  // shows the Start page with no design open is no design).
+  bool otherDesign = false;
+  for (MainWindow* other : windows()) {
+    if (other != window && other->hasDesign()) otherDesign = true;
+  }
+  if (otherDesign) return closeWindow(window);
+  if (!quitsOnLastClose()) return window->closeToStartPage();
+  qInfo().noquote() << QStringLiteral("Last design closed: quitting");
+  if (windows().size() == 1) return closeWindow(window);
+  // Windows left on the Start page go with it, each with its questions.
+  quit();
+  return !windows().contains(window);
+}
+
 void WindowManager::windowClosed(MainWindow* window) {
   bool found = false;
   for (auto it = m_windows.begin(); it != m_windows.end();) {
@@ -397,6 +415,9 @@ void WindowManager::installWindowMenu(MainWindow* window) {
     connect(minimize, &QAction::triggered, window, [window] { window->minimizeDocumentWindow(); });
     menu->addSeparator();
     for (MainWindow* document : windows()) {
+      // A window on the Start page with no design open names none
+      // (mitcad#2142).
+      if (!document->hasDesign()) continue;
       QAction* action = menu->addAction(document->documentName());
       action->setCheckable(true);
       action->setChecked(document == activeWindow());

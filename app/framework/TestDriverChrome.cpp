@@ -721,4 +721,61 @@ void TestDriver::testSketchFinishLayout() {
   }, 6, QStringLiteral("duplicate title Finish Sketch, stale title slot/mask, or missing ribbon/palette action"));
 }
 
+// This file's steps (mitcad#2173): their specs and their chain.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    {"expect-sketch-finish-layout", 0, 0, TestDriver::kIdle},
+    {"expect-ribbon-labels", 1, -1, TestDriver::kIdle},
+    {"expect-ribbon-scroll", 1, 1, TestDriver::kIdle},
+    // The design in front shows its ribbon, Browser and navigation bar, the
+    // Docked view below the ribbon (mitcad#1451).
+    {"expect-design-chrome", 0, 0, TestDriver::kIdle},
+    // The window, the ribbon, the Browser and a command panel at the
+    // Interface size's device pixel ratio (mitcad#1495).
+    {"expect-interface-size", 1, 1, TestDriver::kIdle},
+    // Preferences' Text size, Icon size and Font as the run applied them
+    // (mitcad#1556).
+    {"expect-text-icon-size", 3, 3, TestDriver::kIdle},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kChromeSteps{
+    kStepSpecs, std::size(kStepSpecs), &TestDriver::runChromeStep};
+
+void TestDriver::runChromeStep(const QString& name, const QStringList& a, int line) {
+  if (name == QLatin1String("expect-sketch-finish-layout")) {
+    testSketchFinishLayout();
+  } else if (name == QLatin1String("expect-ribbon-labels")) {
+    testRibbonLabels(a);
+  } else if (name == QLatin1String("expect-ribbon-scroll")) {
+    if (a.at(0) != QLatin1String("none") && a.at(0) != QLatin1String("start") &&
+        a.at(0) != QLatin1String("scrolled")) {
+      fail(line, QStringLiteral("expect-ribbon-scroll none|start|scrolled"));
+      return;
+    }
+    testRibbonScroll(a.at(0));
+  } else if (name == QLatin1String("expect-design-chrome")) {
+    testDesignChrome();
+  } else if (name == QLatin1String("expect-interface-size")) {
+    // `any`: the layout at whatever ratio the screen gives (0).
+    bool ok = a.at(0) == QLatin1String("any");
+    const double ratio = ok ? 0.0 : a.at(0).toDouble(&ok);
+    if (!ok || ratio < 0.0 || (ratio == 0.0 && a.at(0) != QLatin1String("any"))) {
+      fail(line, QStringLiteral("expect-interface-size <device pixel ratio|any>")); return;
+    }
+    testInterfaceSize(ratio);
+  } else if (name == QLatin1String("expect-text-icon-size")) {
+    bool textOk = false;
+    bool iconOk = false;
+    const int textPercent = a.at(0).toInt(&textOk);
+    const int iconPercent = a.at(1).toInt(&iconOk);
+    if (!textOk || !iconOk) {
+      fail(line, QStringLiteral("expect-text-icon-size <text%> <icon%> <family|system>")); return;
+    }
+    testTextIconSize(textPercent, iconPercent, a.at(2));
+  }
+}
+
 } // namespace mitcad

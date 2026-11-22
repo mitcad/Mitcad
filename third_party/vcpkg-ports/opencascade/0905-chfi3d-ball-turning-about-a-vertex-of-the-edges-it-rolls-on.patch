@@ -29,15 +29,8 @@ then rolls on the next edge. Three faults there:
 
 Upstream: new.
 
-Test: none, because no synthetic body reached its failure (mitcad#1986).
-Tried with the patch's code traced and with it switched off: about 100
-bodies of the OCCT-only geometry tests and variants of their dimensions
-(lens overflows, rolling balls, concave creases, the eave, the rolled end
-cut) take one of its three changes (the walk back not completed forward,
-only the reached end extended, a turn's transition from its neighbour),
-and each builds alike without it. Verified on the stored design's bodies
-(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded
-with 0.86).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0905.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 40572c24..aa0c4bd0 100644

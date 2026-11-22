@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/tutorials app/webbrowser core/vcs/src/library tools/cli
+# check-all sources: app/MainWindowStart.cpp app/WindowManager.cpp app/files/StartPage.cpp
 """In-app tutorials (mitcad#2012, docs/tutorials.md): a tutorials repository
 of the test's own (a bare clone in a folder) as the only source; Help >
 Tutorials... fetches and lists its two-step tutorial and opens it in the
@@ -20,8 +21,19 @@ rectangle, Finish Sketch, Extrude, 20 mm, OK) until the page hears that the
 last one is done and the design has the block. A UI change that breaks the
 example fails here.
 
+With start-page (mitcad#2168, a test of its own): the example's tutorial
+opened while the Start page is shown, in the Floating and the Docked layout,
+in three cases: the page at launch, the last design closed to the page, and
+a modified design under the page. Each time the tutorial starts in an empty
+design of its own (the page left for the empty design under it, or New
+Design in a new window), its first step's Create Sketch button is outlined
+and the tutorial is done to its end; the modified design keeps its block
+and its unsaved changes.
+
 Usage: ui-tutorials-test.py <app> <cli> <output folder> [<Qt's bin> [<the built web browser component> [<example>]]]
+       ui-tutorials-test.py start-page <app> <cli> <output folder> [<Qt's bin> [<component> [<example>]]]
        ui-tutorials-test.py prepare <output folder> [<example>]   (the sources and the steps, for the macOS wrapper)
+       ui-tutorials-test.py prepare-start-page <output folder> [<example>]   (the same for the Start page's runs)
        ui-tutorials-test.py verify <output folder>
 <example> is the example tutorials repository's folder; by default
 docs/examples/tutorials of this checkout.
@@ -291,9 +303,15 @@ def workflow(source):
 def example_workflow(source, manifest):
     """The test driver's steps for the example's tutorial in a new design:
     each step its page shows, done as the step's text asks."""
+    lines = ["wait-idle"] + example_open(source, manifest) + example_steps() + ["quit"]
+    return "\n".join(lines) + "\n"
+
+
+def example_open(source, manifest):
+    """The example's tutorial listed in Help > Tutorials..., installed and
+    opened: the driver's steps up to its page loaded with the bridge."""
     title = manifest["title"]
-    lines = [
-        "wait-idle",
+    return [
         # The example's repository the only source.
         "set-setting tutorials/sources '%s'" % json.dumps([source]),
         "mark",
@@ -308,8 +326,17 @@ def example_workflow(source, manifest):
         "expect-log '^Tutorial: opened %s ' 30" % re_text(title),
         "focus-main",
         "expect-log '^Tutorial page loaded: file:.*/%s/index\\.html \\(bridge: yes\\)$' 90" % EXAMPLE_TUTORIAL,
-        # 1. Create Sketch, then the XY plane.
+    ]
+
+
+def example_steps():
+    """Each step of the example's tutorial done as its text asks, to the
+    page's end and Leave Tutorial."""
+    return [
+        # 1. Create Sketch, then the XY plane. Its button is outlined: shown
+        # in the window, not under the Start page (mitcad#2168).
         "expect-log '^Guide: step sketch started: target command sketch\\.create, navigation free$' 30",
+        "expect-log '^Guide: step sketch target at -?[0-9]+,-?[0-9]+ [1-9][0-9]*x[1-9][0-9]*$' 30",
         "expect-widget-property guideCallout visible true",
         # The origin's planes keep their size on the screen; zooming out
         # about a point above the view's middle brings them up and left,
@@ -379,8 +406,100 @@ def example_workflow(source, manifest):
         "command help.leave_tutorial",
         "expect-log '^Tutorial: pane closed$' 20",
         "wait-idle",
-        "quit",
     ]
+
+
+# The Start page's cases (mitcad#2168): the example's tutorial opened while
+# the Start page is shown, with MITCAD_START_PAGE for each (1: the page at
+# launch), run in each layout.
+START_PAGE_CASES = {"launch": "1", "closed": "0", "modified": "0"}
+LAYOUTS = ("floating", "docked")
+
+
+def start_page_workflow(case, source, manifest):
+    """The example's tutorial opened from Help > Tutorials... over the Start
+    page (mitcad#2168), and its steps done to its end:
+      launch: the page at launch over the window's empty untitled design;
+        the page is left for that design, in the same window.
+      closed: the last design closed to the page (File > Close); the page is
+        left for the empty design that waits under it.
+      modified: a design with a block and unsaved changes under the page;
+        New Design opens a window of its own for the tutorial, and the
+        user's design keeps its block and its changes."""
+    block = {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+                                           "corner": [0, 0], "length": 30, "width": 20, "height": 10,
+                                           "operation": "new_body"}}
+    if case == "launch":
+        before = [
+            "expect-ever '^Start page at launch: shown$' 30",
+            "expect-ever '^Start page shown$' 30",
+            "wait-idle",
+        ]
+        opened = [
+            "expect-ever '^Tutorial: starts in the empty design under the Start page$' 10",
+            "expect-document-windows 1",
+        ]
+    elif case == "closed":
+        before = [
+            "wait-idle",
+            "mark",
+            "command file.close",
+            "wait-log '^Last design closed: Start page$' 20",
+            "wait-log '^Start page shown$' 10",
+            "wait-idle",
+            "expect-document-frame-design none",
+        ]
+        opened = [
+            "expect-ever '^Tutorial: starts in the empty design under the Start page$' 10",
+            "expect-ever '^Design shown again after the last design closed$' 10",
+            "expect-document-frame-design open",
+            "expect-document-windows 1",
+        ]
+    elif case == "modified":
+        before = [
+            "wait-idle",
+            "model-command '%s'" % json.dumps(block),
+            "wait-idle",
+            "expect-model-bodies 1 6000",
+            "expect-document-modified yes",
+            "capture-document-window user",
+            "mark",
+            "click-logged '^Ribbon tab START at '",
+            "wait-log '^Start page shown$' 10",
+            "wait-idle",
+        ]
+        opened = [
+            "expect-ever '^Tutorial: starts in a new design$' 10",
+            "expect-no-log '^Tutorial: starts in the empty design under the Start page$'",
+            "expect-document-windows 2",
+            "capture-document-window tutorial",
+            "expect-document-window-active tutorial",
+            "expect-model-bodies 0 0",
+        ]
+    else:
+        raise RuntimeError("no Start page case " + case)
+    # Opened over the page: never by the page's controls, never held back.
+    opened.append("expect-no-log '^Guide: input held back on '")
+    after = []
+    if case == "modified":
+        # The user's design as it was: its block, its one feature, its
+        # unsaved changes; the tutorial's block in the tutorial's window.
+        after = [
+            "expect-model-bodies 1 12000",
+            "focus-document-window user",
+            "focus-main",
+            "wait-idle",
+            "expect-model-bodies 1 6000",
+            "capture-model-number features '{\"query\": \"document\"}' features",
+            "expect-near ${features} 1",
+            "expect-document-modified yes",
+        ]
+    open_lines = example_open(source, manifest)
+    # The window's design choice is logged once the tutorial is installed,
+    # before its page is loaded.
+    split = next(i for i, line in enumerate(open_lines) if line.startswith("expect-log '^Tutorial: opened "))
+    lines = (before + open_lines[:split + 1] + opened + open_lines[split + 1:] + example_steps() + after
+             + ["quit"])
     return "\n".join(lines) + "\n"
 
 
@@ -429,17 +548,45 @@ def verify(directory):
         raise RuntimeError("the example's tutorial was not installed as expected: " + json.dumps(record))
 
 
-def run_app(app, directory, name, qt_bin=None, component=None):
-    """The application with the driver's steps <name>.mitcad-ui, its
-    sources and folders those of `directory`; an error when it fails."""
-    script = directory / (name + ".mitcad-ui")
+def prepare_start_page(directory, example=None):
+    """The Start page's runs (mitcad#2168): the example's repository as the
+    source (source/), the driver's steps of each case (<case>.mitcad-ui) and
+    a folder of its own for each case in each layout (<case>-<layout>: its
+    cache, installed tutorials, profile and log), after what an earlier run
+    left is removed."""
+    directory = Path(directory).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    names = ["source"] + [case + ".mitcad-ui" for case in START_PAGE_CASES]
+    names += [case + "-" + layout for case in START_PAGE_CASES for layout in LAYOUTS]
+    for name in names:
+        remove(directory / name)
+    prepare_example(directory / "source", example)
+    manifest = json.loads((directory / "source" / "course" / "tutorials" / EXAMPLE_TUTORIAL / "tutorial.json")
+                          .read_text(encoding="utf-8"))
+    source = (directory / "source" / "source.git").as_posix()
+    for case in START_PAGE_CASES:
+        (directory / (case + ".mitcad-ui")).write_text(start_page_workflow(case, source, manifest),
+                                                       encoding="utf-8")
+        for layout in LAYOUTS:
+            (directory / (case + "-" + layout)).mkdir()
+    return directory
+
+
+def run_app(app, directory, name, qt_bin=None, component=None, script=None, arguments=(), start_page="0"):
+    """The application with the driver's steps (<name>.mitcad-ui unless
+    `script` is given), its sources and folders those of `directory`, the
+    Start page at launch by `start_page` (MITCAD_START_PAGE); an error when
+    it fails."""
+    script = script or directory / (name + ".mitcad-ui")
     with tempfile.TemporaryDirectory(prefix="settings-", dir=directory) as temporary:
         environment = environment_for(directory, temporary, qt_bin, component)
         environment["MITCAD_TEST_INPUT"] = str(script)
         environment["MITCAD_TEST_STEP_MS"] = "100"
+        environment["MITCAD_START_PAGE"] = start_page
         log_path = directory / (name + ".log")
         with log_path.open("wb") as log:
-            result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp"],
+            result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp",
+                                     *arguments],
                                     env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=300)
         text = log_path.read_text(encoding="utf-8", errors="replace")
         if (result.returncode or any(line.startswith("TestDriver: FAIL") for line in text.splitlines())
@@ -458,10 +605,29 @@ def run(app, cli, directory, qt_bin=None, component=None, example=None):
           "the example tutorial's steps done to its end")
 
 
+def run_start_page(app, cli, directory, qt_bin=None, component=None, example=None):
+    """The example's tutorial opened over the Start page (mitcad#2168) in
+    each case and layout, each run in a folder of its own."""
+    del cli  # the same arguments as the other UI tests; nothing to build here
+    directory = prepare_start_page(directory, example)
+    for case, start_page in START_PAGE_CASES.items():
+        for layout in LAYOUTS:
+            name = case + "-" + layout
+            run_app(app, directory / name, name, qt_bin, component, script=directory / (case + ".mitcad-ui"),
+                    arguments=("--chrome=" + layout,), start_page=start_page)
+    print("PASS: Tutorials over the Start page: at launch, after the last design closed and over a modified "
+          "design, in the Floating and the Docked layout, each in an empty design of its own with Create "
+          "Sketch outlined and the example tutorial done to its end; the modified design kept as it was")
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "prepare":
         prepare(*sys.argv[2:4])
     elif sys.argv[1] == "verify":
         verify(sys.argv[2])
+    elif sys.argv[1] == "start-page":
+        run_start_page(*sys.argv[2:])
+    elif sys.argv[1] == "prepare-start-page":
+        prepare_start_page(*sys.argv[2:4])
     else:
         run(*sys.argv[1:])

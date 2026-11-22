@@ -5,6 +5,7 @@
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
@@ -51,11 +52,26 @@ std::string role(const TopoDS_Face& face, const Frame& frame) {
 } // namespace
 
 ShapePtr primitive(const PrimitiveSpec& spec) {
-  detail::require_positive("the size", spec.a);
+  if (spec.kind == PrimitiveKind::Cone) {
+    // A radius may be zero, the apex there (mitcad#2239).
+    detail::require_finite("the radius", spec.a);
+    detail::require_finite("the top radius", spec.b);
+    if (spec.a < 0.0 || spec.b < 0.0) {
+      throw std::invalid_argument("a cone's radius must not be negative");
+    }
+    if (spec.a <= 0.0 && spec.b <= 0.0) {
+      throw std::invalid_argument("a cone needs a radius greater than zero at its base or its top");
+    }
+    if (spec.a == spec.b) {
+      throw std::invalid_argument("a cone of equal radii is a cylinder");
+    }
+  } else {
+    detail::require_positive("the size", spec.a);
+  }
   if (spec.kind == PrimitiveKind::Box || spec.kind == PrimitiveKind::Torus) {
     detail::require_positive("the size", spec.b);
   }
-  if (spec.kind == PrimitiveKind::Box || spec.kind == PrimitiveKind::Cylinder) {
+  if (spec.kind == PrimitiveKind::Box || spec.kind == PrimitiveKind::Cylinder || spec.kind == PrimitiveKind::Cone) {
     detail::require_positive("the height", spec.c);
   }
   if (spec.kind == PrimitiveKind::Torus && !(spec.b < spec.a)) {
@@ -76,6 +92,11 @@ ShapePtr primitive(const PrimitiveSpec& spec) {
       break;
     case PrimitiveKind::Torus:
       solid = BRepPrimAPI_MakeTorus(axes, spec.a, spec.b).Shape();
+      break;
+    case PrimitiveKind::Cone:
+      // The base disc (none for an apex) is `bottom`, the top disc `top`
+      // and the conical face `side0`, by role() as a cylinder's.
+      solid = BRepPrimAPI_MakeCone(axes, spec.a, spec.b, spec.c).Shape();
       break;
     }
     detail::FaceNamer namer(solid);

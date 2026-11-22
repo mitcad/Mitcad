@@ -451,10 +451,19 @@ hint and progress are the frontends' own.
 command panel higher than its page (a long panel in a low window) scrolls
 the page just far enough to show its box, and the button under it, whole,
 in the Docked and the Floating layout alike. The field that has the
-keyboard stays in view, so the text being typed never leaves the user's
-sight; what that leaves of the box out of view follows once the keyboard
-leaves the field. A hint, progress, or the same message again does not
-move the page. Nor does the page move while a mouse button is down: a
+keyboard stays in view when it is one the user types in (a value, a
+name, an editable list of text), so the text being typed never leaves the
+user's sight; what that leaves of the box out of view follows once the
+keyboard leaves the field. A choice, a button or a list with the keyboard
+holds nothing (mitcad#2118: the Operation choice at the top kept an error
+below the page's view), and neither does a text field the latest change
+was not typed in (one that got the keyboard when the panel opened, while
+a choice, a check or a pick brought the error). A hint, progress, or the same message again does
+not move the page, unless the same error comes again, OK off for it,
+after rows shown above it moved its box (mitcad#2118, GitHub
+mitcad/Mitcad#492: Operation Cut showed the Affected components list
+over it): it is brought into view again. A page the user scrolled away
+from a box that has not moved stays where it is. Nor does the page move while a mouse button is down: a
 click on another field of the panel moves the keyboard there on the press,
 and the page scrolls only after the release, so the click still lands on
 that field.
@@ -471,7 +480,13 @@ until the last has ended. Its tooltip and accessible name say what is
 being computed ("Computing preview…"). OK stays disabled meanwhile. The
 message shown before (a problem, a hint) stays until the result replaces
 it. The same in the Docked and the Floating layout, and on every
-platform.
+platform. A preview, or a value typed for it, that waits for the model to
+finish another job first (a refinement of the meshes, a change of
+visibility) shows the same mark, its text "Waiting for the design to
+finish computing…", until the preview takes over (mitcad#2118): the panel
+never waits without a sign. A line that says something is being updated
+(the Affected components list's "Updating affected components…") shows
+only while it is; a preview that failed says why there instead.
 
 **What a text says** (mitcad#1327, mitcad#1741; called "What a message
 says" before it covered every text): the rules below hold for messages and
@@ -668,8 +683,11 @@ Where the window's messages are shown and kept (mitcad#1042,
   errors in its own message box.
 - **Content.** The level's icon and word (*Failed:*, *Warning:*), the
   text in the level's color role, wrapped to two lines and only then
-  elided at the end (the whole text in the tooltip), and a close button
-  (×).
+  elided at the end (the whole text in the tooltip), and a close button:
+  the shared close mark (Icons, "The close mark") on the cards' flat
+  small button, in the middle of the row as the icon and the text are, for
+  a message on one line or on two (mitcad#2182). The stub has no close
+  button: a click on it opens the history.
 - **Lifetime by level.** A hint, progress, information or a success
   shows for 6 s, a warning for 10 s. An error stays until the user
   closes it or starts the next command: a command with a panel, a tool,
@@ -687,6 +705,26 @@ Where the window's messages are shown and kept (mitcad#1042,
   An error that the closing itself raised (a tool that ends on its own
   failure) stays, as it says why. Errors from elsewhere (a failed feature,
   an import, a refused file) keep the rule above.
+- **An error put right goes** (mitcad#2181). When the cause of a shown
+  error has been fixed, the band does not keep showing it, neither in
+  full nor as the stub (the band shows nothing until the next message),
+  and the Docked status line is cleared of it; the history keeps it,
+  marked *(put right)*. A refused command on a parameter (add, set,
+  rename, delete, from Edit Parameters or a field) is put right by the
+  next successful command of the Parameters dialog or of a parameter
+  field; a failed feature's error by the feature computing again (an
+  undo, a changed parameter, an edit).
+- **Checked before, not refused after** (mitcad#2181). A dialog that adds
+  or changes what the model checks (Add User Parameter's expression)
+  checks it while it is typed: the problem in words under the field, the
+  part it is about marked in the field (the wavy underline in the error
+  colour that Edit Formula marks its error with), and OK disabled while
+  it is wrong, so the dialog does not close on something the design
+  refuses. Expression errors say what is wrong and where in words ("The
+  expression of cabinet_lenght uses table_lenght, which is not a
+  parameter. Did you mean table_length?"), never a parser's byte offset,
+  and a refusal that names its parameter is not prefixed with the name
+  again.
 - **A message's button.** A message carries one button at most (Update,
   Open Linked Design, a sketch refusal's Replace, mitcad#2090): beside
   the close button in the Floating band, after the message in the Docked
@@ -782,7 +820,9 @@ writes a color literal (see [The checks](#5-the-checks)).
     `Hover`. The timeline's marker is `TimelineMarker`, not the accent.
 13. **Support**: the Boost development pill's outline and rocket only;
     its label is `Text`, and it fills with a translucent tint only under
-    the pointer.
+    the pointer. **DiscordFill** and **DiscordMark**: the Discord pill
+    only (mitcad#2159), Discord's own blurple under its logo mark and ×
+    in white; a brand color, not the accent, used nowhere else.
 14. **Card material**: `cardFillColor` and a hairline of
     `cardBorderColor` for every card and bar, `cardShadowColor` for its
     shadow. **Lines**: the separators between groups and under the tab
@@ -833,10 +873,25 @@ dynamic value.
 | | `PrintOverhang`, `PrintThin`, `PrintGap` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7, #00897b / #4dd0c0 | Print Analysis' categories (violet, magenta, teal: narrow gaps, mitcad#1519), by the view's background, with the legend | |
 | | `RuleFrame` … `RuleAction`, `RuleText` | see [configurations.md](configurations.md) | the rule blocks' categories under white text | |
 | | `CamStock`, `CamLeftThin`, `CamLeftThick`, `CamGouge` | #b0aaa2 / #8c877f, #4fb3bf / #6fd0db, #5e35b1 / #9575cd, #d81b60 / #ff5c8d | Simulate's stock (mitcad#1013): the stock grey (nothing left over the part reads as the stock), the material left from teal (thin) to violet (thick), a cut into the part pink; by the view's background, with the legend in the Simulate window | |
+| | `DraftPositive`, `DraftUnder`, `DraftNegative` | #2b8cbe / #74c0e8, #c2185b / #ec6aa0, #7b5cc4 / #b59cf0 | Draft Analysis' classes (mitcad#2166): blue where a face has the draft towards the pull, raspberry where it needs more draft, violet where it has the draft only against the pull (the other mold half); by the view's background, with the legend; none of the status hues, each far in hue from the others | |
 | Chrome | `Support` | #d81b60 / #f06292 | the top bar's Boost development pill (mitcad#1990): its outline and rocket (an indicator, at least 3:1 on the windows), its label in the window's text (`Text`); it fills only under the pointer, with a translucent tint of the pink (20%, pressed 32%) that keeps the label's contrast. A quiet, warm call to support the project that does not draw the eye, apart from the error's red and the accent's blue | |
+| | `DiscordFill`, `DiscordMark` | #5865f2 (both themes), #ffffff | the top bar's Discord pill (mitcad#2159): Discord's blurple fill (a badge under its mark, 4.6:1; a shade darker under the pointer and pressed) and its logo mark and × in white, as Discord's brand guidelines give them | |
+| Formula | `FormulaName`, `FormulaFunction`, `FormulaKeyword`, `FormulaNumber`, `FormulaUnit`, `FormulaOperator`, `FormulaString` | #0a559f / #86bdff, #6238b5 / #c9b1ff, #961e74 / #f59ad9, #00636c / #4fd1d9, #87420e / #f2a96a, #505664 / #b0b6c0, #505d00 / #c8d46a | the Formula Editor's text by its tokens' kinds (mitcad#2179): names, functions, `LET` and the constants (bold), numbers, units, operators and brackets, quoted texts; texts at least 4.5:1 on the fields and on the two fills below, none of them a status hue. An unknown name is `ErrorText` with the `ErrorBorder` wavy underline (a word or mark beside the color) | |
+| | `FormulaLine`, `FormulaBracket` | #dde3ec / #23272e, #d3e2f7 / #2b3b55 | the line with the caret and the bracket at the caret with its match, fills under the text | |
 
 The table's order is the enum's; `allColorRoles`, `colorRoleName`,
 `colorRoleUse` and `colorRolePartner` list it for the checks.
+
+**A region without fill** (mitcad#2194): Show profiles fills a sketch's
+regions with `ProfileFill`, but a region outside the sketch's outline
+set (a hole's disc in a plate) has no fill at all, only its outline in
+the sketch's color, so that it reads as the hole it is. Not a paler
+`ProfileFill`, which would read as material that is merely inactive.
+The pointer over it and its selection fill it in the hover's and the
+selection's own styles, as any region's, so it is still found and
+picked. A sketch whose closed curves cross has no outline set: all its
+regions are filled. The same in sketch mode and for the sketches shown
+in the design, in the Docked and the Floating layout.
 
 ## 5. The checks
 
@@ -973,6 +1028,27 @@ window's Options and Rows, the Render Appearances panel's Favorites:
 *No favorites yet. Right-click an appearance to add it to Favorites.*).
 A list that is empty only because a search or a filter matches nothing
 needs no text.
+
+**A table whose rows are typed adds them in an empty row** (mitcad#2202,
+the Parameters window's User Parameters): the group ends in one empty
+row whose first cell shows what it makes ("New parameter") in the
+placeholder text color, last whatever the sort and hidden while a search
+or a filter narrows the rows. Its cells are edited in place; Tab goes to
+the cell typed next (the name, then the value) and Shift+Tab back; Enter
+makes the row, which then takes its place, and a new empty row takes the
+keyboard. What is refused stays typed in the row with the reason in the
+window's message line; no button or dialog of its own adds a row.
+
+**A row's delete button** (mitcad#2202): a flat button with the `delete`
+icon at the end of the row, in a narrow column of its own that sorts
+nothing, on every row that can be deleted. It takes no focus. While the
+row cannot be deleted it is disabled, its tooltip saying in words what
+keeps it. Deleting asks nothing where Undo brings the row back.
+
+**A window's message line takes no room while it is empty**
+(mitcad#2202): it is shown with its text and hidden again when the text
+goes, so the rows above it and the buttons below it do not move apart
+by an empty line.
 
 **Columns: the name keeps its room** (mitcad#2096). In a list with
 several columns, the name column (the command, the item) stretches and
@@ -1126,6 +1202,12 @@ so Text size scales them all.
   backdrop they stand on (`IconBackdrop`); one stroke weight across a
   row. A command without an icon gets one drawn in this style, never
   third-party art.
+- **Exception** (owner 21.11.2026, mitcad#2159): the top bar's Discord
+  pill (`DiscordButton`) shows Discord's official logo mark in white on
+  Discord's blurple, unchanged, as Discord's brand guidelines allow for
+  linking to a Discord server (`third_party/brand-marks/README.md`). No
+  other button, menu entry or command shows a third-party mark; the Help
+  menu's MitCad on Discord keeps MitCad's own `community` icon.
 - The thin outline (mitcad#2092): the toolbar's buttons (Floating and
   Docked, a collapsed group's too) and the timeline draw the sources'
   outline at half its width, 0.65 in the 24 grid (`kThinOutlineWeight`,
@@ -1142,6 +1224,14 @@ so Text size scales them all.
 - A toolbar button is its icon with 3 px around it (`macButtonSize`,
   `classicButtonSize`: 36 and 38 px); other buttons keep 5 px around their
   icon (the top bar's). An icon never touches its button's edge.
+- **The close mark** (mitcad#2182): a button that closes or dismisses
+  what it stands in (a card, the message band, a row) shows the shared
+  close mark `dismiss` (`app/icons/dismiss.svg`, a thin × in the outline
+  role), never a text glyph (×, ✕): 16 at a row's button, on the cards'
+  flat small button (`setFlatCardButton`, 24 × 24, its hover and pressed
+  tints), centred vertically in its row. `close` is Close Design's
+  document, not this mark. The Docked panels' title buttons draw the same
+  × themselves (`TitleButton`).
 
 ## 12. The top bar
 
@@ -1152,7 +1242,9 @@ radius only where they are a pair or a menu.
 
 From the left: **one left group** (mitcad#2129), then the open
 documents' tabs; at the right Boost development (while shown), the
-Discord button (an icon, mitcad#2123; also while Boost is hidden), the
+Discord pill (mitcad#2123, mitcad#2159: Discord's mark on its blurple
+and a ×, as high as the Boost pill; while shown, whether Boost is or
+not), the
 project and assistant indicators (compact icon buttons with a ˅, their
 text in the tooltip), the chat, Preferences, ? (Help) and the version.
 
@@ -1346,13 +1438,28 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
   fill, `Text` label.
 - **Flat buttons** (toolbar, card headers, `setFlatCardButton`): nothing
   painted until hovered.
+- **A window's bottom row** (mitcad#2202, the Parameters window): one
+  row on the window's margins, the shown tab's actions on the left and
+  the closing button (OK) on the right; a tab's actions are hidden while
+  another tab is shown, never offered for it.
 - **Toggles**: a checked toggle has an accent outline, not a fill.
 - **Chips** (Render's shots, choices in a row of a card or bar):
   secondary buttons in a row 4 px apart; the chosen one is checked. Not
   in the toolbar panel, whose choices are icon buttons (chapter 13).
 - **Pills** in the top bar: a pill groups related buttons (Undo and
-  Redo) or stands for a call (Boost development, outlined); not a frame
-  around a single flat button.
+  Redo) or stands for a call (Boost development, outlined; the Discord
+  pill, filled with Discord's blurple, mitcad#2159); not a frame around a
+  single flat button. A call's pill has a × that hides it, each pill
+  apart, and a check in Preferences › Display that shows it again.
+- **Choice dots in the view** (`Manipulator::Kind::Toggle`): where a
+  panel chooses among things that have no face or edge of their own to
+  click (a pattern's copies, Boundary Fill's closed regions, mitcad#2149),
+  a dot at each one in the view turns it on or off with a click, and a
+  text field of the panel lists the chosen ones by number (`1, 3`), so
+  that they can be typed too. The dots show as soon as there is something
+  to choose, before any preview. Where a choice is needed and there is
+  only one thing to choose (Boundary Fill's one closed region), it is
+  chosen at once.
 
 ## 17. States
 

@@ -520,7 +520,6 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
                 }
                 RowKey::Body(_) => false,
             };
-            let reference = structure(key) == BomStructure::Reference;
             for placement in placements {
                 let mut signature = if !settings.group_identical {
                     None
@@ -562,9 +561,10 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
                 }
                 let group = if settings.group_identical {
                     match signature.as_ref() {
-                        // A Reference groups with References only.
+                        // A row groups with rows of its own BOM Structure
+                        // only, a Reference with References (mitcad#2215).
                         Some(s) => groups.iter_mut().find(|g| {
-                            (structure(&g.0) == BomStructure::Reference) == reference
+                            structure(&g.0) == structure(key)
                                 && g.3.as_ref().is_some_and(|other| other.matches(s))
                         }),
                         // Not measured: its own row still counts each of its

@@ -19,6 +19,7 @@ commands make (`SketchEdit`). It sits below the model's core, on
 | `project` | Model geometry and other sketches' curves and points (`ProjectionSource`, `SketchEntityRef`, mitcad#904) projected into the sketch; linked projections that follow their sources |
 | `offset`, `pattern`, `spacing` | Offsets, patterns, equal spacing |
 | `text`, `fonts`, `code`, `svg`, `dxf` | Texts, font files, QR codes, SVG and DXF drawings |
+| `point_file`, `point_fit`, `bspline` | Insert Points (mitcad#2232): x y coordinates of a point file and airfoils (Selig, Lednicer) into the sketch, the least-squares cubic spline fit, the cubic B-spline basis it shares with the mesh tools' surface fit |
 | `legacy` | The shapes of early version 2 files |
 
 The model re-exports the crate as `mitcad_model::sketch` and the

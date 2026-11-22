@@ -4,8 +4,9 @@
 # it, on a hidden Xvfb display (ui-test-lib.sh); no host but this one is
 # contacted:
 #   1. What it holds: the executables, the desktop file and the icon, Qt's
-#      plugins (X11, OpenGL on X11, SVG images and icons, TLS, CUPS print
-#      support with the system's libcups, mitcad#1089) with a
+#      plugins (X11, OpenGL on X11 through GLX and EGL, Wayland with its
+#      shell and EGL plugins (mitcad#2031), SVG images and icons, TLS, CUPS
+#      print support with the system's libcups, mitcad#1089) with a
 #      qt.conf, OCCT and the licences; every ELF file finds its libraries
 #      inside it or in the system's library folders (ldd with an empty
 #      environment), none in the build's, Qt's or vcpkg's folders, and its
@@ -21,8 +22,8 @@
 #      no file names a library folder of the build machine (vcpkg's install
 #      trees, the render libraries' prefix, the built executables'
 #      RUNPATHs), as OpenSSL's ENGINESDIR and MODULESDIR did. GLib's
-#      libraries and libcups are the system's (mitcad#1654, mitcad#1089):
-#      none of them in usr/lib.
+#      libraries, libcups and Wayland's client libraries are the system's
+#      (mitcad#1654, mitcad#1089, mitcad#2031): none of them in usr/lib.
 #   2. Copied into a folder of its own and started with an empty
 #      environment (env -i; PATH /usr/bin:/bin, and update checks off):
 #      --version, then the demo block's screenshot (--screenshot), while
@@ -187,6 +188,9 @@ DIR=$WORK/squashfs-root
 for file in AppRun mitcad.desktop mitcad.png .DirIcon usr/bin/mitcad usr/bin/mitcad-cli usr/bin/qt.conf \
   usr/share/applications/mitcad.desktop usr/share/icons/hicolor/256x256/apps/mitcad.png \
   usr/plugins/platforms/libqxcb.so usr/plugins/xcbglintegrations/libqxcb-glx-integration.so \
+  usr/plugins/xcbglintegrations/libqxcb-egl-integration.so usr/plugins/platforms/libqwayland.so \
+  usr/plugins/wayland-shell-integration/libxdg-shell.so \
+  usr/plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so \
   usr/plugins/imageformats/libqsvg.so usr/plugins/iconengines/libqsvgicon.so \
   usr/plugins/tls/libqopensslbackend.so usr/plugins/printsupport/libcupsprintersupport.so \
   usr/share/doc/mitcad/LICENSE usr/share/doc/mitcad/THIRD-PARTY-NOTICES.txt \
@@ -213,6 +217,18 @@ done < "$ROOT/app/translations/languages.txt"
   ui_fail "the AppImage has no usr/share/mitcad/translations/qtbase_fi.qm"
 [ ! -e "$DIR/usr/share/mitcad/translations/mitcad_xx.qm" ] || ui_fail "the AppImage has the tests' pseudo-language"
 echo "ok   the interface languages' catalogues, without the pseudo-language"
+# The built-in woods' and panels' textures (mitcad#2186), once, as files
+# in usr/share/mitcad/textures, which mitcad and mitcad-cli read at run
+# time (mitcad#2218): each image of core/model-base/textures, unchanged.
+textures=0
+for image in "$ROOT"/core/model-base/textures/*.jpg; do
+  name=$(basename "$image")
+  cmp -s "$image" "$DIR/usr/share/mitcad/textures/$name" ||
+    ui_fail "the AppImage has no usr/share/mitcad/textures/$name of core/model-base/textures"
+  textures=$((textures + 1))
+done
+[ "$textures" -gt 0 ] || ui_fail "no texture images in core/model-base/textures"
+echo "ok   the $textures built-in texture images in usr/share/mitcad/textures"
 # Qt's D-Bus module: the keychain's (KWallet, the Secret Service); Print
 # Support: File › Print (mitcad#1089).
 for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6PrintSupport libQt6XcbQpa libQt6DBus libTKernel libTKV3d libTKOpenGl; do
@@ -323,13 +339,15 @@ carriers=$(grep -rlaF "${lookup[@]}" "$DIR" | sed "s|^$DIR/||")
 echo "ok   no file names the build machine's library folders"
 # GLib (mitcad#1654, packaging/linux/make-appimage.sh): the system's, which
 # the web browser component's libraries load too; and libcups, the system's
-# print service's own (mitcad#1089).
-for library in libglib-2.0 libgobject-2.0 libgio-2.0 libgmodule-2.0 libgthread-2.0 libcups; do
+# print service's own (mitcad#1089); Wayland's client libraries, which the
+# system's EGL loads too (mitcad#2031).
+for library in libglib-2.0 libgobject-2.0 libgio-2.0 libgmodule-2.0 libgthread-2.0 libcups \
+  libwayland-client libwayland-cursor libwayland-egl; do
   if compgen -G "$DIR/usr/lib/$library.so*" > /dev/null; then
     ui_fail "the AppImage bundles $library, which stays the system's"
   fi
 done
-echo "ok   GLib and libcups are the system's, none in usr/lib"
+echo "ok   GLib, libcups and Wayland's libraries are the system's, none in usr/lib"
 # The CUDA kernels (mitcad#202): a release must have them, with cuew's
 # licence, whatever this machine's GPU.
 CUBINS=$(compgen -G "$DIR/usr/lib/mitcad/cycles/lib/kernel_sm_*.cubin.zst" | wc -l)

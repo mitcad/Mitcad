@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#2184: Sketch1 on XY holds the fixed point p1 (-10, 6) and the point p2 (10, 0) held on the fixed construction line c5 along y = 0 from p3 (-30, 0) to p4 (30, 0): 1 degree of freedom, p2 sliding along the line. The two points' heights are held, so level conflicts: Horizontal/Vertical, nearer to level, adds plumb instead, which puts p2 at (-10, 0). Two fixed points frame the view as the other sketch UI tests' do."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [-10, 6], "fixed": true},
+      {"id": "p2", "type": "point", "at": [10, 0]},
+      {"id": "p3", "type": "point", "at": [-30, 0], "fixed": true},
+      {"id": "p4", "type": "point", "at": [30, 0], "fixed": true},
+      {"id": "c5", "type": "line", "start": "p3", "end": "p4", "construction": true},
+      {"id": "p6", "type": "point", "at": [-40, -30], "fixed": true},
+      {"id": "p7", "type": "point", "at": [40, 30], "fixed": true}],
+    "constraints": [
+      {"id": "k8", "type": "coincident", "point": "p2", "entity": "c5"}]}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"solved": true, "conflicts": [], "dof": 1}}}
+]

@@ -10,24 +10,8 @@ wrote wherever an interference of kind POINT pointed, so an interference
 with a wrong index (0090) overwrote the heap. An index outside the points
 names no point and is not counted, as the checked increment already did.
 
-Test: geometry/tests/port/p0091-point-uses-counted-within-the-points.cpp
-(ctest geometry.port.0091). With 0090 no body makes an index outside the
-points, so the test builds the data structure itself: two points (one
-used by an edge interference, one by none), an edge, a curve without
-geometry and one interference of kind POINT with the index INT_MAX, then
-calls BuildEdges. test_curve_support_outside_the_points,
-test_edge_geometry_outside_the_points and
-test_edge_support_outside_the_points, one per patched increment: it
-returns without an error, keeps the used point and removes the other
-(without the patch the increment reaches 8 GB past the array, a
-segmentation fault that run_operation turns into an error);
-test_curve_geometry_outside_the_points (the increment OCCT checked) and
-test_all_indices_within_the_points are the boundary cases. The old
-witness, geometry/tests/test_chamfer_kernel.cpp
-(geometry.suite.chamfer_kernel,
-test_chamfer_pieces_meeting_at_a_vertex_of_the_edge_they_reach), passes
-without this patch as 0090 removed the bad index. It fails without the
-patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0091.
 diff --git a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_BuildEdges.cxx b/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_BuildEdges.cxx
 index 32de52b3..30d0341f 100644
 --- a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_BuildEdges.cxx

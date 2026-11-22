@@ -30,7 +30,7 @@ int MessageLog::lifetime(NoticeLevel level) {
 }
 
 bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time,
-                     const QString& action, const QString& source) {
+                     const QString& action, const QString& source, const QString& subject) {
   // A message with a button waits for its answer (mitcad#1416): a hint, a
   // progress line or a cleared status line does not take it away.
   const bool waiting = m_full && !m_full->action.isEmpty() &&
@@ -48,9 +48,11 @@ bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feat
     same.time = time;
     same.action = action;
     same.source = source; // the newest one's (mitcad#1621)
+    same.subject = subject; // and refused again (mitcad#2181)
+    same.resolved = false;
     ++same.count;
   } else {
-    m_entries.push_front({time, level, text, feature, 1, action, source});
+    m_entries.push_front({time, level, text, feature, 1, action, source, subject, false});
     while (static_cast<int>(m_entries.size()) > kMaxEntries) {
       m_entries.pop_back();
     }
@@ -117,11 +119,46 @@ bool MessageLog::sourceCovers(const QString& closing, const QString& raised) {
          (raised.size() > closing.size() && raised.startsWith(closing) && raised.at(closing.size()) == QLatin1Char('/'));
 }
 
+bool MessageLog::resolve(const QString& subject) {
+  const Shown before = shown();
+  for (MessageEntry& entry : m_entries) {
+    if (entry.level == NoticeLevel::Error && sourceCovers(subject, entry.subject)) {
+      entry.resolved = true;
+    }
+  }
+  bool changed = false;
+  if (m_full && m_full->level == NoticeLevel::Error && sourceCovers(subject, m_full->subject)) {
+    m_full.reset();
+    changed = true;
+  }
+  return changed || shown() != before;
+}
+
+const MessageEntry* MessageLog::shownError(const QString& prefix) const {
+  const MessageEntry* shownEntry = nullptr;
+  switch (shown()) {
+  case Shown::Full:
+    shownEntry = &*m_full;
+    break;
+  case Shown::Stub:
+    shownEntry = &m_entries.front();
+    break;
+  case Shown::None:
+    break;
+  }
+  if (shownEntry == nullptr || shownEntry->level != NoticeLevel::Error || shownEntry->resolved ||
+      !sourceCovers(prefix, shownEntry->subject)) {
+    return nullptr;
+  }
+  return shownEntry;
+}
+
 MessageLog::Shown MessageLog::shown() const {
   if (m_full) {
     return Shown::Full;
   }
-  return m_entries.empty() || m_cleared ? Shown::None : Shown::Stub;
+  // A stub of an error put right is no stub (mitcad#2181).
+  return m_entries.empty() || m_cleared || m_entries.front().resolved ? Shown::None : Shown::Stub;
 }
 
 } // namespace mitcad

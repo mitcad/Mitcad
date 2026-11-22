@@ -165,3 +165,11 @@ for View > Rendered.
   liblzma (BSD-style); pugixml, cgltf, yaml-cpp, fmt, robin-map,
   libdeflate (MIT); minizip-ng (zlib licence). Their licence texts are in
   mitcad/licenses/vcpkg/<library>/copyright.
+
+Discord's logo mark (built into the application, on the top bar's button
+that opens MitCad's Discord server)
+  "Discord" and the Discord logo are trademarks of Discord Inc. The mark is
+  used unchanged, as Discord's Brand Guidelines (https://discord.com/branding)
+  allow for showing that a project has a Discord server; MitCad is not
+  made, sponsored or endorsed by Discord. Not covered by MitCad's MIT
+  licence.

@@ -26,13 +26,9 @@ ConcatC1 a Standard_ConstructionError for curves not C0). MergeSubSeq reports th
 failure as it reports a chain it cannot merge (false), so the chain stays
 as its edges; any other failure is rethrown and the unification fails as
 before.
-Test: geometry/tests/port/p0110-unify-chain-not-concatenated.cpp (ctest
-geometry.port.0110): a shell of two coplanar squares sharing an edge, the
-first one's bottom two B-spline pieces in line 2e-6 apart at a vertex of
-tolerance 1.5e-6 (the curves do not join): the unification merges the
-faces and the collinear sides and keeps the pieces as their edges, valid
-(stock: it throws); with the vertex's tolerance 1e-5, the pieces merged
-into one edge.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0110.
 diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 index 49f685922..635f191a8 100644
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx

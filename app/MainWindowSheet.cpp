@@ -6,6 +6,7 @@
 #include "MainWindow.hpp"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QStackedWidget>
 #include <QTimer>
@@ -109,6 +110,55 @@ void MainWindow::registerSheetActions() {
   exporting.keywords = {QStringLiteral("sheet metal"), QStringLiteral("dxf"), QStringLiteral("laser"),
                         QStringLiteral("drawing")};
   m_registry->add(exporting);
+
+  CommandDef bendTable = action("sheet.export_bend_table", tr("Export Bend Table…"), "bend-table", [this] {
+    QJsonObject sheet = sheetBody(true);
+    if (sheet.isEmpty()) {
+      sheet = sheetBody(false);
+    }
+    if (sheet.isEmpty()) {
+      showHint(tr("Export Bend Table: select a sheet-metal body first."));
+      return;
+    }
+    const QString body = sheet.value(QStringLiteral("body")).toString();
+    const QString name = bodyName(body);
+    const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".csv"));
+    const QString jsonFilter = tr("JSON files (*.json)");
+    QString filter;
+    QString path = dialogSaveFileName(this, tr("Export Bend Table"), suggested,
+                                      tr("CSV files (*.csv)") + QStringLiteral(";;") + jsonFilter, &filter);
+    if (path.isEmpty()) {
+      return;
+    }
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    const bool json = suffix == QStringLiteral("json") ||
+                      (suffix != QStringLiteral("csv") && filter == jsonFilter);
+    const QString format = json ? QStringLiteral("json") : QStringLiteral("csv");
+    if (suffix.isEmpty()) {
+      path += QStringLiteral(".") + format;
+    }
+    rememberDialogFolder(DialogGroup::Export, path);
+    QJsonObject result;
+    if (!runCommand({{QStringLiteral("cmd"), QStringLiteral("export_bend_table")},
+                     {QStringLiteral("body"), body},
+                     {QStringLiteral("format"), format},
+                     {QStringLiteral("path"), path}},
+                    &result)) {
+      sheetWarning(this, tr("Export Bend Table"), tr("Could not export:\n%1").arg(m_lastError));
+      return;
+    }
+    const int bends = result.value(QStringLiteral("bends")).toInt();
+    const int rows = result.value(QStringLiteral("rows")).toInt();
+    qInfo().noquote() << QStringLiteral("Exported bend table: %1, %2 bend(s), %3 row(s)")
+                             .arg(format)
+                             .arg(bends)
+                             .arg(rows);
+    showHint(tr("Exported %n bend(s) to %1.", nullptr, bends).arg(QDir::toNativeSeparators(path)));
+  });
+  bendTable.tooltip = tr("Writes the selected sheet's bend settings and flat bend lines to CSV or JSON");
+  bendTable.keywords = {QStringLiteral("sheet metal"), QStringLiteral("press brake"), QStringLiteral("csv"),
+                        QStringLiteral("json")};
+  m_registry->add(bendTable);
 
   // A board's die line (mitcad#1939): the Flat Pattern with its cut and
   // crease layers as DXF for cutting tables, or as PDF.

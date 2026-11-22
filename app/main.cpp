@@ -47,6 +47,7 @@
 #include "framework/DesktopEntry.hpp"
 #include "framework/Diagnostics.hpp"
 #include "framework/DisplayMeshes.hpp"
+#include "framework/DisplayPlatform.hpp"
 #include "framework/InterfaceSize.hpp"
 #include "framework/UiSizes.hpp"
 #include "framework/IconSizeStyle.hpp"
@@ -184,11 +185,18 @@ int runApplication(int argc, char* argv[]) {
   mitcad::guard_command_memory(0.0);
 
 #ifdef __linux__
-  // OCCT's OpenGL driver uses GLX on Linux, so Qt must use the X11 (xcb)
-  // platform plugin, also on Wayland desktops and WSLg.
-  if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
-    qputenv("QT_QPA_PLATFORM", "xcb");
-  }
+  // Qt's platform plugin (mitcad#2031, framework/DisplayPlatform.hpp):
+  // Wayland in a Wayland session, with X11 as Qt's fallback, X11 elsewhere;
+  // on X11 Qt's EGL integration, as OCCT draws through EGL. An OCCT built
+  // for GLX keeps X11 everywhere. The user's QT_QPA_PLATFORM wins.
+#ifdef MITCAD_OCCT_EGL
+  constexpr bool occtUsesEgl = true;
+#else
+  constexpr bool occtUsesEgl = false;
+#endif
+  const mitcad::DisplayPlatformChoice displayPlatform =
+      mitcad::chooseDisplayPlatform(mitcad::displayEnvironment(), occtUsesEgl);
+  mitcad::applyDisplayPlatform(displayPlatform);
   // The AppImage bundles no GTK, so Qt's gtk3 theme, which a GNOME desktop
   // would get its dark or light scheme from, is not there and Qt's own
   // falls back to light: the desktop portal's theme follows the scheme.
@@ -500,6 +508,10 @@ int runApplication(int argc, char* argv[]) {
   qInfo().noquote() << QStringLiteral("Frontend: %1 (%2)")
                            .arg(nativeUiRequested ? QStringLiteral("native") : QStringLiteral("qt"), frontendSource);
   qInfo().noquote() << QStringLiteral("Interface size: %1").arg(mitcad::interfaceScaleDescription(interfaceScale));
+#ifdef __linux__
+  qInfo().noquote() << QStringLiteral("Display platform: %1")
+                           .arg(mitcad::displayPlatformDescription(displayPlatform, QGuiApplication::platformName()));
+#endif
 
   // The layout (mitcad#419): --chrome for this run, else Preferences' Layout,
   // else the platform's. The native macOS frontend has a layout of its own.

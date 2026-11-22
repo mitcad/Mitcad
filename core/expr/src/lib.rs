@@ -372,6 +372,10 @@ pub use limits::{Bounds, LimitError, Limited, ParamLimits};
 mod lookups;
 pub use lookups::{ColumnError, MatchMode, TableCell, TableColumn};
 
+// An unknown name's near miss, for "did you mean …?" (mitcad#2181).
+mod near_name;
+pub use near_name::near_name;
+
 /// Byte range in an expression's source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
@@ -408,6 +412,25 @@ impl fmt::Display for ExprError {
 }
 
 impl std::error::Error for ExprError {}
+
+impl ExprError {
+    /// What is wrong in words, without the byte offset (mitcad#2181; see
+    /// [`ParseError::message`] and [`EvalError::message`]).
+    pub fn message(&self) -> String {
+        match self {
+            Self::Parse(e) => e.message(),
+            Self::Eval(e) => e.message(),
+        }
+    }
+
+    /// Where in the source the error is, if it is at a specific place.
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Self::Parse(e) => Some(e.span),
+            Self::Eval(e) => e.span(),
+        }
+    }
+}
 
 impl From<ParseError> for ExprError {
     fn from(e: ParseError) -> Self {

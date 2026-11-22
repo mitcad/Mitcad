@@ -57,4 +57,12 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
 void note_missing_walls(const std::string& feature, const Shape& body, const std::set<int>& removed,
                         double thickness, Shape& result);
 
+// Whether MITCAD_SHELL_TRACE is set (mitcad#2050): the shell then writes to
+// stderr why the geometry kernel's offset failed and where the cavity
+// stopped, for a design whose shell fails.
+bool shell_tracing();
+
+// Writes "shell trace: <line>" to stderr when shell_tracing().
+void shell_trace(const std::string& line);
+
 } // namespace mitcad::geometry::detail

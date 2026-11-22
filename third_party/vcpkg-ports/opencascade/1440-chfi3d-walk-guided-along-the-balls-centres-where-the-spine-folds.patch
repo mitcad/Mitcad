@@ -46,14 +46,8 @@ each failed.
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_acute_turn.cpp,
-test_rounding_round_the_foot (ctest geometry.fillet_acute_turn): a
-synthetic plate, rail and end wall rounded at radii 1, 1.5 and 1.9: valid,
-closed, the walked face on the ball; the port's notes record one faulty
-contour at each radius without the patch. test_reported_body does the same
-on the case acute-concave-turn. It fails without the patch (shown
-2026-11-20 by tools/occt-port-proof.py, reverted together with 1601, 1790,
-which change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1440.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx

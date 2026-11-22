@@ -701,11 +701,16 @@ bool DocumentSession::startAsync(const QString& label, const QString& stage, Job
   m_job = &m_async->job;
   ModelJob* state = m_job;
   const auto hold = label == QStringLiteral("preview") ? m_testHoldPreview : nullptr;
+  // A display meshing held through a cancel too (mitcad#2118).
+  const auto holdDisplay = label == QStringLiteral("display") ? m_testHoldDisplay : nullptr;
   // For tests, a job made longer after its work, as runJob's
   // (MITCAD_TEST_JOB_SLEEP_MS, mitcad#1121: "bed plan=…").
   const int extraMs = testJobSleep(label);
-  m_worker->post([job = std::move(job), state, hold, extraMs] {
+  m_worker->post([job = std::move(job), state, hold, holdDisplay, extraMs] {
     while (hold && hold->load() && !state->control().is_cancelled()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    while (holdDisplay && holdDisplay->load()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     job(*state);

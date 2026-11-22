@@ -279,6 +279,24 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 let base = self.plane_ref(base, names, component, None)?;
                 notes.extend(base.notes);
                 let a = self.params.value(self.doc, angle.as_str(), Kind::Angle)?;
+                // The axis's origin may be length expressions (format 59):
+                // where they put it now.
+                if line.is_none()
+                    && !*direction_only
+                    && axis_origin
+                        .iter()
+                        .any(|e| mitcad_solidcraft::expr::literal(e.as_str(), 1.0).is_none())
+                {
+                    notes.push("its axis is fixed where its expressions put it now".to_owned());
+                }
+                let axis_origin: [f64; 3] = [
+                    self.params
+                        .value(self.doc, axis_origin[0].as_str(), Kind::Length)?,
+                    self.params
+                        .value(self.doc, axis_origin[1].as_str(), Kind::Length)?,
+                    self.params
+                        .value(self.doc, axis_origin[2].as_str(), Kind::Length)?,
+                ];
                 // Only the axis's direction, projected onto the base, about
                 // the line through the pivot or the base's origin (format
                 // 51): that line, fixed where it is now.
@@ -310,7 +328,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     let o = sub(p, scale(n, dot(sub(p, w.o), n)));
                     (o, d, None)
                 } else {
-                    (*axis_origin, *axis_dir, line.clone())
+                    (axis_origin, *axis_dir, line.clone())
                 };
                 let (axis_origin, axis_dir, line) = (&axis_origin, &axis_dir, &line);
                 let world = base.world.map(|w| w.rotated(*axis_origin, *axis_dir, a));
@@ -376,11 +394,24 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 );
                 made
             }
-            PlaneRef::Construction { feature } => {
+            PlaneRef::Construction { feature, placement } => {
                 let f = self
                     .design
                     .feature(*feature)
                     .ok_or_else(|| format!("no construction plane {feature}"))?;
+                // A plane of another component kept where that component
+                // stood when it was picked (format 58): MitCad's plane is
+                // where the component stands now.
+                let author = super::features::CURRENT
+                    .with(|c| c.borrow().as_ref().map(|current| current.component));
+                if let (Some(placement), Some(author)) = (placement, author)
+                    && super::features::moved_since(self.design, author, f.component, placement)
+                {
+                    notes.push(
+                        "the plane of another component is where that component stands now, where the file keeps it where it stood when it was picked"
+                            .to_owned(),
+                    );
+                }
                 let uid = self
                     .made
                     .get(&f.id)
@@ -695,20 +726,18 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .ok_or_else(|| format!("{name} did not come in"))?;
                 json!(uid.to_string())
             }
-            GeoRef::SketchPoint { sketch, point } => {
-                let s = self
-                    .sketches
-                    .get(sketch)
-                    .ok_or("the sketch did not come in")?;
-                json!({"sketch": s.uid.to_string(), "point": s.point(point)?})
-            }
-            GeoRef::SketchCurve { sketch, curve } => {
-                let s = self
-                    .sketches
-                    .get(sketch)
-                    .ok_or("the sketch did not come in")?;
-                json!({"sketch": s.uid.to_string(), "curve": s.curve(curve)?})
-            }
+            // A 3D curve's node (`w3:1`, format 52) and a 3D curve are
+            // the 3D sketch's (mitcad#2157).
+            GeoRef::SketchPoint { sketch, point } => self
+                .sketches
+                .get(sketch)
+                .ok_or("the sketch did not come in")?
+                .point_ref(point)?,
+            GeoRef::SketchCurve { sketch, curve } => self
+                .sketches
+                .get(sketch)
+                .ok_or("the sketch did not come in")?
+                .curve_ref(curve)?,
             // An origin datum of a component's placement (format 52): this
             // component's own where the placement is its own, else fixed
             // where the placement puts it now.
@@ -804,7 +833,11 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .sketches
                     .get(sketch)
                     .ok_or("the sketch did not come in")?;
-                json!({"sketch": s.uid.to_string(), "curve": s.curve(curve)?})
+                // A 3D curve: the typed path of the 3D sketch (mitcad#2157).
+                match &s.spatial {
+                    Some(sp) if sp.wire(curve).is_some() => sp.path(std::slice::from_ref(curve))?,
+                    _ => json!({"sketch": s.uid.to_string(), "curve": s.curve(curve)?}),
+                }
             }
             other => return Err(format!("{other:?} is not a path")),
         })
@@ -812,7 +845,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
 }
 
 /// Whether a placement moves nothing (within 1e-9).
-fn is_identity(m: &Mat) -> bool {
+pub(crate) fn is_identity(m: &Mat) -> bool {
     m.iter()
         .flatten()
         .zip(mitcad_solidcraft::document::IDENTITY.iter().flatten())
@@ -821,7 +854,7 @@ fn is_identity(m: &Mat) -> bool {
 
 /// The inverse of a rigid placement (a turn and a move): the turn's
 /// transpose, and the move back through it.
-fn rigid_inverse(m: &Mat) -> Mat {
+pub(crate) fn rigid_inverse(m: &Mat) -> Mat {
     let mut out = mitcad_solidcraft::document::IDENTITY;
     for (c, col) in out.iter_mut().enumerate().take(3) {
         for (r, cell) in col.iter_mut().enumerate().take(3) {

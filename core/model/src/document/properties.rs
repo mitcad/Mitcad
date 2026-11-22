@@ -26,6 +26,28 @@ use crate::properties::{
 /// component's form and origin (mitcad#1980).
 const COMPUTED_KEYS: [&str; 6] = ["Volume", "Area", "Mass", "Length", "Material", "Kind"];
 
+/// The set of a component's standing rows (mitcad#2138), the one a
+/// component brought in from the web stores its part number in
+/// (mitcad#1579).
+pub(crate) const IDENTITY_SET: &str = "Identity";
+
+/// The keys a component's Property Sets always lists (mitcad#2138): what
+/// a parts list's Part Number and Description columns read. Shown empty
+/// in [`IDENTITY_SET`] while the component stores none of them; never
+/// stored empty.
+pub(crate) const STANDING_KEYS: [&str; 2] = ["Part number", "Description"];
+
+/// Whether an owner's level lists the standing rows: a component's, not
+/// the root's (the design, which no parts list lists), an occurrence's or
+/// a body's.
+fn has_standing_rows(owner: PropertyOwner) -> bool {
+    matches!(owner, PropertyOwner::Component(c) if !c.is_root())
+}
+
+fn is_standing_key(key: &str) -> bool {
+    STANDING_KEYS.iter().any(|k| same_name(k, key))
+}
+
 /// The computed `Material` of a body without a material anywhere
 /// (mitcad#1817): said so, never a default's name.
 pub(crate) const NO_MATERIAL: &str = "No material";
@@ -263,6 +285,22 @@ impl<K: Kernel> Document<K> {
         };
         if source == Source::Computed {
             return Err(invalid("computed values are not stored"));
+        }
+        // A component's Part number or Description emptied (mitcad#2138):
+        // nothing stays stored; its standing row shows it empty again.
+        if has_standing_rows(owner)
+            && is_standing_key(key)
+            && value.is_some_and(|v| v.as_str().is_some_and(|t| t.trim().is_empty()))
+        {
+            if self.state.properties.get(owner, set, key).is_some() {
+                self.remove_property(owner, set, key)?;
+            }
+            return Ok(Property::new(
+                key,
+                BaseType::Text,
+                PropertyValue::Text(String::new()),
+                source,
+            ));
         }
         let store = &self.state.properties;
         let existing = store.get(owner, set, key).cloned();
@@ -782,10 +820,22 @@ impl<K: Kernel> Document<K> {
         };
         text("Designation", row.designation.as_str());
         text("Supplier", row.supplier.as_str());
-        text("Part number", row.part_number.as_str());
+        // The entry's own number, not the parts list's: a number of the
+        // component's own comes first there (mitcad#2138).
+        text(
+            "Part number",
+            self.library_part_number(component)
+                .unwrap_or_default()
+                .as_str(),
+        );
         if let Some(library) = &row.library {
             text("Library", library.library.as_str());
             text("Version", library.version_text().as_str());
+        }
+        // A part whose library does not allow printing it as a service
+        // (mitcad#2214); nothing is shown for a printable one.
+        if self.non_printable_record(component).is_some() {
+            text("Print service", "Not for print services");
         }
         if let Some(info) = &info
             && let Some(material) = &info.meta.material
@@ -972,6 +1022,7 @@ impl<K: Kernel> Document<K> {
                 None => sets.push((shown.set.clone(), vec![value])),
             }
         }
+        self.add_standing_rows(owner, &mut sets);
         let sets: Vec<Value> = sets
             .into_iter()
             .map(|(name, properties)| json!({"name": name, "properties": properties}))
@@ -988,6 +1039,52 @@ impl<K: Kernel> Document<K> {
             value["component"] = json!(occurrence.component);
         }
         value
+    }
+
+    /// A component's standing rows (mitcad#2138): `Part number` and
+    /// `Description` in [`IDENTITY_SET`] with an empty value while the
+    /// component stores no property of that key in any set (one stored is
+    /// listed in its own row instead), so that they are typed in place.
+    /// Only in the `property_sets` query: nothing is stored, and the
+    /// lists, the searches and an occurrence's inherited values do not see
+    /// them. The Identity set comes first when the component has none.
+    fn add_standing_rows(&self, owner: PropertyOwner, sets: &mut Vec<(String, Vec<Value>)>) {
+        if !has_standing_rows(owner) {
+            return;
+        }
+        let stored = self.state.properties.sets(owner);
+        for key in STANDING_KEYS {
+            let has = stored
+                .iter()
+                .flat_map(|group| group.properties.iter())
+                .any(|p| same_name(&p.key, key));
+            if has {
+                continue;
+            }
+            let shown = ShownProperty {
+                set: IDENTITY_SET.to_owned(),
+                property: Property::new(
+                    key,
+                    BaseType::Text,
+                    PropertyValue::Text(String::new()),
+                    Source::User,
+                ),
+                read_only: false,
+                inherited: false,
+                overrides: false,
+                library: None,
+                library_source: Source::Library,
+            };
+            let mut value = self.property_json(&shown);
+            value["standing"] = json!(true);
+            match sets
+                .iter_mut()
+                .find(|(name, _)| same_name(name, IDENTITY_SET))
+            {
+                Some((_, properties)) => properties.push(value),
+                None => sets.insert(0, (IDENTITY_SET.to_owned(), vec![value])),
+            }
+        }
     }
 
     /// The `property_types` query: the standard types and the design's

@@ -1008,6 +1008,12 @@ void LibraryBrowser::showVersion() {
     licence += QStringLiteral("<br>") + escaped(note);
   }
   details << QStringLiteral("<p>%1</p>").arg(licence);
+  // Its library does not allow printing it as a service (mitcad#2214); no
+  // other effect on the picker.
+  if (component.value(QStringLiteral("non_printable")).toBool()) {
+    details << tr("<p><b>Not for print services</b><br>Its library does not allow printing this part as a "
+                  "service. Your own export and Send to Slicer are not affected.</p>");
+  }
   details << tr("<p><b>Attribution:</b> %1</p>").arg(escaped(attribution));
   m_details->setText(details.join(QString()));
   // An open table's options, filtered by the rules (mitcad#810): asked of
@@ -1036,6 +1042,10 @@ void LibraryBrowser::showVersion() {
                            .arg(str(item, "library"), str(item, "id"), m_version->currentText(),
                                 m_size->row().isEmpty() ? QStringLiteral("-") : m_size->row(),
                                 license.isEmpty() ? QStringLiteral("none") : license);
+  if (component.value(QStringLiteral("non_printable")).toBool()) {
+    qInfo().noquote() << QStringLiteral("Library browser: %1/%2 is not for print services")
+                             .arg(str(item, "library"), str(item, "id"));
+  }
   if (m_size->isOpen()) {
     qInfo().noquote() << QStringLiteral("Library browser options of %1/%2: %3")
                              .arg(str(item, "library"), str(item, "id"), m_size->summary());

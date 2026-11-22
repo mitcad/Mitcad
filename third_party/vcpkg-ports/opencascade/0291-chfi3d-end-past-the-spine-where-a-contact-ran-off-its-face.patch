@@ -36,12 +36,9 @@ computation it cannot make (ChFi3d_IsComputationFailure, 0016) where the
 contact does not lie on that surface: that end is not run on and is left
 to OCCT's corner as before. Any other failure (a broken invariant, a
 signal) is rethrown.
-Test: geometry/tests/test_fillet_corners.cpp (the tapering strip on a wall
-turning into its tangent plane); geometry/tests/port/p0291-end-past-the-spine.cpp
-(ctest geometry.port.0291): the same body mirrored, its top's edge with the
-wall rounded with 1: built, valid, the same volume removed as from the
-body itself; the cut plane lifted 0.75 at the wall so that the top stays
-at least 1.1 wide (the contact of 1 stays on it) as stock.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0291.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 003b095a9..54c7cfa14 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

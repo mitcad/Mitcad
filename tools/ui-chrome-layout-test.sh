@@ -8,7 +8,8 @@
 # check-all sources: app/MainWindowOrigin.cpp app/MainWindowSketch3d.cpp
 # The window's layout chosen in Preferences (mitcad#419) and the defaults
 # (mitcad#429) through the real UI:
-#   1. Without a choice (a plate open) Floating with the Browser's Rows:
+#   1. Without a choice (a plate open) Floating with the Browser's Rows
+#      (mitcad#2144; the card from mitcad#1990 until then):
 #      nothing above the view, no menu bar under the system's title bar
 #      (mitcad#1990: its menus are the title row's); the title row (one flat
 #      bar across the view's top, mitcad#1990: its controls, each whole
@@ -17,16 +18,19 @@
 #      has no commands by default, mitcad#1990) and the
 #      toolbar panel (the workspace selector, the workspace's tabs, the
 #      search field and at least two groups within it, mitcad#1990) are over
-#      its top, every other card starts below them; no place between two
+#      its top, every other card starts below them; the Browser's card
+#      overlaps none of the left column's other cards (Projects,
+#      Configuration) nor the Timeline; no place between two
 #      cards is logged, and with the plate zoomed in to fill the view, a
 #      click on the bar's free stretch stays the bar's (nothing selected).
 #      Preferences > Display > Layout Docked asks Restart MitCad, Later
 #      keeps it in the settings for the next start.
 #   2. Floating again is the window's layout: saved, no question.
 #   3. A sketch on XY clicked in the view as a user would: Create Sketch's
-#      command card and the Browser's card leave XY's place clear
-#      (mitcad#1990: the view moves the origin's planes out from under
-#      them); the next sketch on XY picked from the Browser. Docked,
+#      command card leaves XY's place clear, and the Browser's card on its
+#      card (with Rows the click beside the rows' boxes reaches the view,
+#      mitcad#419) (mitcad#1990: the view moves the origin's planes out from
+#      under them); the next sketch on XY picked from the Browser. Docked,
 #      Restart Now with unsaved changes: the window asks about them as
 #      quitting does; Cancel keeps Mitcad open and nothing restarts.
 #   4. Saved, Docked, Restart Now: Mitcad quits and would start again
@@ -34,11 +38,11 @@
 #      options and the design, without --chrome.
 #   5. The next start is Docked by the preference: no cards; Preferences
 #      shows the Browser background there too (mitcad#429); Floating and
-#      the Rows background chosen together, Later.
-#   6. The next start is Floating by the preference, with the Rows
-#      background: the cards at the default size, in a narrow and a wide
-#      window; a click on the title bar beside its controls stays the
-#      bar's.
+#      the Card background chosen together, Later.
+#   6. The next start is Floating by the preference, with the Card
+#      background as chosen (mitcad#2144: a saved Card stays Card): the
+#      cards at the default size, in a narrow and a wide window; a click on
+#      the title bar beside its controls stays the bar's.
 #   7. --chrome=docked overrides the preference.
 # The Windows counterpart is tools/ui-windows-chrome-layout-test.ps1.
 #
@@ -197,6 +201,17 @@ cards_below_bar() {
     *browserDock*) ;;
     *) ui_fail "$1: no Browser card in '$line'" ;;
   esac
+  # The Browser's card (Rows or Card, mitcad#2144) overlaps none of the
+  # left column's other cards nor the Timeline.
+  read -r rx ry rw rh <<< "${CARDS[browserDock]}"
+  for part in projectsDock configurationDock timelineDock; do
+    [ -n "${CARDS[$part]:-}" ] || continue
+    read -r px py pw ph <<< "${CARDS[$part]}"
+    if [ "$px" -lt $((rx + rw)) ] && [ "$rx" -lt $((px + pw)) ] && [ "$py" -lt $((ry + rh)) ] &&
+      [ "$ry" -lt $((py + ph)) ]; then
+      ui_fail "$1: the Browser's card ($rx,$ry ${rw}x$rh) overlaps $part ($px,$py ${pw}x$ph): '$line'"
+    fi
+  done
   echo "ok   $1: the view below the menu bar ($bar), $count cards and parts, $groups groups in the toolbar panel, the title row's and the panel's parts within them, the others below the rows' bottom $rows (window ${width} wide)"
 }
 
@@ -216,10 +231,16 @@ zoom_plate() {
 # and 3D row, mitcad#1524) came over the only part of XY's square left to
 # click; the view now moves the origin's planes out from under the cards as
 # the pick starts ("View for the origin planes: moved ..."). XY's logged
-# place is inside neither the command card nor the Browser's card of the
-# last "Floating cards:" line. As Sketch-OnXyInView in the Windows twin.
+# place is inside neither the command card nor, on its card, the Browser's
+# card of the last "Floating cards:" line. With the Rows background
+# (mitcad#2144: the default) the Browser takes the mouse only on its rows'
+# boxes (mitcad#419), and the view keeps the planes clear of their extent
+# (GlassCard::coveredRect), not of the card's rectangle: a place in that
+# rectangle beside the rows reaches the view, which the click then shows
+# (the sketch starts on XY). As Sketch-OnXyInView in the Windows twin.
 sketch_on_xy_in_view() {
-  local before line at ax ay name rect cx cy cw ch moved
+  local before line at ax ay name rect cx cy cw ch moved cards="commandDock browserDock"
+  grep '^Browser background: ' "$UI_LOG" | tail -1 | grep -q 'rows$' && cards=commandDock
   before=$(grep -c "Sketch started on xy" "$UI_LOG")
   ui_mark
   ui_command "Create Sketch"
@@ -239,7 +260,7 @@ sketch_on_xy_in_view() {
   [ -n "$at" ] || ui_fail "no place of XY logged for Create Sketch"
   ax=${at%,*}
   ay=${at#*,}
-  for name in commandDock browserDock; do
+  for name in $cards; do
     rect=$(tr ';' '\n' <<< "${line#*; }" | sed 's/^ *//' |
       sed -n "s/^$name \([0-9-]*\),\([0-9-]*\) \([0-9]*\)x\([0-9]*\)$/\1 \2 \3 \4/p")
     [ -n "$rect" ] || ui_fail "no $name card while Create Sketch waits for a plane: '$line'"
@@ -248,7 +269,7 @@ sketch_on_xy_in_view() {
       ui_fail "XY's place $at is inside the $name card ($cx,$cy ${cw}x$ch): no place of XY to click in the view"
     fi
   done
-  echo "ok   XY's place $at clear of the command card and the Browser's card"
+  echo "ok   XY's place $at clear of the cards that take the mouse there ($cards)"
   ui_click_logged "Datum xy"
   for _ in $(seq 1 25); do
     [ "$(grep -c "Sketch started on xy" "$UI_LOG")" -gt "$before" ] && return 0
@@ -313,10 +334,11 @@ click_title_row() {
 
 ui_start_display
 
-echo "--- 1. Without a choice Floating with the Card; the cards; Docked chosen, Later"
+echo "--- 1. Without a choice Floating with Rows; the cards; Docked chosen, Later"
 ui_start_app --no-native-dialogs --open "$PLATE"
 ui_expect_log "Chrome: floating (the platform's default)" "Floating without a choice"
-ui_expect_log "Browser background: card" "the Browser's card without a choice (mitcad#1990)"
+ui_expect_log "Browser background: rows" "the Browser's Rows without a choice (mitcad#2144)"
+grep -q '^browserBackground=' "$CONF" 2> /dev/null && ui_fail "a Browser background saved without a choice"
 ui_expect_log "Floating cards: window " "the cards placed"
 cards_below_bar "at the default size" 1280 1280
 no_gaps
@@ -396,7 +418,7 @@ done
 echo "ok   the run's settings options and the design, no --chrome: $COMMAND"
 expect_exit "Mitcad quit to restart"
 
-echo "--- 5. The next start: Docked by the preference; Floating and the Rows background chosen there"
+echo "--- 5. The next start: Docked by the preference; Floating and the Card background chosen there"
 ui_start_app --no-native-dialogs --open "$FILE"
 ui_expect_log "Chrome: docked (the preference)" "Docked by the preference"
 grep -q '^Floating cards: ' "$UI_LOG" && ui_fail "Floating cards in the Docked layout"
@@ -409,22 +431,22 @@ ui_step "create another Docked sketch"    ui_create_sketch xy
 ui_mark
 ui_step "finish Docked sketch from ribbon" ui_click_logged "Ribbon button sketch.finish"
 ui_expect_new "Sketch finished" "Docked ribbon still finishes a sketch"
-choose_layout End End
-ui_expect_new "Preferences: browser background rows" "the Rows background chosen while Docked"
+choose_layout End Home
+ui_expect_new "Preferences: browser background card" "the Card background chosen while Docked"
 ui_expect_new "Layout preference: floating (restart asked)" "Floating chosen, a restart asked"
 ui_focus_dialog '^Restart MitCad$'
 ui_step "later (Escape)"                  ui_key Escape
 ui_focus_main
 ui_expect_new "Layout restart: later (floating at the next start)" "kept for the next start"
 grep -q '^layout=floating$' "$CONF" || ui_fail "the layout is not saved"
-grep -q '^browserBackground=rows$' "$CONF" || ui_fail "the Browser background is not saved"
+grep -q '^browserBackground=card$' "$CONF" || ui_fail "the Browser background is not saved"
 echo "ok   both saved for the next start"
 ui_stop_app
 
-echo "--- 6. The next start: Floating with Rows by the preferences; the cards"
+echo "--- 6. The next start: Floating with the Card by the preferences; the cards"
 ui_start_app --no-native-dialogs --open "$PLATE"
 ui_expect_log "Chrome: floating (the preference)" "Floating by the preference"
-ui_expect_log "Browser background: rows" "the Browser's Rows by the preference"
+ui_expect_log "Browser background: card" "the Browser's Card kept after a restart (mitcad#2144)"
 ui_expect_log "Floating cards: window " "the cards placed"
 cards_below_bar "at the default size" 1280 1280
 click_title_row

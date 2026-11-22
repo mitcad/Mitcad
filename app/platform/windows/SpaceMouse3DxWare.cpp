@@ -10,6 +10,7 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QGuiApplication>
 #include <QTimer>
@@ -30,8 +31,38 @@ namespace {
 constexpr int kAnyDevice = -1;
 constexpr int kReceiveMessages = 1;
 constexpr int kEventAvailable = 5;
+constexpr int kNotEvent = 7;
 constexpr int kDriverStopped = 8;
 constexpr int kDeviceClosed = 17;
+
+// The test's stand-in for the runtime (MITCAD_TEST_3DXWARE=1, mitcad#2152):
+// it loads as the installed runtime does and reports one device, "Test 3D
+// mouse", so the backend asks for MitCad's window at the moment a real
+// driver start does; it opens that device only for a window, and sends no
+// events. The VM has no 3DxWare.
+namespace standin {
+HWND openedFor = nullptr;
+int openedDevice = 0; // the open device's handle points here
+
+int WINAPI initialize() { return 0; }
+void WINAPI terminate() {}
+void WINAPI initWindow(void*, HWND window) { openedFor = window; }
+void* WINAPI open(char*, int, void*, int, void*) {
+  qInfo().noquote() << (openedFor != nullptr ? QStringLiteral("3D mouse: test 3DxWare runtime opened its device")
+                                             : QStringLiteral("3D mouse: test 3DxWare runtime got no window"));
+  return openedFor != nullptr ? &openedDevice : nullptr;
+}
+int WINAPI close(void*) { return 0; }
+void WINAPI initEvent(void*, UINT, WPARAM, LPARAM) {}
+int WINAPI getEvent(void*, int, void*, void*) { return kNotEvent; }
+int WINAPI deviceCount() { return 1; }
+int WINAPI deviceName(void*, void* name) {
+  // The device name record's first field: its text (at most 512 bytes).
+  static constexpr char kName[] = "Test 3D mouse";
+  std::memcpy(name, kName, sizeof(kName));
+  return 0;
+}
+} // namespace standin
 
 HMODULE loadDriver() {
   if (const HMODULE module = LoadLibraryExW(L"siappdll.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
@@ -84,13 +115,31 @@ private:
   }
 
   bool start();
+  bool startStandIn();
 
   HMODULE m_module = nullptr;
   void (WINAPI* terminate)() = nullptr;
   bool m_initialized = false;
 };
 
+bool SiRuntime::startStandIn() {
+  qInfo().noquote() << QStringLiteral("3D mouse: test 3DxWare runtime (MITCAD_TEST_3DXWARE) reports one device");
+  terminate = &standin::terminate;
+  initWindow = &standin::initWindow;
+  open = &standin::open;
+  close = &standin::close;
+  initEvent = &standin::initEvent;
+  getEvent = &standin::getEvent;
+  deviceCount = &standin::deviceCount;
+  deviceName = &standin::deviceName;
+  m_initialized = standin::initialize() == 0;
+  return m_initialized;
+}
+
 bool SiRuntime::start() {
+  if (qEnvironmentVariableIntValue("MITCAD_TEST_3DXWARE") == 1) {
+    return startStandIn();
+  }
   m_module = loadDriver();
   if (!m_module) {
     return false;
@@ -140,8 +189,11 @@ public:
     if (!m_runtime || m_runtime->deviceCount() <= 0 || !nativeWindow) {
       return false;
     }
+    // An existing window only (mitcad#2152): none before the design is
+    // shown in its frame; the Windows backend tries again then.
     m_window = reinterpret_cast<HWND>(nativeWindow());
     if (!m_window) {
+      qInfo().noquote() << QStringLiteral("3D mouse: 3DxWare has a device, MitCad's window is not shown yet");
       return false;
     }
     alignas(std::max_align_t) std::array<std::byte, 1024> request{};

@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -733,10 +735,14 @@ TopoDS_Shape offset_inside(const TopoDS_Shape& shape, double thickness, GeomAbs_
     }
     interruptible([&](const Message_ProgressRange& range) { maker.MakeOffsetShape(range); });
     if (!maker.IsDone() || maker.Shape().IsNull()) {
+      shell_trace("cavity: the inward offset failed (BRepOffset_Error " + std::to_string(static_cast<int>(maker.Error())) + ")");
       return TopoDS_Shape();
     }
     const TopoDS_Shape piece = as_solid(maker.Shape());
     if (piece.IsNull() || !is_valid(piece) || !(solid_volume(piece) > kTolerance)) {
+      shell_trace(piece.IsNull()        ? "cavity: the inward offset closed no solid"
+                  : !is_valid(piece)    ? "cavity: the inward offset is not valid"
+                                        : "cavity: the inward offset is empty");
       return TopoDS_Shape();
     }
     NCollection_List<TopoDS_Shape> arguments;
@@ -829,8 +835,25 @@ std::pair<double, std::vector<TopoDS_Shape>> nearest_faces(const TopoDS_Shape& f
 ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const std::set<int>& removed,
                          double thickness, GeomAbs_JoinType join, const Shape& from) {
   const double margin = 0.25 * thickness;
+  // The faces' names, for the trace.
+  const auto named = [&body](const auto& faces) {
+    std::string out;
+    for (const int f : faces) {
+      out += (out.empty() ? "" : ", ") + primary_name(body, f);
+    }
+    return "[" + out + "]";
+  };
   try {
     const Thinness thin = thinness(body, removed, thickness);
+    if (shell_tracing()) {
+      std::string pairs;
+      for (const auto& [a, b] : thin.pairs) {
+        pairs += (pairs.empty() ? "" : ", ") + primary_name(body, a) + " / " + primary_name(body, b);
+      }
+      shell_trace("cavity: " + std::to_string(body.face_count()) + " faces, removed " + named(removed) +
+                  "; plates [" + pairs + "]; thin " + named(thin.thin) + "; under removed " +
+                  named(thin.under_removed) + "; removed faces out by " + std::to_string(thin.push));
+    }
 
     // The trimmed body less the solids, the faces they leave merged into
     // those beside them (the removed faces' edges kept; where `seams` holds
@@ -891,6 +914,7 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
     // The body without its plates.
     const std::vector<TopoDS_Shape> cut_off = plates(body, thin.pairs, thickness);
     if (!cut_off.empty() && !cut_away(cut_off, TopoDS_Shape())) {
+      shell_trace("cavity: the " + std::to_string(cut_off.size()) + " plates could not be cut off");
       return nullptr;
     }
 
@@ -908,8 +932,10 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
       History history;
       const TopoDS_Shape plain = images.empty() ? TopoDS_Shape() : without_faces(trimmed, images, history);
       if (plain.IsNull()) {
+        shell_trace("cavity: the thin part " + named(faces) + " could not be taken away");
         return false;
       }
+      shell_trace("cavity: the thin part " + named(faces) + " taken away");
       steps.push_back(history);
       trimmed = plain;
       taken_away.insert(faces.begin(), faces.end());
@@ -974,6 +1000,8 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
       TopoDS_Compound seams;
       const std::vector<TopoDS_Shape> split_off =
           parts_at_roots(trimmed, left, images_in(trimmed, steps, removed), thickness, seams);
+      shell_trace("cavity: the offset failed; " + std::to_string(split_off.size()) +
+                  " thin parts to split off at their roots");
       if (!split_off.empty() && cut_away(split_off, seams)) {
         cavity = cavity_of(trimmed, steps, Depths());
       }
@@ -988,6 +1016,8 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
           taken.push_back(it.Current());
         }
       }
+      shell_trace("cavity: the offset failed; " + std::to_string(taken.size()) +
+                  " convex roundings tighter than the wall to take away");
       for (int round = 0; round < 3 && !taken.empty() && cavity.IsNull(); ++round) {
         if (round > 0 && !grow(trimmed, taken, removed_images)) {
           break;
@@ -995,6 +1025,7 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
         History history;
         const TopoDS_Shape plain = without_faces(trimmed, taken, history);
         if (plain.IsNull()) {
+          shell_trace("cavity: " + std::to_string(taken.size()) + " roundings could not be taken away");
           continue;
         }
         std::vector<History> through = steps;
@@ -1007,6 +1038,7 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
         trimmed = plain;
       }
       if (cavity.IsNull()) {
+        shell_trace("cavity: no inward offset could be built");
         return nullptr;
       }
     }
@@ -1155,6 +1187,7 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
     cut.SetNonDestructive(true);
     build(cut);
     if (!cut.IsDone() || cut.HasErrors()) {
+      shell_trace("cavity: the cavity could not be cut out of the body");
       return nullptr;
     }
     const TopoDS_Shape hollowed = cut.Shape();
@@ -1179,6 +1212,8 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
       }
       const double before = face_area(from.face(f));
       if (area < before - 1.0e-6 * std::max(1.0, before)) {
+        shell_trace("cavity: it cuts into kept face " + primary_name(from, f) + " (area " + std::to_string(area) +
+                    " of " + std::to_string(before) + " left)");
         return nullptr;
       }
     }
@@ -1215,7 +1250,9 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
     throw;
   } catch (const Standard_OutOfMemory&) {
     throw;
-  } catch (const Standard_Failure&) {
+  } catch (const Standard_Failure& failure) {
+    shell_trace(std::string("cavity: the geometry kernel raised ") + typeid(failure).name() + ": " +
+                failure.what());
     return nullptr;
   }
 }
@@ -1296,6 +1333,30 @@ void note_missing_walls(const std::string& feature, const Shape& body, const std
     char least[64];
     std::snprintf(least, sizeof least, ": down to %.2f mm (%.2f mm less)", thinnest, thickness - thinnest);
     result.add_note(amounts + faces_counted(thinner) + least, face_places(thinner));
+  }
+}
+
+bool shell_tracing() {
+  static const bool on = [] {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, "MITCAD_SHELL_TRACE") != 0 || value == nullptr) {
+      return false;
+    }
+    std::free(value);
+    return true;
+#else
+    return std::getenv("MITCAD_SHELL_TRACE") != nullptr;
+#endif
+  }();
+  return on;
+}
+
+void shell_trace(const std::string& line) {
+  if (shell_tracing()) {
+    std::fprintf(stderr, "shell trace: %s\n", line.c_str());
+    std::fflush(stderr);
   }
 }
 

@@ -6,8 +6,10 @@
 //! once per copy (at its first shown placement, turned onto the bed as a
 //! piece of its own), an occurrence's printed bodies as assembled (its
 //! shown placements, all of them when none is shown) once per copy, one
-//! piece each copy. The first plate also prints every placement on no
-//! plate (`Document::unplaced`), each a piece of its own. An item whose
+//! piece each copy. The first plate also prints every shown placement on
+//! no plate (`Document::unplaced`), each a piece of its own; a body with
+//! no shown placement and no item prints on no plate (mitcad#2222). An
+//! item whose
 //! body or occurrence is gone is left out with a warning. Each placement
 //! prints on one plate, its body's (`Document::plate_of_body`,
 //! mitcad#1310): an occurrence item leaves out the bodies under it that

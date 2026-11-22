@@ -248,6 +248,17 @@ pub const SLOTS_60X60: [(&str, f64); 8] = [
     ("y-", 15.0),
 ];
 
+/// The slots of a 20x40 (20 along X, mitcad#2201): two on each long side
+/// (x+, x-), 10 either side of its middle, one on each short side.
+pub const SLOTS_20X40: [(&str, f64); 6] = [
+    ("x+", -10.0),
+    ("x+", 10.0),
+    ("x-", -10.0),
+    ("x-", 10.0),
+    ("y+", 0.0),
+    ("y-", 0.0),
+];
+
 /// A guide rail 15 x 15, `L` long (1000 mm): the ends of a profile with no
 /// slots, its carriage's frame `rail` on its top and its face frame `base`
 /// on its bottom (z down, x along the rail).
@@ -538,6 +549,15 @@ impl TestLibrary {
                 "p60",
                 rev,
                 slotted(30.0, 60.0, 60.0, &SLOTS_60X60, "Profile 60x60 B8"),
+            );
+        }
+        // A 20x40 (mitcad#2201): two slots on each 40 mm side, one on each
+        // 20 mm side.
+        for rev in [V1, V2] {
+            add(
+                "p20x40",
+                rev,
+                slotted(20.0, 20.0, 40.0, &SLOTS_20X40, "Profile 20x40 B8"),
             );
         }
         // At V2 the 30 profile is 32 wide (another section).
@@ -1382,6 +1402,7 @@ impl LinkResolver for TestLibrary {
             supplier_url: Some("https://example.org/shop".to_owned()),
             build: part.build,
             rows: Default::default(),
+            non_printable: false,
         })
     }
 }

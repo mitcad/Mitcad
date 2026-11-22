@@ -57,14 +57,8 @@ the file's within 1e-3 mm; before, the chamfer failed.
 
 Upstream: new.
 
-Test: geometry/tests/port/p1000-chamfer-across-a-concave-crease.cpp
-(ctest geometry.port.1000): a prism's top of a plane and the extrusion of
-a straight B-spline meeting at a concave crease of 2 or 4 degrees, the
-chain of its edges with the front chamfered by 1: built, valid, the
-chamfer's triangle along the chain (without the patch's crease change: not
-built, the chamfer taken for a blend rolling on the crease). The boundary:
-no crease, as stock. The narrow-face and grown-face changes have no port
-test of their own (the design's body only).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1000.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 97a119c9..ec8985a5 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

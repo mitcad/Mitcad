@@ -1019,6 +1019,7 @@ mod tests {
             chain: Vec::new(),
             after: None,
             outline: false,
+            automatic: false,
         };
         let def: SketchDef = SketchDef {
             entities: vec![

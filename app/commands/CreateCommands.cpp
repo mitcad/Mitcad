@@ -27,6 +27,7 @@ void registerCreateCommands(CommandRegistry& registry, const CommandContext& con
   // the primitives,
   registry.add(boxCommand(context));
   registry.add(cylinderCommand(context));
+  registry.add(coneCommand(context)); // mitcad#2239
   registry.add(sphereCommand(context));
   registry.add(torusCommand(context));
   registry.add(coilCommand(context));
@@ -47,6 +48,9 @@ void registerCreateCommands(CommandRegistry& registry, const CommandContext& con
   registry.add(envelopeCommand(context));
   // Form (mitcad#1757): a section of its own before the Machine Elements.
   registry.add(formCommand(context));
+  // Boundary Fill (mitcad#2149): the space solids, surfaces and planes
+  // close off, filled; its places are the layout's (after Thicken).
+  registry.add(boundaryFillCommand(context));
 }
 
 } // namespace mitcad

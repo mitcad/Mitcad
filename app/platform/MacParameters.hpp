@@ -38,6 +38,11 @@ class QTreeWidgetItem;
 // selection colours while giving the parameter sheet the system's spacing.
 namespace mitcad::mac {
 
+// The empty row at the end of the Parameters window's User Parameters
+// (mitcad#2202), in its Name cell: a row to type a new parameter in, not
+// a section heading (whose rows have no parameter's name either).
+inline constexpr int NewParameterRowRole = Qt::UserRole + 73; // after the groups' roles (mitcad#2180)
+
 #ifdef MITCAD_MAC_UI
 namespace parameters {
 
@@ -49,7 +54,8 @@ constexpr int kRefusedRole = NativeRefusedRole;
 // Column delegates override the table's generic delegate. Both must apply
 // the same semantic cell state before either native or numeric painting.
 inline void styleParameterCell(QStyleOptionViewItem* option, const QModelIndex& index) {
-  if (index.siblingAtColumn(0).data(Qt::UserRole).toString().isEmpty()) {
+  if (index.siblingAtColumn(0).data(Qt::UserRole).toString().isEmpty() &&
+      !index.siblingAtColumn(0).data(NewParameterRowRole).toBool()) {
     option->font.setWeight(QFont::DemiBold);
   }
   if (index.data(parameters::kRefusedRole).toBool() && !option->state.testFlag(QStyle::State_Selected)) {
@@ -86,8 +92,9 @@ inline void styleParameterForm(QDialog* dialog, QFormLayout* form) {
   dialog->setMinimumWidth(420);
 }
 
-inline void styleParametersDialog(QDialog* dialog, QTreeWidget* table, QLineEdit* filter,
-                                 QPushButton* add, QPushButton* remove, QPushButton* ok) {
+// Parameters are added in the table's empty row and deleted by their rows'
+// buttons (mitcad#2202): the window has no Add and Delete buttons.
+inline void styleParametersDialog(QDialog* dialog, QTreeWidget* table, QLineEdit* filter, QPushButton* ok) {
   styleDialog(dialog);
   dialog->resize(1240, 590); // with the limits' columns (mitcad#665) and the tabs (mitcad#667)
   dialog->setMinimumSize(640, 360);
@@ -96,11 +103,7 @@ inline void styleParametersDialog(QDialog* dialog, QTreeWidget* table, QLineEdit
   filter->setMinimumWidth(180);
   filter->setMaximumWidth(260);
   styleSearchField(filter);
-  styleListButtons(add, remove);
-  for (QPushButton* button : {add, remove, ok}) {
-    button->setMinimumHeight(28);
-    button->setIconSize(QSize(14, 14));
-  }
+  ok->setMinimumHeight(28);
   table->setItemDelegate(new parameters::RowDelegate(table));
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setAllColumnsShowFocus(true);
@@ -121,7 +124,7 @@ inline bool styleRefusedParameter(QTreeWidgetItem* row, int column) {
 
 inline void styleParameterCell(QStyleOptionViewItem*, const QModelIndex&) {}
 inline void styleParameterForm(QDialog*, QFormLayout*) {}
-inline void styleParametersDialog(QDialog*, QTreeWidget*, QLineEdit*, QPushButton*, QPushButton*, QPushButton*) {}
+inline void styleParametersDialog(QDialog*, QTreeWidget*, QLineEdit*, QPushButton*) {}
 inline bool styleRefusedParameter(QTreeWidgetItem*, int) { return false; }
 
 #endif

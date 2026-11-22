@@ -370,6 +370,7 @@ impl LinkResolver for Library {
             supplier_url: None,
             build: None,
             rows: BTreeMap::new(),
+            non_printable: false,
         })
     }
 }

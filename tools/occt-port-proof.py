@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: MIT
 """Before/after proof of the OCCT port patches' regression tests (mitcad#1986).
 
-Each patch in third_party/vcpkg-ports/opencascade/ names its regression test
-in the header's `Test:` paragraph (ctest names such as geometry.port.0011 or
-geometry.suite.fillet_overflow). This tool shows, for each patch given, that
-the named ctests pass with the whole port and fail with that one patch
-reverted:
+Each patch in third_party/vcpkg-ports/opencascade/ has its regression test
+named in its section of third_party/vcpkg-ports/docs/opencascade-patch-tests.md
+(`## <number>`, then a `Test:` paragraph naming ctests such as
+geometry.port.0011 or geometry.suite.fillet_overflow); the patch's header
+only points there, so that a test note or a proof result does not change
+the port and rebuild OCCT (mitcad#2133). This tool shows, for each patch
+given, that the named ctests pass with the whole port and fail with that
+one patch reverted:
 
   1. OCCT 8.0.1 with every port patch as one commit each, in portfile order
      (tags p-<number>, tip), in <work>/history.
@@ -30,13 +33,21 @@ patch using a function or variable it added is reverted too. A group can
 also be given as 0130+0140.
 
 A failing ctest counts for the patch when the failure lies in a test
-function the Test paragraph names (test_...); where the output does not
+function the patch's Test paragraph names (test_...); where the output does not
 place the failure, each named function runs alone (MITCAD_TEST_ONLY).
 
     tools/occt-port-proof.py [options] NNNN [NNNN+MMMM ...]
-    tools/occt-port-proof.py --unproven        # headers that say "still to be shown"
+    tools/occt-port-proof.py --unproven        # sections that say "still to be shown"
     tools/occt-port-proof.py --all             # every patch naming a ctest
-    tools/occt-port-proof.py --update-headers  # rewrite the headers from the last results
+    tools/occt-port-proof.py --list            # the patches and their named ctests only
+    tools/occt-port-proof.py --update-tests [NNNN ...]
+                                               # rewrite the proof sentences from the last
+                                               # results (all, or the patches given)
+
+--update-tests (also spelled --update-headers, its name before mitcad#2133)
+writes the test document and the table, never a .patch file. --tests-doc
+reads and writes another copy of the test document. A patch header that has
+a `Test:` paragraph again is reported: its test belongs in the document.
 
 In the chain (--in-chain, mitcad#2121) a patch is shown at its own place
 instead of at the tip: OCCT with the patches before it (*before*) and with
@@ -45,10 +56,16 @@ state's headers and its named ctests run against each state's libraries.
 No later patch is reverted, so a patch entangled with later ones at the
 tip is shown here alone. Where the MitCad code the tests need (the
 geometry library, the test's own source) uses a later patch's API (a
-function, a member, a header it adds), that patch is cherry-picked onto
-both states (*carried*, at most --max-carry, 20, with the patches between whose lines a carried patch's
-hunks build on where it does not cherry-pick alone); where the patch itself adds
-it, the test does not build without the patch. A suite part whose
+function, a member, a header it adds), that patch's declarations (its
+changes to the headers alone) are applied to both states (*carried*, at
+most --max-carry, 20); a function only declared there is bound, in the
+test's executable, to a stub that says so if it is called (the patch
+defining it is then carried whole, where it applies there; else the run
+shows nothing). Where the declarations do not apply or OCCT does not build
+with them, the patch is cherry-picked whole, with the patches between
+whose lines its hunks build on where it does not cherry-pick alone;
+where the patch itself adds the API, the test does not build without the
+patch. A suite part whose
 executable has other parts that do not build at that state is linked
 without them. The --jobs workers (trees <work>/c<i>, MitCad builds
 <repo>/build/occt-chain-m<i>) each take a run of consecutive patches and
@@ -62,12 +79,13 @@ patches again).
     tools/occt-port-proof.py --in-chain --table-verdict "not shown" --table-verdict "fails with"
 
 (the second takes the patches whose verdict at the tip in the table starts
-so). The table gets three columns for the chain, and --update-headers
-writes the chain's result into the headers of the patches the tip did not
-prove.
+so). The table gets three columns for the chain, and --update-tests
+writes the chain's result into the test document's sections of the
+patches the tip did not prove.
 
 Run it in a login shell (corpus variables) with the MitCad build of the
-preset configured (cmake --preset dev). Heavy steps run through --wrap, e.g.
+preset configured (cmake --preset dev); --list without that build lists
+every ctest name a paragraph mentions, unchecked. Heavy steps run through --wrap, e.g.
 --wrap "bash /path/memjob.sh 20" to give each worker its own memory-capped
 scope. Nothing is deleted: work trees are reused on the next run. The
 table keeps the rows of an earlier table whose results are no longer in
@@ -153,23 +171,62 @@ def header(patch_file: str) -> str:
     return text[: m.start()] if m else text
 
 
-def test_paragraphs(hdr: str) -> list[tuple[int, int]]:
-    """The spans of the header's Test paragraphs (from 'Test' to a blank line)."""
+def test_paragraphs(text: str) -> list[tuple[int, int]]:
+    """The spans of the text's Test paragraphs (from 'Test' to a blank line)."""
     spans = []
-    for m in re.finditer(r"^Tests?:", hdr, re.M):
-        end = hdr.find("\n\n", m.start())
-        spans.append((m.start(), len(hdr) if end < 0 else end))
+    for m in re.finditer(r"^Tests?:", text, re.M):
+        end = text.find("\n\n", m.start())
+        spans.append((m.start(), len(text) if end < 0 else end))
     return spans
 
 
-def named_ctests(hdr: str, known: set[str]) -> list[str]:
-    """The ctests a header's Test paragraphs name, in order, known names only.
+# ---------------------------------------------------------------- the test document
+
+# The patches' tests and proof sentences live outside the port folder, whose
+# every file vcpkg hashes (mitcad#2133): one section per patch, headed
+# "## <number>", holding its Test paragraph.
+TESTS_DOC = PORT.parent / "docs" / "opencascade-patch-tests.md"
+SECTION = re.compile(r"^## (\d{4})[ \t]*\n(.*?)(?=^## |\Z)", re.M | re.S)
+_doc: dict = {}
+
+
+def tests_doc() -> Path:
+    return Path(_doc.get("path", TESTS_DOC))
+
+
+def set_tests_doc(path: str) -> None:
+    _doc.clear()
+    _doc["path"] = path
+
+
+def test_sections() -> dict[str, str]:
+    """Patch number -> the text of its section in the test document."""
+    if "sections" not in _doc:
+        p = tests_doc()
+        text = p.read_text(encoding="utf-8") if p.exists() else ""
+        _doc["sections"] = {m.group(1): m.group(2) for m in SECTION.finditer(text)}
+    return _doc["sections"]
+
+
+def tests_of(n: str) -> str:
+    """The section of patch `n` in the test document ('' without one)."""
+    return test_sections().get(n, "")
+
+
+def stray_test_paragraphs(order: list[str]) -> list[str]:
+    """The patches whose header has a Test paragraph (it belongs in the document)."""
+    return [number(f) for f in order if test_paragraphs(header(f))]
+
+
+def named_ctests(text: str, known: set[str] | None) -> list[str]:
+    """The ctests a section's Test paragraphs name, in order, known names only
+    (every name with `known` None).
 
     '(ctests geometry.a.b, c and d)' names geometry.a.b, geometry.a.c and
     geometry.a.d."""
     names: list[str] = []
-    for start, end in test_paragraphs(hdr):
-        para = re.sub(r"\s+", " ", hdr[start:end])
+    for start, end in test_paragraphs(text):
+        para = re.sub(r"\s+", " ", text[start:end])
         found = [m.group(1) for m in CTEST_NAME.finditer(para)]
         for group in re.findall(r"\(ctests?\s+([^)]*)\)", para):
             prefix = ""
@@ -183,13 +240,13 @@ def named_ctests(hdr: str, known: set[str]) -> list[str]:
                     found.append(prefix + item)
         for name in found:
             name = name.rstrip(".")
-            if name in known and name not in names:
+            if (known is None or name in known) and name not in names:
                 names.append(name)
     return names
 
 
-def unproven(hdr: str) -> bool:
-    return re.search(r"still\s+to\s+be\s+shown", hdr) is not None
+def unproven(text: str) -> bool:
+    return re.search(r"still\s+to\s+be\s+shown", text) is not None
 
 
 # ---------------------------------------------------------------- OCCT trees
@@ -210,10 +267,15 @@ def find_tarball(given: str | None) -> Path:
 
 
 def port_stamp(order: list[str]) -> str:
+    """The port's code: the patches' bodies, not their headers, so that an
+    edited header keeps the history and the with-runs (mitcad#2121: a header
+    rewrite between two runs dropped the earlier with-runs, and their
+    patches' rows read "does not pass with the patch"; the proof sentences
+    are written to the test document since mitcad#2133)."""
     h = hashlib.sha256()
     for f in order:
         h.update(f.encode())
-        h.update((PORT / f).read_bytes())
+        h.update((PORT / f).read_text(encoding="utf-8", errors="replace")[len(header(f)):].encode())
     return h.hexdigest()[:16]
 
 
@@ -702,7 +764,10 @@ def worker(args, wid: int) -> None:
         group = item.split("+")
         names = plan["tests"][item]
         with_runs = plan["with"]
-        rec = {"item": item, "tests": names, "reverted": [], "state": "", "runs": {}}
+        # Each result keeps the with-runs of its tests: the table reads them
+        # from there, not from the last run's plan, which names only its own.
+        rec = {"item": item, "tests": names, "reverted": [], "state": "", "runs": {},
+               "with": {n: with_runs[n] for n in names if n in with_runs}}
         t0 = time.time()
         seq = None
         try:
@@ -800,10 +865,10 @@ def named_functions(item: str) -> set[str]:
         names: set[str] = set()
         for n in item.split("+"):
             if n in files:
-                hdr = header(files[n])
-                for start, end in test_paragraphs(hdr):
+                text = tests_of(n)
+                for start, end in test_paragraphs(text):
                     # A file name (test_sweeps.cpp) is not a test function.
-                    names |= set(re.findall(r"\b(test_\w+)\b(?!\.\w)", re.sub(r"\s+", " ", hdr[start:end])))
+                    names |= set(re.findall(r"\b(test_\w+)\b(?!\.\w)", re.sub(r"\s+", " ", text[start:end])))
         _functions_cache[item] = names
     return _functions_cache[item]
 
@@ -886,8 +951,17 @@ def failing_tests(log: str) -> tuple[set[str], bool]:
         found |= tests
         unplaced |= not tests
     for m in re.finditer(r"^(.+?): unexpected error", text, re.M):
-        # A guarded() label: the test functions its call runs.
-        found |= guard_labels().get(m.group(1), {m.group(1)})
+        # A guarded() label: the test functions its call runs. The runner
+        # writes it to stderr, which can land in the middle of a stdout line
+        # ("... off the path 3.07e-stirrup: unexpected error", mitcad#2121):
+        # then the longest known label the text before it ends with.
+        before = m.group(1)
+        labels = guard_labels()
+        if before not in labels:
+            ends = [label for label in labels if before.endswith(label)]
+            if ends:
+                before = max(ends, key=len)
+        found |= labels.get(before, {before})
     if not found:
         unplaced = True
     return found, unplaced
@@ -912,14 +986,17 @@ def verdict(rec: dict, with_runs: dict) -> tuple[str, dict]:
         if len([n for n in rec.get("reverted", []) if n not in rec["item"].split("+")]) > SINGLE_OUT:
             return "not shown: the test does not build with the later patches reverted", per
         return "fails without the patch (the test does not build)", per
-    fails = passes = bad = 0
+    fails = passes = bad = unrun = 0
     elsewhere: set[str] = set()
     named = named_functions(rec["item"])
+    with_runs = {**with_runs, **rec.get("with", {})}
     for n in rec["tests"]:
         w = with_runs.get(n, {}).get("status")
         wo = rec["runs"].get(n, {}).get("status")
         per[n] = wo or "-"
-        if w != "passed":
+        if w is None:
+            unrun += 1
+        elif w != "passed":
             bad += 1
         elif wo in ("failed", "timeout") and rec["runs"][n].get("only"):
             alone = {}
@@ -958,6 +1035,8 @@ def verdict(rec: dict, with_runs: dict) -> tuple[str, dict]:
         return "passes without the patch: the named test does not prove it (its ctest fails in other tests)", per
     if bad and not passes:
         return "not shown: the test does not pass with the patch", per
+    if unrun and not passes:
+        return "not shown: the test was not run with the patch", per
     if passes:
         return "passes without the patch: the test does not prove it", per
     return "not shown: no test ran", per
@@ -1019,6 +1098,7 @@ def table_entry(item: str, rec: dict, with_runs: dict) -> dict:
         revd += "; kept " + ", ".join(sorted({ln.split("<")[1].rstrip(">") for _, ln in rec["kept_includes"]}))
     tip = {}
     tests = rec["tests"] or ["-"]
+    with_runs = {**with_runs, **rec.get("with", {})}
     for n in tests:
         wo = rec["runs"].get(n, {})
         wotxt = per.get(n, "-")
@@ -1033,7 +1113,7 @@ def chain_entry(rec: dict) -> dict:
     cv, per = chain_verdict(rec)
     place = f"after {rec['base']}"
     if rec.get("carried"):
-        place += "; carried " + ", ".join(rec["carried"])
+        place += "; carried " + carried_text(rec["carried"])
     if rec.get("needs"):
         place += f"; needs {len(rec['needs'])} later"
     return {"place": place, "cverdict": cv, "tests": list(rec["tests"] or ["-"]),
@@ -1058,6 +1138,13 @@ def table_entries(args, plan: dict, results: dict) -> dict:
         # An earlier row stays only for the tip's result on it.
         kept = [t for t in e["tests"] if t in new["tests"] or e["tip"].get(t, ("-", "-")) != ("-", "-")]
         e["tests"] = kept + [t for t in new["tests"] if t not in kept]
+    # A patch whose section in the test document says "Test: none,
+    # because ..." has no test to run: an earlier row of its test is no
+    # longer its proof (mitcad#2121, the section since mitcad#2133).
+    for f in patch_order():
+        if re.search(r"^Tests?:\s*none\b", tests_of(number(f)), re.M):
+            entries[number(f)] = {**json.loads(json.dumps(blank)), "verdict": "Test: none (its section says why)",
+                                  "tests": ["-"]}
     return entries
 
 
@@ -1073,6 +1160,8 @@ def write_table(args, plan: dict, results: dict) -> Path:
         v, cv = e["verdict"], e["cverdict"]
         if v not in ("", "-"):
             key = re.sub(r"\d+ later", "several later", v.split(":")[0])
+            if v.startswith("Test: none"):
+                key = "Test: none"
             counts[key] = counts.get(key, 0) + 1
         if cv not in ("", "-"):
             key = cv.split(":")[0]
@@ -1083,6 +1172,11 @@ def write_table(args, plan: dict, results: dict) -> Path:
             first = i == 0
             rows.append(f"| {item if first else ''} | {e['revd'] if first else ''} | `{n}` | {wtxt} | {wotxt} | "
                         f"{v if first else ''} | {e['place'] if first else ''} | {ctxt} | {cv if first else ''} |")
+    tested_items = [i for i, e in entries.items() if not e["verdict"].startswith("Test: none")]
+    proven_items = [i for i in tested_items
+                    if entries[i]["verdict"].startswith("fails without") or entries[i]["cverdict"].startswith("fails")]
+    tested, proven = len(tested_items), len(proven_items)
+    unproven_items = sorted(set(tested_items) - set(proven_items), key=lambda s: s.split("+")[0])
     date = plan.get("date") or (old_date.group(1) if old_date else datetime.date.today().isoformat())
     lines = [
         "<!-- SPDX-License-Identifier: MIT -->",
@@ -1094,8 +1188,9 @@ def write_table(args, plan: dict, results: dict) -> Path:
         "with the later patches that change the same lines, named in the second",
         "column; an `#include` it added that later patches rely on is kept",
         "(*kept*). Only the changed OCCT libraries, and the MitCad tests that",
-        "include a changed OCCT header, are rebuilt; the ctests the header's",
-        "`Test:` paragraph names run against them. A failure counts for the",
+        "include a changed OCCT header, are rebuilt; the ctests the patch's",
+        "`Test:` paragraph in [opencascade-patch-tests.md](opencascade-patch-tests.md)",
+        "names run against them. A failure counts for the",
         "patch when it lies in a test function the paragraph names (run alone",
         "where the output does not place it); with more than "
         f"{SINGLE_OUT} later patches",
@@ -1105,14 +1200,21 @@ def write_table(args, plan: dict, results: dict) -> Path:
         "(`--in-chain`, mitcad#2121): OCCT with the patches before it and with",
         "the patches up to it, no later patch reverted, the MitCad tests built",
         "against each state's headers (*before / with it*). Where the MitCad",
-        "code the tests need uses an API a later patch adds, that patch is",
-        "cherry-picked onto both states (*carried*); where the patch itself adds",
-        "it, the test does not build without the patch. A suite part is linked",
-        "without the parts of its executable that do not build at that state.",
+        "code the tests need uses an API a later patch adds, that patch's",
+        "declarations (its changes to the headers) are applied to both states",
+        "(*carried … (its declarations)*), a function only declared there bound",
+        "to a stub that ends the run if it is called; where they do not apply or",
+        "OCCT does not build with them, the patch is cherry-picked whole",
+        "(*carried*). Where the patch itself adds the API, the test does not",
+        "build without the patch. A suite part is linked without the parts of",
+        "its executable that do not build at that state.",
         "",
         "Verdicts: " + "; ".join(f"{k}: {v}" for k, v in sorted(counts.items())) + ".",
         "",
         "In-chain verdicts: " + ("; ".join(f"{k}: {v}" for k, v in sorted(ccounts.items())) or "none yet") + ".",
+        "",
+        f"Shown to fail without the patch at the tip or at its place in the chain: {proven} of the "
+        f"{tested} patches with a test (the others: {', '.join(unproven_items) or 'none'}).",
         "",
         "| Patch | Reverted | Test | With | Without | Verdict | In chain | Before / with it | In-chain verdict |",
         "|---|---|---|---|---|---|---|---|---|",
@@ -1123,15 +1225,16 @@ def write_table(args, plan: dict, results: dict) -> Path:
     return table
 
 
-# ---------------------------------------------------------------- header updates
+# ---------------------------------------------------------------- test document updates
 
 
 # Up to this many later patches reverted with one, a failure still counts as
-# the patch's own; with more, the header says the test does not single it out.
+# the patch's own; with more, the sentence says the test does not single it out.
 SINGLE_OUT = 5
 
-# The header's sentence on the before/after proof: as the port's headers
-# wrote it before, or as this tool wrote it (so that a later run rewrites it).
+# The Test paragraph's sentence on the before/after proof: as the port's
+# headers wrote it before mitcad#2133 moved the paragraphs into the test
+# document, or as this tool wrote it (so that a later run rewrites it).
 SENTENCE = re.compile(
     r"(?:A new test: )?[Ii]ts\s+failure\s+without\s+the\s+patch(?P<mid>.*?)\s+(?:is|was)\s+still\s+to\s+be\s+shown\s+in"
     r"\s+the\s+port's\s+before/after\s+run(?:\s+\(mitcad#1986\))?\."
@@ -1139,12 +1242,19 @@ SENTENCE = re.compile(
     r"\s+to\s+be\s+shown:)[^.]*?(?:\.[^.\s][^.]*?)*?tools/occt-port-proof\.py[^)]*\)\.", re.S)
 
 
-def update_headers(args, plan: dict, results: dict) -> list[str]:
+def update_tests(args, plan: dict, results: dict) -> list[str]:
+    """Rewrites the proof sentences of the results' patches (of those given,
+    where patches are given) in the test document; no .patch file changes."""
     date = plan.get("date", datetime.date.today().isoformat())
     chain = load_chain_results(Path(args.work))
     entries = table_entries(args, plan, results)
+    wanted = {n for p in args.patches for n in p.split("+")}
+    doc = tests_doc()
+    text = doc.read_text(encoding="utf-8")
     changed = []
     for item in sorted(set(results) | set(chain)):
+        if wanted and not wanted & set(item.split("+")):
+            continue
         new = tip_sentence(item, results[item], plan, date) if item in results else None
         # The chain's result where the tip did not prove the patch.
         tip_v = entries.get(item, {}).get("verdict", "-")
@@ -1153,16 +1263,15 @@ def update_headers(args, plan: dict, results: dict) -> list[str]:
         if new is None:
             continue
         for n in item.split("+"):
-            f = next((p for p in plan["order"] if number(p) == n), None)
-            if f is None:
+            sec_m = next((m for m in SECTION.finditer(text) if m.group(1) == n), None)
+            if sec_m is None:
+                log(f"{n}: no section in {doc}: its proof sentence is not written")
                 continue
-            path = PORT / f
-            text = path.read_text(encoding="utf-8")
-            hdr = header(f)
-            spans = test_paragraphs(hdr)
+            sec = sec_m.group(2)
+            spans = test_paragraphs(sec)
             done = False
             for start, end in reversed(spans):
-                para = hdr[start:end]
+                para = sec[start:end]
                 m = SENTENCE.search(para)
                 if not m:
                     continue
@@ -1174,23 +1283,30 @@ def update_headers(args, plan: dict, results: dict) -> list[str]:
                 rest = body[line:m.start()] + new + body[m.end():]
                 flat = re.sub(r"\s+", " ", rest).strip()
                 wrapped = "\n".join(textwrap.wrap(flat, width=74, break_long_words=False, break_on_hyphens=False))
-                hdr = hdr[:start] + para[:line] + wrapped + tail + hdr[end:]
+                sec = sec[:start] + para[:line] + wrapped + tail + sec[end:]
                 done = True
                 break
             if done:
-                path.write_text(hdr + text[len(header(f)):], encoding="utf-8")
+                text = text[:sec_m.start(2)] + sec + text[sec_m.end(2):]
                 changed.append(n)
+    if changed:
+        doc.write_text(text, encoding="utf-8")
+        set_tests_doc(str(doc))
     return changed
 
 
 def chain_sentence(rec: dict) -> str | None:
-    """The header's sentence for a decisive result in the chain, else None."""
+    """The Test paragraph's sentence for a decisive result in the chain, else None."""
     v, _ = chain_verdict(rec)
     date = rec.get("date", datetime.date.today().isoformat())
     how = f"shown {date} by {TOOL} --in-chain"
     if rec.get("carried"):
+        # No parentheses inside: the sentence ends at its first ")." (SENTENCE).
+        whole = [p for p in rec["carried"] if not p.startswith(API_ONLY)]
+        decl = [pick_number(p) for p in rec["carried"] if p.startswith(API_ONLY)]
+        parts = ([", ".join(whole)] if whole else []) + ([f"the declarations of {', '.join(decl)}"] if decl else [])
         verb = "adds" if len(rec["carried"]) == 1 else "add"
-        how += f", with {', '.join(rec['carried'])} carried, which {verb} API the MitCad code uses"
+        how += f", with {' and '.join(parts)} carried, which {verb} API the MitCad code uses"
     if v.startswith("fails without the patch at its place (the test does not build"):
         return (f"It fails without the patch at its place in the chain: with the patches before it, the "
                 f"test does not build without the API the patch adds ({how}).")
@@ -1206,7 +1322,7 @@ def chain_sentence(rec: dict) -> str | None:
 
 
 def tip_sentence(item: str, rec: dict, plan: dict, date: str) -> str | None:
-    """The header's sentence for a result at the tip, or None to leave it."""
+    """The Test paragraph's sentence for a result at the tip, or None to leave it."""
     v, _ = verdict(rec, plan["with"])
     others = [n for n in rec.get("reverted", []) if n not in item.split("+")]
     how = f"shown {date} by {TOOL}"
@@ -1250,19 +1366,21 @@ def tip_sentence(item: str, rec: dict, plan: dict, date: str) -> str | None:
 
 # Raised when the way a state is built or judged changes, so that cached
 # states and results of an older tool are not reused.
-CHAIN_VERSION = 4
+CHAIN_VERSION = 16
 HEADER_GLOBS = ["*.hxx", "*.lxx", "*.gxx", "*.h"]
 # Words an error message quotes that are no API a patch adds.
 CPP_WORDS = {"const", "class", "struct", "int", "double", "bool", "void", "auto", "char", "unsigned", "long",
              "float", "enum", "typename", "operator", "std", "this", "nullptr", "return", "static", "virtual"}
 # The objects of a suite executable that only dispatch to its parts.
 DISPATCHERS = re.compile(r"(?:tests/test_main|tests/port/main)\.cpp")
+# What the stub bound to a missing function writes when it is called.
+STUB_CALLED = "occt-port-proof: a function no patch at this state defines was called"
 
 
 def chain_stamp(order: list[str]) -> str:
     """The port's code and the MitCad sources the chain's cached builds and
-    runs depend on: by content, so that rewritten patch headers
-    (--update-headers) or other commits keep them."""
+    runs depend on: by content, so that edited patch headers or other
+    commits keep them."""
     h = hashlib.sha256(f"chain {CHAIN_VERSION}".encode())
     for f in order:
         h.update(f.encode())
@@ -1273,12 +1391,33 @@ def chain_stamp(order: list[str]) -> str:
     return h.hexdigest()[:16]
 
 
+# A carried patch of which only the changes to the headers are applied (its
+# declarations: an enumerator, a function, a member), "h:<number>"; the rest
+# of it stays out of the state (mitcad#2121).
+API_ONLY = "h:"
+
+
+def pick_number(pick: str) -> str:
+    return pick.removeprefix(API_ONLY)
+
+
+def pick_order(nums: list[str]):
+    return lambda pick: (nums.index(pick_number(pick)), pick)
+
+
+def carried_text(picks: list[str]) -> str:
+    """The carried patches as the table and the test document name them."""
+    return ", ".join(pick_number(p) + (" (its declarations)" if p.startswith(API_ONLY) else "") for p in picks)
+
+
 def chain_state(nums: list[str], base_idx: int, picks) -> tuple[str, list[str]]:
     """A state of the chain: the history's commit after nums[base_idx] and the
     later patches cherry-picked onto it, in order; picks that directly follow
-    the base are folded into it, so that each state has one name."""
-    picks = sorted(set(picks), key=nums.index)
-    while picks and nums.index(picks[0]) == base_idx + 1:
+    the base are folded into it, so that each state has one name. A patch
+    carried whole needs no carry of its declarations."""
+    full = {p for p in picks if not p.startswith(API_ONLY)}
+    picks = sorted({p for p in picks if pick_number(p) not in full or p in full}, key=pick_order(nums))
+    while picks and not picks[0].startswith(API_ONLY) and nums.index(picks[0]) == base_idx + 1:
         base_idx += 1
         picks.pop(0)
     return (f"p-{nums[base_idx]}" if base_idx >= 0 else "base"), picks
@@ -1397,6 +1536,32 @@ def link_command(build: Path, target: str) -> list[str] | None:
     return None
 
 
+def occt_undefined(libdir: Path, binaries: list[str] = ()) -> list[str]:
+    """The symbols OCCT's libraries in libdir (and the given binaries) need
+    and neither they nor the system libraries they load define."""
+    libs = sorted(str(f) for f in libdir.glob("libTK*.so"))
+    if not libs:
+        return []
+    need: set[str] = set()
+    have: set[str] = set()
+    for lib in [*libs, *binaries]:
+        need |= set(run(["nm", "-D", "--undefined-only", "--format=just-symbols", lib]).stdout.split())
+        have |= set(run(["nm", "-D", "--defined-only", "--format=just-symbols", lib]).stdout.split())
+    # The other libraries they load: the system's, and the installed
+    # OCCT libraries this tree does not build (Visualization, DataExchange);
+    # the ones it builds are taken from libdir only.
+    ours = {Path(f).name.split(".so")[0] for f in libs}
+    system = set()
+    for ln in run(["ldd", *libs, *binaries], check=False).stdout.splitlines():
+        m = re.search(r"(\S+) => (/\S+)", ln)
+        if m and m.group(1).split(".so")[0] not in ours:
+            system.add(m.group(2))
+    for lib in sorted(system):
+        have |= set(run(["nm", "-D", "--defined-only", "--format=just-symbols", lib], check=False).stdout.split())
+    # Weak symbols and versioned names (name@VERSION) are the system's.
+    return sorted(n.split("@")[0] for n in need - have if n.startswith("_Z") and "@" not in n)
+
+
 def undefined_only_in_dispatchers(text: str) -> bool:
     """Whether a link's undefined references all come from the objects that
     only dispatch to a suite's parts."""
@@ -1443,20 +1608,29 @@ def chain_verdict(rec: dict) -> tuple[str, dict]:
     if st != "ran":
         return f"not shown: {st}", per
     named = named_functions(rec["item"])
-    fails = api = passes = elsewhere = no_pass = no_build = 0
+    fails = api = passes = elsewhere = no_pass = no_build = stub = 0
     for n in rec["tests"]:
         w = rec["runs"]["with"].get(n, {})
         wo = rec["runs"]["without"].get(n, {})
         ws, wos = w.get("status", "-"), wo.get("status", "-")
         wtxt = ws + (f" ({w['why']})" if w.get("why") else "")
         alone = {fn: o for fn, o in w.get("only", {}).items() if fn in named}
-        if ws in ("failed", "timeout") and named and named <= set(alone):
+        if ws in ("failed", "timeout", "stub called") and named and named <= set(alone):
             # The ctest fails with the patch in tests other than the named ones.
             if all(o["status"] == "passed" for o in alone.values()):
                 ws = "passed"
                 wtxt = "passed alone (" + ", ".join(sorted(alone)) + ")"
+        alone_wo = {fn: o for fn, o in wo.get("only", {}).items() if fn in named}
+        if wos == "stub called" and named and named <= set(alone_wo):
+            # Another test of the ctest called a stub: the named ones alone decide.
+            if any(o["status"] in ("failed", "timeout") for o in alone_wo.values()):
+                wos = "failed"
+            elif all(o["status"] == "passed" for o in alone_wo.values()):
+                wos = "passed"
         wotxt = wos + (f" ({wo['why']})" if wo.get("why") and wos != "failed" else "")
-        if ws == "not built":
+        if "stub called" in (ws, wos):
+            stub += 1
+        elif ws == "not built":
             no_build += 1
         elif ws != "passed":
             no_pass += 1
@@ -1481,6 +1655,9 @@ def chain_verdict(rec: dict) -> tuple[str, dict]:
                 "(its ctest fails in other tests)"), per
     if passes:
         return "passes without the patch at its place: the test does not prove it", per
+    if stub:
+        return ("not shown: the test calls a function that a later patch, carried as its declarations "
+                "only, defines"), per
     if no_pass:
         return "not shown: the test does not pass at its place", per
     if no_build:
@@ -1569,6 +1746,8 @@ class ChainWorker:
         self.info: dict = {}
         self.added: dict[str, str] = {}
         self.conflict_files: list[str] = []
+        self.api_picks: list[str] = []
+        self.state_numbers: set[str] = set()
 
     # -- states
 
@@ -1578,6 +1757,12 @@ class ChainWorker:
         git(self.tree, "checkout", "-q", "-f", "--detach", tag)
         git(self.tree, "reset", "-q", "--hard", tag)
         for n in picks:
+            if n.startswith(API_ONLY):
+                if not self.apply_declarations(pick_number(n)):
+                    git(self.tree, "reset", "-q", "--hard", tag)
+                    self.conflict_files = []
+                    return n
+                continue
             p = git(self.tree, "-c", "user.name=port", "-c", "user.email=port@localhost", "cherry-pick",
                     "--allow-empty", "--keep-redundant-commits", f"p-{n}", check=False)
             if p.returncode != 0:
@@ -1588,6 +1773,58 @@ class ChainWorker:
                 return n
         return None
 
+    def apply_declarations(self, n: str) -> bool:
+        """Applies a later patch's changes to the headers alone (three-way) and
+        commits them; False where they do not apply at this state."""
+        diff = git(self.tree, "diff", f"p-{n}~1", f"p-{n}", "--", *HEADER_GLOBS).stdout
+        if diff.strip():
+            f = self.wdir / "declarations.diff"
+            f.write_text(diff)
+            if git(self.tree, "apply", "-3", "--whitespace=nowarn", f, check=False).returncode != 0:
+                # Declarations conflict where the patches between wrote the
+                # lines beside them: each conflict keeps this state's lines and
+                # adds the patch's added lines it lacks (OCCT's build then
+                # shows whether that holds).
+                added = {ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")}
+                conflicted = git(self.tree, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+                if not conflicted:
+                    return False
+                for path in conflicted:
+                    if not self.union(self.tree / path, added):
+                        return False
+                    git(self.tree, "add", path)
+        git(self.tree, "add", "-A")
+        git(self.tree, "-c", "user.name=port", "-c", "user.email=port@localhost", "commit", "-q", "--allow-empty",
+            "-m", f"declarations of {n}")
+        return True
+
+    @staticmethod
+    def union(path: Path, added: set[str]) -> bool:
+        """Resolves a file's conflicts (merge style) as this state's side plus
+        the other side's lines that the patch adds and this side lacks."""
+        out: list[str] = []
+        ours: list[str] = []
+        theirs: list[str] = []
+        where = ""
+        for ln in path.read_text(encoding="utf-8", errors="replace").split("\n"):
+            if ln.startswith("<<<<<<< "):
+                where, ours, theirs = "ours", [], []
+            elif ln == "=======" and where == "ours":
+                where = "theirs"
+            elif ln.startswith(">>>>>>> ") and where == "theirs":
+                out += ours + [t for t in theirs if t in added and t not in ours]
+                where = ""
+            elif where == "ours":
+                ours.append(ln)
+            elif where == "theirs":
+                theirs.append(ln)
+            else:
+                out.append(ln)
+        if where:
+            return False
+        path.write_text("\n".join(out), encoding="utf-8")
+        return True
+
     def build(self, tag: str, picks: list[str], names: list[str]) -> dict:
         """OCCT and the named tests' executables at a state (only what
         changed since the state before is rebuilt)."""
@@ -1595,6 +1832,8 @@ class ChainWorker:
         if self.current != key:
             self.current = None
             info = {"key": key, "occt": "ok", "tests": {}, "needs": [], "unprovided": []}
+            self.api_picks = [p for p in picks if p.startswith(API_ONLY)]
+            self.state_numbers = {pick_number(p) for p in picks}
             bad = self.prepare(tag, picks)
             if bad:
                 info["occt"] = f"a carried patch does not apply at its place ({bad})"
@@ -1608,7 +1847,7 @@ class ChainWorker:
                     info["occt"] = "error: the OCCT build stopped without a compiler error"
                 else:
                     info["occt"] = "OCCT does not build at its place"
-                    info["errors"] = errors[:3]
+                    info["errors"] = errors[:20]
                 return info
             sync_headers(self.tree, self.inc, self.headers)
             self.current = key
@@ -1667,12 +1906,23 @@ class ChainWorker:
     def exe_status(self, name: str, target: str, failed: dict, lib_failed: list[str]):
         """('built' | 'partial' | 'failed', the executable to run in place of
         the ctest's, the failed edges that keep it from building)."""
+        stubs = bool(self.api_picks)
         if built(self.mbuild, target, failed):
-            return "built", None, []
+            if not stubs:
+                return "built", None, []
+            # Linked again so that OCCT's calls of functions only declared
+            # at this state are bound too.
+            exe = self.partial_link(target, name, [], True)
+            return ("partial", exe, []) if exe else ("failed", None, [target])
         if lib_failed:
             return "failed", None, lib_failed
-        if target in failed:
+        # A function a later patch only declares here (carried as its
+        # declarations) is bound to a stub that says so if it is called.
+        if target in failed and not (stubs and "undefined reference" in failed[target]):
             return "failed", None, [target]
+        if target in failed:
+            exe = self.partial_link(target, name, [], stubs)
+            return ("partial", exe, []) if exe else ("failed", None, [target])
         d = exe_dir(target)
         mine = [o for o in failed if o.startswith(d)]
         own = own_sources(self.tests[name])
@@ -1681,14 +1931,16 @@ class ChainWorker:
         keep = [o for o in mine if o[len(d):].removesuffix(".o") in own]
         if keep or not mine:
             return "failed", None, keep
-        exe = self.partial_link(target, name, mine)
+        exe = self.partial_link(target, name, mine, stubs)
         return ("partial", exe, []) if exe else ("failed", None, [])
 
-    def partial_link(self, target: str, name: str, drop: list[str]) -> str | None:
+    def partial_link(self, target: str, name: str, drop: list[str], any_undefined: bool = False) -> str | None:
         """The executable linked without the objects of the other parts that
         do not build here. Where the dispatcher's table of parts names their
         functions, each is bound to a stub that aborts (never called: only
-        the part asked for runs)."""
+        the part asked for runs). With any_undefined (later patches carried
+        as their declarations only) every undefined reference is bound to
+        it; the stub says so on its way out (STUB_CALLED)."""
         cmd = link_command(self.mbuild, target)
         if not cmd:
             return None
@@ -1698,13 +1950,26 @@ class ChainWorker:
         gone = set(drop)
         words = [w for w in cmd if w not in gone and not w.startswith("-Wl,--dependency-file=")]
         words[words.index("-o") + 1] = str(exe)
+        # The state's OCCT libraries may call functions only declared at
+        # this state (the build links against the installed tip's).
+        libdir = occt_libs(self.tree)
         p = run(words + ["-Wl,--no-demangle"], cwd=self.mbuild, check=False)
-        if p.returncode == 0:
+        occt_missing = occt_undefined(libdir, [str(exe)] if p.returncode == 0 else []) if any_undefined else []
+        if p.returncode == 0 and not occt_missing:
             return str(exe)
-        text = p.stdout + p.stderr
+        text = p.stdout + p.stderr if p.returncode else ""
+        missing = sorted(set(re.findall(r"undefined reference to [`‘']([^'’]+)['’]", text)) | set(occt_missing))
+        if any_undefined and missing:
+            for _ in range(3):
+                if not self.stub_link(words, exe, missing):
+                    return None
+                more = set(occt_undefined(libdir, [str(exe)])) - set(missing)
+                if not more:
+                    return str(exe)
+                missing = sorted(set(missing) | more)
+            return None
         if not undefined_only_in_dispatchers(text):
             return None
-        missing = sorted(set(re.findall(r"undefined reference to [`‘']([^'’]+)['’]", text)))
         stub = folder / "missing-part.o"
         if not stub.exists():
             src = folder / "missing-part.cpp"
@@ -1714,6 +1979,30 @@ class ChainWorker:
                 return None
         defs = [f"-Wl,--defsym={sym}=occt_port_proof_missing_part" for sym in missing]
         p = run(words + [str(stub), *defs], cwd=self.mbuild, check=False)
+        return str(exe) if p.returncode == 0 else None
+
+    def stub_link(self, words: list[str], exe: Path, missing: list[str]) -> str | None:
+        """The executable linked with a shared library of stubs, one function
+        for each missing symbol (functions only declared at this state, also
+        those OCCT's own libraries call), each writing STUB_CALLED and
+        aborting. A missing vtable or type info (data) is not stubbed."""
+        if any(re.match(r"_ZT[VIS]|vtable for|typeinfo", sym) for sym in missing) or \
+                not all(re.fullmatch(r"\w+", sym) for sym in missing):
+            return None
+        key = hashlib.sha256(("named\n" + "\n".join(missing)).encode()).hexdigest()[:12]
+        lib = exe.parent / f"libstubs-{key}.so"
+        if not lib.exists():
+            src = exe.parent / f"stubs-{key}.cpp"
+            body = "".join(f'extern "C" void {sym}() {{ called("{sym}"); }}\n' for sym in missing)
+            src.write_text('// SPDX-License-Identifier: MIT\n#include <cstdio>\n#include <cstdlib>\n'
+                           'static void called(const char* sym) {\n'
+                           f'  std::fprintf(stderr, "{STUB_CALLED}: %s\\n", sym);\n  std::abort();\n}}\n'
+                           + body)
+            if run([words[0], "-fPIC", "-shared", src, "-o", lib], check=False).returncode != 0:
+                return None
+        # Not as needed: OCCT's libraries, not the executable, may be the callers.
+        p = run(words + ["-Wl,--no-as-needed", str(lib), f"-Wl,-rpath,{lib.parent}", "-Wl,--no-demangle"],
+                cwd=self.mbuild, check=False)
         return str(exe) if p.returncode == 0 else None
 
     # -- the later patches whose API the MitCad code needs
@@ -1741,11 +2030,15 @@ class ChainWorker:
                 out.add(n)
         return out
 
-    def header_added(self, n: str) -> str:
-        if n not in self.added:
-            diff = git(self.tree, "diff", f"p-{n}~1", f"p-{n}", "--", *HEADER_GLOBS).stdout
-            self.added[n] = "\n".join(ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
-        return self.added[n]
+    def header_added(self, n: str, cls: str = "") -> str:
+        """The lines patch n adds to the headers (to the header of class cls only, if given)."""
+        key = f"{n}:{cls}"
+        if key not in self.added:
+            globs = [f"*/{cls}.hxx", f"*/{cls}.lxx"] if cls else HEADER_GLOBS
+            diff = git(self.tree, "diff", f"p-{n}~1", f"p-{n}", "--", *globs).stdout
+            self.added[key] = "\n".join(ln[1:] for ln in diff.splitlines()
+                                        if ln.startswith("+") and not ln.startswith("+++"))
+        return self.added[key]
 
     def providers(self, text: str, base_idx: int) -> tuple[set[str], list[str]]:
         """The later patches adding the names and headers the errors miss
@@ -1754,8 +2047,17 @@ class ChainWorker:
         # Names whose call matches no declaration there: an overload or a
         # parameter a later patch adds, so present at the state and still missing.
         overloads: set[str] = set()
+        # Members a class lacks there ("'class C' has no member named 'X'",
+        # "'X' is not a member of 'C'"): a later patch adding X to C's header,
+        # though the name may be in other headers already (another class's).
+        members: dict[str, str] = {}
         hdrs: set[str] = set()
         for ln in text.splitlines():
+            m = (re.search(r"[‘'`](?:class |struct )?(\w+)[’'`] has no member named [‘'`](\w+)", ln)
+                 or re.search(r"[‘'`](\w+)[’'`] is not a member of [‘'`](?:class |struct )?(\w+)", ln))
+            if m:
+                cls, nm = (m.group(1), m.group(2)) if "has no member" in ln else (m.group(2), m.group(1))
+                members[nm] = cls.split("::")[-1]
             m = re.search(r"(\w+\.(?:hxx|lxx|gxx|h)):\d+:\d+: error: #error \"this header is not in this state", ln)
             if m:
                 hdrs.add(m.group(1))
@@ -1779,11 +2081,16 @@ class ChainWorker:
             else:
                 unprovided.append(h)
         for nm in sorted(names)[:80]:
-            if nm not in overloads and git(self.tree, "grep", "-q", "-w", "-F", "-e", nm, "HEAD", "--",
-                                           *HEADER_GLOBS, check=False).returncode == 0:
+            if nm not in overloads and nm not in members and git(
+                    self.tree, "grep", "-q", "-w", "-F", "-e", nm, "HEAD", "--", *HEADER_GLOBS,
+                    check=False).returncode == 0:
                 continue
             pat = re.compile(rf"\b{re.escape(nm)}\b")
-            n = next((k for k in self.nums[base_idx + 1:] if pat.search(self.header_added(k))), None)
+            later = [k for k in self.nums[base_idx + 1:] if k not in self.state_numbers]
+            n = None
+            if nm in members:
+                n = next((k for k in later if pat.search(self.header_added(k, members[nm]))), None)
+            n = n or next((k for k in later if pat.search(self.header_added(k))), None)
             if n:
                 needs.add(n)
             else:
@@ -1807,7 +2114,7 @@ class ChainWorker:
         """Whether a failing run needs its named tests run one by one: in the
         chain a ctest often holds tests of later patches that fail at the
         patch's place, so both states are judged by the named tests alone."""
-        if run_["status"] not in ("failed", "timeout") or not named:
+        if run_["status"] not in ("failed", "timeout", "stub called") or not named:
             return False
         return not named <= set(run_.get("only", {}))
 
@@ -1845,6 +2152,8 @@ class ChainWorker:
                 r = run_ctest(self.command(n, ti), libdir, self.logs / f"{key}-{n}.log", self.limit(n))
                 if ti["build"] == "partial":
                     r["partial"] = True
+                    if r["status"] != "passed" and STUB_CALLED in Path(r["log"]).read_text(errors="replace"):
+                        r["status"] = "stub called"
             if self.needs_only(r, named):
                 # Each named test alone (MITCAD_TEST_ONLY), to see whether it is one that fails.
                 r.setdefault("only", {})
@@ -1852,6 +2161,8 @@ class ChainWorker:
                     lo = self.logs / f"{key}-{n}-{fn}.log"
                     o = run_ctest(self.command(n, ti), libdir, lo, self.limit(n),
                                   {"MITCAD_TEST_ONLY": only_selector(fn)})
+                    if o["status"] != "passed" and STUB_CALLED in Path(o["log"]).read_text(errors="replace"):
+                        o["status"] = "stub called"
                     r["only"][fn] = {"status": o["status"], "log": o["log"]}
                 fresh = True
             if fresh:
@@ -1869,42 +2180,108 @@ class ChainWorker:
         return out
 
     def item(self, item: str, names: list[str]) -> dict:
+        """The patch at its place; where a test calls a function only declared
+        there, the patch that defines it is carried whole and the patch shown
+        again."""
+        forced: set[str] = set()
+        rec: dict = {}
+        for _ in range(4):
+            prev, rec = rec, self.attempt(item, names, forced)
+            if prev and rec["state"] != "ran":
+                # Carried whole, the patch does not apply or build there: the
+                # run with its declarations stands.
+                return prev
+            called = self.stubs_called(rec)
+            if rec["state"] != "ran" or not called:
+                break
+            hit = {pick_number(p) for p in rec["carried"] if p.startswith(API_ONLY) and any(
+                re.search(rf"\b{re.escape(nm)}\b", self.header_added(pick_number(p))) for nm in called)}
+            if not hit - forced:
+                break
+            forced |= hit
+        return rec
+
+    @staticmethod
+    def stubs_called(rec: dict) -> set[str]:
+        """The names of the functions whose stubs the item's runs called."""
+        syms: set[str] = set()
+        for runs in rec["runs"].values():
+            for r in runs.values():
+                logs = [r.get("log")] if r.get("status") == "stub called" else []
+                logs += [o["log"] for o in r.get("only", {}).values() if o["status"] == "stub called"]
+                for lg in logs:
+                    text = Path(lg).read_text(errors="replace") if lg and Path(lg).exists() else ""
+                    syms |= set(re.findall(re.escape(STUB_CALLED) + r": (\w+)", text))
+        if not syms:
+            return set()
+        names = run(["c++filt", *sorted(syms)], check=False).stdout.split("\n")
+        return {m.group(1) for n in names if (m := re.search(r"(\w+)\(", n))}
+
+    def attempt(self, item: str, names: list[str], forced: set[str]) -> dict:
         group = item.split("+")
         base_idx = min(self.nums.index(n) for n in group) - 1
         named = named_functions(item)
         rec = {"item": item, "tests": names, "base": self.nums[base_idx] if base_idx >= 0 else "base",
                "carried": [], "state": "", "runs": {"without": {}, "with": {}},
                "date": datetime.date.today().isoformat()}
-        # The later patches whose API the MitCad code needs, found state by state.
+        # The later patches whose API the MitCad code needs, found state by
+        # state: first their declarations alone (the changes to the headers),
+        # so that no later code comes in; whole where those do not apply or
+        # OCCT does not build with them.
         carried: list[str] = []
+        order = pick_order(self.nums)
+
+        def declared(n: str) -> str:
+            return n if n in forced else API_ONLY + n
+
+        def numbers(picks: list[str]) -> set[str]:
+            return {pick_number(p) for p in picks}
+
+        def whole(picks, more) -> list[str]:
+            return sorted({p for p in picks if pick_number(p) not in more} | set(more), key=order)
+
         for _ in range(2 * self.args.max_carry + 2):
             info, _key = self.visit(base_idx, carried, names, [], named)
             if info["occt"] != "ok":
+                bad = info.get("conflict")
+                if bad and bad.startswith(API_ONLY):
+                    carried = whole(carried, {pick_number(bad)})
+                    continue
+                if not bad:
+                    api = {pick_number(p) for p in carried if p.startswith(API_ONLY)}
+                    if api and info["occt"].startswith("OCCT does not build"):
+                        # Declarations that use other later declarations: those too.
+                        more, _ = self.providers("\n".join(info.get("errors", [])), base_idx)
+                        more -= set(group) | numbers(carried)
+                        if more and len(carried) + len(more) <= self.args.max_carry:
+                            carried = sorted(set(carried) | {declared(n) for n in more}, key=order)
+                            continue
+                        carried = whole(carried, api)
+                        continue
+                    break
                 # A carried patch that does not cherry-pick takes with it the
                 # patches between whose lines its hunks build on.
-                if not info.get("conflict"):
-                    break
-                more = self.pick_needs(base_idx, info["conflict"], info.get("conflict_files", []))
+                more = self.pick_needs(base_idx, bad, info.get("conflict_files", []))
                 if more & set(group):
-                    rec["entangled"] = [info["conflict"], *sorted(more & set(group))]
+                    rec["entangled"] = [bad, *sorted(more & set(group))]
                     break
-                new = more - set(carried)
+                new = more - numbers(carried)
                 if not new or len(carried) + len(new) > self.args.max_carry:
                     if new:
-                        rec["needs"] = sorted(set(carried) | new, key=self.nums.index)
+                        rec["needs"] = sorted(numbers(carried) | new, key=self.nums.index)
                     break
-                carried = sorted(set(carried) | new, key=self.nums.index)
+                carried = whole(carried, new)
                 continue
             need = set(info.get("needs", []))
             if need & set(group):
                 rec["own_api"] = sorted(need & set(group))
-            new = need - set(group) - set(carried)
+            new = need - set(group) - numbers(carried)
             if not new:
                 break
             if len(carried) + len(new) > self.args.max_carry:
-                rec["needs"] = sorted(set(carried) | new, key=self.nums.index)
+                rec["needs"] = sorted(numbers(carried) | new, key=self.nums.index)
                 break
-            carried = sorted(set(carried) | new, key=self.nums.index)
+            carried = sorted(set(carried) | {declared(n) for n in new}, key=order)
         rec["carried"] = carried
         if info.get("unprovided"):
             rec["unprovided"] = info["unprovided"]
@@ -1951,7 +2328,7 @@ def chain_worker(args, wid: int) -> None:
             rec["stamp"] = w.plan["stamp"]
             append_result(work / "chain-results.jsonl", rec)
             v, _ = chain_verdict(rec)
-            extra = f" (carried {'+'.join(rec['carried'])})" if rec.get("carried") else ""
+            extra = f" (carried {carried_text(rec['carried'])})" if rec.get("carried") else ""
             log(f"c{wid}: {item}{extra}: {v}")
 
 
@@ -1989,7 +2366,7 @@ def chain_main(args, items: list[str], plan_tests: dict, order: list[str]) -> No
     passthru = ["--work", str(work), "--preset", args.preset, "--build-jobs", str(args.build_jobs),
                 "--max-carry", str(args.max_carry),
                 "--timeout-factor", str(args.timeout_factor), "--min-timeout", str(args.min_timeout),
-                "--max-timeout", str(args.max_timeout), "--targets", *args.targets]
+                "--max-timeout", str(args.max_timeout), "--tests-doc", args.tests_doc, "--targets", *args.targets]
     if args.chain_retry:
         passthru.append("--chain-retry")
     procs = []
@@ -2010,8 +2387,11 @@ def chain_main(args, items: list[str], plan_tests: dict, order: list[str]) -> No
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("patches", nargs="*", help="patch numbers, or groups such as 0130+0140")
-    ap.add_argument("--unproven", action="store_true", help="every patch whose header says 'still to be shown'")
+    ap.add_argument("--unproven", action="store_true",
+                    help="every patch whose section in the test document says 'still to be shown'")
     ap.add_argument("--all", action="store_true", help="every patch whose Test paragraph names a ctest")
+    ap.add_argument("--tests-doc", default=str(TESTS_DOC),
+                    help="the test document: a section '## <number>' with a Test paragraph per patch")
     ap.add_argument("--work", default=str(REPO / "build" / "occt-proof"))
     ap.add_argument("--tarball", help=f"the OCCT source archive ({TARBALL})")
     ap.add_argument("--preset", default="dev", help="the MitCad configure preset (build/<preset>)")
@@ -2026,7 +2406,9 @@ def main() -> None:
     ap.add_argument("--max-timeout", type=float, default=1500.0)
     # Documents stay out of the port's own folder (the public gate's rule).
     ap.add_argument("--table", default=str(PORT.parent / "docs" / "opencascade-before-after.md"))
-    ap.add_argument("--update-headers", action="store_true", help="rewrite the headers' sentences from the results")
+    ap.add_argument("--update-tests", "--update-headers", dest="update_tests", action="store_true",
+                    help="rewrite the proof sentences in the test document from the last results "
+                         "(of the patches given, or all); no .patch file changes")
     ap.add_argument("--list", action="store_true", help="only list the patches and their named ctests")
     ap.add_argument("--worker", type=int, help=argparse.SUPPRESS)
     ap.add_argument("--in-chain", action="store_true",
@@ -2043,6 +2425,7 @@ def main() -> None:
                     help="in the chain: take the given patches again, done ones too, and build again the states that did not build")
     ap.add_argument("--chain-worker", type=int, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    set_tests_doc(args.tests_doc)
     if args.worker is not None:
         worker(args, args.worker)
         return
@@ -2050,31 +2433,46 @@ def main() -> None:
         chain_worker(args, args.chain_worker)
         return
     work = Path(args.work)
-    work.mkdir(parents=True, exist_ok=True)
     plan_file = work / "plan.json"
 
-    if args.update_headers:
+    if args.update_tests:
         # A run in the chain alone has no plan of the tip.
         plan = (json.loads(plan_file.read_text()) if plan_file.exists()
                 else {"order": patch_order(), "with": {}, "date": datetime.date.today().isoformat()})
         results = load_results(work)
-        changed = update_headers(args, plan, results)
-        log(f"headers rewritten: {len(changed)} ({' '.join(changed)})")
+        changed = update_tests(args, plan, results)
+        log(f"proof sentences rewritten in {tests_doc()}: {len(changed)} ({' '.join(changed)})")
         log(f"table: {write_table(args, plan, results)}")
         return
 
     order = patch_order()
+    stray = stray_test_paragraphs(order)
+    if stray:
+        log(f"a Test paragraph in the header of {' '.join(stray)}: it belongs in {tests_doc()} "
+            "(a header change rebuilds OCCT); this tool does not read it")
+    if not tests_doc().exists():
+        raise SystemExit(f"no test document {tests_doc()}")
+    if not args.list:
+        work.mkdir(parents=True, exist_ok=True)
     devbuild = REPO / "build" / args.preset
-    if not (devbuild / "build.ninja").exists():
+    known: set[str] | None = None
+    tests: dict = {}
+    if (devbuild / "build.ninja").exists():
+        log(f"MitCad tests at the tip ({devbuild})")
+        # In the chain each worker builds its own tests; the build only names them.
+        if not args.list and not args.in_chain and not build_mitcad(devbuild, args.targets, args.build_jobs * 2,
+                                                                    work / "dev-build.log"):
+            raise SystemExit(f"the MitCad tests do not build ({work / 'dev-build.log'})")
+        tests = ctest_table(devbuild)
+        known = set(tests)
+    elif args.list:
+        log(f"{devbuild} is not configured: every ctest name a Test paragraph mentions is listed, unchecked")
+    else:
         raise SystemExit(f"{devbuild} is not configured (cmake --preset {args.preset})")
-    log(f"MitCad tests at the tip ({devbuild})")
-    # In the chain each worker builds its own tests; the build only names them.
-    if not args.list and not args.in_chain and not build_mitcad(devbuild, args.targets, args.build_jobs * 2,
-                                                                work / "dev-build.log"):
-        raise SystemExit(f"the MitCad tests do not build ({work / 'dev-build.log'})")
-    tests = ctest_table(devbuild)
-    known = set(tests)
     by_number = {number(f): f for f in order}
+    no_section = [number(f) for f in order if not tests_of(number(f))]
+    if no_section:
+        log(f"no section in {tests_doc()} for {' '.join(no_section)}")
 
     items: list[str] = list(args.patches)
     for item in table_items(Path(args.table), args.table_verdict):
@@ -2082,8 +2480,8 @@ def main() -> None:
             items.append(item)
     if args.all or args.unproven:
         for f in order:
-            hdr = header(f)
-            if named_ctests(hdr, known) and (args.all or unproven(hdr)):
+            text = tests_of(number(f))
+            if named_ctests(text, known) and (args.all or unproven(text)):
                 if number(f) not in items:
                     items.append(number(f))
     if not items:
@@ -2094,13 +2492,13 @@ def main() -> None:
         for n in item.split("+"):
             if n not in by_number:
                 raise SystemExit(f"no patch {n} in portfile.cmake")
-            for t in named_ctests(header(by_number[n]), known):
+            for t in named_ctests(tests_of(n), known):
                 if t not in names:
                     names.append(t)
         plan_tests[item] = names
     no_test = [i for i, t in plan_tests.items() if not t]
     if no_test:
-        log(f"no ctest named in the header of {' '.join(no_test)}: left out")
+        log(f"no ctest named in the section of {' '.join(no_test)} in {tests_doc()}: left out")
         for i in no_test:
             items.remove(i)
             del plan_tests[i]
@@ -2153,7 +2551,7 @@ def main() -> None:
     passthru = ["--work", str(work), "--preset", args.preset, "--build-jobs", str(args.build_jobs),
                 "--max-extra", str(args.max_extra),
                 "--timeout-factor", str(args.timeout_factor), "--min-timeout", str(args.min_timeout),
-                "--max-timeout", str(args.max_timeout), "--targets", *args.targets]
+                "--max-timeout", str(args.max_timeout), "--tests-doc", args.tests_doc, "--targets", *args.targets]
     procs = []
     for wid in range(min(args.workers, len(queue))):
         cmd = shlex.split(args.wrap) + me + passthru + ["--worker", str(wid)]

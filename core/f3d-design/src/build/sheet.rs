@@ -28,7 +28,10 @@
 //!   material's name; another expression; the thickness as a `str16` and
 //!   its value, then a reference to the thickness parameter *(seen: the
 //!   corpus's designs of one rule; the order of the relief fields is
-//!   taken from their default expressions, not from variants)*.
+//!   taken from their default expressions, not from variants)*. A later
+//!   writer keeps the K-factor in an unfold rule the rule refers to
+//!   ([`UNFOLD_RULE`]): the f64 after its root part (mitcad#2117); the
+//!   rule then has the material's name where the K-factor was.
 //! - A **hem** (`Hem<n>`, mitcad#1364; cadmpeg's *Hem* layouts): its
 //!   parameters name their roles (`HemGap`, `HemLength`, `HemRadius`,
 //!   `HemAngle`, `HemSetback`) and their holders are the marked owner
@@ -43,18 +46,98 @@
 //!   that form; the description takes the form from the parameters and
 //!   the result instead)*. The edge is its edge input, as an edge
 //!   flange's.
+//! - An **Unfold** (`EC187027…`, `Unfold<n>`, mitcad#2117): its input
+//!   slots (`2CA5A1CD…`, as an extrusion's, [`decode::extent_slots`]) in
+//!   the order the record names them: the bends' faces (role 16, a face
+//!   input per bend face: both cylinders of each bend it unfolds), the
+//!   stationary face (role 16, one face input) and the body (role 4); then
+//!   a reference to the sheet-metal rule (`E75C86D6…`) *(seen: one Unfold,
+//!   twelve bends of three edge flanges named by their 24 faces)*.
+//! - A **Refold** (`483D584F…`, `Refold<n>`): one input slot, the body
+//!   (role 8), and the rule's reference; it names no bend nor the Unfold
+//!   (a group item of class `99F375B3…`, `UnfoldRefoldGroupMode`, pairs
+//!   the two), so it closes every bend the Unfold before it opened
+//!   *(seen: the Unfold's pair)*.
 
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
 
-use super::super::decode::{ParameterEntry, TimelineEntry};
+use super::super::classes::{BODY_REF, FACE_REF};
+use super::super::decode::{self, ParameterEntry, TimelineEntry};
 use super::super::ir::*;
 use super::super::stream::{f64_at, str16_at, u32_at};
-use super::{Builder, edge_input, paramref};
+use super::{Builder, edge_input, face_input, paramref};
 
 /// The flanges' class (base and edge flanges, hems).
 pub const FLANGE: &str = "7AFA0A65-B53C-472C-ACA4-5C7C0A65001C";
+
+/// The Unfold's class (mitcad#2117).
+pub const UNFOLD: &str = "EC187027-FF97-48A3-8031-F923807E630B";
+
+/// The Refold's class (mitcad#2117).
+pub const REFOLD: &str = "483D584F-29AA-46DA-ABA2-F139B0ED8100";
+
+/// The role of an Unfold's face slots (its bends' and its stationary
+/// face's).
+const UNFOLD_FACES: u32 = 16;
+
+/// The roles of a slot of the bodies an Unfold or Refold works on.
+const UNFOLD_BODIES: [u32; 2] = [decode::PARTICIPANT_ROLE, decode::PARTICIPANT_ROLE_2];
+
+/// An Unfold's inputs by their slots: the bend faces' inputs, the
+/// stationary face's input and the body inputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnfoldSlots {
+    bends: Vec<u64>,
+    stationary: u64,
+    bodies: Vec<u64>,
+}
+
+/// An Unfold's slots (role, inputs) in the order its record names them:
+/// the first face slot holds the bends' faces, the second the stationary
+/// face (one input); the body slots the bodies.
+fn unfold_slots(slots: &[(u32, Vec<u64>)]) -> Result<UnfoldSlots, String> {
+    let faces: Vec<&Vec<u64>> = slots
+        .iter()
+        .filter(|(role, _)| *role == UNFOLD_FACES)
+        .map(|(_, inputs)| inputs)
+        .collect();
+    let [bends, stationary] = faces.as_slice() else {
+        return Err(format!(
+            "{} face slots (role {UNFOLD_FACES}): the bends' and the stationary face's are \
+             expected",
+            faces.len()
+        ));
+    };
+    let [stationary] = stationary.as_slice() else {
+        return Err(format!(
+            "its stationary face's slot holds {} inputs (one is expected)",
+            stationary.len()
+        ));
+    };
+    if bends.is_empty() {
+        return Err("its bends' slot holds no face".to_owned());
+    }
+    Ok(UnfoldSlots {
+        bends: bends.to_vec(),
+        stationary: *stationary,
+        bodies: unfold_bodies(slots),
+    })
+}
+
+/// The inputs of the body slots of an Unfold or Refold.
+fn unfold_bodies(slots: &[(u32, Vec<u64>)]) -> Vec<u64> {
+    let mut out = Vec::new();
+    for (_, inputs) in slots.iter().filter(|(r, _)| UNFOLD_BODIES.contains(r)) {
+        for &i in inputs {
+            if !out.contains(&i) {
+                out.push(i);
+            }
+        }
+    }
+    out
+}
 
 /// The sheet-metal rule's class.
 pub const RULE: &str = "B42ED662-8999-4C1B-A744-759D1D446D55";
@@ -96,9 +179,13 @@ fn rule(d: &[u8]) -> Rule {
         }
     }
     // The K-factor: the f64 four bytes after the corner relief size's
-    // value, before the material's name.
+    // value, the material's name right after it. A writer that keeps the
+    // K-factor in an unfold rule of its own (`UNFOLD_RULE`, mitcad#2117) has
+    // the material's name there instead: no K-factor here.
     if let Some((_, _, end)) = texts.iter().find(|(s, _, _)| s.contains("* 4")) {
-        r.k_factor = f64_at(d, end + 8 + 4).filter(|k| (0.0..=1.0).contains(k));
+        let at = end + 8 + 4;
+        let named_after = texts.iter().any(|(_, p, _)| *p == at + 8);
+        r.k_factor = f64_at(d, at).filter(|k| named_after && plausible_k(*k));
     }
     r.name = texts
         .iter()
@@ -106,6 +193,43 @@ fn rule(d: &[u8]) -> Rule {
         .find(|(s, _, _)| s.contains('('))
         .map(|(s, _, _)| s.clone());
     r
+}
+
+/// The unfold rule a sheet-metal rule refers to (mitcad#2117; the class of
+/// `Linear (k=0.44)`): the K-factor its own record holds.
+pub const UNFOLD_RULE: &str = "B4439D38-AFFE-464E-A4CB-CD6620BEBB78";
+
+/// A K-factor a record can hold: between 0.001 and 1 (a value read from
+/// other bytes is far off it).
+fn plausible_k(k: f64) -> bool {
+    (1e-3..=1.0).contains(&k)
+}
+
+/// An unfold rule's K-factor: the f64 right after its root part (`start`),
+/// else the `k=` its name gives (`Linear (k=0.44)`) *(seen: one such
+/// rule, both 0.44)*.
+fn unfold_rule_k(d: &[u8], start: usize) -> Option<f64> {
+    if let Some(k) = f64_at(d, start).filter(|k| plausible_k(*k)) {
+        return Some(k);
+    }
+    let mut p = start;
+    while p + 4 <= d.len() {
+        match str16_at(d, p) {
+            Some((s, end)) if !s.is_empty() && s.len() < 256 => {
+                if let Some(k) = s
+                    .split("k=")
+                    .nth(1)
+                    .and_then(|t| t.trim_end_matches(')').trim().parse::<f64>().ok())
+                    .filter(|k| plausible_k(*k))
+                {
+                    return Some(k);
+                }
+                p = end;
+            }
+            _ => p += 1,
+        }
+    }
+    None
 }
 
 /// A hem's form by its code (the module's notes).
@@ -192,11 +316,23 @@ impl Builder<'_> {
         let o = self.seg.objects_of(RULE).next()?;
         let d = self.seg.data(o);
         let mut r = rule(d);
-        r.thickness = self
-            .seg
-            .ref_ids(d)
-            .into_iter()
+        let refs = self.seg.ref_ids(d);
+        r.thickness = refs
+            .iter()
+            .copied()
             .find(|id| self.dec.parameters.iter().any(|p| p.id == *id));
+        // The K-factor of the unfold rule it refers to, where it has one
+        // (mitcad#2117).
+        if let Some(k) = refs
+            .iter()
+            .find(|id| self.seg.guid_of(**id) == Some(UNFOLD_RULE))
+            .and_then(|&id| {
+                let u = self.seg.data_of(id);
+                unfold_rule_k(u, self.seg.root_part(u)?.end)
+            })
+        {
+            r.k_factor = Some(k);
+        }
         Some(r)
     }
 
@@ -462,6 +598,85 @@ impl Builder<'_> {
         }
         Ok(out)
     }
+
+    /// An Unfold or Refold item (mitcad#2117): the faces and body its slots
+    /// name, as a sheet item (`unfold`, `refold`).
+    pub(super) fn unfold_refold(&self, it: &TimelineEntry) -> Detail {
+        let mut map = Map::new();
+        let sheet = if it.class == REFOLD {
+            self.refold(it)
+        } else {
+            self.unfold(it)
+        };
+        match sheet {
+            Ok(s) => {
+                map.insert("sheet".to_owned(), s);
+            }
+            Err(e) => {
+                map.insert("_sheet_error".to_owned(), json!(e));
+            }
+        }
+        Detail::Other(map)
+    }
+
+    /// The slots an item names, as (role, inputs).
+    fn item_slots(&self, it: &TimelineEntry) -> Vec<(u32, Vec<u64>)> {
+        decode::extent_slots(self.seg, it.id)
+            .into_iter()
+            .map(|s| (s.role, s.inputs))
+            .collect()
+    }
+
+    /// The body references of body inputs (a body slot's).
+    fn unfold_body_refs(&self, inputs: &[u64]) -> Vec<Reference> {
+        inputs
+            .iter()
+            .filter(|&&i| self.seg.guid_of(i) == Some(BODY_REF))
+            .filter_map(|&i| self.body_input(i))
+            .collect()
+    }
+
+    fn unfold(&self, it: &TimelineEntry) -> Result<Value, String> {
+        let slots = unfold_slots(&self.item_slots(it))?;
+        // A face input by its names (its geometry found in the history
+        // before the item, `super::super::inputs`).
+        let face = |i: u64, what: &str| -> Result<Reference, String> {
+            if self.seg.guid_of(i) != Some(FACE_REF) {
+                return Err(format!("{what} is no face input"));
+            }
+            face_input(self.seg, i).ok_or_else(|| format!("{what}'s names do not decode"))
+        };
+        let stationary = face(slots.stationary, "its stationary face")?;
+        let bends: Vec<Reference> = slots
+            .bends
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| face(i, &format!("bend face {}", k + 1)))
+            .collect::<Result<_, _>>()?;
+        let mut out = json!({
+            "kind": "unfold",
+            "stationary": stationary,
+            "bends": bends,
+        });
+        let bodies = self.unfold_body_refs(&slots.bodies);
+        if !bodies.is_empty() {
+            out["participantBodies"] = json!(bodies);
+        }
+        Ok(out)
+    }
+
+    fn refold(&self, it: &TimelineEntry) -> Result<Value, String> {
+        let slots = self.item_slots(it);
+        if slots.iter().any(|(role, _)| *role == UNFOLD_FACES) {
+            return Err("a refold that names faces (bends of its own): not seen".to_owned());
+        }
+        let mut out = json!({"kind": "refold"});
+        let bodies = self.unfold_body_refs(&unfold_bodies(&slots));
+        if !bodies.is_empty() {
+            out["participantBodies"] = json!(bodies);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -501,6 +716,40 @@ mod tests {
         assert_eq!(r.expressions[2], ("Thickness * 0.5".to_owned(), 0.125));
         assert_eq!(r.k_factor, Some(0.44));
         assert_eq!(r.name.as_deref(), Some("Steel (mm)"));
+    }
+
+    /// A rule whose writer keeps the K-factor in an unfold rule of its own
+    /// (mitcad#2117): the material's name follows the corner relief size's
+    /// value and its four zero bytes, so the rule gives no K-factor (the
+    /// name's bytes read as one were 1.8e-306); the unfold rule's record
+    /// gives it after its root part, or by its name.
+    #[test]
+    fn a_rule_without_its_k_factor_and_its_unfold_rule() {
+        let mut d = vec![0u8; 20];
+        for (e, v) in [("Thickness", 0.2), ("Thickness * 4.0", 0.8)] {
+            d.extend(str16(e));
+            d.extend(f64::to_le_bytes(v));
+        }
+        d.extend([0; 4]);
+        d.extend(str16("Steel"));
+        d.extend(str16("Thickness"));
+        d.extend(f64::to_le_bytes(0.2));
+        d.extend(str16("Steel (mm)"));
+        let r = rule(&d);
+        assert_eq!(r.k_factor, None, "{:?}", r.k_factor);
+        assert_eq!(r.name.as_deref(), Some("Steel (mm)"));
+        // The unfold rule: its K-factor right after the root part.
+        let mut u = vec![0u8; 21];
+        u.extend(f64::to_le_bytes(0.44));
+        u.extend(str16("00000000-0000-0000-0000-000000000000"));
+        u.extend([0; 4]);
+        u.extend(str16("Linear (k=0.44)"));
+        assert_eq!(unfold_rule_k(&u, 21), Some(0.44));
+        // Without it there, by its name; with neither, none.
+        let mut named = vec![0u8; 29];
+        named.extend(str16("Linear (k=0.38)"));
+        assert_eq!(unfold_rule_k(&named, 21), Some(0.38));
+        assert_eq!(unfold_rule_k(&[0u8; 40], 21), None);
     }
 
     /// A marked reference (flag, id, two zero bytes).
@@ -580,5 +829,33 @@ mod tests {
         assert_eq!(s.rule_radius, 0.25);
         assert!(hem_section(&d, &at, &[0x13a, 0x999]).is_err());
         assert!(hem_section(&d, &at, &[0x13a]).is_err());
+    }
+
+    /// An Unfold's slots (mitcad#2117): the first face slot holds the
+    /// bends' faces, the second the one stationary face, the body slots
+    /// the body (each once); other layouts are refused.
+    #[test]
+    fn an_unfolds_slots_give_its_bends_stationary_face_and_body() {
+        let slots = vec![
+            (16, vec![11, 12, 13, 14]),
+            (16, vec![21]),
+            (4, vec![31]),
+            (8, vec![31]),
+        ];
+        assert_eq!(
+            unfold_slots(&slots),
+            Ok(UnfoldSlots {
+                bends: vec![11, 12, 13, 14],
+                stationary: 21,
+                bodies: vec![31],
+            })
+        );
+        // Two stationary faces, a slot missing, no bend.
+        assert!(unfold_slots(&[(16, vec![11]), (16, vec![21, 22])]).is_err());
+        assert!(unfold_slots(&[(16, vec![11]), (4, vec![31])]).is_err());
+        assert!(unfold_slots(&[(16, vec![]), (16, vec![21])]).is_err());
+        // A Refold's body slot.
+        assert_eq!(unfold_bodies(&[(8, vec![31])]), [31]);
+        assert!(unfold_bodies(&[(16, vec![11])]).is_empty());
     }
 }

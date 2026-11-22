@@ -49,15 +49,8 @@ pairs whose blends OCCT already finds overlapping on the face (the plate's
 back edge beside a tower's foot whose distance from it grows past the two
 radii) are not made so.
 
-Test: geometry/tests/test_fillet_tangent_ride.cpp (ctest
-geometry.fillet_tangent_ride): test_narrowing_wall (either edge slanting,
-either end narrow) and test_falling_step, each in both orders: valid, the
-volume of the two roundings made one after the other within a millionth
-(the wall's result 0.45 mm3 more without the patch). It fails with this
-patch and 8 later patches that change the same lines reverted together, so
-the test does not single this patch out (shown 2026-11-20 by
-tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1721.
 
 Failures (mitcad#1986): the rider's walk part of the way and its
 computation again on undoing it fail with OCCT's reports of a computation

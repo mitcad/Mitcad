@@ -76,8 +76,10 @@
 #include "../framework/Ribbon.hpp"
 #include "../platform/NativeDialogs.hpp"
 #include "../framework/AppSettings.hpp"
+#include "../files/NewDesignSave.hpp"
 #include "../framework/AppTheme.hpp"
 #include "../framework/BoostButton.hpp"
+#include "../framework/DiscordButton.hpp"
 #include "../framework/Language.hpp"
 #include "../print/MaterialProperties.hpp"
 #include "../framework/CachePreferences.hpp"
@@ -140,6 +142,8 @@
 #include "SelectionLook.hpp"
 #include "ShortcutOverview.hpp"
 #include "SmallCirclesPreference.hpp"
+// General: the operation a new Extrude starts with (mitcad#2164).
+#include "../framework/ExtrudeStartPreference.hpp"
 
 namespace mitcad {
 namespace {
@@ -161,6 +165,10 @@ const StyleEntry kStyles[] = {
     {VisualStyle::Wireframe, "view.style.wireframe", QT_TRANSLATE_NOOP("View", "Wireframe")},
     {VisualStyle::WireframeHiddenEdges, "view.style.wireframe_hidden",
      QT_TRANSLATE_NOOP("View", "Wireframe with Hidden Edges")},
+    // mitcad#2155: the faces as Wireframe with Hidden Edges has them, the
+    // edges in sight only.
+    {VisualStyle::WireframeVisibleEdges, "view.style.wireframe_visible",
+     QT_TRANSLATE_NOOP("View", "Wireframe with Visible Edges Only")},
 };
 
 // The command's name and tooltip are whole texts, not a view's name put
@@ -301,7 +309,8 @@ const PreferencePage kPreferencePages[] = {
     {"general", QT_TRANSLATE_NOOP("View", "General"),
      "autosave recovery activate component ask picked face units inch new design "
      "browser features used sketches consumed language tolerance import temperature fahrenheit celsius "
-     "tabs windows open_designs folder version native macos"},
+     "tabs windows open_designs folder version native macos extrude operation new_body join cut automatic "
+     "save new_design computer project remote remember"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"),
      "mouse orbit pan zoom scheme shortcuts bindings custom trackpad 3d_mouse space speed arrow key step "
      "orbit_center cursor constrained reverse smooth transitions scroll"},
@@ -461,13 +470,10 @@ ViewSettings ViewSettings::load(const QSettings& store) {
     return store.value(kGroup + QLatin1String(key), fallback).toBool();
   };
   s.style = static_cast<VisualStyle>(
-      std::clamp(number("style", int(s.style)), 0, int(VisualStyle::WireframeHiddenEdges)));
+      std::clamp(number("style", int(s.style)), 0, int(VisualStyle::WireframeVisibleEdges)));
   s.perspective = flag("perspective", s.perspective);
   s.componentColors = flag("componentColors", s.componentColors);
-#ifdef Q_OS_MACOS
-  // macOS applications follow the system's light or dark appearance.
-  s.background = Background::Automatic; // unless the settings name another
-#endif
+  // Follow System (Automatic) unless the settings name another background.
   s.background = static_cast<Background>(
       std::clamp(number("background", int(s.background)), 0, int(Background::Automatic)));
   s.top = QColor(store.value(kGroup + QStringLiteral("top"), s.top.name()).toString());
@@ -554,14 +560,25 @@ void ViewSettings::save() const {
   store.setValue(kGroup + QStringLiteral("selectionThroughBodies"), selectionThroughBodies); // mitcad#1956
 }
 
+void ViewSettings::automaticColors(bool dark, QColor& top, QColor& bottom) {
+  if (dark) {
+    // A dark blue-grey (also the Dark Background).
+    top = QColor(0x3b, 0x42, 0x4d);
+    bottom = QColor(0x1c, 0x20, 0x27);
+  } else {
+    // The default gradient (also the Gradient Background): linear RGB 0.93,
+    // 0.94, 0.96 and 0.74, 0.77, 0.82 as before U5; the view takes sRGB, as
+    // colour dialogs give it.
+    top = QColor(247, 248, 250);
+    bottom = QColor(223, 227, 234);
+  }
+}
+
 void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
   gradient = true;
   switch (background) {
   case Background::Gradient:
-    // Linear RGB 0.93, 0.94, 0.96 and 0.74, 0.77, 0.82 as before U5; the
-    // view takes sRGB, as colour dialogs give it.
-    upper = QColor(247, 248, 250);
-    lower = QColor(223, 227, 234);
+    automaticColors(false, upper, lower);
     break;
   case Background::Light:
     upper = QColor::fromRgbF(0.99f, 0.99f, 1.0f);
@@ -572,8 +589,7 @@ void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
     gradient = false;
     break;
   case Background::Dark:
-    upper = QColor(0x3b, 0x42, 0x4d);
-    lower = QColor(0x1c, 0x20, 0x27);
+    automaticColors(true, upper, lower);
     break;
   case Background::Custom:
     upper = top;
@@ -581,14 +597,8 @@ void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
     gradient = top != bottom;
     break;
   case Background::Automatic:
-    if (isDarkPalette()) {
-      // A dark blue-grey.
-      upper = QColor(0x3b, 0x42, 0x4d);
-      lower = QColor(0x1c, 0x20, 0x27);
-    } else {
-      upper = QColor(247, 248, 250); // the default gradient
-      lower = QColor(223, 227, 234);
-    }
+    // Dark exactly when the window's chrome is (mitcad#2145).
+    automaticColors(isDarkTheme(), upper, lower);
     break;
   }
 }
@@ -614,7 +624,10 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
     qInfo().noquote() << QStringLiteral("No render worker (%1) next to the application: no rendered view")
                              .arg(QString::fromLatin1(render::kWorkerName));
   }
-  // The automatic background follows the system's light and dark modes.
+  // The automatic background (Follow System) follows the theme while
+  // MitCad runs: the Theme preference, the system's light and dark modes
+  // (mitcad#2145). The view hears of it more than once for one change (its
+  // own palette and the application's): only a change of colours redraws.
   connect(&m_viewer, &OcctViewer::themeChanged, this, [this] {
     if (m_settings.background != ViewSettings::Background::Automatic) {
       return;
@@ -623,6 +636,12 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
     QColor bottom;
     bool gradient = true;
     m_settings.colors(top, bottom, gradient);
+    QColor shownTop;
+    QColor shownBottom;
+    m_viewer.backgroundColors(shownTop, shownBottom);
+    if (top == shownTop && bottom == shownBottom) {
+      return;
+    }
     m_viewer.setBackground(top, bottom, gradient);
     if (m_render != nullptr) {
       m_render->redisplay();
@@ -1631,6 +1650,61 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   openDesignsIn->setEnabled(false);
 #endif
   generalForm->addRow(tr("Open designs in:"), openDesignsIn);
+  // Off (the default), closing the last design leaves the window on the
+  // Start page with no design open; on, it quits MitCad as closing the
+  // window does (mitcad#2142, WindowManager::closeDesign).
+  auto* quitOnLastClose = new QCheckBox(tr("Quit MitCad when the last design is closed"));
+  quitOnLastClose->setObjectName(QStringLiteral("quitOnLastClose"));
+  quitOnLastClose->setChecked(general->quitOnLastClose);
+  quitOnLastClose->setToolTip(tr("Off, closing the last design shows the Start page and MitCad stays open"));
+  control(generalForm, quitOnLastClose);
+  // Save of a design that has no file yet (mitcad#2183): Ask (the question
+  // On this computer or To a project, when a remote project is known), or
+  // the answer Remember my choice keeps. Save As, Save to Project and a
+  // design that has a file are not affected.
+  auto* newDesignSave = new QComboBox;
+  newDesignSave->setObjectName(QStringLiteral("newDesignSave"));
+  for (const NewDesignSave choice : {NewDesignSave::Ask, NewDesignSave::Computer, NewDesignSave::Project}) {
+    newDesignSave->addItem(newDesignSaveLabel(choice), newDesignSaveId(choice));
+  }
+  newDesignSave->setCurrentIndex(std::max(0, newDesignSave->findData(general->newDesignSave)));
+  newDesignSave->setItemData(0, tr("With a remote project, Save of a design that has no file yet asks where"),
+                             Qt::ToolTipRole);
+  newDesignSave->setItemData(1, tr("Save of a design that has no file yet opens the file dialog"), Qt::ToolTipRole);
+  newDesignSave->setItemData(2, tr("Save of a design that has no file yet opens Save to Project's picker"),
+                             Qt::ToolTipRole);
+  newDesignSave->setToolTip(tr("Where Save puts a design that has no file yet; Save As and Save to Project ask "
+                               "as before"));
+  generalForm->addRow(tr("Save of a new design:"), newDesignSave);
+  // The operation a new Extrude starts with (mitcad#2164, GitHub
+  // mitcad/Mitcad#496): chosen from the bodies its tool touches (mitcad#289,
+  // the default) or New Body. Saved when the dialog is accepted, at once in
+  // the Settings window; the next Extrude follows it, an edit keeps its own.
+  auto* extrudeStart = new QComboBox;
+  extrudeStart->setObjectName(QStringLiteral("preferencesExtrudeStart"));
+  extrudeStart->addItem(tr("Operation from the bodies it touches"),
+                        newFeatureOperationId(NewFeatureOperation::Automatic));
+  extrudeStart->addItem(tr("New Body"), newFeatureOperationId(NewFeatureOperation::NewBody));
+  extrudeStart->setCurrentIndex(std::max(0, extrudeStart->findData(newFeatureOperationId(savedExtrudeStart()))));
+  extrudeStart->setItemData(0, tr("Join where it touches a body, Cut where it goes into one, otherwise New Body"),
+                            Qt::ToolTipRole);
+  extrudeStart->setItemData(1, tr("Every new extrusion is a new body until you choose Join, Cut or another "
+                                  "operation"),
+                            Qt::ToolTipRole);
+  extrudeStart->setToolTip(tr("The operation a new extrusion starts with; editing an extrusion keeps its own"));
+  generalForm->addRow(tr("E&xtrude starts with:"), extrudeStart);
+  const auto applyExtrudeStart = [extrudeStart] {
+    const NewFeatureOperation chosen = newFeatureOperationFromId(extrudeStart->currentData().toString())
+                                           .value_or(NewFeatureOperation::Automatic);
+    if (saveExtrudeStart(chosen)) {
+      qDebug().noquote() << QStringLiteral("Preferences: extrude starts with %1").arg(newFeatureOperationId(chosen));
+    }
+  };
+  if (window != nullptr) {
+    connect(extrudeStart, &QComboBox::currentIndexChanged, host, saving(applyExtrudeStart));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, extrudeStart, applyExtrudeStart);
+  }
   // Create Sketch and the Construct commands on another component's face
   // ask whether to activate it (mitcad#960); the question's Don't ask
   // again turns this off. Saved when the dialog is accepted, at once in
@@ -2741,20 +2815,58 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
       connect(dialog.get(), &QDialog::accepted, boostShown, applyBoost);
     }
   }
+  // The Discord button (mitcad#2159): shown by default, hidden by its own
+  // × apart from Boost development; offered where the window has it, on
+  // Show the Boost development button's row.
+  QCheckBox* discordShown = nullptr;
+  if (chromeStyle() == ChromeStyle::Docked || floatingTopCards()) {
+    discordShown = new QCheckBox(tr("Show the Discord button"));
+    discordShown->setObjectName(QStringLiteral("discordVisible"));
+    discordShown->setChecked(DiscordSettings::loadVisible());
+    discordShown->setToolTip(tr("The button beside Boost development that opens MitCad's Discord server"));
+    if (window != nullptr) {
+      // macOS sizes a check box a few pixels short of its text (as control()).
+      discordShown->ensurePolished();
+      discordShown->setMinimumWidth(discordShown->sizeHint().width() + 8);
+    }
+    const auto applyDiscord = [discordShown] {
+      if (DiscordSettings::saveVisible(discordShown->isChecked())) {
+        qDebug().noquote() << QStringLiteral("Preferences: Discord button %1")
+                                  .arg(discordShown->isChecked() ? QStringLiteral("shown") : QStringLiteral("hidden"));
+      }
+    };
+    if (window != nullptr) {
+      connect(discordShown, &QCheckBox::toggled, host, saving(applyDiscord));
+      // The Settings window stays open: the button's own × unchecks it
+      // there too.
+      connect(&DiscordNotifier::instance(), &DiscordNotifier::visibilityChanged, discordShown,
+              [discordShown](bool visible) {
+                const QSignalBlocker blocker(discordShown);
+                discordShown->setChecked(visible);
+              });
+    } else {
+      connect(dialog.get(), &QDialog::accepted, discordShown, applyDiscord);
+    }
+  }
   if (MenuBarSettings::offered() && !floatingTopCards()) {
     auto* menuBarShown = new QCheckBox(tr("Show the m&enu bar"));
     menuBarShown->setObjectName(QStringLiteral("menuBarVisible"));
     menuBarShown->setChecked(MenuBarSettings::loadShown());
     menuBarShown->setToolTip(tr("Off: the menus are under the ☰ button before Undo, and Alt shows them"));
-    if (boostShown != nullptr) {
-      // Both on one row.
+    if (boostShown != nullptr || discordShown != nullptr) {
+      // All on one row.
       auto* checksRow = new QHBoxLayout;
       checksRow->addWidget(menuBarShown);
-      checksRow->addSpacing(12);
-      checksRow->addWidget(boostShown);
+      for (QCheckBox* check : {boostShown, discordShown}) {
+        if (check != nullptr) {
+          checksRow->addSpacing(12);
+          checksRow->addWidget(check);
+        }
+      }
       checksRow->addStretch(1);
       control(display, checksRow);
       boostShown = nullptr;
+      discordShown = nullptr;
     } else {
       control(display, menuBarShown);
     }
@@ -2770,8 +2882,18 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
       connect(dialog.get(), &QDialog::accepted, menuBarShown, applyMenuBar);
     }
   }
-  if (boostShown != nullptr) {
+  if (boostShown != nullptr && discordShown != nullptr) {
+    // The top bar's two pills' checks on one row.
+    auto* pillsRow = new QHBoxLayout;
+    pillsRow->addWidget(boostShown);
+    pillsRow->addSpacing(12);
+    pillsRow->addWidget(discordShown);
+    pillsRow->addStretch(1);
+    control(display, pillsRow);
+  } else if (boostShown != nullptr) {
     control(display, boostShown);
+  } else if (discordShown != nullptr) {
+    control(display, discordShown);
   }
 #if defined(Q_OS_MACOS) && !defined(MITCAD_MAC_UI)
   // The window's own File, Edit, ... menu bar (experiment/macos-shared-qt-ui):
@@ -3085,6 +3207,7 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
 
   *commit = [this, general, top, bottom, navigation, camera, cubeProjection, background,
              autosave, minutes, importTolerance, newDesignUnits, temperatureUnit, openInCurrent, openDesignsIn,
+             quitOnLastClose, newDesignSave,
              cacheBox, updatesBox, slicerBox, remoteBox, renderWorker,
              renderDevice, debugLog, debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice,
              layoutApplied, themeChoice, languageChoice] {
@@ -3172,6 +3295,15 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     chosen.temperatureUnit = temperatureUnit->currentData().toString();
     chosen.openInCurrentWindow = openInCurrent->isChecked();
     chosen.openDesignsIn = openDesignsIn->currentData().toString();
+    chosen.quitOnLastClose = quitOnLastClose->isChecked();
+    if (chosen.quitOnLastClose != general->quitOnLastClose) {
+      qDebug().noquote() << QStringLiteral("Preferences: quit when the last design is closed %1")
+                                .arg(chosen.quitOnLastClose ? QStringLiteral("on") : QStringLiteral("off"));
+    }
+    chosen.newDesignSave = newDesignSave->currentData().toString();
+    if (chosen.newDesignSave != general->newDesignSave) {
+      qDebug().noquote() << QStringLiteral("Preferences: save of a new design %1").arg(chosen.newDesignSave);
+    }
     chosen.save();
     // The next new design takes it (mitcad#1036), and an untitled design
     // nothing is made in yet (newDesignUnitsChanged, mitcad#1452); any
@@ -3451,6 +3583,8 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     connect(temperatureUnit, &QComboBox::currentIndexChanged, host, changed);
     connect(openInCurrent, &QCheckBox::toggled, host, changed);
     connect(openDesignsIn, &QComboBox::currentIndexChanged, host, changed);
+    connect(quitOnLastClose, &QCheckBox::toggled, host, changed);
+    connect(newDesignSave, &QComboBox::currentIndexChanged, host, changed);
     connect(cacheBox, &CachePreferencesBox::changed, host, changed);
     connect(texturesBox, &TexturePreferencesBox::changed, host, changed);
     connect(agentsBox, &mcp::AgentPreferencesBox::changed, host, changed);

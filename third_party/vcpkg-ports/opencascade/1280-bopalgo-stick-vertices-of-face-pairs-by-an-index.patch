@@ -16,14 +16,8 @@ are the same. GetStickVertices itself is unchanged. The results are
 unchanged. The index's lists are OCCT's NCollection_Array1 (a pair's codes
 sorted in place, mitcad#1986).
 
-Test: geometry/tests/port/p1280-stick-vertices-many-bodies.cpp (ctest
-geometry.port.1280): the union of 48 stars of 40 square pyramids whose
-apexes meet (37 440 VV interferences, about 600 000 pairs of faces) and two
-overlapping boxes is valid, 1921 solids with the volume of its parts, its
-intersections within 25 s (the scan of every interference for each pair of
-faces grew with their square: 49 s without the patch, 7.5 s with it); a row of 12 touching boxes, each pierced by
-a cylinder, is one valid solid with the volume of its parts;
-geometry/tests/test_join_many_bodies.cpp (results).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1280.
 diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
 index 8611aaa8..b487088f 100644
 --- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx

@@ -14,11 +14,12 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BodyChange, CheckContext, Env, EvalContext, FeatureEntry, FeatureOutput, OccurrencePath,
+    BodyChange, CheckContext, Env, EvalContext, FeatureDef, FeatureEntry, FeatureOutput,
+    OccurrencePath,
 };
 use crate::assembly::{Assembly, inverse};
 use crate::fingerprint::Fingerprint;
-use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
+use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::{BooleanOp, BooleanOutput, Kernel, KernelError};
 use crate::recompute::Read;
 use crate::transform::Transform;
@@ -193,65 +194,99 @@ pub struct CutTargets {
 }
 
 impl CutScope {
-    /// Feature replay currently applies tools in their owning component.
-    /// Preserve that boundary rather than localizing an assembly selection.
-    pub(crate) fn check_local_replay(&self) -> Result<(), String> {
-        if matches!(&self.targets, TargetScope::Explicit { included, .. }
-            if included.iter().any(|target| target != &self.context))
-        {
-            return Err(
-                "unsupported cut scope for feature replay: cross-component or occurrence targets"
-                    .to_owned(),
-            );
-        }
-        Ok(())
+    /// The first component other than its own an explicit scope includes:
+    /// a mirror or a pattern repeats the cut only in its own component, so
+    /// such a scope refuses it ([`ReplayRefusal::AlsoCuts`]).
+    pub(crate) fn foreign_included(&self) -> Option<&ComponentTarget> {
+        self.included()
+            .iter()
+            .find(|target| target.component != self.context.component)
     }
 
-    /// Resolve an ordinary local cut's selection at the replay point. An
-    /// automatic scope is local only while all selected body definitions
-    /// belong to its unique context. These assembly and body reads also
-    /// invalidate a cached replay when another target becomes available.
+    /// The bodies of its own component a mirror or a pattern repeats the
+    /// cut `cut` on (mitcad#569, mitcad#2126), resolved at the replay
+    /// point; the copies cut only those. Refused, in words
+    /// ([`ReplayRefusal`]), when the cut changes more: an explicit scope
+    /// that includes another component, or a cut whose result changed a
+    /// body of another component or occurrence (`report`, the cut's
+    /// Affected components as it was evaluated: its output's). Components
+    /// the cut does not reach refuse nothing; the copies are checked
+    /// against them ([`CutScope::copy_reach`]). The assembly and body reads
+    /// of the discovery invalidate a cached replay when a target changes.
     pub(crate) fn local_replay_bodies<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
+        cut: FeatureUid,
+        report: Option<&CutTargets>,
     ) -> Result<Vec<BodyUid>, String> {
-        self.check_local_replay()?;
+        if let Some(target) = self.foreign_included() {
+            return Err(ReplayRefusal::AlsoCuts(target.clone()).text(ctx, cut));
+        }
         let discovery = self.discover(ctx)?;
+        if let Some(row) = report.and_then(|report| {
+            report
+                .rows
+                .iter()
+                .find(|row| row.checked && row.component != self.context.component)
+        }) {
+            let target = ComponentTarget {
+                component: row.component,
+                occurrence: row.occurrence.clone(),
+            };
+            return Err(ReplayRefusal::AlsoCuts(target).text(ctx, cut));
+        }
         let mut bodies = Vec::new();
         for candidate in discovery.candidates {
-            if !self.checked(&candidate.target) {
+            if candidate.target != self.context || !self.checked(&candidate.target) {
                 continue;
             }
-            if candidate.target == self.context {
-                if let Some(reason) = candidate.row.reason {
-                    return Err(format!(
-                        "unsupported cut scope for feature replay: {reason}"
-                    ));
-                }
-                bodies.extend(candidate.shapes.into_iter().filter_map(|(body, shape)| {
-                    (!ctx.is_mesh(&shape)
-                        && !self.excluded_bodies().iter().any(|excluded| {
-                            excluded.body == body && excluded.target() == self.context
-                        }))
-                    .then_some(body)
-                }));
-            } else if candidate.row.eligible
-                && candidate.shapes.iter().any(|(body, shape)| {
-                    !ctx.is_mesh(shape)
-                        && !self.excluded_bodies().iter().any(|excluded| {
-                            excluded.body == *body && excluded.target() == candidate.target
-                        })
-                })
-            {
-                return Err("unsupported cut scope for feature replay: automatic scope includes another component or occurrence".to_owned());
+            if let Some(reason) = candidate.row.reason {
+                return Err(ReplayRefusal::Own(reason).text(ctx, cut));
             }
+            bodies.extend(candidate.shapes.into_iter().filter_map(|(body, shape)| {
+                (!ctx.is_mesh(&shape)
+                    && !self
+                        .excluded_bodies()
+                        .iter()
+                        .any(|excluded| excluded.body == body && excluded.target() == self.context))
+                .then_some(body)
+            }));
         }
         // The shared tool application treats an empty list as all bodies.
         // A deliberate empty selection must therefore fail before it.
         if bodies.is_empty() {
-            return Err("no eligible local bodies selected for cut feature replay".to_owned());
+            return Err(ReplayRefusal::NoOwnBodies.text(ctx, cut));
         }
         Ok(bodies)
+    }
+
+    /// The first other component, at its occurrence, that one of `copies`
+    /// (a mirror's or a pattern's copies of this cut, in the coordinates
+    /// of the cut's component) would cut (mitcad#2126): a body of a
+    /// checked, eligible component other than the cut's own that is
+    /// neither excluded nor a mesh, as [`CutScope::would_cut`] tells. The
+    /// copies cut only the own component's bodies, so such a copy refuses
+    /// the mirror or the pattern instead of leaving that body uncut
+    /// silently (mitcad#569).
+    pub(crate) fn copy_reach<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        copies: &[K::Shape],
+    ) -> Result<Option<ComponentTarget>, String> {
+        let discovery = self.discover(ctx)?;
+        for candidate in &discovery.candidates {
+            if candidate.target.component == self.context.component
+                || !(self.checked(&candidate.target) && candidate.row.eligible)
+            {
+                continue;
+            }
+            for copy in copies {
+                if self.cuts_candidate(ctx, candidate, copy)? {
+                    return Ok(Some(candidate.target.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// The kept frame of an occurrence the cut machines (mitcad#2131).
@@ -1309,45 +1344,137 @@ impl CutScope {
             if !(self.checked(&candidate.target) && candidate.row.eligible) {
                 continue;
             }
-            let local_tool = ctx
-                .kernel
-                .transform_shape(tool, &candidate.to_local, None)
-                .map_err(|e| e.to_string())?;
-            let tool_bounds = ctx
-                .kernel
-                .bounding_box(&local_tool)
-                .map_err(|e| e.to_string())?;
-            for (uid, shape) in &candidate.shapes {
-                if ctx.is_mesh(shape)
-                    || self
-                        .excluded_bodies()
-                        .iter()
-                        .any(|b| b.body == *uid && b.target() == candidate.target)
-                {
-                    continue;
-                }
-                let bounds = ctx.kernel.bounding_box(shape).map_err(|e| e.to_string())?;
-                if let (Some(a), Some(b)) = (&tool_bounds, &bounds)
-                    && !a.overlaps(b, 1e-7)
-                {
-                    continue;
-                }
-                match ctx.kernel.boolean(BooleanOp::Cut, &[shape], &local_tool) {
-                    Ok(result) if result.touched.first() == Some(&true) => return Ok(true),
-                    Ok(_) => {}
-                    Err(error) => {
-                        let detail = error.to_string();
-                        if KernelError::is_out_of_memory(&detail)
-                            || detail.contains("cancelled")
-                            || detail.contains("canceled")
-                        {
-                            return Err(detail);
-                        }
+            if self.cuts_candidate(ctx, candidate, tool)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether `tool` (in the cut's own frame) would cut a body of
+    /// `candidate` that is neither excluded nor a mesh. A body whose
+    /// intersection fails counts as not cut.
+    fn cuts_candidate<K: Kernel>(
+        &self,
+        ctx: &EvalContext<'_, K>,
+        candidate: &Candidate<K::Shape>,
+        tool: &K::Shape,
+    ) -> Result<bool, String> {
+        let local_tool = ctx
+            .kernel
+            .transform_shape(tool, &candidate.to_local, None)
+            .map_err(|e| e.to_string())?;
+        let tool_bounds = ctx
+            .kernel
+            .bounding_box(&local_tool)
+            .map_err(|e| e.to_string())?;
+        for (uid, shape) in &candidate.shapes {
+            if ctx.is_mesh(shape)
+                || self
+                    .excluded_bodies()
+                    .iter()
+                    .any(|b| b.body == *uid && b.target() == candidate.target)
+            {
+                continue;
+            }
+            let bounds = ctx.kernel.bounding_box(shape).map_err(|e| e.to_string())?;
+            if let (Some(a), Some(b)) = (&tool_bounds, &bounds)
+                && !a.overlaps(b, 1e-7)
+            {
+                continue;
+            }
+            match ctx.kernel.boolean(BooleanOp::Cut, &[shape], &local_tool) {
+                Ok(result) if result.touched.first() == Some(&true) => return Ok(true),
+                Ok(_) => {}
+                Err(error) => {
+                    let detail = error.to_string();
+                    if KernelError::is_out_of_memory(&detail)
+                        || detail.contains("cancelled")
+                        || detail.contains("canceled")
+                    {
+                        return Err(detail);
                     }
                 }
             }
         }
         Ok(false)
+    }
+}
+
+/// Why a mirror or a pattern does not repeat a scoped cut in its own
+/// component (mitcad#2126): its copies would change only the own
+/// component's bodies, where the cut changes more or nothing.
+pub(crate) enum ReplayRefusal {
+    /// The cut also cuts another component at an occurrence: its result
+    /// changed a body there, or its explicit scope includes it.
+    AlsoCuts(ComponentTarget),
+    /// A copy would cut a body of another component at an occurrence.
+    CopyCuts(ComponentTarget),
+    /// The own component's row is not eligible, for this reason.
+    Own(String),
+    /// No body of the own component is left to cut.
+    NoOwnBodies,
+}
+
+impl ReplayRefusal {
+    /// The failure of the mirror or the pattern being evaluated that
+    /// repeats `cut`: in words with the cut's and the component's names,
+    /// the other component's occurrence as its place
+    /// ([`crate::notice::FeatureError`]).
+    pub(crate) fn text<K: Kernel>(self, ctx: &EvalContext<'_, K>, cut: FeatureUid) -> String {
+        let name = ctx.feature_name(cut);
+        let mirror = ctx
+            .feature_entry(ctx.uid)
+            .is_ok_and(|entry| matches!(entry.def, FeatureDef::Mirror(_)));
+        let place = match &self {
+            Self::AlsoCuts(target) | Self::CopyCuts(target) => Some(target.clone()),
+            Self::Own(_) | Self::NoOwnBodies => None,
+        };
+        let other = place
+            .as_ref()
+            .map(|target| ctx.env.assembly.name(target.component))
+            .unwrap_or_default();
+        let message = match (self, mirror) {
+            (Self::AlsoCuts(_), true) => format!(
+                "Could not mirror {name}: it also cuts {other}, and a mirrored or patterned cut \
+                 changes only the bodies of its own component. Leave that component out in the \
+                 cut's Affected components."
+            ),
+            (Self::AlsoCuts(_), false) => format!(
+                "Could not repeat {name} in the pattern: it also cuts {other}, and a mirrored or \
+                 patterned cut changes only the bodies of its own component. Leave that \
+                 component out in the cut's Affected components."
+            ),
+            (Self::CopyCuts(_), true) => format!(
+                "Could not mirror {name}: its mirrored copy would also cut {other}, and a \
+                 mirrored or patterned cut changes only the bodies of its own component."
+            ),
+            (Self::CopyCuts(_), false) => format!(
+                "Could not repeat {name} in the pattern: a copy of it would also cut {other}, \
+                 and a mirrored or patterned cut changes only the bodies of its own component."
+            ),
+            (Self::Own(reason), true) => format!("Could not mirror {name}: {reason}"),
+            (Self::Own(reason), false) => {
+                format!("Could not repeat {name} in the pattern: {reason}")
+            }
+            (Self::NoOwnBodies, true) => format!(
+                "Could not mirror {name}: it cuts no body of its own component, and a mirrored \
+                 or patterned cut changes only the bodies of its own component."
+            ),
+            (Self::NoOwnBodies, false) => format!(
+                "Could not repeat {name} in the pattern: it cuts no body of its own component, \
+                 and a mirrored or patterned cut changes only the bodies of its own component."
+            ),
+        };
+        let mut error = crate::notice::FeatureError::new(message);
+        if let Some(target) = place
+            && !target.occurrence.is_empty()
+        {
+            error = error.at(crate::notice::NoticePlace::occurrence(
+                target.occurrence.to_string(),
+            ));
+        }
+        error.text()
     }
 }
 

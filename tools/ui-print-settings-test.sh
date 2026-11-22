@@ -96,6 +96,33 @@ expect_in_value_column() {
   echo "ok   $2"
 }
 
+# type_ahead_to "word" "logged name" since: Property Sets' type-ahead to the
+# row of that word, typed afresh until the row's place ("<logged name> at")
+# is logged after line `since` of the log, up to three tries (mitcad#2189).
+# Qt joins the keys into one search only while the app reads each within
+# 400 ms of the one before; under a full check's load it read one later
+# than that, the search started again in the middle of the word and the
+# row was never reached. A try after the first waits that long first, so
+# that its word starts afresh. A row in sight from the start was logged
+# then, with the others.
+type_ahead_to() {
+  local attempt
+  for attempt in 1 2 3; do
+    if [ "$attempt" != 1 ]; then
+      echo "note: the type-ahead missed '$1': typed again"
+      sleep 0.5
+    fi
+    ui_step "go to $1 (type-ahead, try $attempt)" xdotool type --delay 40 "$1"
+    ui_sync
+    if grep -qF -- "$2 at " < <(tail -n +$(($3 + 1)) "$UI_LOG"); then
+      echo "ok   the type-ahead reached '$1'"
+      return
+    fi
+  done
+  UI_MARK=$3
+  ui_expect_new "$2 at " "the type-ahead reached '$1' in the end"
+}
+
 # Ctrl+S is the main window's shortcut: not one of a print window's.
 save() {
   ui_focus_main
@@ -521,9 +548,7 @@ ui_expect_new "Property sets row: print Print Process/own_settings = None" "Body
 # its pencil into view. Where the rows fit, the pencil was logged with the
 # others when the window opened (since the mark of the right-click).
 ui_focus_dialog '^Property Sets$'
-ui_step "go to Own settings (type-ahead)"  xdotool type --delay 40 "Own settings"
-ui_sync
-ui_expect_new "Property sets print Print Process/own_settings edit at" "the pencil of Own settings"
+type_ahead_to "Own settings" "Property sets print Print Process/own_settings edit" "$UI_MARK"
 expect_in_value_column "Property sets print Print Process/own_settings edit" "Own settings' pencil in the Value column"
 ui_mark
 ui_step "Own settings' pencil"             ui_click_logged "Property sets print Print Process/own_settings edit"
@@ -602,12 +627,9 @@ if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "Property sets print Print Pro
   ui_fail "a right click ran ↺: $(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "clear$|cleared" | head -3)"
 fi
 echo "ok   a right click on ↺ runs nothing"
-ui_step "go to Material (type-ahead)"      xdotool type --delay 40 "Material"
-ui_sync
 # Logged since the dialog opened: again only where the type-ahead scrolled
 # it into view, else where the dialog showed it at first.
-UI_MARK=$opened
-ui_expect_new "Property sets print Print Filament/material value at" "the Material row's value"
+type_ahead_to "Material" "Property sets print Print Filament/material value" "$opened"
 ui_mark
 ui_step "Material"                         ui_click_logged "Property sets print Print Filament/material value"
 ui_expect_new "Materials opened" "the next left click opens Materials"
@@ -760,6 +782,18 @@ for attempt in 1 2 3; do
   xdotool type --delay 40 "Send to Slicer"
   ui_sync
   xdotool key --delay 1 Return Return
+  # Keys that come apart (mitcad#2189): under load the app read both
+  # Returns while the search still had the keyboard (its choice starts the
+  # command a moment later), so the search chose twice and the panel got
+  # none. That try's panel is cancelled and the next try types again.
+  ui_expect_new "3D Print printer: " "try $attempt: the panel opened"
+  ui_sync
+  if [ "$(grep -c '^Command search chose ' < <(tail -n +$((UI_MARK + 1)) "$UI_LOG"))" -gt 1 ] &&
+    [ "$(grep -c '^3D Print last line: ' < <(tail -n +$((UI_MARK + 1)) "$UI_LOG"))" = 0 ]; then
+    echo "note: try $attempt: both Returns went to the search, none to the panel"
+    ui_step "cancel the panel (Esc)"       ui_key Escape
+    continue
+  fi
   ui_expect_new "3D Print last line: " "try $attempt: sent" 60
   grep -q "The document was read while a job computes it" "$UI_LOG" && ui_fail "the document was read during the export"
   if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "3D Print: library changes asked after the job"; then

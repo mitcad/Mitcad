@@ -21,12 +21,8 @@ edge's pieces under the rounding and gave an unorientable shell.
   contact ends: its part from the vertex, under the rounding, is dropped.
   Elsewhere nothing changes.
 
-Test: geometry/tests/test_fillet_results.cpp (ctest
-geometry.suite.fillet_results), test_slot_end_beside_a_split_side: It
-fails with this patch and 20 later patches that change the same lines
-reverted together, so the test does not single this patch out (shown
-2026-11-20 by tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0150.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index b6526905..52ba975d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

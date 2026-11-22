@@ -465,6 +465,9 @@ pub(super) fn add_command(command: &Value) -> Result<Value, VcsError> {
         rows: old.rows,
         build,
         mounts: mount_frames,
+        // Not for print services (mitcad#2214): set by hand in the
+        // manifest only, kept when the component's design is replaced.
+        non_printable: old.non_printable,
     };
     match manifest.components.iter_mut().find(|c| c.id == id) {
         Some(old) => *old = component.clone(),

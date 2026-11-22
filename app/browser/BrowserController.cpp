@@ -58,6 +58,7 @@
 #include "ParametersDialog.hpp"
 #include "PolicyDialog.hpp"
 #include "ReorientDialog.hpp"
+#include "SelectionSets.hpp"
 #include "TimelineWidget.hpp"
 
 namespace mitcad {
@@ -1326,6 +1327,9 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
   case BrowserNode::Type::SketchBlock: // mitcad#2110
     command = cmd("rename_sketch_block", {{QStringLiteral("block"), node.uid}, {QStringLiteral("name"), name}});
     break;
+  case BrowserNode::Type::SelectionSet: // mitcad#2192: a taken name is refused
+    command = cmd("rename_selection_set", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
+    break;
   case BrowserNode::Type::CamSetup: // mitcad#1013
     command = cmd("cam_setup_edit", {{QStringLiteral("setup"), node.uid.toInt()},
                                      {QStringLiteral("changes"), QJsonObject{{QStringLiteral("name"), name}}}});
@@ -1543,6 +1547,10 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
       command = cmd("remove_sketch_block", {{QStringLiteral("block"), node.uid}});
       name = tr("block %1").arg(node.name);
       break;
+    case BrowserNode::Type::SelectionSet: // mitcad#2192: the set alone, never its items
+      command = cmd("delete_selection_set", {{QStringLiteral("name"), node.uid}});
+      name = tr("selection set %1").arg(node.name);
+      break;
     case BrowserNode::Type::CenterOfMass: // mitcad#1094: display state, as its light bulb
       command = cmd("delete_center_of_mass");
       name = tr("the Center of Mass marker");
@@ -1742,6 +1750,96 @@ void BrowserController::ungroupFolder(const BrowserNode& folder) {
   }
   if (!commands.isEmpty() && m_host.runNamedModelCommands(commands, tr("Ungroup %1").arg(folder.name))) {
     qDebug().noquote() << QStringLiteral("Ungrouped %1").arg(folder.name);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Selection sets (mitcad#2192)
+
+QJsonArray BrowserController::selectionSetMembers(const Selection& items) const {
+  // The Browser's selected rows show the selection: a feature's row there
+  // stands for the feature, which the items give as its body.
+  QJsonArray members = setMembersOf(m_browser->selectedNodes());
+  if (members.isEmpty()) {
+    members = setMembersOf(items);
+  }
+  return members;
+}
+
+QJsonArray BrowserController::menuSetMembers(const BrowserNode& node) const {
+  const QVector<BrowserNode> selected = m_browser->selectedNodes();
+  const QJsonObject own = setMemberOf(node);
+  const QJsonArray members = setMembersOf(selected);
+  return members.contains(own) ? members : QJsonArray{own};
+}
+
+void BrowserController::createSelectionSet(const QJsonArray& members) {
+  if (members.isEmpty() || !canChange()) {
+    return;
+  }
+  QJsonObject result;
+  if (!m_host.runModelCommand(cmd("add_selection_set", {{QStringLiteral("members"), members}}), &result)) {
+    return;
+  }
+  const QString name = result.value(QStringLiteral("name")).toString();
+  QStringList texts;
+  for (const QJsonValue& member : members) {
+    texts << setMemberText(member.toObject());
+  }
+  qDebug().noquote() << QStringLiteral("Created selection set %1: %2").arg(name, texts.join(QStringLiteral(", ")));
+  // Its row, its name selected for typing in place.
+  BrowserNode row;
+  row.type = BrowserNode::Type::SelectionSet;
+  row.uid = name;
+  row.name = name;
+  m_browser->startRename(row);
+}
+
+void BrowserController::selectSet(const QString& name) {
+  Selection items;
+  QStringList features;
+  for (const BrowserNode& node : m_browser->setMemberNodes(name)) {
+    if (node.type == BrowserNode::Type::Feature) {
+      if (!features.contains(node.uid)) {
+        features << node.uid;
+      }
+    } else if (const SelectionItem item = node.item(); item.isValid() && !items.contains(item)) {
+      items << item;
+    }
+  }
+  pickRows(items, features);
+  qDebug().noquote() << QStringLiteral("Selected selection set %1: %2 item(s)").arg(name).arg(items.size() + features.size());
+}
+
+void BrowserController::changeSetMembers(const QString& name, bool replace) {
+  if (!canChange()) {
+    return;
+  }
+  const QJsonArray members = selectionSetMembers(m_shownItems);
+  if (members.isEmpty()) {
+    m_host.showStatus(tr("Select bodies, components, sketches or features to put in %1.").arg(name),
+                      NoticeLevel::Information);
+    return;
+  }
+  QJsonObject result;
+  if (m_host.runModelCommand(cmd("set_selection_set_members",
+                                 {{QStringLiteral("name"), name},
+                                  {replace ? QStringLiteral("members") : QStringLiteral("add"), members}}),
+                             &result)) {
+    qDebug().noquote() << QStringLiteral("Selection set %1: %2 members")
+                              .arg(name)
+                              .arg(result.value(QStringLiteral("members")).toInt());
+  }
+}
+
+void BrowserController::removeFromSet(const BrowserNode& member) {
+  const QJsonObject removed = setMemberOf(member);
+  if (removed.isEmpty() || !canChange()) {
+    return;
+  }
+  if (m_host.runModelCommand(cmd("set_selection_set_members", {{QStringLiteral("name"), member.selectionSet},
+                                                               {QStringLiteral("remove"), QJsonArray{removed}}}))) {
+    qDebug().noquote() << QStringLiteral("Removed %1 from selection set %2").arg(member.name, member.selectionSet);
   }
 }
 
@@ -2223,11 +2321,40 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     }
   };
   const bool plane = item.kind == SelectKind::Plane;
+  // Selection sets (mitcad#2192), after the row's own entries and before
+  // Save as Mesh…: a set's member row adds Find in Browser (its item's own
+  // row) and Remove from Set to its item's entries; the row of anything a
+  // set takes offers Create Selection Set, for the rows selected with it.
+  bool setEntriesAdded = false;
+  const auto setEntries = [&] {
+    if (setEntriesAdded) {
+      return;
+    }
+    setEntriesAdded = true;
+    if (node.isSetMember()) {
+      menu.separator();
+      menu.add(QStringLiteral("browser"), tr("Find in Browser"), [this, node] {
+        BrowserNode own = node;
+        own.selectionSet.clear();
+        if (own.type == BrowserNode::Type::Feature ? m_browser->reveal(own.uid) : m_browser->revealItem(own.item())) {
+          qDebug().noquote() << QStringLiteral("Found %1 in the browser").arg(own.name);
+        } else {
+          m_host.showStatus(tr("%1 has nothing in the browser.").arg(own.name), NoticeLevel::Information);
+        }
+      });
+      menu.add(QStringLiteral("selection-set"), tr("Remove from Set"), [this, node] { removeFromSet(node); });
+    } else if (!setMemberOf(node).isEmpty()) {
+      const QJsonArray members = menuSetMembers(node);
+      menu.add(QStringLiteral("selection-set"), tr("Create Selection Set"),
+               [this, members] { createSelectionSet(members); });
+    }
+  };
   // Save As Mesh (mitcad#734): the row's bodies, or those of the body and
   // component rows selected with it, to mesh files; disabled with the
   // reason when none is a solid or mesh body. Last before Collapse All, which
   // ends every row's menu, so that the entries above keep their places.
   const auto saveAsMeshEntry = [&] {
+    setEntries();
     const SelectionItem own =
         item.isValid() ? item : SelectionItem{SelectKind::Component, node.uid, QString(), QString()}; // the root
     Selection meshItems;
@@ -2446,11 +2573,16 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         const QString path = node.occurrence;
         const QString name = node.name;
         const double detail = c.envelope;
-        menu.add(QStringLiteral("component"), tr("Show as Envelope…"),
-                 [this, path, name, detail] { showAsEnvelope(path, name, detail, false); });
+        // A design linked with its components is shown in full
+        // (mitcad#2209).
+        const QString inFull = c.linkTree ? tr("It is linked with its components") : QString();
+        menu.add(
+            QStringLiteral("component"), tr("Show as Envelope…"),
+            [this, path, name, detail] { showAsEnvelope(path, name, detail, false); }, inFull);
         if (occurrencesOf(m_snapshot.occurrences, c.uid) > 1) {
-          menu.add(QStringLiteral("component"), tr("Show All as Envelope…"),
-                   [this, path, name, detail] { showAsEnvelope(path, name, detail, true); });
+          menu.add(
+              QStringLiteral("component"), tr("Show All as Envelope…"),
+              [this, path, name, detail] { showAsEnvelope(path, name, detail, true); }, inFull);
         }
         if (detail > 0) {
           menu.add(QStringLiteral("component"), tr("Show in Full"),
@@ -2476,12 +2608,16 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
             m_host.updateLink(QString());
           }
         });
-        // Linked parts of the design only (mitcad#2130).
-        menu.add(QStringLiteral("component"), tr("Choose Linked Parts…"), [this, component] {
-          if (canChange()) {
-            m_host.chooseLinkedParts(component);
-          }
-        });
+        // Linked parts of the design only (mitcad#2130); not of one
+        // linked with its components (mitcad#2209).
+        menu.add(
+            QStringLiteral("component"), tr("Choose Linked Parts…"),
+            [this, component] {
+              if (canChange()) {
+                m_host.chooseLinkedParts(component);
+              }
+            },
+            c.linkTree ? tr("It is linked with its components") : QString());
       }
     }
     // The whole design turned by quarter turns (mitcad#502).
@@ -2778,6 +2914,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         m_host.startCommand(QStringLiteral("inspect.print_analysis"), {}, nullptr);
       }
     });
+    // mitcad#2166
+    menu.add(QStringLiteral("draft-analysis"), tr("New Draft Analysis"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("inspect.draft_analysis"), {}, nullptr);
+      }
+    });
     break;
   case BrowserNode::Type::Joints:
     // Joints (mitcad#55): in the component the folder is in, when active.
@@ -2826,11 +2968,13 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   }
   case BrowserNode::Type::Analysis:
     menu.add(QStringLiteral("edit"),
-             node.featureType == QStringLiteral("print") ? tr("Edit Print Analysis") : tr("Edit Section Analysis"),
+             node.featureType == QStringLiteral("print")   ? tr("Edit Print Analysis")
+             : node.featureType == QStringLiteral("draft") ? tr("Edit Draft Analysis")
+                                                           : tr("Edit Section Analysis"),
              [this, node] { m_host.editAnalysis(node.uid); });
     // A section's other side (mitcad#1975: here, no longer in the
     // toolbar's Inspect menu; its Hide is Remove Section Analysis).
-    if (node.featureType != QStringLiteral("print")) {
+    if (node.featureType == QStringLiteral("section")) {
       menu.add(QStringLiteral("flip"), tr("Flip Section Analysis"), [this, node] {
         QJsonObject def = m_snapshot.analysis(node.uid);
         if (def.isEmpty() || !canChange()) {
@@ -3050,9 +3194,26 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
   }
+  // Selection sets (mitcad#2192): the root's folder; a set's row selects
+  // its members, adds the selection to them or puts it in their place, and
+  // is renamed and deleted (the set alone, never its items).
+  case BrowserNode::Type::SelectionSets:
+    break;
+  case BrowserNode::Type::SelectionSet: {
+    const QString name = node.uid;
+    menu.add(QStringLiteral("select"), tr("Select"), [this, name] { selectSet(name); });
+    menu.add(QStringLiteral("add"), tr("Add Selection"), [this, name] { changeSetMembers(name, false); });
+    menu.add(QStringLiteral("selection-set"), tr("Replace with Selection"),
+             [this, name] { changeSetMembers(name, true); });
+    menu.separator();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
+  }
   default:
     break;
   }
+  setEntries();
   // Every row's menu ends with this presentation action (mitcad#312).
   if (!menu.isEmpty()) {
     menu.separator();
@@ -3640,6 +3801,24 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
   if (row.isValid()) {
     menu.add(QStringLiteral("timeline"), tr("Find in Timeline"), [this, uid] { findInTimeline(uid); });
     commentEntry();
+    // Selection sets (mitcad#2192): a set's member row finds the feature's
+    // own rows and leaves the set; its own row makes a set.
+    if (row.isSetMember()) {
+      menu.add(QStringLiteral("browser"), tr("Find in Browser"), [this, uid] {
+        const DocumentSnapshot::Feature* f = m_snapshot.feature(uid);
+        if (m_browser->reveal(uid)) {
+          qDebug().noquote() << QStringLiteral("Found %1 in the browser").arg(f != nullptr ? f->name : uid);
+        } else {
+          m_host.showStatus(tr("%1 has nothing in the browser.").arg(f != nullptr ? f->name : uid),
+                            NoticeLevel::Information);
+        }
+      });
+      menu.add(QStringLiteral("selection-set"), tr("Remove from Set"), [this, row] { removeFromSet(row); });
+    } else {
+      const QJsonArray members = menuSetMembers(row);
+      menu.add(QStringLiteral("selection-set"), tr("Create Selection Set"),
+               [this, members] { createSelectionSet(members); });
+    }
     menu.add(QStringLiteral("folder"), tr("Collapse All"), [this] { m_browser->collapseAll(); });
   } else {
     menu.add(QStringLiteral("browser"), tr("Find in Browser"), [this, uid] {

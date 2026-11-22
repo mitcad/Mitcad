@@ -2,7 +2,9 @@
 # The BOM Structure and the Bill of Materials' views (mitcad#1985), on
 # bom-structure.json (Base a box; Frame a subassembly holding Rail twice):
 #   1. Structured: Base, Frame and its Rails below it, numbered 1, 2, 2.1;
-#      Parts only: Base and the two Rails.
+#      Parts only: Base and the two Rails. Group identical parts
+#      (mitcad#2215) combines Base and the equal Rails in Parts only, and
+#      not in Structured, where they are no siblings.
 #   2. Frame Inseparable: the structured view still lists its Rails, the
 #      parts-only view Frame as one item.
 #   3. Frame Phantom: neither view lists Frame; its Rails move up a level.
@@ -31,6 +33,30 @@ expect-log '^Build parts list view: parts$'
 expect-log '^Build BOM item: 1 Base x 1 \(Normal\)$'
 expect-log '^Build BOM item: 2 Rail x 2 \(Normal\)$'
 expect-widget-property buildPartsList rowCount 2
+
+# 1b. Group identical parts (mitcad#2215), enabled in the views: in Parts
+# only Base and the two Rails (equal 10 mm boxes) are one row of three; the
+# structured view combines siblings only, so Base and the Rails below
+# Frame stay apart. Unchecked again for the steps below.
+expect-widget-property buildPartsGroupIdentical enabled true
+expect-widget-property buildPartsGroupIdentical checked false
+mark
+button '^Group identical parts$'
+expect-log '^Build BOM item: 1 Base x 3 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 1
+mark
+qt-choice buildPartsView 'Structured'
+expect-widget-property buildPartsGroupIdentical enabled true
+expect-log '^Build BOM item:   2[.]1 Rail x 2 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 3
+mark
+qt-choice buildPartsView 'Parts only'
+expect-log '^Build BOM item: 1 Base x 3 \(Normal\)$'
+mark
+button '^Group identical parts$'
+expect-log '^Build BOM item: 2 Rail x 2 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 2
+expect-widget-property buildPartsGroupIdentical checked false
 key Escape
 expect-dialog-gone '^Bill of Materials$'
 focus-main

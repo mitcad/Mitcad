@@ -256,6 +256,184 @@ pub fn face_bounded_regions(curves: &[RegionCurve]) -> (Vec<Region>, Layout) {
     (kept.into_iter().map(|(_, region)| region).collect(), layout)
 }
 
+/// The profiles of a sketch on a face ([`own_area_regions`]).
+#[derive(Debug, Clone, Default)]
+pub struct OwnAreaRegions {
+    /// The regions, sorted by key.
+    pub regions: Vec<Region>,
+    /// How they lie against each other.
+    pub layout: Layout,
+    /// The pieces the automatic boundaries cut out of an own area, as
+    /// profiles were bounded before mitcad#2197: a stored reference to one
+    /// still means that piece, so that saved designs keep their bodies.
+    pub earlier: Vec<Region>,
+}
+
+/// The regions of a sketch on a face (mitcad#2197). `own` are the curves
+/// the user drew or chose (drawn curves, texts, projections the user made);
+/// `automatic` the boundaries the user neither drew nor chose: the face's
+/// own edges (mitcad#1138) and the outline projected when the sketch was
+/// made (mitcad#2051, [`crate::Projection::automatic`]).
+///
+/// An own area (a region of the own curves alone, with its holes) is one
+/// region whatever automatic boundaries cross it, keyed as the own curves
+/// key it: a circle across the face's edge is one disc, a rectangle
+/// reaching past the face one region with its holes, and a hole of the
+/// face inside it makes no hole in it. Outside every own area the
+/// automatic boundaries bound regions as [`face_bounded_regions`] finds
+/// them: the face's leftover around the shapes, a region closed by drawn
+/// lines and the face's edge, the outline alone.
+pub fn own_area_regions(own: &[RegionCurve], automatic: &[RegionCurve]) -> OwnAreaRegions {
+    let curves: Vec<RegionCurve> = own.iter().chain(automatic).cloned().collect();
+    let (pieces, mut layout) = face_bounded_regions(&curves);
+    let areas = regions(own);
+    // The own area each piece lies in. The arrangement of all the curves
+    // refines that of the own curves, so a piece lies in one area or in
+    // none, and a point deep inside it tells which.
+    let within: Vec<Option<usize>> = pieces
+        .iter()
+        .map(|piece| {
+            let p = deep_point(&piece.outline, &piece.holes, piece.centroid)?;
+            areas.iter().position(|a| {
+                polygon_contains(&a.outline, p) && !a.holes.iter().any(|h| polygon_contains(h, p))
+            })
+        })
+        .collect();
+    if within.iter().all(Option::is_none) {
+        return OwnAreaRegions {
+            regions: pieces,
+            layout,
+            earlier: Vec::new(),
+        };
+    }
+    let area_keys: Vec<RegionKey> = areas.iter().map(|a| a.profile.key.clone()).collect();
+    let piece_keys: Vec<RegionKey> = pieces.iter().map(|p| p.profile.key.clone()).collect();
+    // An area that holds no piece (none was found inside it) stays out,
+    // so that no two regions overlap: its pieces stay as they are.
+    let mut used = vec![false; areas.len()];
+    for &a in within.iter().flatten() {
+        used[a] = true;
+    }
+    let mut merged: Vec<Region> = areas
+        .into_iter()
+        .zip(&used)
+        .filter(|(_, used)| **used)
+        .map(|(area, _)| area)
+        .collect();
+    let mut earlier = Vec::new();
+    for (piece, at) in pieces.into_iter().zip(&within) {
+        match at {
+            Some(_) => earlier.push(piece),
+            None => merged.push(piece),
+        }
+    }
+    merged.sort_by(|a, b| a.profile.key.cmp(&b.profile.key));
+    merged.dedup_by(|later, kept| later.profile.key == kept.profile.key);
+    let index_of = |key: &RegionKey| merged.binary_search_by(|r| r.profile.key.cmp(key)).ok();
+    earlier.retain(|piece| index_of(&piece.profile.key).is_none());
+    // Each piece's region now: its area's, or its own.
+    let target: Vec<Option<usize>> = within
+        .iter()
+        .zip(&piece_keys)
+        .map(|(at, key)| index_of(at.map_or(key, |a| &area_keys[a])))
+        .collect();
+    // The curves on each area's outer loop and on its holes: an edge on
+    // the outer boundary of a piece may be on a hole's of its area.
+    let mut loops: HashMap<usize, (BTreeSet<CurveId>, BTreeSet<CurveId>)> = HashMap::new();
+    for (a, key) in area_keys.iter().enumerate() {
+        let Some(index) = index_of(key).filter(|_| used[a]) else {
+            continue;
+        };
+        let mut outer = BTreeSet::new();
+        let mut holes = BTreeSet::new();
+        for (k, l) in merged[index].profile.loops.iter().enumerate() {
+            let set = if k == 0 { &mut outer } else { &mut holes };
+            set.extend(l.segments.iter().map(|s| s.key.curve.clone()));
+        }
+        loops.insert(index, (outer, holes));
+    }
+    for edge in &mut layout.edges {
+        let LayoutEdge { curve, sides, .. } = edge;
+        for side in sides.iter_mut() {
+            *side = side.and_then(|s| {
+                let region = target.get(s.region).copied().flatten()?;
+                let outer = match loops.get(&region) {
+                    Some((outer, holes)) if outer.contains(curve) && !holes.contains(curve) => true,
+                    Some((outer, holes)) if holes.contains(curve) && !outer.contains(curve) => {
+                        false
+                    }
+                    _ => s.outer,
+                };
+                Some(LayoutSide { region, outer })
+            });
+        }
+    }
+    OwnAreaRegions {
+        regions: merged,
+        layout,
+        earlier,
+    }
+}
+
+/// A point well inside the area of the sampled `outline` less its `holes`
+/// (`centroid` its centroid): of the centroid and the middles of chords
+/// across the area along both axes, the one farthest from its boundary, so
+/// that the sampling of another outline along the same curves does not put
+/// it on the wrong side. None for an area with no inside.
+fn deep_point(outline: &[P2], holes: &[Vec<P2>], centroid: P2) -> Option<P2> {
+    let rings: Vec<&[P2]> = std::iter::once(outline)
+        .chain(holes.iter().map(Vec::as_slice))
+        .collect();
+    let inside =
+        |p: P2| polygon_contains(outline, p) && !holes.iter().any(|h| polygon_contains(h, p));
+    let depth = |p: P2| {
+        rings
+            .iter()
+            .flat_map(|ring| {
+                let n = ring.len();
+                (0..n).map(move |k| segment_distance(ring[k], ring[(k + 1) % n], p))
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let mut candidates = vec![centroid];
+    for axis in 0..2 {
+        let across = 1 - axis;
+        let (lo, hi) = outline
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+                (lo.min(p[across]), hi.max(p[across]))
+            });
+        for i in 1..16 {
+            // Off the even fractions, where a polygon's vertices often lie.
+            let at = lo + (hi - lo) * (f64::from(i) + 0.0717) / 16.0;
+            let mut cuts: Vec<f64> = Vec::new();
+            for ring in &rings {
+                let n = ring.len();
+                for k in 0..n {
+                    let (a, b) = (ring[k], ring[(k + 1) % n]);
+                    if (a[across] <= at) != (b[across] <= at) {
+                        let t = (at - a[across]) / (b[across] - a[across]);
+                        cuts.push(a[axis] + t * (b[axis] - a[axis]));
+                    }
+                }
+            }
+            cuts.sort_by(f64::total_cmp);
+            for pair in cuts.windows(2) {
+                let mut p = [0.0; 2];
+                p[axis] = (pair[0] + pair[1]) / 2.0;
+                p[across] = at;
+                candidates.push(p);
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|&p| inside(p))
+        .map(|p| (depth(p), p))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, p)| p)
+}
+
 /// Whether `t` is an end of an open curve.
 fn is_end(curve: &Curve2, t: f64) -> bool {
     if curve.is_closed() {
@@ -961,6 +1139,32 @@ impl<'a> Arrangement<'a> {
     /// The next half-edge of each half-edge around its face (face on the
     /// left), for the live edges with vertices.
     fn next_links(&self) -> Vec<Option<usize>> {
+        let sorted_at = self.sorted_around();
+        let mut position = vec![usize::MAX; 2 * self.edges.len()];
+        for list in sorted_at.values() {
+            for (i, &h) in list.iter().enumerate() {
+                position[h] = i;
+            }
+        }
+        let mut next = vec![None; 2 * self.edges.len()];
+        for (e, edge) in self.edges.iter().enumerate() {
+            if !edge.alive || edge.v0.is_none() {
+                continue;
+            }
+            for h in [2 * e, 2 * e + 1] {
+                let twin = h ^ 1;
+                let list = &sorted_at[&self.origin(twin)];
+                let i = position[twin];
+                next[h] = Some(list[(i + list.len() - 1) % list.len()]);
+            }
+        }
+        next
+    }
+
+    /// The half-edges leaving each vertex of the live edges, sorted
+    /// counter-clockwise by direction: the face on the left of the one at
+    /// position `i` lies between it and the one at `i + 1`.
+    fn sorted_around(&self) -> BTreeMap<usize, Vec<usize>> {
         let mut out: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (e, edge) in self.edges.iter().enumerate() {
             if edge.alive && edge.v0.is_some() {
@@ -970,7 +1174,6 @@ impl<'a> Arrangement<'a> {
                     .push(2 * e + 1);
             }
         }
-        let mut position = vec![usize::MAX; 2 * self.edges.len()];
         let mut sorted_at: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (v, list) in out {
             let mut keyed: Vec<(f64, f64, usize)> = list
@@ -1014,24 +1217,47 @@ impl<'a> Arrangement<'a> {
                     .then(keyed[a].2.cmp(&keyed[b].2))
             });
             let list: Vec<usize> = order.iter().map(|&i| keyed[i].2).collect();
-            for (i, &h) in list.iter().enumerate() {
-                position[h] = i;
-            }
             sorted_at.insert(v, list);
         }
-        let mut next = vec![None; 2 * self.edges.len()];
-        for (e, edge) in self.edges.iter().enumerate() {
-            if !edge.alive || edge.v0.is_none() {
+        sorted_at
+    }
+
+    /// The points where two of the sketch's own curves cross through each
+    /// other (mitcad#2194): at a vertex both pass through, their pieces
+    /// alternating around it, and one of the areas about the vertex is
+    /// outside every region or inside a hole of one (`side`, the region on
+    /// the left of each half-edge). Two overlapping circles cross so; a
+    /// line that ends on another curve, curves that touch, and two lines
+    /// that cross inside an area (a cross in a rectangle, which only
+    /// divides it) do not. The supporting face's edges are not the
+    /// sketch's own curves.
+    fn crossings(&self, side: &[Option<LayoutSide>]) -> Vec<P2> {
+        let mut found = Vec::new();
+        for (v, list) in self.sorted_around() {
+            if list.len() < 4 {
                 continue;
             }
-            for h in [2 * e, 2 * e + 1] {
-                let twin = h ^ 1;
-                let list = &sorted_at[&self.origin(twin)];
-                let i = position[twin];
-                next[h] = Some(list[(i + list.len() - 1) % list.len()]);
+            // The positions of each own curve's pieces about the vertex.
+            let mut at: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+            for (i, &h) in list.iter().enumerate() {
+                let edge = &self.edges[h / 2];
+                if edge.sketch_boundary {
+                    at.entry(edge.curve).or_default().push(i);
+                }
+            }
+            let through: Vec<&Vec<usize>> = at.values().filter(|p| p.len() >= 2).collect();
+            let alternate = through.iter().enumerate().any(|(k, a)| {
+                through[k + 1..].iter().any(|b| {
+                    let between = |p: usize| a[0] < p && p < a[1];
+                    between(b[0]) != between(b[1])
+                })
+            });
+            let open = list.iter().any(|&h| side[h].is_none_or(|s| !s.outer));
+            if alternate && open {
+                found.push(self.vertices[v]);
             }
         }
-        next
+        found
     }
 
     fn cycles(&self) -> Vec<Vec<usize>> {
@@ -1555,6 +1781,7 @@ impl<'a> Arrangement<'a> {
             curves_at,
             edges,
             aliases: self.aliases(),
+            crossings: self.crossings(side),
         }
     }
 }
@@ -1572,6 +1799,10 @@ pub struct Layout {
     /// curve (mitcad#2051): a key that names such an edge means the curve
     /// ([`Layout::aliased`]).
     aliases: Vec<(CurveId, CurveId)>,
+    /// Where two of the sketch's own curves cross through each other on
+    /// the boundary of its areas (mitcad#2194, `Arrangement::crossings`):
+    /// such a sketch has no outline set.
+    crossings: Vec<P2>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1613,6 +1844,14 @@ struct Run {
 const LOOP_SEARCH_LIMIT: usize = 20_000;
 
 impl Layout {
+    /// The points (sketch coordinates) where two of the sketch's own
+    /// curves cross through each other on the boundary of its areas
+    /// (mitcad#2194): two overlapping circles, a circle across a
+    /// rectangle's side. Empty when no curves cross so.
+    pub fn crossings(&self) -> &[P2] {
+        &self.crossings
+    }
+
     /// `key` with each supporting face edge that a stored curve on it
     /// stands for now ([`Layout::aliases`]) named as that curve, at the
     /// segments' ends too: the key of the same region when the face's
@@ -1690,6 +1929,8 @@ impl Layout {
         let inside = self.spread(&walk, &on_loop, left)?;
         let mut inside = self.old_side(key, &runs, &walk, left, inside);
         inside.sort_unstable();
+        // Edges inside an own area have it on both sides (mitcad#2197).
+        inside.dedup();
         Some(inside)
     }
 

@@ -222,7 +222,11 @@ them in this order:
    or occurrences and their `count`. An item is on one plate at most, so
    a test plate (a fit coupon, a first piece to try) needs its own copy of
    the part, made with `move` and `copy`, with its own bed face.
-   `print_plates` lists what is `unplaced`.
+   `print_plates` lists what is `unplaced`: the shown placements that no
+   item names, which print on the first plate. A hidden body (or one hidden
+   in every occurrence) stays off the plates unless an item puts it on one;
+   hide a helper or reference body to leave it out. `remove_from_plates`
+   takes items only: on a body or occurrence that is no item it is refused.
 3. **The slicer's settings** from the user's own slicer project (its
    3MF, a preset or a bundle) with that slicer's `dialect`:
    `import_print_profile` into the design. The design then uses the

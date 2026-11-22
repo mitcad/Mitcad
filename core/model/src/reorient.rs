@@ -766,6 +766,34 @@ pub(crate) fn turn_analysis(def: &mut AnalysisDef, ctx: &Turned<'_>) -> bool {
         }
         // A bed face is a face by its name, which a turn keeps.
         AnalysisDef::Print(_) => false,
+        // The pull reference (mitcad#2166), in its occurrence's component
+        // as a section's plane: an origin datum or a fixed plane or axis
+        // turns with the design.
+        AnalysisDef::Draft(draft) => {
+            if draft.pull.is_none() {
+                // The design's +Z, turned with the design.
+                let z = GeomRef::Origin(OriginDatum::Z);
+                let turned = ctx.of(ComponentUid::ROOT).reference(&z);
+                if turned == z {
+                    return false;
+                }
+                draft.pull = Some(turned);
+                return true;
+            }
+            let Some(pull) = &mut draft.pull else {
+                return false;
+            };
+            let component = match &draft.occurrence {
+                Some(path) => ctx
+                    .end(ComponentUid::ROOT, path)
+                    .unwrap_or(ComponentUid::ROOT),
+                None => ComponentUid::ROOT,
+            };
+            let turned = ctx.of(component).reference(pull);
+            let changed = turned != *pull;
+            *pull = turned;
+            changed
+        }
     }
 }
 

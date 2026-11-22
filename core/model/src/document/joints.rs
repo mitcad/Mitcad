@@ -630,6 +630,19 @@ impl<K: Kernel> Document<K> {
             })?;
             placements.push((*o, rigid));
         }
+        // A part of a linked design moves only inside a flexible occurrence
+        // of it, for that occurrence alone (mitcad#2209): its own placement
+        // and its joints stay the design's.
+        for (o, _) in &placements {
+            if let Some(placed) = self.state.assembly.occurrence(*o) {
+                self.state.editable(placed.parent)?;
+            }
+        }
+        for (uid, _) in &edits {
+            if let Some(entry) = self.state.entry(*uid) {
+                self.state.editable(entry.component)?;
+            }
+        }
         // The joints that hold now (mitcad#1666): the recompute in timeline
         // order must keep them holding where the drag leaves the
         // occurrences, else the drag is refused and nothing moves.

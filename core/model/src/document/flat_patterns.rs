@@ -302,40 +302,16 @@ impl<K: Kernel> Document<K> {
         &self,
         body: BodyUid,
     ) -> Result<FlatOutcome<K::Shape>, ModelError> {
-        let outcome = if self.state.flat_patterns.contains_key(&body) {
-            self.flat_pattern(body)
-        } else {
-            let def = self.flat_settings(body)?;
-            Arc::new(flat::evaluate(
-                &self.kernel,
-                self.last_result(),
-                body,
-                &def,
-                &FeatureWords {
-                    name: &|feature| self.flat_feature_name(feature),
-                    edges: &|feature| self.flat_feature_edges(feature),
-                },
-            ))
-        };
-        match &*outcome {
-            Ok(_) => Ok(outcome),
-            Err(failure) => Err(self.flat_refusal(body, failure)),
-        }
+        self.evaluate_flat_pattern(body, None)
+            .map(|(_, pattern)| pattern)
     }
 
-    /// Writes the Flat Pattern of a sheet-metal body to a DXF file
-    /// (mitcad#210): the cut contours and bend lines of its evaluated outline
-    /// with the item's settings (or a new item's, when the body has none),
-    /// viewed from `reference_side` when given. Only a valid pattern is
-    /// written; otherwise the reasons are the error. Returns the drawing.
-    pub fn export_flat_pattern_dxf(
+    /// The body's valid Flat Pattern with an optional export-side override.
+    fn evaluate_flat_pattern(
         &self,
         body: BodyUid,
-        path: &str,
         reference_side: Option<SheetReferenceSide>,
-        options: &crate::sheet::flat_dxf::FlatDxfOptions,
-        write: &mitcad_dxf::WriteOptions,
-    ) -> Result<(FlatPatternDef, mitcad_dxf::Drawing), ModelError> {
+    ) -> Result<(FlatPatternDef, FlatOutcome<K::Shape>), ModelError> {
         let mut def = self.flat_settings(body)?;
         // The item's own evaluation is cached; other settings are not.
         let own = self.state.flat_patterns.contains_key(&body)
@@ -357,10 +333,44 @@ impl<K: Kernel> Document<K> {
                 },
             ))
         };
-        let pattern = match &*outcome {
-            Ok(pattern) => pattern,
-            Err(failure) => return Err(self.flat_refusal(body, failure)),
-        };
+        match &*outcome {
+            Ok(_) => Ok((def, outcome)),
+            Err(failure) => Err(self.flat_refusal(body, failure)),
+        }
+    }
+
+    /// The manufacturing table of a sheet's current Flat Pattern.
+    pub fn bend_table(
+        &self,
+        body: BodyUid,
+        reference_side: Option<SheetReferenceSide>,
+    ) -> Result<(FlatPatternDef, crate::sheet::bend_table::BendTable), ModelError> {
+        let (def, outcome) = self.evaluate_flat_pattern(body, reference_side)?;
+        let pattern = outcome.as_ref().as_ref().expect("a valid Flat Pattern");
+        let table = crate::sheet::bend_table::BendTable::from_bends(
+            &self.body_name(body),
+            &self.flat_feature_name(pattern.developed.rules),
+            pattern.thickness,
+            &pattern.bends,
+        );
+        Ok((def, table))
+    }
+
+    /// Writes the Flat Pattern of a sheet-metal body to a DXF file
+    /// (mitcad#210): the cut contours and bend lines of its evaluated outline
+    /// with the item's settings (or a new item's, when the body has none),
+    /// viewed from `reference_side` when given. Only a valid pattern is
+    /// written; otherwise the reasons are the error. Returns the drawing.
+    pub fn export_flat_pattern_dxf(
+        &self,
+        body: BodyUid,
+        path: &str,
+        reference_side: Option<SheetReferenceSide>,
+        options: &crate::sheet::flat_dxf::FlatDxfOptions,
+        write: &mitcad_dxf::WriteOptions,
+    ) -> Result<(FlatPatternDef, mitcad_dxf::Drawing), ModelError> {
+        let (def, outcome) = self.evaluate_flat_pattern(body, reference_side)?;
+        let pattern = outcome.as_ref().as_ref().expect("a valid Flat Pattern");
         // The layers of the sheet's process profile (mitcad#1939).
         let options = crate::sheet::flat_dxf::FlatDxfOptions {
             process: self.sheet_process_of_rules(pattern.developed.rules),
@@ -452,6 +462,7 @@ impl<K: Kernel> Document<K> {
             && let Some(shape) = self.last_result().bodies.get(&body)
             && let Ok(curve) = self.kernel().edge_geometry(&shape.value, &name)
         {
+            let straight = matches!(curve, crate::datum::CurveGeometry::Line { .. });
             let (start, end) = match curve {
                 crate::datum::CurveGeometry::Line { start, end }
                 | crate::datum::CurveGeometry::Other { start, end, .. } => (start, end),
@@ -461,6 +472,25 @@ impl<K: Kernel> Document<K> {
                 corner["body"] = serde_json::json!(body);
                 return Ok(corner);
             }
+            // A straight edge on a panel's surface along a boundary
+            // (mitcad#2117: the outline of material a Join added to a
+            // panel, which keeps the Join's own face names).
+            if straight
+                && let Ok(mut found) = crate::sheet::pick::boundary_at(state, thickness, start, end)
+            {
+                found["body"] = serde_json::json!(body);
+                return Ok(found);
+            }
+        }
+        // A planar face named after an ordinary feature on a sheet
+        // (mitcad#2117): the panel whose surface holds the point picked.
+        if answer.is_err()
+            && edge.is_none()
+            && face.is_some()
+            && let Some(at) = at
+            && let Ok(found) = crate::sheet::pick::panel_at(state, thickness, at)
+        {
+            return Ok(found);
         }
         // The Sheet commands show the refusal of a pick in their panels
         // (mitcad#1942): walls and features by their names.

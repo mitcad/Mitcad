@@ -4130,9 +4130,10 @@ void Ribbon::fitTabRow() {
   // The row's width less what its other widgets take: each at the width
   // the row gives it (its layout item's hint, which keeps a fixed width:
   // the + is narrower by its own hint), Boost development (BoostButton) at
-  // its whole one, and the row's spacing after each. The Discord button
-  // (DiscordButton, mitcad#2123) is an icon already, as compact as it gets:
-  // its fixed width is counted, so the tabs fold for it, never squeezed.
+  // its whole one, and the row's spacing after each. The Discord pill
+  // (DiscordButton, mitcad#2123, mitcad#2159: its mark and its ×) is as
+  // compact as it gets: its fixed width is counted while it shows, so the
+  // tabs fold for it, never squeezed.
   const QMargins margins = layout()->contentsMargins();
   int room = width() - margins.left() - margins.right();
   // The workspace block beside the row (setWorkspaceSelector, mitcad#2082:

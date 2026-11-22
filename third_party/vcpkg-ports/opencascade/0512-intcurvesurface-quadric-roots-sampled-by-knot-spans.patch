@@ -25,14 +25,8 @@ For a B-spline curve the samples are now at least the curve's degree for
 each knot span in the interval (at most 100000); other curves and B-splines
 with fewer spans keep the count they had.
 
-Test: geometry/tests/test_multi_turn_faces.cpp,
-test_cross_hole_through_a_thread_whose_edges_run_many_turns (ctest
-geometry.multi_turn_faces): a cross hole of radius 1 through the threaded
-hole at mid-height: each helix edge crosses it twice where it passes the
-hole, several times within a few turns: the cut checks the helices'
-crossings with the hole (the curve was sampled every two thirds of a turn
-before, and found one crossing of each such pair or none). It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0512.
 
 --- a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_QuadricCurveExactInterUtils.pxx
 +++ b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_QuadricCurveExactInterUtils.pxx

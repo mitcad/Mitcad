@@ -63,6 +63,12 @@ void fail_allocation_if_asked(const char* operation);
 // failure is caught as OCCT's checker catches its own.
 void fail_occt_allocation_if_asked(const char* operation);
 
+// For tests of the errors an operation gives where the geometry kernel and
+// its fallbacks all refuse it (mitcad#2140): true when the environment
+// variable MITCAD_TEST_OCCT_REFUSES names this operation ("shell"). Read at
+// each call.
+bool refusal_asked(const char* operation);
+
 // Throws std::bad_alloc when an allocation inside OCCT has failed under
 // this thread's calls since failed_allocations_in_thread() (guard.hpp) was
 // `before`.

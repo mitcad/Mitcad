@@ -73,6 +73,12 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/third_party/fonts/iso-lettering/lettering.ttf")
   install(FILES "${PROJECT_SOURCE_DIR}/third_party/fonts/iso-lettering/LICENSE.txt"
     DESTINATION ${mitcad_doc_dir}/licenses/iso-lettering)
 endif()
+# The built-in woods' and panels' textures (mitcad#2186): files in
+# share/mitcad/textures, which the model in mitcad and mitcad-cli reads at
+# run time (mitcad#2218), so that the AppImage has them once.
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/core/model-base/textures/"
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/mitcad/textures
+  FILES_MATCHING PATTERN "*.jpg")
 # The interface languages (mitcad#1460, cmake/Translations.cmake): MitCad's
 # catalogues and Qt's own (qtbase_<code>.qm, BSD-3-Clause) in
 # share/mitcad/translations, where Language.cpp looks; never the tests'

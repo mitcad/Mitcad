@@ -59,16 +59,8 @@ Only the ratios 1e-3 and ten times it are choices, not derived from the
 case: they separate a still direction (ratio 0) from a moving one (ratio
 about 1 on a surface far wider than the ball).
 
-Test: geometry/tests/test_fillet_stationary_ball.cpp,
-test_top_rim_through_the_mitres and test_both_rims_on_the_half_lid (ctest
-geometry.fillet_stationary_ball; with 1521): a lid of 23 cut by a plane,
-the flat side's edges rounded with 1 and its top rim rounded with 1
-through both corners' mitres, and the lid's half with its cone and post,
-both rims rounded: valid, each corner one new face on the ball's sphere
-within 1e-4, the top corner's area pi / 2 + asin(1 / 22) within 2e-3; the
-port's notes record each rounding failing without 1520 and 1521. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted
-together with 1523, 1760, which change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1520.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
 index d188e8fb..454c0d8e 100644

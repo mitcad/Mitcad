@@ -16,9 +16,13 @@
 //!   loft `start`/`end`: the caps.
 //! - `F<f>:side:<curve>`: the side swept from the sketch curve
 //!   (`side(<segment>)` of the curve's Mitcad id).
-//! - A box's `+x`, `-x`, `+y`, `-y`, `+z`, `-z`; a cylinder's `top`,
+//! - A box's `+x`, `-x`, `+y`, `-y`, `+z`, `-z`; a cylinder's and a cone's `top`,
 //!   `bottom`, `side`.
 //! - `F<f>:blend:<edge>`: the rounding or bevel of a fillet or chamfer.
+//! - A base flange's `F<b>:top` and `:bottom` (format 62): its panel's
+//!   surfaces (`sheet_front(…)`, `sheet_back…`, the pick telling them
+//!   apart); `F<b>:side:<line>`: the wall along the sketch line
+//!   (`sheet_side<k>(…:sheet_curve(<segment>))`).
 //! - Edges `<face>|<face>` (`~k` for several): the edges between faces of
 //!   the two names.
 //! - A legacy mark (`?`), piece qualifiers (`#2`, `#[…]`) and pattern
@@ -124,9 +128,22 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 "-z" => "bottom",
                 _ => return None,
             }]),
+            // A base flange's panel (format 62: the model's names of a
+            // sheet's faces): its top and bottom are MitCad's panel
+            // surfaces, the pick telling them apart; its rim along a sketch
+            // line the wall along that curve.
+            ("sheet_base", "top" | "bottom") => Role::Prefixes(vec!["sheet_front(", "sheet_back"]),
+            ("sheet_base", side) if side.starts_with("side:") => {
+                let curve = side.strip_prefix("side:")?;
+                Role::SheetSide(sketch?.curves.get(curve)?.clone())
+            }
             ("cylinder", "top") => Role::Exact(vec!["top"]),
             ("cylinder", "bottom") => Role::Exact(vec!["bottom"]),
             ("cylinder", "side") => Role::Exact(vec!["side0"]),
+            // A cone's as a cylinder's (mitcad#2239).
+            ("cone", "top") => Role::Exact(vec!["top"]),
+            ("cone", "bottom") => Role::Exact(vec!["bottom"]),
+            ("cone", "side") => Role::Exact(vec!["side0"]),
             ("fillet", r) if nested(r, "blend").is_some() => Role::Prefix("fillet("),
             ("chamfer", r) if nested(r, "blend").is_some() => Role::Prefix("chamfer("),
             // A shell's inside of a face: Mitcad's `offset(<face>)`.
@@ -176,6 +193,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 match role {
                     Role::Exact(roles) => roles.contains(&local),
                     Role::Prefix(p) => local.starts_with(p),
+                    Role::Prefixes(ps) => ps.iter().any(|p| local.starts_with(p)),
+                    Role::SheetSide(curve) => {
+                        local.starts_with("sheet_side")
+                            && local.split_once(":sheet_curve(").is_some_and(|(_, k)| {
+                                k.strip_prefix(curve.as_str())
+                                    .is_some_and(|t| t.starts_with('[') || t.starts_with(')'))
+                            })
+                    }
                     Role::Side(curve) => local.strip_prefix("side(").is_some_and(|k| {
                         k.strip_prefix(curve.as_str())
                             .is_some_and(|t| t.starts_with('[') || t.starts_with(')'))
@@ -334,6 +359,11 @@ enum Role {
     Side(String),
     Exact(Vec<&'static str>),
     Prefix(&'static str),
+    /// Any of these prefixes.
+    Prefixes(Vec<&'static str>),
+    /// A sheet's wall along the sketch curve (MitCad's
+    /// `sheet_side<k>(<sketch>:sheet_curve(<curve>…))`).
+    SheetSide(String),
     /// `<prefix><face>)` of the face of a SolidCraft name.
     Wraps(&'static str, String),
 }

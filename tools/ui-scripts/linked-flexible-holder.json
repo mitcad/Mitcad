@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#2209: the design tools/ui-scripts/linked-flexible.mitcad-ui opens, saved beside the design it links whole (linked-flexible-source.json). The runners put the absolute path of that design (forward slashes) in place of @SOURCE@ in a copy of this file. Linked, it keeps its components: Slider (C1, Slider:1 O1; its root's own base feature F1, empty) with Base (C2, base feature F2, Base:1 O2, grounded) and Key (C3, base feature F3, Key:1 O3) in it, and the design's slider Joint1 (F4) of its own. Slider:1 is grounded, so that a drag inside it moves its Key alone."},
+  {"cmd": "insert_component", "path": "@SOURCE@", "name": "Slider"},
+  {"cmd": "ground_occurrence", "occurrence": "Slider:1"},
+  {"expect": {"feature": "Joint1", "status": "ok"}}
+]

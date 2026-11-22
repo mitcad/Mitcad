@@ -113,22 +113,31 @@ struct PrintOverlay {
   QString narrowestLabel;                         // "Gap 0.20 mm"
   QString title;         // the legend's: the analysis' name
   std::vector<std::pair<QColor, QString>> legend;
+  // Draft Analysis (mitcad#2166, DraftAnalysis.hpp): the triangles of its
+  // three classes (towards the pull, needs more draft, against the pull),
+  // drawn as the overhangs are, in their colours.
+  std::array<std::vector<float>, 3> draft;
+  std::array<QColor, 3> draftColors;
   bool isEmpty() const {
-    return overhangs.empty() && thin.empty() && gaps.empty() && !thinnest && !narrowest && legend.empty();
+    return overhangs.empty() && thin.empty() && gaps.empty() && !thinnest && !narrowest && legend.empty() &&
+           draft[0].empty() && draft[1].empty() && draft[2].empty();
   }
 };
 // What an inspection carries for the view (Inspection::printOverlay): the
 // triangles, the thinnest point, the narrow gaps and the settings of the
 // legend; empty when the definition checks neither overhangs, walls nor gaps.
 QJsonObject printOverlayJson(const QJsonObject& def, const PrintAnswers& answers, const QString& title);
+// The view's overlay of such an object; a Draft Analysis' (`draft`,
+// draftOverlayJson) in `draftColors`.
 PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor,
-                            const QColor& gapColor = QColor());
+                            const QColor& gapColor = QColor(), const std::array<QColor, 3>& draftColors = {});
 // For the log, when it changes: "Print overlay: 12 overhang triangle(s)
 // #rrggbb, 4 thin triangle(s) #rrggbb (150.0 mm^2: the area drawn thin),
 // thinnest 0.50 mm at (x, y, z) (with narrow gaps then ", 1 narrow gap(s)
 // #rrggbb, marker Gap 0.20 mm at (x, y, z)");
 // legend Print1: Overhang over 45° | Wall under 0.8 mm", or "Print overlay:
-// none".
+// none". A Draft Analysis' adds ", draft 2 along #rrggbb, 8 under #rrggbb, 2
+// against #rrggbb" (triangles) after the markers.
 QString printOverlayLog(const PrintOverlay& overlay);
 
 // The point of a result link ("point:x,y,z"), if it is one.

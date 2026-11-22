@@ -30,22 +30,8 @@ and for every other curve, nothing changes. The offsets' edges stay within
 0.001 mm, and the volume is that of the same loft with the seam on a
 corner within 1e-5.
 
-Test: geometry/tests/port/p1180-extended-edge-keeps-its-curve-on-a-face.cpp
-(ctest geometry.port.1180): an edge from (0, 0, 0) to (10, 0, 0) made of
-the line v = 0 on the plane z = 0 trimmed to u from -2 to 12 and on a
-B-spline surface over u from -4 to 14, extended by ExtentEdge.
-test_curve_kept_where_the_surfaces_part_beyond_the_edge: the B-spline is
-that plane from u = 0 on and a ramp before it, so the rebuilt curve's
-first point lies 0.485 mm off it and the projection fails; the extended
-edge stays same-parameter with its tolerance 1e-7, its curve on the
-B-spline on the 3D curve within 1e-6 mm over the edge's range.
-The boundaries: test_curve_projected_where_the_surfaces_agree (the
-B-spline flat, the projection succeeds) and
-test_curve_not_kept_where_the_surfaces_part_within_the_edge (the ramp
-ending at u = 5: not kept, the edge not left exact). It fails without the
-patch (shown 2026-11-20 by tools/occt-port-proof.py). The loft offsets in
-geometry/tests/test_offset_loft_circle_seam.cpp
-(test_square_to_a_circle_of_radius_20_seam_on_a_side) pass without it.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1180.
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
 index e1e74f8b..e0af368f 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx

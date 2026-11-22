@@ -8,10 +8,12 @@
 #include <cstdio>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -20,6 +22,7 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFill_CompatibleWires.hxx>
 #include <BRepGProp.hxx>
+#include <BRepLib.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Builder.hxx>
@@ -31,6 +34,7 @@
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomAdaptor_Curve.hxx>
 #include <GeomConvert.hxx>
+#include <GeomConvert_CompCurveToBSplineCurve.hxx>
 #include <GeomFill_SectionGenerator.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
@@ -50,6 +54,7 @@
 
 #include "face_select.hpp"
 #include "history.hpp"
+#include "loft_merge.hpp"
 #include "mitcad/geometry/user_error.hpp"
 #include "skin.hpp"
 #include "util.hpp"
@@ -380,22 +385,29 @@ Surface added(const Surface& a0, const Surface& b0) {
 
 // --- End conditions
 
-// A face next to a face section, across one of its edges.
+// A face next to a face section, across one of its edges; across a joined
+// edge of merged tangent edges (mitcad#2162) the faces next to the edges it
+// joins, each where its edge is nearest.
 class Neighbour {
 public:
-  Neighbour(const TopoDS_Face& face, const TopoDS_Edge& edge)
-      : m_surface(BRep_Tool::Surface(face)), m_reversed(face.Orientation() == TopAbs_REVERSED) {
-    BRepTools::UVBounds(face, m_u0, m_u1, m_v0, m_v1);
+  Neighbour(const TopoDS_Face& face, const TopoDS_Edge& edge) { add(face, edge); }
+
+  void add(const TopoDS_Face& face, const TopoDS_Edge& edge) {
+    Piece piece;
+    piece.surface = BRep_Tool::Surface(face);
+    piece.reversed = face.Orientation() == TopAbs_REVERSED;
+    BRepTools::UVBounds(face, piece.u0, piece.u1, piece.v0, piece.v1);
     for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
       if (e.Current().IsSame(edge)) {
-        m_edge = TopoDS::Edge(e.Current());
+        piece.edge = TopoDS::Edge(e.Current());
         break;
       }
     }
-    m_curve = BRep_Tool::Curve(m_edge, m_first, m_last);
-    if (m_curve.IsNull()) {
+    piece.curve = BRep_Tool::Curve(piece.edge, piece.first, piece.last);
+    if (piece.curve.IsNull()) {
       throw std::invalid_argument("an edge of a face section has no curve");
     }
+    m_pieces.push_back(piece);
   }
 
   // The geometry of the face at a point of the edge: its normal out of the
@@ -408,7 +420,23 @@ public:
   };
 
   Local at(const gp_Pnt& p) const {
-    GeomAPI_ProjectPointOnSurf projection(p, m_surface, m_u0, m_u1, m_v0, m_v1);
+    // The piece whose edge is nearest.
+    const Piece* nearest = &m_pieces.front();
+    if (m_pieces.size() > 1) {
+      double least = std::numeric_limits<double>::max();
+      for (const Piece& piece : m_pieces) {
+        GeomAPI_ProjectPointOnCurve on(p, piece.curve, piece.first, piece.last);
+        const double d = on.NbPoints() > 0 ? on.LowerDistance()
+                                           : std::min(p.Distance(piece.curve->Value(piece.first)),
+                                                      p.Distance(piece.curve->Value(piece.last)));
+        if (d < least) {
+          least = d;
+          nearest = &piece;
+        }
+      }
+    }
+    const Piece& m = *nearest;
+    GeomAPI_ProjectPointOnSurf projection(p, m.surface, m.u0, m.u1, m.v0, m.v1);
     if (projection.NbPoints() == 0) {
       throw std::runtime_error("a section's edge could not be found on the face next to it");
     }
@@ -417,19 +445,19 @@ public:
     projection.LowerDistanceParameters(u, v);
     Local local;
     gp_Pnt q;
-    m_surface->D2(u, v, q, local.su, local.sv, local.suu, local.svv, local.suv);
+    m.surface->D2(u, v, q, local.su, local.sv, local.suu, local.svv, local.suv);
     gp_Vec n = local.su.Crossed(local.sv);
     if (n.Magnitude() <= 1.0e-12) {
       throw std::runtime_error("the face next to a section has no normal at its edge");
     }
     n.Normalize();
-    local.normal = m_reversed ? -n : n;
-    GeomAPI_ProjectPointOnCurve on_edge(p, m_curve, m_first, m_last);
-    const double t = on_edge.NbPoints() > 0 ? on_edge.LowerDistanceParameter() : m_first;
+    local.normal = m.reversed ? -n : n;
+    GeomAPI_ProjectPointOnCurve on_edge(p, m.curve, m.first, m.last);
+    const double t = on_edge.NbPoints() > 0 ? on_edge.LowerDistanceParameter() : m.first;
     gp_Pnt e;
     gp_Vec d1;
-    m_curve->D1(t, e, d1);
-    if (m_edge.Orientation() == TopAbs_REVERSED) {
+    m.curve->D1(t, e, d1);
+    if (m.edge.Orientation() == TopAbs_REVERSED) {
       d1.Reverse();
     }
     // The face lies to the left of its edges about its normal.
@@ -452,12 +480,15 @@ public:
   }
 
 private:
-  occ::handle<Geom_Surface> m_surface;
-  bool m_reversed = false;
-  double m_u0 = 0.0, m_u1 = 0.0, m_v0 = 0.0, m_v1 = 0.0;
-  TopoDS_Edge m_edge;
-  occ::handle<Geom_Curve> m_curve;
-  double m_first = 0.0, m_last = 0.0;
+  struct Piece {
+    occ::handle<Geom_Surface> surface;
+    bool reversed = false;
+    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+    TopoDS_Edge edge;
+    occ::handle<Geom_Curve> curve;
+    double first = 0.0, last = 0.0;
+  };
+  std::vector<Piece> m_pieces;
 };
 
 // The vector two edges meeting at a vertex both leave it with: the line
@@ -771,20 +802,30 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
     const Shape& body = *section.body;
     const int self = body.face_index(section.face);
     for (const TopoDS_Edge& origin : here.origins) {
-      const int edge = body.edge_index(origin);
-      int other = -1;
-      if (edge >= 0) {
-        for (const int f : faces_at_edge(body, edge)) {
-          if (f != self) {
-            other = f;
+      // A joined edge of merged tangent edges (mitcad#2162): the faces next
+      // to the edges it joins.
+      std::optional<Neighbour> neighbour;
+      for (const TopoDS_Edge& source : source_edges(section.sources, origin)) {
+        const int edge = body.edge_index(source);
+        int other = -1;
+        if (edge >= 0) {
+          for (const int f : faces_at_edge(body, edge)) {
+            if (f != self) {
+              other = f;
+            }
           }
         }
+        if (other < 0) {
+          throw std::invalid_argument(std::string("the ") + which +
+                                      " condition needs a face next to every edge of the section");
+        }
+        if (neighbour) {
+          neighbour->add(body.face(other), source);
+        } else {
+          neighbour.emplace(body.face(other), source);
+        }
       }
-      if (other < 0) {
-        throw std::invalid_argument(std::string("the ") + which +
-                                    " condition needs a face next to every edge of the section");
-      }
-      neighbours.emplace_back(body.face(other), origin);
+      neighbours.push_back(*neighbour);
     }
     std::optional<gp_Pln> plane = face_plane(section.face);
     axis = plane ? towards(plane->Axis().Direction(), here.centre, next.centre) : gp_Vec(here.centre, next.centre);
@@ -995,6 +1036,358 @@ void align_to_previous(std::vector<Matched>& matched) {
     m.edges = std::move(edges);
     m.origins = std::move(origins);
   }
+}
+
+// --- Smooth seams of lofts through two sections (mitcad#2141, mitcad#2143)
+//
+// Between two sections OCCT's through-sections rules a face across each
+// pair of matched edges, each edge at its own parameter: along the line
+// between two matched vertices a face's tangent plane is spanned by that
+// line and (1 - v) A' + v B', A' and B' the derivatives of its two edges
+// at the vertices. Where both sections run on smoothly through their
+// vertices (a circle cut where a slot's arcs meet its straight sides), the
+// two faces beside the line share it and their tangent planes at its ends;
+// between the ends they are tangent only where their A' and B' stand in
+// the same ratio. A circle's long piece matched to a slot's straight side
+// and the next, short piece to the slot's half circle stand in ratios
+// about twice apart: the faces meet at a crease that grows from nothing at
+// the sections to some ten degrees between them. An offset of the faces (a
+// shell, a thickened surface loft) has to intersect the two offset faces
+// along it, a curve that runs out tangentially at both ends, and the wall
+// did not close ("the offset faces do not close up", "the thickened
+// surface does not close").
+//
+// Here each face's two curves are eased (their parameters run faster or
+// slower towards an end, the curves themselves unchanged) so that on both
+// sides of such a line A' and B' stand in the same ratio: the faces are
+// tangent all along it. The faces of a chain joined so are pieces of one
+// surface, periodic where the chain runs round the whole section
+// (match_seams, skinned_loft).
+
+// Below this angle between the derivatives of two edges at their common
+// vertex a section runs on smoothly through it (radians).
+constexpr double kSmoothSection = 1.0e-4;
+
+// Below this crease two faces count as tangent along their common line
+// (radians).
+constexpr double kTangentSeam = 1.0e-6;
+
+// The faces' curves lie within this distance of the sections' edges (mm),
+// as OCCT's own polynomial forms of arcs in a loft do (GeomFill_Profiler).
+constexpr double kSeamFit = 1.0e-7;
+
+// Below this angle between the derivatives of two edges at their common
+// vertex the faces beside the line there are pieces of one surface
+// (radians; match_seams).
+constexpr double kChainAngle = 1.0e-8;
+
+// The point and the first two derivatives at x of [0, 1] of an edge as it
+// runs in its wire: its curve's parameter range scaled to [0, 1].
+void edge_d2(const BRepAdaptor_Curve& curve, bool reversed, double x, gp_Pnt& p, gp_Vec& d1, gp_Vec& d2) {
+  const double first = curve.FirstParameter();
+  const double last = curve.LastParameter();
+  const double span = last - first;
+  curve.D2(reversed ? last - x * span : first + x * span, p, d1, d2);
+  d1 *= reversed ? -span : span;
+  d2 *= span * span;
+}
+
+// The cubic taking [0, 1] onto itself that leaves 0 with the slope `start`
+// and arrives at 1 with `end`; increasing for slopes up to 3 (Fritsch and
+// Carlson). Slopes of 1 leave the parameter as it is.
+struct Easing {
+  double start = 1.0;
+  double end = 1.0;
+
+  // Its value and first two derivatives at s.
+  std::array<double, 3> at(double s) const {
+    const double a = start + end - 2.0;
+    const double b = 3.0 - 2.0 * start - end;
+    return {((a * s + b) * s + start) * s, (3.0 * a * s + 2.0 * b) * s + start, 6.0 * a * s + 2.0 * b};
+  }
+};
+
+// The edge at the eased parameter, with the first two derivatives.
+void eased_d2(const BRepAdaptor_Curve& curve, bool reversed, const Easing& easing, double s, gp_Pnt& p, gp_Vec& d1,
+              gp_Vec& d2) {
+  const std::array<double, 3> h = easing.at(s);
+  gp_Vec c1;
+  gp_Vec c2;
+  edge_d2(curve, reversed, std::clamp(h[0], 0.0, 1.0), p, c1, c2);
+  d1 = c1 * h[1];
+  d2 = c2 * (h[1] * h[1]) + c1 * h[2];
+}
+
+// A face's two edges, each at its eased parameter, as polynomial B-splines
+// over [0, 1] in one basis: interpolated at evenly spaced parameters with
+// their exact first and second derivatives at the ends, the spacing halved
+// until each lies within kSeamFit of its edge between them. Empty when 512
+// spans do not reach that.
+std::optional<std::array<Curve, 2>> eased_curves(const std::array<TopoDS_Edge, 2>& edges,
+                                                 const std::array<Easing, 2>& easings) {
+  const BRepAdaptor_Curve curve0(edges[0]);
+  const BRepAdaptor_Curve curve1(edges[1]);
+  const std::array<const BRepAdaptor_Curve*, 2> curves{&curve0, &curve1};
+  for (int spans = 8; spans <= 512; spans *= 2) {
+    std::vector<double> parameters;
+    for (int k = 0; k <= spans; ++k) {
+      parameters.push_back(static_cast<double>(k) / spans);
+    }
+    std::array<Curve, 2> fitted;
+    bool close = true;
+    for (std::size_t i = 0; i < 2 && close; ++i) {
+      const bool reversed = edges[i].Orientation() == TopAbs_REVERSED;
+      const auto at = [&](double s, gp_Pnt& p, gp_Vec& d1, gp_Vec& d2) {
+        eased_d2(*curves[i], reversed, easings[i], s, p, d1, d2);
+      };
+      gp_Pnt p;
+      gp_Vec d1;
+      gp_Vec d2;
+      std::vector<gp_Pnt> points;
+      for (const double s : parameters) {
+        at(s, p, d1, d2);
+        points.push_back(p);
+      }
+      EndDerivatives leaving;
+      EndDerivatives arriving;
+      at(0.0, p, d1, d2);
+      leaving.first = d1;
+      leaving.second = d2;
+      at(1.0, p, d1, d2);
+      arriving.first = d1;
+      arriving.second = d2;
+      fitted[i] = interpolate_with_ends(points, parameters, leaving, arriving);
+      for (int k = 0; k < spans && close; ++k) {
+        for (const double part : {0.25, 0.5, 0.75}) {
+          const double s = (k + part) / spans;
+          at(s, p, d1, d2);
+          close = close && fitted[i]->Value(s).Distance(p) <= kSeamFit;
+        }
+      }
+    }
+    if (close) {
+      return fitted;
+    }
+  }
+  return std::nullopt;
+}
+
+// The side faces of a loft through two sections as pieces of surfaces
+// that each run through a chain of them (match_seams): per chain the two
+// sections' curves over one parameter, per face its chain and its range
+// of that parameter.
+struct SeamChains {
+  std::vector<Curve> first;
+  std::vector<Curve> second;
+  std::vector<std::size_t> chain_of;
+  std::vector<std::pair<double, double>> range;
+  bool round = false; // one chain round the whole section, closing smoothly
+};
+
+// The B-spline's parameter moved and scaled onto [from, from + span].
+Curve spanned(const Curve& curve, double from, double span) {
+  Curve moved = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
+  NCollection_Array1<double> knots(moved->Knots());
+  const double a = knots(knots.Lower());
+  const double b = knots(knots.Upper());
+  for (int i = knots.Lower(); i <= knots.Upper(); ++i) {
+    knots(i) = from + (knots(i) - a) / (b - a) * span;
+  }
+  moved->SetKnots(knots);
+  return moved;
+}
+
+// Two sections' faces made tangent along every line between matched
+// vertices through which both sections run on smoothly (above), as pieces
+// of one surface for each chain of faces joined so. Each face gets a span
+// of the chain's parameter, the geometric mean of its two edges' lengths,
+// and its edges are eased so that each section's curve runs on with the
+// same derivative (by that parameter) across every such line: the chain's
+// curves, and the ruled surface between them, are continuous in their
+// first derivative there, the faces tangent. (Faces on surfaces of their
+// own, only tangent, were not enough: the geometry kernel's offset extends
+// each face's surface by the length of its own first ruling, the shared
+// edge's curves on the two extended offsets then cover different ranges,
+// and the curve it projects again for one of them came out short of the
+// edge's range, an edge of an invalid range on an unorientable face, at
+// every thickness. On one surface the faces' extensions are the same.)
+// The faces of a chain are made on copies of its surface, so that their
+// common edges are not taken for seams of one face. A chain runs round
+// the whole section where every line is joined so; a corner of a section
+// (where the faces meet at an angle anyway), or a line whose easings
+// would turn back (slopes beyond 3), ends one. Empty, the loft left to
+// OCCT's through-sections as before: no line between faces meeting at a
+// crease is joined, or the curves could not be fitted or joined.
+std::optional<SeamChains> match_seams(const std::vector<Matched>& matched, double tolerance) {
+  if (matched.size() != 2 || matched[0].point || matched[1].point) {
+    return std::nullopt;
+  }
+  const std::size_t n = matched[0].edges.size();
+  if (n == 0 || matched[1].edges.size() != n) {
+    return std::nullopt;
+  }
+  constexpr double kTiny = 1.0e-12;
+  // Each edge's ends: the points, the derivative leaving its start and the
+  // one arriving at its end; its length.
+  struct Ends {
+    gp_Pnt start;
+    gp_Pnt end;
+    gp_Vec leaving;
+    gp_Vec arriving;
+    double length = 0.0;
+  };
+  std::array<std::vector<Ends>, 2> ends;
+  for (std::size_t i = 0; i < 2; ++i) {
+    for (const TopoDS_Edge& edge : matched[i].edges) {
+      const BRepAdaptor_Curve curve(edge);
+      const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+      Ends e;
+      gp_Vec second;
+      edge_d2(curve, reversed, 0.0, e.start, e.leaving, second);
+      edge_d2(curve, reversed, 1.0, e.end, e.arriving, second);
+      e.length = GCPnts_AbscissaPoint::Length(curve);
+      ends[i].push_back(e);
+    }
+  }
+  // Each face's span of its chain's parameter.
+  std::vector<double> spans(n);
+  for (std::size_t j = 0; j < n; ++j) {
+    spans[j] = std::sqrt(ends[0][j].length * ends[1][j].length);
+    if (!(spans[j] > kTiny)) {
+      return std::nullopt;
+    }
+  }
+  // Per face, the first section's easing and the second's; per line (the
+  // one where face k starts), whether the faces beside it are joined.
+  std::vector<std::array<Easing, 2>> easings(n);
+  std::vector<bool> joined(n, false);
+  bool needed = false;
+  for (std::size_t k = 0; k < n; ++k) {
+    // The line where face k starts and the face before it round the
+    // sections ends.
+    const std::size_t before = (k + n - 1) % n;
+    const Ends& a0 = ends[0][before];
+    const Ends& a1 = ends[0][k];
+    const Ends& b0 = ends[1][before];
+    const Ends& b1 = ends[1][k];
+    if (a0.end.Distance(a1.start) > tolerance || b0.end.Distance(b1.start) > tolerance) {
+      continue; // open sections: no face before the first
+    }
+    const gp_Vec& a_in = a0.arriving;
+    const gp_Vec& a_out = a1.leaving;
+    const gp_Vec& b_in = b0.arriving;
+    const gp_Vec& b_out = b1.leaving;
+    if (a_in.Magnitude() <= kTiny || a_out.Magnitude() <= kTiny || b_in.Magnitude() <= kTiny ||
+        b_out.Magnitude() <= kTiny) {
+      continue;
+    }
+    if (a_in.Angle(a_out) > kSmoothSection || b_in.Angle(b_out) > kSmoothSection) {
+      continue; // a corner: the faces meet at an angle there anyway
+    }
+    const gp_Vec line(a1.start, b1.start);
+    if (line.Magnitude() <= tolerance) {
+      continue;
+    }
+    double crease = 0.0;
+    for (const double v : {0.25, 0.5, 0.75}) {
+      const gp_Vec normal_before = line.Crossed(a_in * (1.0 - v) + b_in * v);
+      const gp_Vec normal_after = line.Crossed(a_out * (1.0 - v) + b_out * v);
+      if (normal_before.Magnitude() > kTiny && normal_after.Magnitude() > kTiny) {
+        crease = std::max(crease, normal_before.Angle(normal_after));
+      }
+    }
+    // Each section's derivative by the chain's parameter, arriving with
+    // the slope g and leaving with 1 / g: the same on both sides when g^2
+    // is the ratio of the two without easing.
+    const double g_first = std::sqrt((a_out.Magnitude() / spans[k]) / (a_in.Magnitude() / spans[before]));
+    const double g_second = std::sqrt((b_out.Magnitude() / spans[k]) / (b_in.Magnitude() / spans[before]));
+    const auto increasing = [](double g) { return g >= 1.0 / 3.0 && g <= 3.0; };
+    if (!increasing(g_first) || !increasing(g_second)) {
+      continue;
+    }
+    easings[before][0].end = g_first;
+    easings[k][0].start = 1.0 / g_first;
+    easings[before][1].end = g_second;
+    easings[k][1].start = 1.0 / g_second;
+    // One surface across the line only where both sections run on through
+    // it within kChainAngle (the joined curves' knot there is removed
+    // within kJoin); elsewhere the faces stay tangent on surfaces of their
+    // own.
+    joined[k] = a_in.Angle(a_out) <= kChainAngle && b_in.Angle(b_out) <= kChainAngle;
+    needed = needed || crease > kTangentSeam;
+  }
+  if (!needed) {
+    return std::nullopt;
+  }
+  std::vector<std::array<Curve, 2>> pieces;
+  for (std::size_t j = 0; j < n; ++j) {
+    const std::optional<std::array<Curve, 2>> fitted =
+        eased_curves({matched[0].edges[j], matched[1].edges[j]}, easings[j]);
+    if (!fitted) {
+      return std::nullopt;
+    }
+    pieces.push_back(*fitted);
+  }
+  // The chains: from a line that is not joined, or round the whole
+  // section from face 0.
+  std::size_t first_face = 0;
+  bool round = true;
+  for (std::size_t k = 0; k < n; ++k) {
+    if (!joined[k]) {
+      first_face = k;
+      round = false;
+      break;
+    }
+  }
+  // The pieces' ends meet within this distance (mm).
+  constexpr double kJoin = 1.0e-6;
+  SeamChains chains;
+  chains.round = round;
+  chains.chain_of.assign(n, 0);
+  chains.range.assign(n, {0.0, 0.0});
+  std::optional<GeomConvert_CompCurveToBSplineCurve> joining[2];
+  std::size_t chain_faces = 0;
+  const auto finish = [&]() {
+    if (!joining[0]) {
+      return true;
+    }
+    const Curve a = joining[0]->BSplineCurve();
+    const Curve b = joining[1]->BSplineCurve();
+    // Joined pieces keep the knot between them only once less than the
+    // degree: continuous in the first derivative.
+    if (chain_faces > 1 && (a->Continuity() < GeomAbs_C1 || b->Continuity() < GeomAbs_C1)) {
+      return false;
+    }
+    chains.first.push_back(a);
+    chains.second.push_back(b);
+    joining[0].reset();
+    joining[1].reset();
+    return true;
+  };
+  double at = 0.0;
+  for (std::size_t step = 0; step < n; ++step) {
+    const std::size_t j = (first_face + step) % n;
+    if (step > 0 && !joined[j] && !finish()) {
+      return std::nullopt;
+    }
+    if (!joining[0]) {
+      at = 0.0;
+      chain_faces = 0;
+      joining[0].emplace(spanned(pieces[j][0], at, spans[j]));
+      joining[1].emplace(spanned(pieces[j][1], at, spans[j]));
+    } else if (!joining[0]->Add(spanned(pieces[j][0], at, spans[j]), kJoin, true, false, 4) ||
+               !joining[1]->Add(spanned(pieces[j][1], at, spans[j]), kJoin, true, false, 4)) {
+      return std::nullopt;
+    }
+    chains.chain_of[j] = chains.first.size();
+    chains.range[j] = {at, at + spans[j]};
+    at += spans[j];
+    ++chain_faces;
+  }
+  if (!finish()) {
+    return std::nullopt;
+  }
+  return chains;
 }
 
 // --- Matching from the rails (mitcad#1944)
@@ -1397,8 +1790,13 @@ std::vector<Surface> skin_surfaces(const std::vector<Matched>& matched, const st
 
 ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& start, const LoftEnd& end,
                       const std::vector<Path>& rail_paths, const NamedWire& named, const NameList& first,
-                      const NameList& last, bool closed, bool solid) {
+                      const NameList& last, bool closed, bool solid, bool seams_only, bool matched_already) {
   const std::size_t count = sections.size();
+  if (seams_only &&
+      (count != 2 || closed || !rail_paths.empty() || sections.front().point || sections.back().point ||
+       start.kind != LoftEnd::Kind::Free || end.kind != LoftEnd::Kind::Free)) {
+    return nullptr;
+  }
   check_end(start, sections.front(), "start");
   check_end(end, sections.back(), "end");
   if (!rail_paths.empty() && (sections.front().point || sections.back().point)) {
@@ -1438,22 +1836,28 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
   std::vector<TopoDS_Wire> section_wires(count);
   std::size_t edge_count = 0;
   const auto compatible_matching = [&]() -> bool {
+    // Merged sections of one smooth edge each (mitcad#2162) are matched
+    // already: OCCT's matching would cut them where it relates their
+    // vertices.
     BRepFill_CompatibleWires compatible(wires);
-    try {
-      compatible.Perform();
-    } catch (const Standard_Failure&) {
-      if (rails.empty()) {
-        throw;
+    if (!matched_already) {
+      try {
+        compatible.Perform();
+      } catch (const Standard_Failure&) {
+        if (rails.empty()) {
+          throw;
+        }
+        return false;
       }
-      return false;
-    }
-    if (!compatible.IsDone()) {
-      if (rails.empty()) {
-        throw std::runtime_error("the sections could not be matched edge for edge");
+      if (!compatible.IsDone()) {
+        if (rails.empty()) {
+          throw std::runtime_error("the sections could not be matched edge for edge");
+        }
+        return false;
       }
-      return false;
     }
-    const auto& generated = compatible.Generated();
+    const NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> unchanged;
+    const auto& generated = matched_already ? unchanged : compatible.Generated();
     matched.assign(count, Matched{});
     edge_count = 0;
     for (std::size_t i = 0; i < count; ++i) {
@@ -1464,7 +1868,8 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
         m.tip = BRep_Tool::Pnt(TopoDS::Vertex(sections[i].shape));
         continue;
       }
-      section_wires[i] = TopoDS::Wire(compatible.Shape().Value(static_cast<int>(i) + 1));
+      section_wires[i] = TopoDS::Wire(matched_already ? wires.Value(static_cast<int>(i) + 1)
+                                                      : compatible.Shape().Value(static_cast<int>(i) + 1));
       m.edges = wire_edges(section_wires[i]);
       for (const TopoDS_Edge& edge : m.edges) {
         TopoDS_Edge source;
@@ -1523,6 +1928,16 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     matched = match_along_rails(sections, wires, origins, rails, tolerance, section_wires);
     edge_count = matched.front().curves.size();
   }
+  // Two sections with free ends: built here only where faces would meet at
+  // a crease that fades out at both sections (mitcad#2141), each chain of
+  // faces made tangent so one surface.
+  std::optional<SeamChains> chains;
+  if (seams_only) {
+    chains = match_seams(matched, tolerance);
+    if (!chains) {
+      return nullptr;
+    }
+  }
 
   // The loft's parameter: the chord length between the sections' centres.
   std::vector<double> v{0.0};
@@ -1534,7 +1949,34 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     v.push_back(v.back() + std::max(matched.back().centre.Distance(matched.front().centre), 1.0e-3));
   }
   const bool hermite_free = rails.empty();
-  std::vector<Surface> surfaces = skin_surfaces(matched, sections, start, end, v, false, closed, hermite_free);
+  std::vector<Matched> chained;
+  if (chains) {
+    // One surface per chain (each face a piece of its chain's).
+    chained = matched;
+    chained[0].curves = chains->first;
+    chained[1].curves = chains->second;
+  }
+  std::vector<Surface> surfaces =
+      skin_surfaces(chains ? chained : matched, sections, start, end, v, false, closed, hermite_free);
+  if (chains && chains->round && surfaces.size() == 1) {
+    // A chain round the whole section closes smoothly: its surface made
+    // periodic, its knot where it closes kept once less than its degree
+    // (continuous in the first derivative), as the kernel's offset takes a
+    // closed surface (a clamped one that only closes on itself was
+    // intersected wrongly where it closes: a rim's wire crossing itself,
+    // Round, the other end open, and the closed surface not offset at
+    // all).
+    const Surface periodic = Handle(Geom_BSplineSurface)::DownCast(surfaces.front()->Copy());
+    periodic->SetUPeriodic();
+    const int closing = periodic->FirstUKnotIndex();
+    const int smooth = periodic->UDegree() - 1;
+    if (periodic->UMultiplicity(closing) > smooth) {
+      periodic->RemoveUKnot(closing, smooth, 1.0e-6);
+    }
+    if (periodic->UMultiplicity(closing) <= smooth) {
+      surfaces.front() = periodic;
+    }
+  }
 
   // Rails: each face bent by the rails' distances from it along the
   // vertex lines they run through, in shares that fall from 1 at a rail's
@@ -1692,11 +2134,31 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
   BRepBuilderAPI_Sewing sewing(kSewing);
   std::vector<std::pair<TopoDS_Face, NameList>> faces;
   for (std::size_t j = 0; j < edge_count; ++j) {
-    BRepBuilderAPI_MakeFace face(surfaces[j], 1.0e-7);
-    if (!face.IsDone()) {
-      throw std::runtime_error("a side face of the loft could not be built");
+    TopoDS_Face side;
+    if (chains) {
+      // Its range of its chain's surface, on a copy of that surface (faces
+      // on one surface object would take their common edges for seams).
+      const Surface& surface = surfaces[chains->chain_of[j]];
+      double u0 = 0.0;
+      double u1 = 0.0;
+      double v0 = 0.0;
+      double v1 = 0.0;
+      surface->Bounds(u0, u1, v0, v1);
+      const auto [from, to] = chains->range[j];
+      BRepBuilderAPI_MakeFace piece(Handle(Geom_BSplineSurface)::DownCast(surface->Copy()), std::max(from, u0),
+                                    std::min(to, u1), v0, v1, 1.0e-7);
+      if (!piece.IsDone()) {
+        throw std::runtime_error("a side face of the loft could not be built");
+      }
+      side = piece.Face();
+    } else {
+      BRepBuilderAPI_MakeFace face(surfaces[j], 1.0e-7);
+      if (!face.IsDone()) {
+        throw std::runtime_error("a side face of the loft could not be built");
+      }
+      side = face.Face();
     }
-    faces.emplace_back(face.Face(), names[j].empty() ? NameList{} : NameList{names[j]});
+    faces.emplace_back(side, names[j].empty() ? NameList{} : NameList{names[j]});
   }
   for (const auto& [index, caps] : {std::pair<std::size_t, const NameList*>{0, &first}, {count - 1, &last}}) {
     // A closed loft and a surface loft have no caps.
@@ -1716,7 +2178,14 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     sewing.Add(face);
   }
   detail::interruptible([&](const Message_ProgressRange& range) { sewing.Perform(range); });
-  FaceNamer namer(solid ? oriented_solid(sewing.SewedShape(), "the loft") : sewing.SewedShape());
+  const TopoDS_Shape sewn_shape = solid ? oriented_solid(sewing.SewedShape(), "the loft") : sewing.SewedShape();
+  if (seams_only) {
+    // The faces tangent along their lines are marked so, as OCCT's
+    // through-sections marks its own (the offsets take such edges as
+    // smooth all along).
+    BRepLib::EncodeRegularity(sewn_shape, 1.0e-8);
+  }
+  FaceNamer namer(sewn_shape);
   for (const auto& [face, face_names] : faces) {
     const TopoDS_Shape sewn = sewing.IsModified(face) ? sewing.Modified(face) : face;
     for (const std::string& name : face_names) {

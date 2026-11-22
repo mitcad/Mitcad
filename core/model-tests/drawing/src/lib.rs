@@ -26,5 +26,8 @@ mod render_lines_tests;
 // The BOM Structure acting on the Bill of Materials' views and a drawing's
 // parts list (mitcad#1985).
 mod bom_structure_tests;
+// A laid-out drawing of an assembly: every shown placement drawn and
+// counted (mitcad#2147).
+mod placements_tests;
 // A drawing's own hole callout in the exported files (mitcad#2054).
 mod hole_callout_export_tests;

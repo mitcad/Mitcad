@@ -2148,6 +2148,10 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
        QKeySequence(Qt::Key_T), QObject::tr("Removes the piece of a curve between the curves crossing it")});
   add({"sketch.extend", QObject::tr("Extend"), "extend", [&c] { c.startTool(sketch::extendTool(c)); },
        none, QObject::tr("Extends a line or an arc to the next curve")});
+  // Extend to Meet (mitcad#2178).
+  add({"sketch.extend_to_meet", QObject::tr("Extend to Meet"), "extend-to-meet",
+       [&c] { c.startTool(sketch::extendToMeetTool(c)); }, none,
+       QObject::tr("Extends or shortens two lines or arcs to the point where they meet, ending in one corner")});
   // Break and Split at Point (mitcad#2108).
   add({"sketch.break", QObject::tr("Break"), "sketch-break", [&c] { c.startTool(sketch::breakTool(c)); }, none,
        QObject::tr("Splits a curve where the curves around the click cross it, keeping every piece")});
@@ -2217,6 +2221,12 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
       CommandDef::Kind::Action);
   c.setToolIcon(QObject::tr("Create Block"), QStringLiteral("create-block"));
   c.setToolIcon(QObject::tr("Insert Block"), QStringLiteral("insert-block"));
+  // Explode Text (mitcad#2163, SketchController::explodeText): in the context
+  // menu of a text and of a region a text bounds.
+  add({"sketch.explode_text", QObject::tr("Explode Text"), "explode-text", [&c] { c.explodeText(); }, none,
+       QObject::tr("Turns the selected text or QR code into plain lines and splines, which Trim and the other "
+                   "sketch tools take")},
+      CommandDef::Kind::Action);
 
   // --- CONSTRAINTS
   for (const QString& id : sketchConstraintCommands()) {
@@ -2242,7 +2252,9 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
       }
     };
     if (type == QStringLiteral("horizontal_vertical")) {
-      def.tooltip = QObject::tr("A line horizontal or vertical (as it is nearer to), or two points level");
+      // Nearer to, or the other way when only that can be added
+      // (mitcad#2184): the user guide says so.
+      def.tooltip = QObject::tr("A line horizontal or vertical, or two points level or plumb");
     } else if (type == QStringLiteral("coincident")) {
       def.tooltip = QObject::tr("A point on a curve or at another point; two curve ends become one point");
     } else if (type == QStringLiteral("tangent") || type == QStringLiteral("smooth")) {

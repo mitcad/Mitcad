@@ -31,24 +31,8 @@ With it the cuts of that corner's sides lie 2.7e-5 mm apart and the pipe
 is mitred square to its path (it leaned by 3 degrees). The corners of the
 existing mitred pipes and sweeps keep their volumes.
 
-Test: still to be shown (mitcad#2121): a port test written for this patch
-(not kept: an
-8 mm circle swept with OCCT alone along its own interpolated crossing of
-the sine wave kinked 3 degrees and the arc bending 0.3 mm), does not
-reach its case yet; its failure without the patch is still to be shown.
-With every patch applied (2026-11-20) the corrected frame's sweep has a
-null side face at the corner and crashes in
-BRepFill_TrimShellCorner::PerformByIntersection (with the section halved
-as well), and the constant binormal's boundary is no valid solid (two
-edges of invalid range); both fail the same way at 1663 without the patch.
-MitCad's own path of that case (geometry/tests/test_pipe_square_section.cpp,
-test_small_kinks, "kink of 3 degrees, nearly planar") does reach it: its
-mitre with the circle in one edge is no valid shape, and with the section
-halved the trim along the intersection fails and the mitre along the
-bisector plane makes a valid pipe. That test passes without the patch
-too: MitCad's pipe tries rounded corners where the mitre is not sound,
-and test_ten_lines' corners are between lines, where the patch leaves
-OCCT's extension.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1664.
 
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx

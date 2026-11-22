@@ -75,16 +75,8 @@ the ball of rk rolled between the chain's end and the top as a walked
 blend; left, mitcad#1986). Only the margins are choices, not derived:
 max(10 tolapp3d, 1e-5) for points and 1e-6 for directions.
 
-Test: geometry/tests/test_fillet_convex_mitre.cpp,
-test_vertical_edge_into_the_mitre, test_top_mitre_alone and
-test_corner_face_named (ctest geometry.fillet_convex_mitre): a block on a
-plate, its foot rounded with 1.5 and its top with 2.5, each vertical edge
-rounded with 3, 4 and 6, each way round: valid, one torus of area rk phi
-(rho pi / 2 + rk), the material taken at the top corner the formula's
-within 1e-4; the block with only its top rounded, rounded with 3; MitCad's
-fillet names every face and edge. The port's notes record each part
-failing without the patch. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1500.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 1291013c..f04c5e9d 100644

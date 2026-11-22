@@ -49,7 +49,7 @@ void settle(bool deadline) {
   if (!current.pending) {
     return;
   }
-  const bool dark = isDarkPalette(QGuiApplication::palette());
+  const bool dark = isDarkTheme();
   if (current.choice == ThemeChoice::System) {
     if (deadline) {
       current.pending = false;
@@ -123,7 +123,7 @@ void startThemePreference() {
   }
   // The platform's scheme, as before the preference: nothing asked.
   state().choice = choice;
-  qInfo().noquote() << QStringLiteral("Theme: system (%1)").arg(schemeName(isDarkPalette(QGuiApplication::palette())));
+  qInfo().noquote() << QStringLiteral("Theme: system (%1)").arg(schemeName(isDarkTheme()));
 }
 
 void applyThemePreference(ThemeChoice choice) {

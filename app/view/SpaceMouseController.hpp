@@ -84,6 +84,9 @@ public:
   bool toggleRotationLock();
   // A sketch began or ended: the rotation in a sketch starts locked again.
   void sketchChanged();
+  // The design's window is shown in its frame (mitcad#2152): the backend
+  // may now find the native window it found none of at start.
+  void windowPlaced();
 
 private:
   void apply();

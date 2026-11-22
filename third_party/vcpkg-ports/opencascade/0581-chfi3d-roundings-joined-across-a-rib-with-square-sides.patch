@@ -36,12 +36,9 @@ at that end cuts the blend along the end section (a rib's or a notch's side
 in the spine's normal plane, at any place, of any width or height, on any
 blend that is one surface with the same sides on both stripes); a slanted
 side gives its own piece and the join is as before.
-Test: geometry/tests/port/p0581-joined-across-square-ribs.cpp (ctest
-geometry.port.0581): a pocket's ceiling rounded with 8 along two walls
-broken by ribs 1 thick standing out 6 (one rib on each wall, the other, or
-both): built, valid, one cylinder along each wall, the material that of the
-rounding's section along the walls and beyond the ribs' ends (without the
-patch: invalid). The boundary: no ribs, as before.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0581.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

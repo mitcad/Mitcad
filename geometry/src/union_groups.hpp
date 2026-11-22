@@ -19,6 +19,8 @@
 #include <vector>
 
 #include <Message_Alert.hxx>
+#include <TopoDS_Shape.hxx>
+#include <gp_Pnt.hxx>
 
 #include "mitcad/geometry/shape.hpp"
 
@@ -93,5 +95,56 @@ ShapePtr solids_compound(const std::vector<const Shape*>& shapes);
 ShapePtr grouped_union(const std::vector<const Shape*>& shapes,
                        const std::vector<std::vector<std::size_t>>& groups,
                        const std::function<ShapePtr(const std::vector<const Shape*>&)>& unite_group);
+
+// Points inside one solid of the shape `shape` (its index among the shapes
+// given to points_inside), for missing_inputs (mitcad#2053).
+struct InsidePoints {
+  std::size_t shape = 0;
+  std::vector<gp_Pnt> points;
+};
+
+// A few points inside each solid of the shapes (mitcad#2053), the solids
+// in the shapes' order: from a point in the middle of each of a solid's
+// first faces, the line along the face's inward normal to where it leaves
+// the solid, and the point halfway along it that OCCT's classifier finds
+// inside the solid; the two deepest of them. A solid where none is found
+// (it has no face OCCT can find a point in) has none, and passes
+// missing_inputs. The shapes beside each other.
+std::vector<InsidePoints> points_inside(const std::vector<const Shape*>& shapes);
+
+// The shapes (indices, in order, each once) of which a solid lies outside
+// `result` (mitcad#2053): none of its points (points_inside) lies in or on
+// a solid of `result`, within `tolerance`. A union holds every point inside
+// each of the shapes it joins. The union of a reported hub with 30 blades,
+// triangles, rods and a ring kept the hub and the six blades on it and
+// dropped the rest without an error: a valid result that holds more than
+// the largest of them, which was all the check of its material asked
+// (GitHub mitcad/Mitcad#463). Two points of a solid, both outside, are needed (a
+// classifier that misjudges one point does not make a union wrong); a point
+// outside the box of every solid of the result is outside without a
+// classifier.
+std::vector<std::size_t> missing_inputs(const TopoDS_Shape& result, const std::vector<InsidePoints>& points,
+                                        double tolerance);
+
+// Whether `shape` lies wholly inside `other`, by OCCT's solid classifier
+// (mitcad#2053): the points inside its solids (points_inside), its
+// vertices, points along each edge and across each face all lie in or on
+// a solid of `other` (within 1e-6 mm). Not by a boolean's volume: for a
+// reported rod lying inside a body of the same rod with thin fins, OCCT's
+// common was empty, its cut the whole rod, and its general fuse lost a
+// piece of the rod, while the classifier put every point of the rod
+// inside.
+bool lies_inside(const Shape& shape, const Shape& other);
+
+// The shapes (indices, in order) each of which lies wholly inside another
+// of them that is not itself left out (mitcad#2053): its box within the
+// other's (1e-3 mm around), and lies_inside. A union of the others is
+// the union of all. The reported
+// design's five rods lie each inside a body of the same rod with three
+// thin fins, two of which touch at their tips (an edge on four faces):
+// OCCT's exact union of such a pair gave nothing of either, and of
+// everything they touch, without a warning. A classifier that fails keeps
+// the shape in.
+std::vector<std::size_t> contained_inputs(const std::vector<const Shape*>& shapes);
 
 } // namespace mitcad::geometry::detail

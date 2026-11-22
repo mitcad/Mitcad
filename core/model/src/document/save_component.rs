@@ -252,6 +252,7 @@ impl<K: Kernel> Document<K> {
                 given: Vec::new(),
                 parts: None,
                 unlinked: Vec::new(),
+                tree: None,
             };
             self.replace_with_link(component, link, bodies)?;
             saved.link = Some(recorded);
@@ -1911,6 +1912,12 @@ fn keep_links(
                         frame: f.frame,
                     })
                     .collect(),
+                // Its components, occurrences and joints (mitcad#2209), as
+                // copied.
+                tree: l
+                    .tree
+                    .as_ref()
+                    .map(|t| super::link_tree::copied_tree(t, source, design, copy)),
             }
         });
         if let Some(c) = design.assembly.component_mut(target) {

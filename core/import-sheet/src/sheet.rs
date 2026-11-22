@@ -265,6 +265,44 @@ pub trait Sheets<K: ImportKernel> {
     /// rolled hem a flange past 180 degrees with no wall; a teardrop, rope
     /// or double hem the flange's hem of that form).
     fn sheet_hem(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String>;
+
+    /// Why the sheet item works on a body that is no longer a valid sheet
+    /// (mitcad#2117), before its edges are looked for: its decoded body,
+    /// else the document's only valid sheet body, else, where no sheet body
+    /// is valid, the only sheet body there is; the note names the item that
+    /// took the sheet meaning away ([`Sheets::lost_sheet`]). `None` where
+    /// the body is a valid sheet or none is known.
+    fn sheet_lost_before(&self, sheet: &Map<String, Value>) -> Option<String>;
+
+    /// Why an edge the file names (`fp`, found in the file's history) is
+    /// not found in the replay: the first deviation, where the decoder
+    /// found it, its middle and length, and the nearest edge of the
+    /// replay's bodies to that middle with its distance and length.
+    fn edge_not_found(&self, fp: &mitcad_dump::Fingerprint) -> String;
+
+    /// The sheet domain (`{kind, id}`, the `sheet_reference` answer's) of a
+    /// face the file names (mitcad#2117), found in the replay by its
+    /// geometry, on the sheet body `body`; `what` names the face in the
+    /// reasons.
+    fn sheet_face_domain(
+        &self,
+        body: &str,
+        face: &Map<String, Value>,
+        what: &str,
+    ) -> Result<Value, String>;
+
+    /// An Unfold (the `.f3d` Unfold, mitcad#2117): its stationary face and
+    /// its bends' faces read from the file by their names, found in the
+    /// replay, a panel and bends of the sheet (`sheet_reference`), as a
+    /// `sheet_unfold` of those bends (each once: the file names both
+    /// faces of a bend) about that panel.
+    fn sheet_unfold_item(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String>;
+
+    /// A Refold (the `.f3d` Refold, mitcad#2117): it names its body only,
+    /// and closes the bends the Unfold it is paired with opened: a
+    /// `sheet_refold` of the last `sheet_unfold` of its body, every bend
+    /// that Unfold still holds open.
+    fn sheet_refold_item(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String>;
 }
 
 impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
@@ -282,6 +320,8 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
             Some("bend") => self.sheet_bend_item(sheet),
             Some("fold") => self.sheet_fold_item(sheet),
             Some("hem") => self.sheet_hem(sheet),
+            Some("unfold") => self.sheet_unfold_item(sheet),
+            Some("refold") => self.sheet_refold_item(sheet),
             Some(kind) => Err(format!("a sheet-metal {kind}: not translated yet")),
             None => Err("a sheet-metal item of no kind".to_owned()),
         }
@@ -640,6 +680,13 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
         edges: &[Map<String, Value>],
         count: usize,
     ) -> Result<Vec<Candidate>, String> {
+        // A body whose sheet an earlier item took away (a fallback's base
+        // feature, an ordinary feature): the note names that item, as a
+        // cut's and a joined face's do, before its edges are looked for
+        // (mitcad#2117).
+        if let Some(note) = self.sheet_lost_before(sheet) {
+            return Err(note);
+        }
         let position = match sheet.get("position").and_then(Value::as_str) {
             Some(p @ ("inside" | "outside")) => p,
             // The bend tangent to the side face: its outer surface touches
@@ -682,14 +729,31 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
         let mut found: Vec<FoundEdge> = Vec::new();
         for edge in edges {
             let fp = mitcad_dump::Fingerprint::from_map(edge.clone());
-            let mid = fp
-                .mid_point
-                .ok_or("its edge was not found in the file's history")?;
-            let (body, name) = mitcad_import_replay::internal::refs::resolve_edge(self.doc, &fp)
-                .ok_or("its edge was not found")?;
-            let (body, name) = (body.to_string(), name.to_string());
+            let Some(mid) = fp.mid_point else {
+                return Err(self.edge_not_found(&fp));
+            };
+            // The replay's edge; or, where the replay has the file's one
+            // straight edge as several (a base face over collinear sketch
+            // lines: a wall per line, mitcad#2117), those edges end to end,
+            // the flange then along their whole run from the first.
+            use mitcad_import_replay::internal::refs;
+            let (body, name, run) = match refs::resolve_edge(self.doc, &fp) {
+                Some((body, name)) => (body.to_string(), name.to_string(), false),
+                None => match refs::resolve_edge_chain(self.doc, &fp, &|_| true) {
+                    Some((body, names)) if names.len() > 1 => {
+                        (body.to_string(), names[0].to_string(), true)
+                    }
+                    _ => return Err(self.edge_not_found(&fp)),
+                },
+            };
             if found.iter().any(|f| f.0 == body && f.1 == name) {
                 continue;
+            }
+            // (The edge's own body: its sheet may be gone where another
+            // body is a valid sheet.)
+            let state = self.sheet_state(&body)?;
+            if matches!(state["status"].as_str(), Some("invalid" | "blocked")) {
+                return Err(self.lost_sheet(&body, &state));
             }
             let answer = self.sheet_reference(&body, &name, Some(mid.map(|x| x * 10.0)))?;
             let boundary = answer
@@ -700,10 +764,16 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
             if answer["straight"] != true {
                 return Err("its edge is not straight".to_owned());
             }
-            let on_back = name.contains("sheet_back(");
-            if !on_back && !name.contains("sheet_front(") {
-                return Err(format!("its edge {name} is not on a panel's surface"));
-            }
+            // The surface its face is: by the edge's name, or, for an edge
+            // named after an ordinary feature (material a Join added),
+            // where `sheet_reference` found it (mitcad#2117).
+            let on_back = match answer["surface"].as_str() {
+                Some("back") => true,
+                Some("front") => false,
+                _ if name.contains("sheet_back(") => true,
+                _ if name.contains("sheet_front(") => false,
+                _ => return Err(format!("its edge {name} is not on a panel's surface")),
+            };
             // Whether the file's edge runs along the boundary's axial
             // direction (where Mitcad's flange offsets start), for the
             // widths measured from the edge's ends.
@@ -723,7 +793,7 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
                 }
                 _ => None,
             };
-            found.push((body, name, boundary, on_back, along));
+            found.push((body, name, boundary, on_back, along, run));
         }
         if found.len() != count {
             return Err(format!(
@@ -771,7 +841,7 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
         // to the other side.
         let flip = sheet.get("flip") == Some(&json!(true));
         let mut defs = Vec::new();
-        for (body, _, boundary, on_back, along) in &found {
+        for (body, _, boundary, on_back, along, run) in &found {
             let back = *on_back != flip;
             let mut def = json!({
                 "type": "sheet_flange",
@@ -781,6 +851,19 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
                 "length": {"mode": mode, "value": signed("length", false)?},
                 "position": position,
             });
+            // Along the straight run of the replay's boundaries that are
+            // the file's one edge (mitcad#2117).
+            if *run {
+                def["run"] = json!(true);
+            }
+            // The edge flange's bend relief where the panel goes on along
+            // the bend line past an end (a concave corner): the rule's
+            // relief inside the span (mitcad#2117) *(verified: the reported
+            // design's first edge flange, four such ends, its history
+            // state)*. Not for hems.
+            if !sheet.contains_key("form") {
+                def["relieve_ends"] = json!(true);
+            }
             // A flat, open or rolled hem sets its bend's radius itself
             // (mitcad#2112): the flange then has none.
             if sheet.contains_key("radius") || sheet.get("hem_model").is_none() {
@@ -1110,23 +1193,13 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
     }
 
     fn lost_sheet(&self, body: &str, state: &Value) -> String {
-        let culprit = state["invalidated"]
-            .as_object()
-            .or_else(|| state["blockers"].as_array()?.first()?.as_object());
-        let Some(c) = culprit else {
-            return format!("its sheet body {body} is {}", state["status"]);
-        };
-        let feature = c.get("feature").and_then(Value::as_str).unwrap_or("?");
-        let name = feature
-            .parse::<FeatureUid>()
-            .ok()
-            .and_then(|uid| self.doc.feature(uid))
-            .map_or_else(|| feature.to_owned(), |f| format!("{} ({feature})", f.name));
-        format!(
-            "its sheet body {body} is no longer a valid sheet: {name} took its sheet meaning \
-             away ({})",
-            c.get("message").and_then(Value::as_str).unwrap_or("")
-        )
+        lost_note(body, state, &|feature: &str| {
+            feature
+                .parse::<FeatureUid>()
+                .ok()
+                .and_then(|uid| self.doc.feature(uid))
+                .map_or_else(|| feature.to_owned(), |f| format!("{} ({feature})", f.name))
+        })
     }
 
     fn sheet_bend_item(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String> {
@@ -2038,6 +2111,219 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
         }
         Ok(candidates)
     }
+
+    fn sheet_lost_before(&self, sheet: &Map<String, Value>) -> Option<String> {
+        let body = match self.sheet_body(sheet) {
+            Ok(body) => body,
+            Err(_) => lost_body(&self.sheet_states().ok()?)?,
+        };
+        let state = self.sheet_state(&body).ok()?;
+        matches!(state["status"].as_str(), Some("invalid" | "blocked"))
+            .then(|| self.lost_sheet(&body, &state))
+    }
+
+    fn edge_not_found(&self, fp: &mitcad_dump::Fingerprint) -> String {
+        let Some(mid) = fp.mid_point.map(|p| p.map(|x| x * 10.0)) else {
+            return match fp.f3d.as_ref().and_then(|f| f.found.as_deref()) {
+                Some(why) => format!("its edge was not found in the file's history: {why}"),
+                None => "its edge was not found in the file's history".to_owned(),
+            };
+        };
+        let kernel = self.doc.kernel();
+        // (distance, body, edge, length) of the nearest edge.
+        let mut nearest: Option<(f64, String, String, f64)> = None;
+        for body in self.doc.bodies() {
+            let Ok(middles) = kernel.edge_middles(body.shape) else {
+                continue;
+            };
+            for m in middles {
+                let d = norm(sub(m.point, mid));
+                if nearest.as_ref().is_none_or(|n| d < n.0) {
+                    nearest = Some((d, body.uid.to_string(), m.name, m.length));
+                }
+            }
+        }
+        let found = fp
+            .f3d
+            .as_ref()
+            .and_then(|f| f.found.as_deref())
+            .map_or_else(String::new, |f| format!(" (found in {f})"));
+        let length = fp
+            .length
+            .map_or_else(String::new, |l| format!(", {} mm long", fmt_mm(l * 10.0)));
+        let replay = match nearest {
+            Some((d, body, edge, l)) => format!(
+                "the nearest edge of the replay, {edge} of {body}, is {} mm from it and {} mm \
+                 long",
+                fmt_mm(d),
+                fmt_mm(l)
+            ),
+            None => "the replay has no edge".to_owned(),
+        };
+        format!(
+            "its edge was not found: the file's edge{found} has its middle at [{}] mm{length}; \
+             {replay}",
+            mid.map(fmt_mm).join(", ")
+        )
+    }
+
+    fn sheet_face_domain(
+        &self,
+        body: &str,
+        face: &Map<String, Value>,
+        what: &str,
+    ) -> Result<Value, String> {
+        let fp = mitcad_dump::Fingerprint::from_map(face.clone());
+        let Some(point) = fp.point_on_face.map(|p| p.map(|x| x * 10.0)) else {
+            let why = fp
+                .f3d
+                .as_ref()
+                .and_then(|f| f.found.as_deref())
+                .map_or_else(String::new, |f| format!(": {f}"));
+            return Err(format!("{what} was not found in the file's history{why}"));
+        };
+        let (on, name) = mitcad_import_replay::internal::refs::resolve_face(self.doc, &fp)
+            .ok_or_else(|| {
+                format!(
+                    "{what} was not found in the replay (its point [{}] mm)",
+                    point.map(fmt_mm).join(", ")
+                )
+            })?;
+        if on.to_string() != body {
+            return Err(format!("{what} is on {on}, not on its sheet body {body}"));
+        }
+        let name = name.to_string();
+        let answer = self
+            .doc
+            .sheet_reference_json(query_body(body)?, Some(name.as_str()), None, Some(point))
+            .map_err(|e| format!("{what} {name}: {e}"))?;
+        answer
+            .get("domain")
+            .filter(|d| d.is_object())
+            .cloned()
+            .ok_or_else(|| format!("{what} {name} is no panel's or bend's face"))
+    }
+
+    fn sheet_unfold_item(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String> {
+        let body = self.sheet_body(sheet)?;
+        let state = self.sheet_state(&body)?;
+        if state["status"] != "valid" {
+            return Err(self.lost_sheet(&body, &state));
+        }
+        let stationary = sheet
+            .get("stationary")
+            .and_then(Value::as_object)
+            .ok_or("its stationary face was not decoded")?;
+        let fixed = self.sheet_face_domain(&body, stationary, "its stationary face")?;
+        if fixed["kind"] != "panel" {
+            return Err(format!(
+                "its stationary face lies on the sheet's {} {}, not on a panel",
+                fixed["kind"], fixed["id"]
+            ));
+        }
+        let faces: Vec<&Map<String, Value>> = sheet
+            .get("bends")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_object).collect())
+            .unwrap_or_default();
+        if faces.is_empty() {
+            return Err("its bends were not decoded".to_owned());
+        }
+        // Each bend once (the file names both cylinders of a bend), in the
+        // file's order.
+        let mut bends: Vec<Value> = Vec::new();
+        for (k, face) in faces.iter().enumerate() {
+            let what = format!("bend face {}", k + 1);
+            let domain = self.sheet_face_domain(&body, face, &what)?;
+            if domain["kind"] != "bend" {
+                return Err(format!(
+                    "{what} lies on the sheet's {} {}, not on a bend",
+                    domain["kind"], domain["id"]
+                ));
+            }
+            if !bends.contains(&domain["id"]) {
+                bends.push(domain["id"].clone());
+            }
+        }
+        let n = bends.len();
+        let mut c = Candidate::new(json!({
+            "type": "sheet_unfold",
+            "body": body,
+            "stationary": fixed["id"],
+            "bends": bends,
+        }));
+        c.input_provenance = InputProvenance::Read;
+        c.note = Some(format!(
+            "its stationary face and its {} bend faces read from the file by their names: {n} \
+             bends of the sheet unfolded about the panel",
+            faces.len()
+        ));
+        Ok(vec![c])
+    }
+
+    fn sheet_refold_item(&mut self, sheet: &Map<String, Value>) -> Result<Vec<Candidate>, String> {
+        let body = self.sheet_body(sheet)?;
+        let state = self.sheet_state(&body)?;
+        if state["status"] != "valid" {
+            return Err(self.lost_sheet(&body, &state));
+        }
+        // The Unfold it is paired with: the last one of its body.
+        let unfold = self
+            .doc
+            .features()
+            .take(self.doc.marker())
+            .filter(|f| !f.suppressed)
+            .filter(|f| matches!(&f.def, FeatureDef::SheetUnfold(d) if d.body.to_string() == body))
+            .map(|f| f.uid)
+            .last()
+            .ok_or(
+                "no Unfold of its sheet body was replayed before it (the file's Refold closes \
+                 the bends of the Unfold it is paired with)",
+            )?;
+        let mut c = Candidate::new(json!({
+            "type": "sheet_refold",
+            "body": body,
+            "unfold": unfold.to_string(),
+        }));
+        c.input_provenance = InputProvenance::Read;
+        c.note = Some(format!(
+            "closes every bend its Unfold ({unfold}) opened, as the file's Refold paired with it"
+        ));
+        Ok(vec![c])
+    }
+}
+
+/// The note of a sheet item on a body that is no longer a valid sheet
+/// ([`Sheets::lost_sheet`]): the item that took the sheet meaning away (the
+/// sheet state's `invalidated`, else its first blocker), `name` naming a
+/// feature by its uid.
+fn lost_note(body: &str, state: &Value, name: &dyn Fn(&str) -> String) -> String {
+    let culprit = state["invalidated"]
+        .as_object()
+        .or_else(|| state["blockers"].as_array()?.first()?.as_object());
+    let Some(c) = culprit else {
+        return format!("its sheet body {body} is {}", state["status"]);
+    };
+    let feature = c.get("feature").and_then(Value::as_str).unwrap_or("?");
+    format!(
+        "its sheet body {body} is no longer a valid sheet: {} took its sheet meaning away ({})",
+        name(feature),
+        c.get("message").and_then(Value::as_str).unwrap_or("")
+    )
+}
+
+/// The sheet body an item whose body was not decoded works on where no
+/// sheet body is valid any more (the `sheet_state` answer of every sheet
+/// body): the only sheet body there is, `None` for none or several.
+fn lost_body(states: &Value) -> Option<String> {
+    let states = states.as_array()?;
+    if states.iter().any(|s| s["status"] == "valid") {
+        return None;
+    }
+    match states.as_slice() {
+        [one] => one["body"].as_str().map(str::to_owned),
+        _ => None,
+    }
 }
 
 /// The flange a hem is (mitcad#1364, mitcad#1378), with a note, or why it
@@ -2190,9 +2476,11 @@ fn material_direction(sheet: &Map<String, Value>) -> Result<[f64; 3], String> {
 }
 
 /// An `.f3d` flange's edge found in the replay: its body, name, panel
-/// boundary, whether it lies on the panel's back surface, and whether the
-/// file's edge runs along the boundary's axial direction.
-type FoundEdge = (String, String, Value, bool, Option<bool>);
+/// boundary, whether it lies on the panel's back surface, whether the
+/// file's edge runs along the boundary's axial direction, and whether it is
+/// several replay edges end to end (the flange along their run,
+/// mitcad#2117).
+type FoundEdge = (String, String, Value, bool, Option<bool>, bool);
 
 /// Where the ray `p + s d` (s > 0) crosses the segment `a b`.
 /// Whether a point lies inside a polygon (even-odd).
@@ -2363,5 +2651,49 @@ mod tests {
                 .contains("setback")
         );
         assert!(hem_as_flange(&hem("spiral"), &names).is_err());
+    }
+
+    /// A sheet item after a fallback that replaced the sheet body
+    /// (mitcad#2117): an edge flange names no body of its own, and no
+    /// sheet body is valid any more, so it works on the only sheet body
+    /// there is, and its note names the fallback's base feature that took
+    /// the sheet meaning away. Where a sheet body is still valid, or there
+    /// are several sheet bodies, none is taken.
+    #[test]
+    fn a_sheet_item_after_a_fallback_names_the_fallback() {
+        let message = "ordinary modeling replaced this body and the sheet-domain adapter could \
+                       not re-derive its material: material added";
+        let states = json!([{
+            "body": "F3.b0", "status": "invalid",
+            "invalidated": {"feature": "F9", "message": message},
+            "blockers": [],
+        }]);
+        let body = lost_body(&states).expect("the only sheet body");
+        assert_eq!(body, "F3.b0");
+        let names = |feature: &str| match feature {
+            "F9" => "Base Feature2 (F9)".to_owned(),
+            other => other.to_owned(),
+        };
+        let note = lost_note(&body, &states[0], &names);
+        assert_eq!(
+            note,
+            format!(
+                "its sheet body F3.b0 is no longer a valid sheet: Base Feature2 (F9) took its \
+                 sheet meaning away ({message})"
+            )
+        );
+        // A blocked sheet names its first blocker.
+        let blocked = json!({"body": "F3.b0", "status": "blocked",
+            "blockers": [{"feature": "F9", "message": "failed"}]});
+        assert!(
+            lost_note("F3.b0", &blocked, &names).contains("Base Feature2 (F9) took its sheet"),
+            "{}",
+            lost_note("F3.b0", &blocked, &names)
+        );
+        let valid = json!([states[0].clone(), {"body": "F5.b0", "status": "valid"}]);
+        assert_eq!(lost_body(&valid), None);
+        let two = json!([states[0].clone(), {"body": "F5.b0", "status": "invalid"}]);
+        assert_eq!(lost_body(&two), None);
+        assert_eq!(lost_body(&json!([])), None);
     }
 }

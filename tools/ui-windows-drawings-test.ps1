@@ -3,6 +3,7 @@
 # check-all sources: core/model-api/src/drawings.rs core/model-api/src/drawing.rs core/model/src/document/drawings.rs tools/cli
 # check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/drawing_tables.rs
 # check-all sources: core/model-api/src/drawing_templates.rs
+# check-all sources: app/browser/PropertySetsDialog.cpp core/model/src/document/properties.rs core/model/src/document/library_parts.rs
 # check-all sources: app/framework/Ribbon.cpp app/framework/FloatingLayout.cpp app/framework/GlassCard.cpp
 # Input-driven Windows UI test of drawings kept in the design (mitcad#707)
 # in the build VM (tools/ui-windows-lib.ps1 says how the input is posted),
@@ -29,7 +30,11 @@
 #      table and the title block show it (phase 4).
 #   6. An assembly mitcad-cli makes (Component1 placed twice, Component2
 #      once): a front view, a parts list of it placed by a click and a
-#      balloon on Component1's second placement (phase 3).
+#      balloon on Component1's second placement (phase 3). The parts list
+#      selected: its panel's hint while a shown Description or Part Number
+#      cell is empty (mitcad#2138; Part Number on, Description off); each
+#      component's standing Part number typed in place in its Property Sets
+#      (a shortcut of the test's), and the hint gone.
 #   7. The front view's Scale typed (mitcad#1169): abc refused and not
 #      sent, 2:3 sent, the model's scale 0.667 and the field showing 1:1.5.
 #   8. Create Drawing opens with the last choice (mitcad#1218): ISO, A3,
@@ -56,7 +61,7 @@ param(
 # Sheet to its name (mitcad#2082).
 Ui-Init $App $Out $QtBin @{ 'file.create_drawing' = 'F9'; 'drawing.export_pdf' = 'F11'; 'drawing.export_dwg' = 'F12'
                             'drawing.add_revision' = 'F8'; 'drawing.parts_list' = 'F7'
-                            'drawing.balloon' = 'Shift+F7' } -StepPause 0
+                            'drawing.balloon' = 'Shift+F7'; 'view.property_sets' = 'Shift+F9' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -438,6 +443,67 @@ Ui-Step 'where the balloon goes'          { Sheet-Click 175 150 }
 Ui-ExpectNew '"type":"balloon"' 'a balloon asked for'
 Ui-ExpectNew '| 2 = 1' "the balloon shows Component1's number"
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
+if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-Fail 'a drawing command was refused' }
+
+Write-Host '--- 6b. The parts list''s Part Number from Property Sets and the panel''s hint (mitcad#2138)'
+# The hint's end: "Drawing table hint: Set Part number and Description in a
+# component's Property Sets... (its Browser menu). (empty ...)", its ellipsis
+# one character (this script stays ASCII).
+$hint = '(its Browser menu).'
+# The parts list is still selected from its placing (the balloon tool left
+# the selection as it was): Esc clears it, so that the click below selects
+# it anew (mitcad#2248).
+Ui-Mark
+Ui-Step 'clear the selection (Esc)'       { Ui-Key 'Escape' }
+Ui-ExpectNew 'Drawing selection cleared' 'nothing selected'
+Ui-Mark
+Settled 'Drawing annotation 1'
+Ui-Step 'select the parts list'           { Ui-ClickLogged 'Drawing annotation 1' }
+Ui-ExpectNew 'Drawing annotation 1 selected' 'the parts list selected'
+Ui-ExpectNew "$hint (empty description)" 'the hint: its Description cells are empty'
+Ui-Mark
+Settled 'Drawing panel drawingTableColumn_part_number'
+Ui-Step 'Part Number on'                  { Ui-ClickLogged 'Drawing panel drawingTableColumn_part_number' }
+Ui-ExpectNew "$hint (empty part_number, description)" 'the Part Number cells empty too'
+Ui-Mark
+Settled 'Drawing panel drawingTableColumn_description'
+Ui-Step 'Description off'                 { Ui-ClickLogged 'Drawing panel drawingTableColumn_description' }
+Ui-ExpectNew "$hint (empty part_number)" 'only the shown columns count'
+Ui-Step 'Esc'                             { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
+Ui-ExpectNew 'Drawing closed' 'the 3D view again'
+# Type-PartNumber occurrence number: the component's standing Part number
+# row (found by typing its name, F2) typed in place in its Property Sets.
+function Type-PartNumber([string]$Occurrence, [string]$Number) {
+  Ui-FocusMain
+  Ui-Mark
+  Ui-Step "select $Occurrence"            { Ui-ClickLogged "Browser Root/$Occurrence" }
+  Ui-Step 'Property Sets (Shift+F9)'      { Ui-Key 'shift+F9' }
+  Ui-ExpectNew 'Property sets row: component Identity/Part number =  ()' 'its standing Part number row, empty'
+  Ui-FocusDialog '^Property Sets$'
+  Start-Sleep -Milliseconds 800
+  Ui-Step 'go to Part number (type its name)' { Ui-Type 'Part' }
+  Start-Sleep -Milliseconds 800
+  Ui-Step 'edit (F2)'                     { Ui-Key 'F2' }
+  Ui-ExpectNew 'Editing property component Identity/Part number' 'the standing row in edit'
+  Ui-Step "$Number (Enter)"               { Ui-Key 'ctrl+a'; Ui-Type $Number; Ui-Key 'Return' }
+  Ui-ExpectNew "Property component Identity/Part number set: $Number" 'the Part number typed in place'
+  Ui-Step 'close (Esc)'                   { Ui-Key 'Escape' }
+}
+Type-PartNumber 'Component1:1' 'PN-100'
+Type-PartNumber 'Component2:1' 'PN-200'
+Ui-FocusMain
+Ui-Mark
+Ui-Step 'open Drawing1 (double-click)'    { Ui-DoubleClickLogged 'Browser Root/Drawings/Drawing1' }
+Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'the drawing opened again'
+Ui-ExpectNew 'Drawing sheet view ' 'the sheet placed'
+Ui-Mark
+Settled 'Drawing annotation 1'
+Ui-Step 'select the parts list'           { Ui-ClickLogged 'Drawing annotation 1' }
+Ui-ExpectNew 'Drawing annotation 1 selected' 'the parts list selected'
+Ui-ExpectNew 'Drawing table hint: none' 'every Part Number cell filled from Property Sets: no hint'
+Ui-Step 'Esc'                             { Ui-Key 'Escape' }
 if (Ui-LogLines | Where-Object { $_.Contains('Drawing command refused') }) { Ui-Fail 'a drawing command was refused' }
 
 Write-Host '--- 7. Any scale typed in the view''s Scale (mitcad#1169)'

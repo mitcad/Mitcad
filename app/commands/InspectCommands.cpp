@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // The INSPECT group of the SOLID tab (U4): Measure, Interference, Section
-// Analysis, Print Analysis and Physical Properties, on the model's
+// Analysis, Print Analysis, Draft Analysis (mitcad#2166) and Physical
+// Properties, on the model's
 // analysis queries (commands.md, "Analysis queries", "Print analysis").
-// They show answers; only Section Analysis and Print Analysis leave
+// They show answers; only Section, Print and Draft Analysis leave
 // something behind: OK keeps them in the document as analyses (the
 // browser's Analysis folder, mitcad#41, mitcad#620), and while one is shown
 // the bodies stay cut at its plane, or its overhangs and thin walls stay
@@ -10,6 +11,7 @@
 #include "Commands.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <exception>
@@ -71,6 +73,7 @@
 #include "../framework/PanelTree.hpp"
 #include "../framework/Theme.hpp"
 #include "CommandSupport.hpp"
+#include "DraftAnalysis.hpp"
 #include "PrintAnalysis.hpp"
 #include "PropertiesReport.hpp"
 #include "mitcad/geometry/datum.hpp"
@@ -1420,6 +1423,10 @@ QString printStage(const QJsonObject& request) {
   if (query == QStringLiteral("print_min_gap")) {
     return QObject::tr("Measuring the gaps");
   }
+  // Draft Analysis (mitcad#2166).
+  if (query == QStringLiteral("draft_analysis")) {
+    return QObject::tr("Measuring the draft");
+  }
   return query == QStringLiteral("print_thickness") ? QObject::tr("Measuring the walls")
                                                     : QObject::tr("Finding the overhangs");
 }
@@ -1616,6 +1623,114 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
       }
     }
     setPrintSettings(state, PrintAnalysisSettings::fromDef(analysis), context);
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Draft Analysis (mitcad#2166; app/COMMANDS.md "Draft Analysis"): the
+// bodies' faces by their draft from a pull direction, kept in the document
+// as Print Analysis is.
+
+// What the Pull Direction input takes: a plane or planar face (its normal),
+// an axis, a straight edge or a sketch line (its direction).
+bool givesPull(const SelectionItem& item) { return isPlanar(item) || isStraightLine(item); }
+
+// The panel's values as an analysis' definition, or what is wrong.
+Built draftDefinition(const CommandState& state) {
+  QJsonArray bodies;
+  for (const SelectionItem& item : state.items(QStringLiteral("bodies"))) {
+    if (!bodies.contains(item.owner)) {
+      bodies.append(item.owner);
+    }
+  }
+  if (bodies.isEmpty()) {
+    return Built::failure(QObject::tr("Select the bodies."), QStringLiteral("bodies"));
+  }
+  const double angle = qRadiansToDegrees(state.value(QStringLiteral("angle")));
+  if (!(angle >= 0.0 && angle < 90.0)) {
+    return Built::failure(QObject::tr("Angle: from 0° to less than 90°."), QStringLiteral("angle"));
+  }
+  const Selection& pull = state.items(QStringLiteral("pull"));
+  return Built::of(draftAnalysisDef(bodies, pull.isEmpty() ? QJsonValue() : refsOf(pull).first(),
+                                    pull.isEmpty() ? QString() : pull.first().occurrence,
+                                    state.checked(QStringLiteral("flip")), angle));
+}
+
+CommandDef draftAnalysisCommand(const CommandContext& model) {
+  CommandDef def;
+  def.id = QStringLiteral("inspect.draft_analysis");
+  def.name = QObject::tr("Draft Analysis");
+  def.icon = QStringLiteral("draft-analysis");
+  def.tooltip = QObject::tr("Faces colored by their draft from a pull direction, before molding");
+  def.keywords = {QStringLiteral("draft"), QStringLiteral("mold"), QStringLiteral("mould"),
+                  QStringLiteral("pull direction"), QStringLiteral("taper"), QStringLiteral("casting")};
+  // OK keeps it in the document as an analysis, shown (mitcad#41).
+  def.keepsSection = true;
+  def.inputs = {
+      selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 1, 0)
+          .withAccepts([&model](const SelectionItem& item) { return printable(model.bodyShape(item.owner)); })
+          .withTooltip(QObject::tr("The bodies to check: a click on a body adds or removes it")),
+      selectionInput(QStringLiteral("pull"), QObject::tr("Pull Direction"), kPlaneKinds | kAxisKinds, 0, 1)
+          .withAccepts(givesPull)
+          .withTooltip(QObject::tr("A plane or planar face (its normal), an axis, a straight edge or a sketch line; "
+                                   "none: +Z")),
+      flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withTooltip(QObject::tr("Pull the other way")),
+      valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("1 deg"))
+          .withTooltip(QObject::tr("The least draft a face needs to release from the mold")),
+  };
+  // The bodies the selection stands for, else every shown body, as Print
+  // Analysis starts.
+  def.preselect = [](const Selection& before, CommandState& state, const CommandContext& context) {
+    bool selected = false;
+    const Selection start = printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected);
+    Selection bodies;
+    QStringList seen;
+    for (const SelectionItem& item : start) {
+      if (!seen.contains(item.owner) && printable(context.bodyShape(item.owner))) {
+        seen << item.owner;
+        bodies.append(item);
+      }
+    }
+    state.setItems(QStringLiteral("bodies"), bodies);
+  };
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    Inspection result;
+    const Built built = draftDefinition(state);
+    if (!built.error.isEmpty()) {
+      result.error = built.error;
+      return result;
+    }
+    QJsonObject answer;
+    const QString error = runDraftAnalysis(
+        built.def, [&context](const QJsonObject& request, bool slow) { return printQuery(context, request, slow); },
+        answer);
+    if (!error.isEmpty()) {
+      result.error = error;
+      return result;
+    }
+    const BodyNames name = [&context](const QString& uid) { return context.bodyName(uid); };
+    // The legend's swatches in the panel's colors; the view draws the
+    // classes in the view's (CommandHost::showPrintAnalysis).
+    const std::array<QColor, 3> colors = {themeColor(ColorRole::DraftPositive), themeColor(ColorRole::DraftUnder),
+                                          themeColor(ColorRole::DraftNegative)};
+    result.text = draftAnalysisText(answer, name, colors);
+    result.log = draftAnalysisLog(answer, name);
+    result.printOverlay = draftOverlayJson(built.def, answer, QObject::tr("Draft Analysis"));
+    return result;
+  };
+  // OK keeps it (add_analysis, or edit_analysis of the one edited;
+  // CommandSession::keepAnalysis).
+  def.build = [](const CommandState& state, const CommandContext&) { return draftDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    state.setItems(QStringLiteral("bodies"), bodiesOf(analysis.value(QStringLiteral("bodies")).toArray()));
+    SelectionItem pull = itemOf(analysis.value(QStringLiteral("pull")), context);
+    if (pull.isValid()) {
+      pull.occurrence = analysis.value(QStringLiteral("occurrence")).toString();
+      state.items(QStringLiteral("pull")) = {pull};
+    }
+    state.setChecked(QStringLiteral("flip"), analysis.value(QStringLiteral("flip")).toBool());
+    state.setText(QStringLiteral("angle"), QStringLiteral("%1 deg").arg(n(draftAngleOf(analysis))));
   };
   return def;
 }
@@ -2050,6 +2165,7 @@ void registerInspectCommands(CommandRegistry& registry, const CommandContext& co
   registry.add(interferenceCommand(context));
   registry.add(sectionCommand());
   registry.add(printAnalysisCommand(context));
+  registry.add(draftAnalysisCommand(context)); // mitcad#2166
 
   CommandDef properties;
   properties.id = QStringLiteral("inspect.properties");

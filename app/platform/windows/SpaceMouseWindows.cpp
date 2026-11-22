@@ -385,6 +385,25 @@ public:
     return startRaw(device);
   }
 
+  // A driver start that found no window (the design not yet in its shown
+  // frame, mitcad#2152) is tried again once there is one, whether the
+  // window is active or not, so that a 3DxWare user gets the driver and
+  // not only Raw Input; a window it was already tried with is not tried
+  // again (a design's tab shown again, its frame restored).
+  void windowPlaced() override {
+    if (!m_backend || m_driverOpen || !nativeWindow) {
+      return;
+    }
+    const std::uintptr_t window = nativeWindow();
+    if (window == 0 || window == m_triedWindow) {
+      return;
+    }
+    QString device;
+    if (startDriver(device) && connection) {
+      connection(true, device);
+    }
+  }
+
 private:
   void wire(SpaceMouseBackend& backend) {
     backend.acceptsInput = acceptsInput;
@@ -394,6 +413,7 @@ private:
   }
 
   bool startDriver(QString& device) {
+    m_triedWindow = nativeWindow ? nativeWindow() : 0;
     auto driver = createWindows3DxWareBackend();
     wire(*driver);
     if (!driver->start(device)) {
@@ -418,11 +438,13 @@ private:
       motion({});
     }
     m_backend = std::move(driver);
+    m_driverOpen = true;
     m_retry.stop();
     return true;
   }
 
   bool startRaw(QString& device) {
+    m_driverOpen = false;
     auto raw = std::make_unique<RawInputBackend>();
     wire(*raw);
     raw->connection = connection;
@@ -433,6 +455,9 @@ private:
 
   QTimer m_retry;
   std::unique_ptr<SpaceMouseBackend> m_backend;
+  bool m_driverOpen = false;
+  // The window the last driver start was given (0: none yet).
+  std::uintptr_t m_triedWindow = 0;
 };
 
 } // namespace

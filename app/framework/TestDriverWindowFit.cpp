@@ -462,4 +462,27 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
   return true;
 }
 
+// This file's steps (mitcad#2173): their specs, run by its run function before the others.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    // Card widths and windows within the screen (mitcad#818, TestDriverWindowFit.cpp).
+    {"expect-dialog-fits", 0, 2, TestDriver::kIdle},
+    {"fit-main-frame", 2, 3, TestDriver::kInputOfMain},
+    {"expect-main-frame", 2, 3, TestDriver::kIdle},
+    {"expect-widget-whole", 1, 1, TestDriver::kIdle},
+    {"expect-native-card-width", 2, 3, TestDriver::kIdle},
+    {"expect-native-name-fits", 2, 2, TestDriver::kIdle},
+    {"expect-native-window-fits", 1, 1, TestDriver::kIdle},
+    // A design window's kept place (mitcad#1710, TestDriverWindowFit.cpp).
+    {"expect-window-place", 4, 4, TestDriver::kIdle},
+    {"expect-window-on-screen", 0, 0, TestDriver::kIdle},
+    {"expect-native-card-height", 2, 3, TestDriver::kIdle},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kWindowFitSteps{
+    kStepSpecs, std::size(kStepSpecs), nullptr};
+
 } // namespace mitcad

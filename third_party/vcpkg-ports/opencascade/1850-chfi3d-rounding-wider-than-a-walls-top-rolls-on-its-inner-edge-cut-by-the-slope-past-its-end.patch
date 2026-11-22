@@ -28,22 +28,8 @@ the inner wall's top edge, and the slope cuts it past the edge's end
   face (the other contact running past the face's far edge, radii over
   about 3.5 there) is refused in words rather than made invalid.
 
-Test: geometry.port.1850
-(geometry/tests/port/p1850-rounding-wider-than-a-walls-top-rolls-on-its-inner-edge.cpp):
-test_rounding_wider_than_the_top_rolls_on_its_inner_edge: a plate whose
-floor lies 4 below the top of a wall 2 wide along its outer side, the
-top's end edges chamfered with 3 (slopes of 45 degrees), the wall's
-outer top edge rounded with 2.5: the side over the top crosses the inner
-wall (no ball touches it) and reaches the floor within 2r = 5 (without
-the patch the ball on the outer wall and the floor took the wall away);
-valid, in the middle the wall kept below the ball's arc rolling on the
-inner top edge and gone above it, and the volume of a slab there exact;
-the ends rolled on past the spine's ends and cut by the slopes.
-test_rounding_wider_than_the_top_beside_a_high_inner_wall: the boundary,
-the inner wall 6 high (past 2r, the floor beyond the ball's reach, where
-the start rolled on the inner top edge before the patch too): the same
-rounding. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1850.
 
 Upstream: new.
 

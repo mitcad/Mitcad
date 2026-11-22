@@ -17,6 +17,7 @@ use std::sync::Arc;
 use super::components::{digest, followed_link};
 use super::copy::CopySource;
 use super::library_parts::LinkUpdate;
+use super::link_tree::TreeUpdate;
 use super::{DocState, Document, ModelError, invalid};
 use crate::assembly::ExternalLink;
 use crate::features::FeatureDef;
@@ -125,11 +126,13 @@ impl<K: Kernel> Document<K> {
         let only = |c: ComponentUid| component.is_none_or(|uid| uid == c);
         let mut messages = Vec::new();
         let sources = self.options_file_updates(base.as_deref(), &only, &mut messages)?;
-        let updates = self.file_link_updates(base.as_deref(), &only, &mut messages)?;
+        let mut trees = Vec::new();
+        let updates = self.file_link_updates(base.as_deref(), &only, &mut messages, &mut trees)?;
         let updated: Vec<ComponentUid> = sources
             .iter()
             .map(|s| s.component)
             .chain(updates.iter().map(|u| u.0))
+            .chain(trees.iter().map(|t| t.component))
             .collect();
         if updated.is_empty() {
             if messages.is_empty() {
@@ -157,13 +160,16 @@ impl<K: Kernel> Document<K> {
             None => "Update All Links".to_owned(),
         };
         let before = self.state.clone();
-        self.apply(|state| {
+        let more = self.apply(|state| {
             super::component_options::apply_file_updates(state, sources)?;
             apply_link_updates(state, updates)?;
+            // Those kept with their components (mitcad#2209).
+            let more = super::link_tree::apply_tree_updates(state, trees)?;
             // A file read again leaves its old source unused (mitcad#801).
             state.prune_library_sources(&before);
-            Ok((label, ()))
+            Ok((label, more))
         })?;
+        messages.extend(more);
         Ok(LinksUpdated { updated, messages })
     }
 
@@ -191,11 +197,14 @@ impl<K: Kernel> Document<K> {
     /// project is read (mitcad#929). A link made before mitcad#1921
     /// (`ExternalLink::looks` false) is read once even when its file is
     /// unchanged, so that its bodies take their materials (mitcad#1923).
+    /// A design linked with its components (mitcad#2209) is read with
+    /// them, into `trees`.
     pub(super) fn file_link_updates(
         &self,
         base: Option<&Path>,
         only: &dyn Fn(ComponentUid) -> bool,
         messages: &mut Vec<String>,
+        trees: &mut Vec<TreeUpdate>,
     ) -> Result<Vec<LinkUpdate>, ModelError> {
         let links: Vec<(ComponentUid, ExternalLink)> = self
             .state
@@ -234,6 +243,33 @@ impl<K: Kernel> Document<K> {
             // them (mitcad#1923); a link shown by its envelope has none.
             let once = new_digest == link.digest;
             if once && (link.looks || link.envelope.is_some()) {
+                continue;
+            }
+            // With its components (mitcad#2209): read with them.
+            if link.tree.is_some() {
+                let read = match crate::file::load_state_at(&text, &resolved) {
+                    Ok((source, _)) => self.design_tree(
+                        &source,
+                        &link.path,
+                        &CopySource::Document(resolved.parent()),
+                    ),
+                    Err(e) => Err(invalid(e.to_string())),
+                };
+                match read {
+                    Ok(read) => {
+                        messages.push(format!("{name} is updated from {}", link.path));
+                        trees.push(TreeUpdate {
+                            component,
+                            digest: new_digest,
+                            file: super::components::file_label(&link.path),
+                            read,
+                        });
+                    }
+                    Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
+                    Err(e) => messages.push(format!(
+                        "{name}: {e}; it keeps the bodies saved with the project"
+                    )),
+                }
                 continue;
             }
             // The lines about chosen parts gone from the design

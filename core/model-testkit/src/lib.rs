@@ -2302,6 +2302,20 @@ impl Kernel for MockKernel {
                 [major_radius, minor_radius, minor_radius],
                 &["side0"],
             ),
+            // A cone has no disc where a radius is zero (mitcad#2239).
+            PrimitiveShape::Cone {
+                radius,
+                top_radius,
+                height,
+            } => (
+                "cone",
+                [radius, top_radius, height],
+                match (radius > 0.0, top_radius > 0.0) {
+                    (true, true) => &["bottom", "top", "side0"],
+                    (true, false) => &["bottom", "side0"],
+                    _ => &["top", "side0"],
+                },
+            ),
         };
         let faces: Vec<FaceName> = roles
             .iter()
@@ -2345,7 +2359,15 @@ impl Kernel for MockKernel {
             edges,
             bounds: Some(BoundingBox {
                 min: o,
-                max: std::array::from_fn(|i| o[i] + size[i]),
+                max: std::array::from_fn(|i| {
+                    o[i] + match spec.shape {
+                        // A cone as wide as its larger radius.
+                        PrimitiveShape::Cone {
+                            radius, top_radius, ..
+                        } if i < 2 => radius.max(top_radius),
+                        _ => size[i],
+                    }
+                }),
             }),
             parts: Vec::new(),
         })
@@ -3267,6 +3289,10 @@ impl Kernel for MockKernel {
         // The parallel orientation along the centre line (mitcad#547).
         if spec.centerline_parallel {
             text += " parallel";
+        }
+        // Tangent Edges: Merge (mitcad#2162).
+        if spec.merge_tangent_edges {
+            text += " tangent_edges merge";
         }
         self.specs.borrow_mut().push(text);
         let key = |section: &LoftSection<'_, MockShape>| match section {
@@ -4632,6 +4658,117 @@ impl Kernel for MockKernel {
         Ok(cells)
     }
 
+    /// Boundary Fill with surfaces and planes (mitcad#2149), worked out on
+    /// the axes alone: each axis has walls at values, a surface body flat
+    /// across the axis (its box without thickness along it) at its place,
+    /// a solid at both ends of its box, a plane square to the axis at its
+    /// origin (other planes are left out). The closed regions are the
+    /// boxes between neighbouring walls on all three axes, in the order x,
+    /// then y, then z, each with its middle as its point; its faces are the
+    /// tools' and `<feature>:plane<i>`, its history
+    /// `region(<the tools' histories>|<planes>)`. A point on a wall lies on
+    /// a face; one without a wall on both sides on some axis is in an open
+    /// region, its gap the point moved to the end of the tools' boxes on
+    /// that side.
+    fn boundary_regions(
+        &self,
+        feature: FeatureUid,
+        tools: &[&MockShape],
+        planes: &[mitcad_model_base::datum::DatumPlane],
+        points: &[mitcad_model_base::datum::Vec3],
+    ) -> Result<mitcad_model_base::kernel::BoundaryRegions<MockShape>, KernelError> {
+        use mitcad_model_base::kernel::{BoundaryPlace, BoundaryRegion, BoundaryRegions};
+        self.call("boundary_regions")?;
+        const FLAT: f64 = 1e-9;
+        let mut walls: [Vec<f64>; 3] = Default::default();
+        let mut span: Option<BoundingBox> = None;
+        for tool in tools {
+            let Some(b) = tool.bounds else {
+                continue;
+            };
+            span = Some(span.map_or(b, |s| s.union(&b)));
+            let sheet = tool.history.contains(",sheet");
+            for (k, axis) in walls.iter_mut().enumerate() {
+                if !sheet {
+                    axis.push(b.min[k]);
+                    axis.push(b.max[k]);
+                } else if b.max[k] - b.min[k] < FLAT {
+                    axis.push(b.min[k]);
+                }
+            }
+        }
+        for plane in planes {
+            let n = plane.normal();
+            for (k, axis) in walls.iter_mut().enumerate() {
+                if (n[k].abs() - 1.0).abs() < FLAT {
+                    axis.push(plane.origin[k]);
+                }
+            }
+        }
+        for axis in &mut walls {
+            axis.sort_by(f64::total_cmp);
+            axis.dedup_by(|a, b| (*a - *b).abs() < FLAT);
+        }
+        let mut faces: Vec<FaceName> = tools.iter().flat_map(|t| t.faces.clone()).collect();
+        for i in 0..planes.len() {
+            faces.push(FaceName::new(feature, &format!("plane{}", i + 1), None));
+        }
+        let histories: Vec<&str> = tools.iter().map(|t| t.history.as_str()).collect();
+        let history = format!("region({}|{})", histories.join(","), planes.len());
+        let gaps = [
+            walls[0].len().saturating_sub(1),
+            walls[1].len().saturating_sub(1),
+            walls[2].len().saturating_sub(1),
+        ];
+        let mut regions = Vec::new();
+        for ix in 0..gaps[0] {
+            for iy in 0..gaps[1] {
+                for iz in 0..gaps[2] {
+                    let at = [ix, iy, iz];
+                    let min: [f64; 3] = std::array::from_fn(|k| walls[k][at[k]]);
+                    let max: [f64; 3] = std::array::from_fn(|k| walls[k][at[k] + 1]);
+                    let point = std::array::from_fn(|k| (min[k] + max[k]) / 2.0);
+                    regions.push(BoundaryRegion {
+                        shape: MockShape {
+                            history: history.clone(),
+                            faces: faces.clone(),
+                            edges: Vec::new(),
+                            bounds: Some(BoundingBox { min, max }),
+                            parts: Vec::new(),
+                        },
+                        point,
+                    });
+                }
+            }
+        }
+        let mut places = Vec::with_capacity(points.len());
+        for p in points {
+            let mut index = [0usize; 3];
+            let mut place = None;
+            for k in 0..3 {
+                let axis = &walls[k];
+                if axis.iter().any(|w| (p[k] - w).abs() < FLAT) {
+                    place = Some(BoundaryPlace::OnFace);
+                    break;
+                }
+                let below = axis.iter().filter(|w| **w < p[k]).count();
+                if below == 0 || below == axis.len() {
+                    let mut end = *p;
+                    if let Some(s) = span {
+                        end[k] = if below == 0 { s.min[k] } else { s.max[k] };
+                    }
+                    place = Some(BoundaryPlace::Open { gap: vec![end] });
+                    break;
+                }
+                index[k] = below - 1;
+            }
+            places.push(place.unwrap_or(BoundaryPlace::Region(
+                (index[0] * gaps[1] + index[1]) * gaps[2] + index[2],
+            )));
+        }
+        Ok(BoundaryRegions { regions, places })
+    }
+
     // Patch, Stitch and Thicken (mitcad#456). Surface bodies are shapes
     // whose history holds ",sheet" (`body_kind`); a stitch closes into a
     // solid only when `stitch_closes` is set. Each call is described in
@@ -5145,13 +5282,20 @@ impl Kernel for MockKernel {
         sections: &[Vec<PathCurve>],
         ruled: bool,
         closed: bool,
+        merge_tangent_edges: bool,
     ) -> Result<MockShape, KernelError> {
         self.call("loft_sheet")?;
         if sections.len() < 2 {
             return Err(KernelError::failed("a loft needs two or more sections"));
         }
+        // Tangent Edges: Merge (mitcad#2162) only when set.
+        let merged = if merge_tangent_edges {
+            " tangent_edges merge"
+        } else {
+            ""
+        };
         self.specs.borrow_mut().push(format!(
-            "loft_sheet({feature}: {} ruled {ruled} closed {closed})",
+            "loft_sheet({feature}: {} ruled {ruled} closed {closed}{merged})",
             describe_chains(sections)
         ));
         Ok(sheet_of_chains(

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/report app/MainWindow.cpp tools/cli
+# check-all sources: app/report tools/cli
 # check-all sources: core/model/src/document/design_package.rs core/model-api/src/design_package.rs
 # check-all sources: core/model/src/document/components.rs core/model/src/file/mod.rs core/zip
 # Help > Send Feedback with Include the design (mitcad#1795, GitHub

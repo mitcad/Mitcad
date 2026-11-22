@@ -2194,7 +2194,7 @@ void DrawingWorkspace::snapNow() {
     }
     const QJsonArray move = answer.value(QStringLiteral("move")).toArray();
     m_sheetView->setDragSnap(snapped && move.size() == 2, QPointF(move.at(0).toDouble(), move.at(1).toDouble()),
-                             snapped ? snapHint(answer) : QString());
+                            snapped ? snapHint(answer) : QString(), answer.value(QStringLiteral("preview")).toObject());
   } else {
     if (m_sheetView->isPlacing() && askSnap(placingCommand(m_snapPoint), m_snapFree, &answer)) {
       snapped = answer.value(QStringLiteral("snapped")).toBool();
@@ -2600,8 +2600,13 @@ void DrawingWorkspace::annotationMoved(int annotation, QPointF delta) {
                   : (freely ? QStringLiteral("free") : QStringLiteral("not snapped"));
       qDebug().noquote() << QStringLiteral("Drawing leader moved: %1 %2").arg(dragged->type, text);
     }
+    if (dragged->type == QStringLiteral("hole_callout")) {
+      m_sheetView->setDraggedCallout(placed.value(QStringLiteral("preview")).toObject());
+    }
   }
-  run(command);
+  if (!run(command)) {
+    m_sheetView->setDraggedCallout({});
+  }
 }
 
 void DrawingWorkspace::annotationTipMoved(int annotation, QPointF delta) {
@@ -2750,8 +2755,12 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
                                              const char* object, const QString& placeholder) {
       auto* box = new LinesEdit(text);
       box->setPlaceholderText(placeholder);
-      box->left = [field, name, text](const QString& now) {
-        if (now.trimmed() != text) {
+      // Text Before and Text After whenever they changed, a line break
+      // alone included (mitcad#2212: one at the end of Text Before or the
+      // start of Text After puts their lines on lines of their own).
+      const bool exact = name != QStringLiteral("replace");
+      box->left = [field, name, text, exact](const QString& now) {
+        if (exact ? now != text : now.trimmed() != text) {
           field(name, now, QJsonObject());
         }
       };
@@ -2769,9 +2778,11 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
       measuredLabel->setWordWrap(true);
       m_form->addRow(tr("Measured"), named(measuredLabel, "drawingAnnotationMeasured"));
     }
+    // A line break in Text Before or Text After logged as \n (mitcad#2212).
+    const auto escaped = [](QString text) { return text.replace(QLatin1Char('\n'), QStringLiteral("\\n")); };
     qDebug().noquote() << QStringLiteral("Drawing panel hole callout: before %1, after %2, replace %3, measured %4")
-                              .arg(format.value(QStringLiteral("before")).toString(),
-                                   format.value(QStringLiteral("after")).toString(),
+                              .arg(escaped(format.value(QStringLiteral("before")).toString()),
+                                   escaped(format.value(QStringLiteral("after")).toString()),
                                    replaceValue.isString() ? replaced : QStringLiteral("none"),
                                    QString(measured).replace(QLatin1Char('\n'), QStringLiteral(" / ")));
   }
@@ -2908,11 +2919,17 @@ void DrawingWorkspace::fillTablePanel(int id, const QJsonObject& json) {
     const QJsonObject column = value.toObject();
     available.append({column.value(QStringLiteral("column")).toString(), column.value(QStringLiteral("header")).toString()});
   }
+  // Where a parts list's Part Number and Description come from
+  // (mitcad#2138): the component's own rows of Property Sets.
+  const QString identityHint = tr("Set Part number and Description in a component's Property Sets… (its Browser menu).");
   bool first = true;
   for (const QPair<QString, QString>& entry : std::as_const(available)) {
     auto* box = new QCheckBox(entry.second);
     box->setObjectName(QStringLiteral("drawingTableColumn_") + entry.first);
     box->setChecked(shown.contains(entry.first));
+    if (!holes && (entry.first == QStringLiteral("part_number") || entry.first == QStringLiteral("description"))) {
+      box->setToolTip(identityHint);
+    }
     const QString key = entry.first;
     connect(box, &QCheckBox::toggled, this, [this, field, shown, available, key, box](bool on) {
       QStringList next;
@@ -2931,6 +2948,25 @@ void DrawingWorkspace::fillTablePanel(int id, const QJsonObject& json) {
     });
     m_form->addRow(first ? tr("Columns") : QString(), box);
     first = false;
+  }
+  if (!holes) {
+    // The hint while a shown Part Number or Description cell is empty;
+    // none once every one is filled.
+    QStringList empty;
+    for (const QJsonValue& column : json.value(QStringLiteral("empty_columns")).toArray()) {
+      empty << column.toString();
+    }
+    if (!empty.isEmpty()) {
+      auto* hint = new QLabel(identityHint);
+      hint->setObjectName(QStringLiteral("drawingTableIdentityHint"));
+      hint->setWordWrap(true);
+      setRoleStyleSheet(hint, ColorRole::InfoText);
+      m_form->addRow(QString(), hint);
+    }
+    qDebug().noquote() << QStringLiteral("Drawing table hint: %1")
+                              .arg(empty.isEmpty() ? QStringLiteral("none")
+                                                   : QStringLiteral("%1 (empty %2)")
+                                                         .arg(identityHint, empty.join(QStringLiteral(", "))));
   }
   if (!holes) {
     // Property columns of the components (`Key` or `Set/Key`): the

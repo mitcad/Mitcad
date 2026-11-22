@@ -44,6 +44,18 @@ public:
   void present(MainWindow* window);
   void activateWindow(MainWindow* window) { present(window); }
   bool closeWindow(MainWindow* window);
+  // Closes the design, not its window (mitcad#2142): its tab's ×, the tab's
+  // Close, File › Close and Ctrl+W. While another window holds
+  // a design this is closeWindow. The last design closes to the Start page
+  // (MainWindow::closeToStartPage), the window staying open, or with
+  // Preferences › General › Quit MitCad when the last design is closed
+  // (quitsOnLastClose) quits MitCad as its window's close button does, with
+  // the same questions. False when a question was cancelled or the close
+  // waits for a command or job.
+  bool closeDesign(MainWindow* window);
+  // Preferences › General › Quit MitCad when the last design is closed
+  // (`documents/quitOnLastClose`, off by default; read when a design closes).
+  static bool quitsOnLastClose();
   void quit();
   // A deferred close reached a save/lock question that was cancelled.
   void cancelQuit(MainWindow* window = nullptr) {

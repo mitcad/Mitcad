@@ -473,6 +473,9 @@ impl LibraryRepo {
             build: item.build.clone(),
             // The rows' standards and articles (mitcad#949).
             rows: manifest.named_rows(item),
+            // Not for print services (mitcad#2214): the component's, else
+            // the library's.
+            non_printable: manifest.non_printable_of(item),
             text,
         })
     }

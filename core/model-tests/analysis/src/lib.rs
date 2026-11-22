@@ -22,3 +22,5 @@ mod comment_tests;
 // Section Analysis through a pick: a round face, a circular or straight
 // edge (mitcad#1769).
 mod section_pick_tests;
+// Draft Analysis kept in the document and its query (mitcad#2166).
+mod draft_analysis_tests;

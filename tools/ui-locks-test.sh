@@ -66,6 +66,10 @@
 source "$(dirname "$0")/ui-test-lib.sh"
 # New and Open replace the design, as these steps expect (mitcad#1172).
 ui_open_in_current_window
+# The shortcut diagnosis (app/framework/TypedTextLog.hpp): the windows'
+# activation, which key_ready waits for, and the way of each key, so that a
+# Ctrl+Alt+Y that starts no Sync says why (mitcad#2206).
+export MITCAD_LOG_SHORTCUTS=1
 
 command -v git > /dev/null || { echo "git is required (apt-get install git)" >&2; exit 2; }
 CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
@@ -239,6 +243,42 @@ banner_click() {
   done
   echo "note: the click did not reach the banner's $1: once more"
   ui_step "$2 (again)"                    ui_click_logged "Lock banner $1"
+}
+
+# main_active: the app's log says its main window is the active window:
+# the last of the main window's ("<design> - MitCad") activation lines
+# ("Window activated: ...", "Window deactivated: ...", MITCAD_LOG_SHORTCUTS)
+# is "activated". (A dialog's lines may come before or after the main
+# window's when the activation moves between them; they do not count.)
+main_active() {
+  local last
+  last=$(grep -aE '^Window (activated|deactivated): .* - MitCad' "$UI_LOG" | tail -1)
+  [[ $last == "Window activated: "* ]]
+}
+
+# key_ready: before a window shortcut's key (Ctrl+Alt+Y): the main window
+# has the keyboard and is the app's active window, which Qt needs to match
+# a window shortcut. The X focus alone is not enough: Xvfb has no window
+# manager, and when a window that had the focus closes the server gives it
+# to no window, and a key then reaches the window under the pointer, which
+# Qt does not make active (mitcad#2206: after Save As back to the original
+# name, Ctrl+Alt+Y reached the app, as its sync key showed, and started no
+# Sync). So the main window gets the keyboard (ui_focus_main), and then,
+# until the app's log says it is active, once more a moment later.
+key_ready() {
+  local attempt
+  ui_focus_main
+  for attempt in 1 2 3; do
+    for _ in $(seq 1 25); do
+      main_active && return 0
+      sleep 0.2
+    done
+    echo "note: the main window is not the active window (attempt $attempt):" \
+      "$(grep -aE '^(Window (activated|deactivated)|Focus window|Native Focus(In|Out)): ' "$UI_LOG" | tail -3 | tr '\n' ' ')"
+    xdotool windowfocus --sync "$UI_WINDOW" 2> /dev/null
+    ui_sync
+  done
+  ui_fail "the main window did not become the active window for the key"
 }
 
 # request message: Request Edit Access in the banner, with a message.
@@ -441,6 +481,7 @@ banner_click "Save as New Version" "save as new version (banner)"
 ui_expect_new "Save as New Version: $A/part.mitcad (read-only)" "Save as New Version"
 ui_expect_new "Version recorded: part.mitcad " "recorded" 20
 expect_d3 "$A/part.mitcad" 33.0 "the changes are in the file"
+key_ready
 ui_mark
 ui_step "sync (Ctrl+Alt+Y)"             ui_key ctrl+alt+y
 ui_expect_new "Sync: files someone else holds the edit lock of: part.mitcad (you, in another window): asked" \
@@ -450,6 +491,7 @@ ui_step "cancel (Esc)"                  ui_key Escape
 ui_focus_main
 ui_expect_new "Sync: not sent (locked files)" "nothing sent"
 [ "$(in_git "$A" rev-parse HEAD)" != "$(git --git-dir="$TEAM" rev-parse main)" ] || ui_fail "the version was sent"
+key_ready
 ui_mark
 ui_step "sync (Ctrl+Alt+Y)"             ui_key ctrl+alt+y
 ui_focus_dialog '^Sync$'
@@ -924,8 +966,14 @@ if [ "$save_as_case" = reverse ]; then
     "the lock's idle sync after Save As back has run" 30
 fi
 
+# After Save As back the app closes the replace question and the file
+# dialog and saves, and the keyboard is given back to the main window
+# while it does: the key waits until that window is the active one
+# (mitcad#2206).
+key_ready
 ui_mark
 ui_step "resolve the pending sync" ui_key ctrl+alt+y
+ui_expect_new "Sync asked" "the key reached Sync" 20
 ui_focus_dialog '^Resolve Sync Conflicts$'
 ui_mark # Only the resolution's outcome, not the preceding conflict result.
 ui_step "keep both versions with the default" ui_key Return

@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# Closing the last design with its tab's × (mitcad#2142) on part.mitcad (a
+# 20 mm cube in MITCAD_TEST_WORK, opened by the runner), on Windows and
+# Linux, where every design has a tab with a × in the top bar's title row
+# (mitcad#1990, both layouts since mitcad#2082; macOS shows no tab for one
+# design, and its runs close the last design with File › Close):
+#   1. Preferences › General › Quit MitCad when the last design is closed
+#      off (the default): the only design's tab × leaves the window on the
+#      Start page with no design open, and the process runs on.
+#   2. Open again, the preference on: the tab's × quits MitCad. The steps
+#      after it are not reached: the runner checks that the run ended
+#      ("Document windows closed: empty process registry", the session
+#      log's end line) without the driver's end.
+# Run by tools/ui-last-design-close-test.sh (Linux) and
+# tools/ui-windows-last-design-close-test.ps1 (Windows) in the Docked and
+# Floating layouts.
+expect-ever 'View area'
+wait-idle
+set-setting documents/quitOnLastClose false
+expect-document-windows 1
+expect-document-frame-design open
+
+# 1. The only design's tab ×: the Start page, MitCad runs on.
+mark
+document-tab-close 0
+wait-log '^Document tab closed: part$' 10
+wait-log '^Last design closed: Start page$' 20
+wait-log '^Start page shown$' 10
+expect-document-frame-design none
+expect-document-windows 1
+sleep 1500
+expect-document-windows 1
+expect-no-log '^Document windows closed'
+screenshot '${MITCAD_TEST_WORK}/last-design-tab-closed.png'
+
+# 2. Open again; with the preference on, the tab's × quits.
+mark
+open-file '${MITCAD_TEST_WORK}/part.mitcad'
+wait-log '^Design shown again after the last design closed$' 30
+wait-idle 30
+expect-document-frame-design open
+expect-document-windows 1
+set-setting documents/quitOnLastClose true
+mark
+document-tab-close 0
+wait-log '^Last design closed: quitting$' 10
+wait-log '^Document windows closed: empty process registry$' 20
+# Not reached when MitCad quit.
+sleep 5000
+expect-never 'TestDriver: FAIL'

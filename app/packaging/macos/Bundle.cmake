@@ -142,6 +142,13 @@ install(CODE "set(MITCAD_BUILD_CLI_EXECUTABLE [[$<TARGET_FILE:mitcad-cli>]])")
 # Save the complete build paths for runtime discovery before install
 # rewrites the worker's rpath to the bundle's Frameworks directory.
 install(CODE "set(MITCAD_BUILD_RENDER_EXECUTABLE [[$<TARGET_FILE:mitcad-render>]])")
+# The built-in woods' and panels' textures (mitcad#2186): files in
+# Resources/textures, which the model in mitcad and mitcad-cli
+# (Contents/MacOS) reads at run time (mitcad#2218), so that the bundle has
+# them once.
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/core/model-base/textures/"
+  DESTINATION "${MITCAD_BUNDLE_DIR}/Contents/Resources/textures"
+  FILES_MATCHING PATTERN "*.jpg")
 
 set(MITCAD_LICENSES_DIR "${MITCAD_BUNDLE_DIR}/Contents/Resources/licenses")
 

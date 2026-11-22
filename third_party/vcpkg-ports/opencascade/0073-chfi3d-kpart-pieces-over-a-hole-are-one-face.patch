@@ -18,14 +18,8 @@ face per piece, with edges between them across the blend.
   of a section shared in part (0071) is still its edge with the face
   beyond.
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow), test_rounding_over_a_hole_is_cut_by_it,
-test_rim_rounding_past_a_side_is_cut_by_it,
-test_rounding_over_a_slot_is_cut_by_its_faces: the blend's pieces over the
-cut one face (the count of faces). Its failure without the patch is still
-to be shown: with it and the 36 later patches that change the same lines
-reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0073.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 11ba5b6..20cfc4f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

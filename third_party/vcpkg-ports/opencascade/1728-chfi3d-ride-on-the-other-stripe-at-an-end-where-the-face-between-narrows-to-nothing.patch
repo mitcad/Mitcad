@@ -64,16 +64,8 @@ edge twice and failed (patch 1711).
   after A, and a line shared against a stripe's way is turned
   (turnRidesAgainst); B's new pieces' faces are turned, as 1727's.
 
-Test: geometry/tests/test_fillet_top_chains.cpp (ctest
-geometry.fillet_top_chains): test_reported_body, both outer arm ends (the
-foot's rounding and the top's edges) valid with the ride's ends where the
-walk puts them (the 0.5's ends at the exact end on the foot's line), and
-test_whole_fillet1, the design's whole rounding valid within 4 mm3 of the
-stored body's with every vertex within 0.05 (the ride approximated by the
-guide's parameter left 0.4 to 1.1 mm, mitcad#2075); both on the stored case
-`fillet-wall-run-on`. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py, reverted together with 1729, which changes the
-same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1728.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

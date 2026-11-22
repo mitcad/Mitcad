@@ -51,6 +51,9 @@ void groupTests() {
   using namespace mitcad;
   CHECK(settingsGroupOf(text("view/smallCircles")) == text("preferences"));
   CHECK(settingsGroupOf(text("documents/openInCurrentWindow")) == text("preferences"));
+  // Quit MitCad when the last design is closed (mitcad#2142).
+  CHECK(settingsGroupOf(text("documents/quitOnLastClose")) == text("preferences"));
+  CHECK(settingsGroupOf(text("documents/newDesignSave")) == text("preferences"));
   CHECK(settingsGroupOf(text("autosave/minutes")) == text("preferences"));
   CHECK(settingsGroupOf(text("view/navigationScheme")) == text("navigation"));
   CHECK(settingsGroupOf(text("view/spaceMouseLockHorizon")) == text("navigation"));

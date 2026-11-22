@@ -43,3 +43,5 @@ mod pipe_helix_turns_tests;
 // The curve tools: Helix Curve, Intersection Curve of faces and bodies, a
 // surface Helix of sketch curves (mitcad#1777).
 mod curve_tools_tests;
+// A loft's Tangent Edges, merged or kept (mitcad#2162).
+mod loft_tangent_edges_tests;

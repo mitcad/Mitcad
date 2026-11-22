@@ -46,6 +46,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QtLogging>
+#include <QtMath>
 
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
@@ -360,6 +361,18 @@ void MainWindow::registerFileCommands() {
   svgSketch.tooltip = tr("Brings an SVG drawing into the sketch");
   svgSketch.mode = CommandDef::Mode::Sketch;
   m_registry->add(svgSketch);
+  // Point files and airfoils (mitcad#2232).
+  CommandDef pointsDef = def("insert.points", tr("Insert Points"), "insert-dxf",
+                             tr("Brings x y coordinates of a file into a new sketch as a spline or points"),
+                             [this] { insertPoints(); });
+  pointsDef.keywords = {QStringLiteral("points"), QStringLiteral("csv"), QStringLiteral("dat"),
+                        QStringLiteral("coordinates"), QStringLiteral("airfoil"), QStringLiteral("spline")};
+  m_registry->add(pointsDef);
+  CommandDef pointsSketch = pointsDef;
+  pointsSketch.id = QStringLiteral("sketch.insert_points");
+  pointsSketch.tooltip = tr("Brings x y coordinates of a file into the sketch as a spline or points");
+  pointsSketch.mode = CommandDef::Mode::Sketch;
+  m_registry->add(pointsSketch);
   CommandDef component = def("insert.component", tr("Insert Component"), "insert-component",
                              tr("Places another MitCad design here, linked or as a copy"),
                              [this] { insertComponent(); });
@@ -802,8 +815,11 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
 }
 
 void MainWindow::closeDocument() {
+  // Another design open: this one's window or tab closes. The last design
+  // closes to the Start page or quits MitCad, as Preferences › General
+  // says (WindowManager::closeDesign, mitcad#2142).
   if (m_windowManager != nullptr && m_windowManager->windows().size() > 1) {
-    m_windowManager->closeWindow(this);
+    m_windowManager->closeDesign(this);
     return;
   }
   if (deferForNativeCommand([this] { closeDocument(); })) {
@@ -818,6 +834,11 @@ void MainWindow::closeDocument() {
     return;
   }
 #endif
+  if (m_windowManager != nullptr) {
+    m_windowManager->closeDesign(this);
+    return;
+  }
+  // Without a window manager the window keeps an empty untitled design.
   if (!maybeSave()) {
     return;
   }
@@ -1375,11 +1396,179 @@ void MainWindow::insertSvg() {
   }
 }
 
+void MainWindow::insertPoints() {
+  const QString path = dialogOpenFileName(this, tr("Insert Points"), dialogFolder(DialogGroup::Import),
+                                          tr("Point files (*.csv *.txt *.dat);;All files (*)"));
+  if (path.isEmpty()) {
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Import, path);
+  QString error;
+  if (!importPointFile(path, true, &error) && !error.isEmpty()) {
+    qWarning().noquote() << QStringLiteral("Could not insert %1: %2").arg(path, error);
+    sheetWarning(this, tr("Insert Points"),
+                 tr("Could not insert %1:\n%2").arg(QDir::toNativeSeparators(path), error));
+  }
+}
+
+bool MainWindow::importPointFile(const QString& path, bool interactive, QString* error) {
+  const QString file = QFileInfo(path).absoluteFilePath();
+  const QString name = QFileInfo(path).fileName();
+  // What the dialog shows: the points, an airfoil's name and layout.
+  QJsonObject info;
+  try {
+    info = queryObject({{QStringLiteral("query"), QStringLiteral("points_info")}, {QStringLiteral("path"), file}});
+  } catch (const std::exception& e) {
+    *error = errorText(e);
+    return false;
+  }
+  const auto importCommand = [&file](const QString& sketch, const PointsChoice& choice) {
+    QJsonObject command = cmd("sketch.import_points", {{QStringLiteral("sketch"), sketch},
+                                                       {QStringLiteral("path"), file},
+                                                       {QStringLiteral("airfoil"), choice.airfoil}});
+    if (choice.asPoints) {
+      command.insert(QStringLiteral("as"), QStringLiteral("points"));
+    }
+    if (choice.airfoil) {
+      command.insert(QStringLiteral("chord"), choice.chord);
+      command.insert(QStringLiteral("angle"), qDegreesToRadians(choice.angle));
+      command.insert(QStringLiteral("close_trailing_edge"), choice.closeTrailingEdge);
+    } else {
+      command.insert(QStringLiteral("scale"), choice.scale);
+    }
+    if (choice.x != 0.0 || choice.y != 0.0) {
+      command.insert(QStringLiteral("at"), QJsonArray{choice.x, choice.y});
+    }
+    return command;
+  };
+  const auto report = [this, &name](const QJsonObject& result, const QString& sketch) {
+    const QJsonObject model = queryObject({{QStringLiteral("query"), QStringLiteral("sketch")},
+                                           {QStringLiteral("uid"), sketch}});
+    qInfo().noquote() << QStringLiteral("Inserted %1 into %2: %3 curves, %4 points, %5 profiles, %6 warnings, "
+                                        "fit %7, %8 control points, deviation %9 mm")
+                             .arg(name, model.value(QStringLiteral("name")).toString())
+                             .arg(result.value(QStringLiteral("curves")).toInt())
+                             .arg(result.value(QStringLiteral("points")).toInt())
+                             .arg(model.value(QStringLiteral("regions")).toArray().size())
+                             .arg(result.value(QStringLiteral("warnings")).toArray().size())
+                             .arg(result.value(QStringLiteral("fit")).toString(QStringLiteral("none")))
+                             .arg(result.value(QStringLiteral("control_points")).toInt())
+                             .arg(result.value(QStringLiteral("deviation")).toDouble(), 0, 'g', 4);
+    const QJsonArray warnings = result.value(QStringLiteral("warnings")).toArray();
+    if (!warnings.isEmpty()) {
+      showWarning(tr("Inserted %1: %2").arg(name, modelMessage(warnings.first().toString())));
+    }
+    return model;
+  };
+  const auto ask = [this, &path, &info](const QVector<QPair<QString, QString>>& planes) {
+    return askPointsInsert(this, path, planes, info, lengthUnit(), unitMillimetres());
+  };
+  PointsChoice defaults;
+  defaults.airfoil = info.value(QStringLiteral("airfoil")).toBool();
+  // In sketch mode, into the sketch being edited.
+  if (m_mode == Mode::Sketch) {
+    PointsChoice choice = defaults;
+    if (interactive) {
+      const std::optional<PointsChoice> chosen = ask({});
+      if (!chosen) {
+        *error = QString();
+        return false;
+      }
+      choice = *chosen;
+    }
+    QJsonObject result;
+    if (!runCommand(importCommand(m_sketch->uid(), choice), &result)) {
+      *error = m_lastError;
+      return false;
+    }
+    refreshScene();
+    report(result, m_sketch->uid());
+    return true;
+  }
+  if (!canChangeModel()) {
+    *error = changeBlockedReason();
+    return false;
+  }
+  // A new sketch on a plane: an origin plane, or the selected plane or
+  // planar face (as Insert DXF).
+  QVector<QPair<QString, QString>> planes;
+  QJsonValue selectedPlane;
+  QString selectedOccurrence;
+  if (m_selection.size() == 1 && (m_selection.first().kind == SelectKind::Plane ||
+                                  (m_selection.first().kind == SelectKind::Face &&
+                                   m_selection.first().geometry == QStringLiteral("plane")))) {
+    const SelectionItem& item = m_selection.first();
+    selectedPlane = item.kind == SelectKind::Plane
+                        ? QJsonValue(item.owner)
+                        : QJsonValue(QJsonObject{{QStringLiteral("face"), item.name},
+                                                 {QStringLiteral("body"), item.owner}});
+    selectedOccurrence = item.occurrence;
+    planes.append({QStringLiteral("selected"), tr("Selected: %1").arg(pickListText(item, m_snapshot))});
+  }
+  planes.append({QStringLiteral("xy"), tr("XY plane")});
+  planes.append({QStringLiteral("xz"), tr("XZ plane")});
+  planes.append({QStringLiteral("yz"), tr("YZ plane")});
+  PointsChoice choice = defaults;
+  choice.plane = planes.first().first;
+  if (interactive) {
+    const std::optional<PointsChoice> chosen = ask(planes);
+    if (!chosen) {
+      *error = QString();
+      return false;
+    }
+    choice = *chosen;
+  }
+  const bool selected = choice.plane == QStringLiteral("selected");
+  QJsonObject fields{{QStringLiteral("plane"), selected ? selectedPlane : QJsonValue(choice.plane)}};
+  const bool originPlane = selectedPlane.isString() &&
+                           QStringList{QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz")}.contains(
+                               selectedPlane.toString());
+  if (selected && !originPlane) {
+    fields.insert(QStringLiteral("occurrence"), selectedOccurrence);
+  }
+  const int depth = undoDepth();
+  QJsonObject created;
+  if (!runCommand(cmd("sketch.create", fields), &created)) {
+    *error = m_lastError;
+    return false;
+  }
+  const QString sketch = created.value(QStringLiteral("uid")).toString();
+  QJsonObject result;
+  if (!runCommand(importCommand(sketch, choice), &result)) {
+    const QString reason = m_lastError;
+    while (undoDepth() > depth) {
+      runCommand(cmd("undo"));
+    }
+    refreshScene();
+    *error = reason;
+    return false;
+  }
+  runCommand(cmd("merge_undo", {{QStringLiteral("depth"), depth}, {QStringLiteral("label"), tr("Insert %1").arg(name)}}));
+  refreshScene();
+  const QJsonObject model = report(result, sketch);
+  // A closed profile (an airfoil with its trailing edge closed) comes
+  // selected, so Extrude takes it.
+  Selection profiles;
+  for (const QJsonValue& region : model.value(QStringLiteral("regions")).toArray()) {
+    profiles.append({SelectKind::Profile, sketch, region.toObject().value(QStringLiteral("key")).toString(),
+                     QStringLiteral("plane")});
+  }
+  if (!profiles.isEmpty()) {
+    setSelection(profiles);
+    showHint(tr("Inserted %1: its profile is selected. Extrude (E) it.").arg(name));
+  } else {
+    showHint(tr("Inserted %1.").arg(name));
+  }
+  m_viewer->fitAll();
+  return true;
+}
+
 void MainWindow::insertMesh() {
   // A glTF file (mitcad#1826) comes in as File > Import takes it: its node
-  // tree as components, in metres, nothing asked about the unit.
+  // tree as components, in metres, nothing asked about the unit. A 3MF file
+  // (mitcad#2156) as STL, in the unit it says.
   const QString path = dialogOpenFileName(this, tr("Insert Mesh"), dialogFolder(DialogGroup::Import),
-                                          tr("Meshes (*.stl *.obj *.glb *.gltf);;All files (*)"));
+                                          tr("Meshes (*.stl *.obj *.glb *.gltf *.3mf);;All files (*)"));
   if (!path.isEmpty()) {
     rememberDialogFolder(DialogGroup::Import, path);
     importPath(path, true);
@@ -1435,6 +1624,9 @@ void MainWindow::insertComponent(const QString& given) {
   // has no project to tell; it is asked as before.
   std::optional<bool> linked;
   bool copyIntoProject = false;
+  // Linked parts of the design only (mitcad#2130), also of the copy into
+  // the project (mitcad#2137).
+  bool chooseParts = false;
   QString copyFolder;
   if (!base.isEmpty()) {
     QJsonObject check;
@@ -1453,12 +1645,11 @@ void MainWindow::insertComponent(const QString& given) {
       if (!choice) {
         return;
       }
-      copyIntoProject = *choice == OutsideLinkChoice::CopyIntoProject;
+      chooseParts = *choice == OutsideLinkChoice::CopyIntoProjectChooseParts;
+      copyIntoProject = *choice == OutsideLinkChoice::CopyIntoProject || chooseParts;
       linked = copyIntoProject;
     }
   }
-  // Linked parts of the design only (mitcad#2130).
-  bool chooseParts = false;
   if (!linked) {
     // Not asked yet: a file in the project, or a design not saved.
     const std::optional<InsertLink> how = askLinked(this, path);
@@ -1476,6 +1667,11 @@ void MainWindow::insertComponent(const QString& given) {
     command.insert(QStringLiteral("copy_into_project"), true);
   }
   if (chooseParts) {
+    // Listed from the file asked for, before anything is copied: the copy
+    // into the project (made by insert_component) is that file's text, with
+    // the same occurrences and body uids, so the parts are recorded against
+    // the copy; Cancel here cancels the whole insert and leaves no copy
+    // behind (mitcad#2137).
     QJsonObject request{{QStringLiteral("query"), QStringLiteral("link_parts")}, {QStringLiteral("path"), absolute}};
     if (!base.isEmpty()) {
       request.insert(QStringLiteral("base"), base);

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Boundary Fill (mitcad#457): the cells that tool bodies enclose, picked by
-// points, with the tools' face names; the tools are not changed.
+// points, with the tools' face names; with surface bodies and planes as
+// tools (mitcad#2149), the closed regions they bound. The tools are not
+// changed.
 
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <string>
@@ -9,10 +12,15 @@
 
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp_Explorer.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "mitcad/geometry/boolean.hpp"
 #include "mitcad/geometry/boundary_fill.hpp"
+#include "mitcad/geometry/profile.hpp"
+#include "mitcad/geometry/surfaces.hpp"
 #include "mitcad/geometry/input_check.hpp"
 #include "mitcad/geometry/primitive.hpp"
 #include "mitcad/geometry/query.hpp"
@@ -163,6 +171,157 @@ void test_points_outside_or_on_a_boundary_fail() {
                     "lies on the boundary of tool 1"));
 }
 
+// --- Surface bodies and planes as tools (mitcad#2149)
+
+using mitcad::geometry::BoundaryPointPlace;
+using mitcad::geometry::BoundaryRegions;
+
+// A 40 x 40 mm surface body (a patch) with its corner at `corner`, along
+// `x` and `y`: "<feature>:patch(<name>)".
+ShapePtr sheet(const std::string& feature, const std::string& name, const gp_Pnt& corner, const gp_Dir& x,
+               const gp_Dir& y) {
+  mitcad::geometry::Frame frame;
+  frame.origin = corner;
+  frame.x_axis = x;
+  frame.y_axis = y;
+  mitcad::geometry::Region region = mitcad::geometry::rectangle_region(0, 0, 40, 40);
+  region.name = name;
+  const std::vector<ShapePtr> patches = mitcad::geometry::patch_regions(feature, frame, {region});
+  CHECK(patches.size() == 1);
+  return patches.empty() ? nullptr : patches.front();
+}
+
+// Four walls of the 20 mm cube at the origin, untrimmed: each runs 10 mm
+// past the cube on every side, so that they overlap one another.
+std::vector<ShapePtr> four_walls() {
+  const gp_Dir x(1, 0, 0), y(0, 1, 0), z(0, 0, 1);
+  return {sheet("F1", "x0", gp_Pnt(0, -10, -10), y, z), sheet("F2", "x20", gp_Pnt(20, -10, -10), y, z),
+          sheet("F3", "y0", gp_Pnt(-10, 0, -10), x, z), sheet("F4", "y20", gp_Pnt(-10, 20, -10), x, z)};
+}
+
+std::vector<const Shape*> pointers(const std::vector<ShapePtr>& shapes) {
+  std::vector<const Shape*> result;
+  for (const ShapePtr& shape : shapes) {
+    result.push_back(shape.get());
+  }
+  return result;
+}
+
+gp_Pln plane_z(double z) { return gp_Pln(gp_Pnt(0, 0, z), gp_Dir(0, 0, 1)); }
+
+// Four untrimmed, overlapping surfaces and two planes close off one box: the
+// one closed region, filled as a new body, its faces named after the
+// surfaces and the planes.
+void test_surfaces_and_planes_close_off_one_box() {
+  const std::vector<ShapePtr> walls = four_walls();
+  const BoundaryRegions found = mitcad::geometry::boundary_regions(
+      pointers(walls), {plane_z(0), plane_z(20)}, {"F9:plane1", "F9:plane2"}, {gp_Pnt(10, 10, 10)});
+  CHECK(found.regions.size() == 1);
+  CHECK(found.places.size() == 1);
+  if (found.regions.size() != 1 || found.places.size() != 1) {
+    return;
+  }
+  CHECK(found.places[0].kind == BoundaryPointPlace::Kind::Region);
+  CHECK(found.places[0].region == 0);
+  const Shape& region = *found.regions[0].shape;
+  CHECK(solid_count(region) == 1);
+  CHECK_NEAR(mitcad::geometry::volume(region), 8000.0);
+  check_box(region, gp_Pnt(0, 0, 0), gp_Pnt(20, 20, 20));
+  CHECK(region.face_count() == 6);
+  for (const char* name : {"F9:plane1", "F9:plane2", "F1:patch(x0)", "F2:patch(x20)", "F3:patch(y0)",
+                           "F4:patch(y20)"}) {
+    CHECK(has_face(region, name));
+  }
+  CHECK(all_faces_named(region));
+  // The region's own point lies inside it.
+  const gp_Pnt& inside = found.regions[0].point;
+  CHECK(inside.X() > 0 && inside.X() < 20 && inside.Y() > 0 && inside.Y() < 20 && inside.Z() > 0 &&
+        inside.Z() < 20);
+  // Without points: the same region, nothing placed.
+  const BoundaryRegions listed =
+      mitcad::geometry::boundary_regions(pointers(walls), {plane_z(0), plane_z(20)}, {"a", "b"}, {});
+  CHECK(listed.regions.size() == 1);
+  CHECK(listed.places.empty());
+}
+
+// A surface across a solid divides it into two regions; the chosen one is
+// cut out of the solid.
+void test_a_surface_across_a_solid_cuts_the_chosen_cell() {
+  const ShapePtr block = box("F1", gp_Pnt(0, 0, 0), 20, 20, 20);
+  const ShapePtr across = sheet("F2", "mid", gp_Pnt(-10, -10, 10), gp_Dir(1, 0, 0), gp_Dir(0, 1, 0));
+  const BoundaryRegions found =
+      mitcad::geometry::boundary_regions({block.get(), across.get()}, {}, {}, {gp_Pnt(5, 5, 15)});
+  CHECK(found.regions.size() == 2);
+  CHECK(found.places.size() == 1);
+  if (found.regions.size() != 2 || found.places.size() != 1) {
+    return;
+  }
+  // In the order of their points: the lower half first.
+  CHECK(found.places[0].kind == BoundaryPointPlace::Kind::Region);
+  CHECK(found.places[0].region == 1);
+  const Shape& upper = *found.regions[1].shape;
+  CHECK_NEAR(mitcad::geometry::volume(upper), 4000.0);
+  check_box(upper, gp_Pnt(0, 0, 10), gp_Pnt(20, 20, 20));
+  CHECK(has_face(upper, "F1:top"));
+  CHECK(has_face(upper, "F2:patch(mid)"));
+  CHECK(all_faces_named(upper));
+  // The cut leaves the lower half of the block.
+  const mitcad::geometry::BooleanResult cut =
+      mitcad::geometry::boolean(mitcad::geometry::BooleanOp::Cut, {block.get()}, upper);
+  CHECK(cut.pieces.size() == 1);
+  if (cut.pieces.size() == 1) {
+    CHECK_NEAR(mitcad::geometry::volume(*cut.pieces[0].shape), 4000.0);
+    check_box(*cut.pieces[0].shape, gp_Pnt(0, 0, 0), gp_Pnt(20, 20, 10));
+  }
+  CHECK_NEAR(mitcad::geometry::volume(*block), 8000.0);
+}
+
+// Without the top plane the region is open upwards: no closed region, the
+// point placed in an open one with points along the walls' top edges,
+// where the region leaks out.
+void test_a_region_open_on_one_side() {
+  const std::vector<ShapePtr> walls = four_walls();
+  const BoundaryRegions found =
+      mitcad::geometry::boundary_regions(pointers(walls), {plane_z(0)}, {"F9:plane1"}, {gp_Pnt(10, 10, 10)});
+  CHECK(found.regions.empty());
+  CHECK(found.places.size() == 1);
+  if (found.places.size() != 1) {
+    return;
+  }
+  const BoundaryPointPlace& place = found.places[0];
+  CHECK(place.kind == BoundaryPointPlace::Kind::Open);
+  CHECK(!place.gap.empty());
+  bool top = false;
+  for (const gp_Pnt& p : place.gap) {
+    // Above the plane: never the walls' edges below it.
+    CHECK(p.Z() > -1e-6);
+    top = top || std::abs(p.Z() - 30.0) < 1e-6;
+  }
+  CHECK(top);
+  // A point on a wall lies on a face.
+  const BoundaryRegions on = mitcad::geometry::boundary_regions(pointers(walls), {plane_z(0), plane_z(20)},
+                                                                {"F9:plane1", "F9:plane2"}, {gp_Pnt(0, 10, 10)});
+  CHECK(on.places.size() == 1 && on.places[0].kind == BoundaryPointPlace::Kind::OnFace);
+}
+
+// Six planes alone close off a box.
+void test_planes_alone() {
+  const std::vector<gp_Pln> planes = {
+      gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)),  gp_Pln(gp_Pnt(10, 0, 0), gp_Dir(1, 0, 0)),
+      gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)),  gp_Pln(gp_Pnt(0, 10, 0), gp_Dir(0, 1, 0)),
+      gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),  gp_Pln(gp_Pnt(0, 0, 10), gp_Dir(0, 0, 1))};
+  const BoundaryRegions found = mitcad::geometry::boundary_regions(
+      {}, planes, {"F7:plane1", "F7:plane2", "F7:plane3", "F7:plane4", "F7:plane5", "F7:plane6"},
+      {gp_Pnt(5, 5, 5)});
+  CHECK(found.regions.size() == 1);
+  CHECK(found.places.size() == 1 && found.places[0].kind == BoundaryPointPlace::Kind::Region);
+  if (found.regions.size() == 1) {
+    CHECK_NEAR(mitcad::geometry::volume(*found.regions[0].shape), 1000.0);
+    CHECK(found.regions[0].shape->face_count() == 6);
+    CHECK(all_faces_named(*found.regions[0].shape));
+  }
+}
+
 } // namespace
 } // namespace test
 
@@ -173,6 +332,11 @@ int main() {
   test::guarded("test_a_cell_of_two_solids", test::test_a_cell_of_two_solids);
   test::guarded("test_one_tool", test::test_one_tool);
   test::guarded("test_points_outside_or_on_a_boundary_fail", test::test_points_outside_or_on_a_boundary_fail);
+  test::guarded("test_surfaces_and_planes_close_off_one_box", test::test_surfaces_and_planes_close_off_one_box);
+  test::guarded("test_a_surface_across_a_solid_cuts_the_chosen_cell",
+                test::test_a_surface_across_a_solid_cuts_the_chosen_cell);
+  test::guarded("test_a_region_open_on_one_side", test::test_a_region_open_on_one_side);
+  test::guarded("test_planes_alone", test::test_planes_alone);
   const std::vector<std::string> changes = mitcad::geometry::input_changes();
   for (const std::string& change : changes) {
     std::fprintf(stderr, "input changed: %s\n", change.c_str());

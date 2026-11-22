@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Closing the last design (mitcad#2142) after a restart, run after
+# last-design-close.mitcad-ui with the same settings: Preferences › General
+# › Quit MitCad when the last design is closed is still on (the setting and
+# the check box), and File › Close of the only design quits MitCad as its
+# window's close button does. The steps after the close are not reached:
+# the runner checks that the run ended ("Last design closed: quitting",
+# "Document windows closed: empty process registry", the session log's
+# end line) without the driver's end. Run by the wrappers of
+# last-design-close.mitcad-ui.
+expect-ever 'View area'
+wait-idle
+expect-setting documents/quitOnLastClose true
+mark
+command tools.preferences.general
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property quitOnLastClose checked true
+key Escape
+focus-main
+wait-idle
+expect-document-windows 1
+expect-document-frame-design open
+
+# File › Close of the last design quits.
+mark
+command file.close
+wait-log '^Last design closed: quitting$' 10
+wait-log '^Document windows closed: empty process registry$' 20
+# Not reached when MitCad quit.
+sleep 5000
+expect-never 'TestDriver: FAIL'

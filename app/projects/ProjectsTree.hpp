@@ -89,6 +89,14 @@ QString defaultProjectName(const QString& root, const QString& remoteUrl);
 // List did not take out. Reads only folder entries (no project opened).
 bool anyProjectConfigured(const QStringList& known, const QString& projectsFolder, const QStringList& hidden);
 
+// Whether any of those projects is a remote one (mitcad#2183): a project
+// whose repository follows a remote (Cloud), among the known projects and
+// the projects folder's that Remove from List did not take out. Reads each
+// project's folder and repository configuration (inspect_folder: no
+// network, no writes); a repository whose configuration names no remote
+// is passed over without it.
+bool anyRemoteProject(const QStringList& known, const QString& projectsFolder, const QStringList& hidden);
+
 // Whether two folder paths are the same (case-insensitive on Windows).
 bool sameRoot(const QString& a, const QString& b);
 

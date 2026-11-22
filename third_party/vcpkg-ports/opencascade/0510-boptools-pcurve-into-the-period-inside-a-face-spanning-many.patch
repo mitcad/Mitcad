@@ -24,17 +24,8 @@ is moved into the first one inside the face. Only when none is inside
 does the shift by one period remain as before. Faces whose range spans
 at most one period, and curves already inside, are not affected.
 
-Test: geometry/tests/test_multi_turn_faces.cpp (ctest
-geometry.multi_turn_faces),
-test_cross_hole_through_a_thread_whose_edges_run_many_turns,
-test_cut_across_a_thread_whose_major_cylinder_is_stored_as_a_cone,
-test_merge_after_a_cut_across_a_multi_turn_thread and
-test_second_cut_across_a_thread_whose_faces_run_many_turns: cuts across
-threads whose faces and edges run many turns: valid results that remove
-the tools' material (without the patch the section curves lay a period or
-more outside the faces, and the cuts removed nothing). It fails without
-the patch (shown 2026-11-20 by tools/occt-port-proof.py). (The boxes of 1
-mm cut across a 32-turn thread, named before, succeed without the patch.)
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0510.
 
 --- a/src/ModelingAlgorithms/TKBO/BOPTools/BOPTools_AlgoTools2D.cxx
 +++ b/src/ModelingAlgorithms/TKBO/BOPTools/BOPTools_AlgoTools2D.cxx

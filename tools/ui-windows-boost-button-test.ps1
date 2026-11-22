@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/framework/BoostButton.cpp app/framework/BoostButton.hpp app/framework/TitleBar.cpp app/framework/TitleBar.hpp app/framework/Ribbon.cpp app/MainWindow.cpp app/view/ViewController.cpp app/framework/Theme.cpp app/icons/boost.svg app/report/ReportCenter.cpp app/framework/TestDriver.cpp tools/cli tools/ui-scripts/boost-button.mitcad-ui tools/ui-scripts/boost-button.json app/framework/DiscordButton.cpp app/framework/DiscordButton.hpp app/icons/community.svg app/resources/layout/default.json
+# check-all sources: app/framework/BoostButton.cpp app/framework/BoostButton.hpp app/framework/TitleBar.cpp app/framework/TitleBar.hpp app/framework/Ribbon.cpp app/MainWindow.cpp app/view/ViewController.cpp app/framework/Theme.cpp app/icons/boost.svg app/report/ReportCenter.cpp app/framework/TestDriver.cpp tools/cli tools/ui-scripts/boost-button.mitcad-ui tools/ui-scripts/boost-button.json app/framework/DiscordButton.cpp app/framework/DiscordButton.hpp app/icons/community.svg app/resources/layout/default.json third_party/brand-marks/discord-mark.svg app/view/PreferencesRestore.cpp
 # The Boost development button (mitcad#1990) in the build VM, as
 # tools/ui-boost-button-test.sh on Linux: the shared steps
 # tools/ui-scripts/boost-button.mitcad-ui on a box
@@ -11,7 +11,10 @@
 # Preferences > Display > Show the Boost development button brings it
 # back; the Discord button right of it (titleDiscord, mitcad#2123): a
 # click logs MitCad's Discord link, it stays while Boost is hidden, Help >
-# MitCad on Discord logs the same link. The pictures are kept in -Out's
+# MitCad on Discord logs the same link; its own x hides only it and saves
+# it, Preferences > Display > Show the Discord button brings it back
+# (mitcad#2159). The pictures (also both pills in each theme,
+# boost-button-<layout>-dark.png and -light.png) are kept in -Out's
 # pictures folder.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-boost-button-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
@@ -99,9 +102,49 @@ foreach ($layout in @('floating', 'docked')) {
   if ($hidden -match '; titleBoost ') { Ui-Fail "${layout}: titleBoost in the top bar after its x: '$hidden'" }
   if ($hidden -notmatch '; titleDiscord ') { Ui-Fail "${layout}: no titleDiscord in the top bar while Boost is hidden: '$hidden'" }
   Write-Host "ok   ${layout}: the Discord button right of the Boost button, there without it too"
-  $picture = Join-Path $env:MITCAD_TEST_WORK 'boost-button.png'
-  if (-not (Test-Path $picture) -or (Get-Item $picture).Length -eq 0) { Ui-Fail "no picture boost-button.png ($layout)" }
-  Copy-Item $picture (Join-Path $pictures "boost-button-$layout.png")
+  # Its own x (mitcad#2159): hidden and saved, Boost left; the parts logged
+  # last between it and Preferences showing it again.
+  Ui-ExpectLog 'Discord button hidden' "${layout}: the Discord x hides it"
+  Ui-ExpectLog 'Preferences: Discord button shown' "${layout}: Preferences shows the Discord button again"
+  $gone = $null
+  $back = $null
+  $on = $false
+  $after = $false
+  foreach ($line in @(Ui-LogLines)) {
+    if ($line -eq 'Discord button hidden') { $on = $true }
+    elseif ($line -eq 'Preferences: Discord button shown') { $on = $false; $after = $true }
+    elseif ($line -match '^(Floating cards|Docked top bar): ') {
+      if ($on) { $gone = $line }
+      if ($after) { $back = $line }
+    }
+  }
+  if ($null -eq $gone) { Ui-Fail "${layout}: no top bar parts logged while the Discord button was hidden" }
+  if ($gone -match '; titleDiscord ') { Ui-Fail "${layout}: titleDiscord in the top bar after its x: '$gone'" }
+  if ($gone -notmatch '; titleBoost ') { Ui-Fail "${layout}: the Discord x hid the Boost button too: '$gone'" }
+  if ($null -eq $back) { Ui-Fail "${layout}: no top bar parts logged after Preferences showed the Discord button" }
+  $boostX = & $partX $back 'titleBoost'
+  $discordX = & $partX $back 'titleDiscord'
+  if ($null -eq $boostX -or $null -eq $discordX -or $boostX -ge $discordX) {
+    Ui-Fail "${layout}: the Discord button not back right of the Boost button after Preferences: '$back'"
+  }
+  Write-Host "ok   ${layout}: the Discord x hides only it, Preferences brings it back"
+  foreach ($name in @('boost-button', 'boost-button-dark', 'boost-button-light')) {
+    $picture = Join-Path $env:MITCAD_TEST_WORK "$name.png"
+    if (-not (Test-Path $picture) -or (Get-Item $picture).Length -eq 0) { Ui-Fail "no picture $name.png ($layout)" }
+  }
+  # Each theme's own picture (mitcad#2176): the steps checked the Browser's
+  # theme before each; the two files differ.
+  foreach ($theme in @('dark', 'light')) {
+    $checked = @(Ui-LogLines | Where-Object { $_ -match "TestDriver: widget theme modelBrowserTree .*: $theme`$" })
+    if ($checked.Count -eq 0) { Ui-Fail "${layout}: the window not checked in the $theme theme before its picture" }
+  }
+  $darkHash = (Get-FileHash (Join-Path $env:MITCAD_TEST_WORK 'boost-button-dark.png')).Hash
+  $lightHash = (Get-FileHash (Join-Path $env:MITCAD_TEST_WORK 'boost-button-light.png')).Hash
+  if ($darkHash -eq $lightHash) { Ui-Fail "${layout}: boost-button-dark.png is the same picture as boost-button-light.png" }
+  Write-Host "ok   ${layout}: the dark and the light picture differ"
+  Copy-Item (Join-Path $env:MITCAD_TEST_WORK 'boost-button.png') (Join-Path $pictures "boost-button-$layout.png")
+  Copy-Item (Join-Path $env:MITCAD_TEST_WORK 'boost-button-dark.png') (Join-Path $pictures "boost-button-$layout-dark.png")
+  Copy-Item (Join-Path $env:MITCAD_TEST_WORK 'boost-button-light.png') (Join-Path $pictures "boost-button-$layout-light.png")
 }
 Write-Host "ok   the pictures in $pictures"
 Ui-StopApp

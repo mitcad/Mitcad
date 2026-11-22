@@ -18,6 +18,9 @@
 //!   pattern relations (the copies stay where they are), the angle of a
 //!   line from the x axis and an arc's sweep (other than level or upright
 //!   lines), a slot's overall length and offset distances.
+//! - 3D curves ([`super::spatial`], mitcad#2157): a 3D sketch of their own,
+//!   the sketch itself when it has nothing else, else right after it
+//!   (`<name> 3D`).
 
 use std::collections::HashMap;
 
@@ -29,6 +32,7 @@ use serde_json::{Value, json};
 
 use super::planes::Frame;
 use super::report::SketchReport;
+use super::spatial::SpatialMade;
 use super::{Importer, MapResult, Mapped, NotMapped};
 
 /// A sketch made.
@@ -42,6 +46,9 @@ pub(crate) struct SketchMade {
     pub frame: Frame,
     /// The file's sketch (for profiles by curves).
     pub sketch: Sketch,
+    /// The 3D sketch of its 3D curves (mitcad#2157): the sketch itself
+    /// when it has nothing else (`uid` is then the 3D sketch's).
+    pub spatial: Option<SpatialMade>,
 }
 
 impl SketchMade {
@@ -58,23 +65,107 @@ impl SketchMade {
             .cloned()
             .ok_or_else(|| format!("the sketch has no point {id}"))
     }
+
+    /// A path along curves of the sketch: the planar form for its curves,
+    /// the typed 3D form for its 3D curves (mitcad#2157).
+    pub fn path(&self, ids: &[String]) -> Result<Value, String> {
+        if let Some(sp) = &self.spatial
+            && !ids.is_empty()
+            && ids.iter().all(|id| sp.wire(id).is_some())
+        {
+            return sp.path(ids);
+        }
+        let curves: Vec<String> = ids
+            .iter()
+            .map(|c| self.curve(c))
+            .collect::<Result<_, _>>()?;
+        Ok(json!({"sketch": self.uid.to_string(), "curves": curves}))
+    }
+
+    /// A point as a reference: the sketch's, or a 3D curve's node
+    /// (`w3:1`, format 52) as the 3D sketch's point.
+    pub fn point_ref(&self, id: &str) -> Result<Value, String> {
+        if let Some(sp) = &self.spatial
+            && let Some(p) = sp.node(id)
+        {
+            return Ok(json!({"sketch": sp.uid.to_string(), "point": p}));
+        }
+        Ok(json!({"sketch": self.uid.to_string(), "point": self.point(id)?}))
+    }
+
+    /// A curve as a reference: the sketch's, or a 3D curve of one piece as
+    /// the 3D sketch's.
+    pub fn curve_ref(&self, id: &str) -> Result<Value, String> {
+        if let Some(sp) = &self.spatial
+            && let Some(w) = sp.wire(id)
+        {
+            return match w.curves.as_slice() {
+                [c] => Ok(json!({"sketch": sp.uid.to_string(), "curve": c})),
+                _ => Err(format!("the 3D curve {id} came in as several curves")),
+            };
+        }
+        Ok(json!({"sketch": self.uid.to_string(), "curve": self.curve(id)?}))
+    }
+}
+
+/// Whether a sketch holds 3D curves only (its planar part no more than the
+/// origin), so the 3D sketch is the sketch itself.
+fn only_3d(s: &Sketch) -> bool {
+    let wire_links = wire_links(s);
+    !s.wires.is_empty()
+        && s.curves.is_empty()
+        && s.points.iter().all(|p| p.id == "origin")
+        && s.patterns.is_empty()
+        && s.offsets.is_empty()
+        && s.freeform_offsets.is_empty()
+        && s.equations.is_empty()
+        && s.links.iter().all(|l| {
+            l.get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| wire_links.iter().any(|w| w == id))
+        })
+}
+
+/// The links that own 3D curves.
+fn wire_links(s: &Sketch) -> Vec<String> {
+    s.wires
+        .iter()
+        .filter_map(|w| w.get("link").and_then(Value::as_str).map(str::to_owned))
+        .collect()
 }
 
 /// The translated definition and what was left out.
-struct Translated {
-    entities: Vec<Value>,
-    constraints: Vec<Value>,
-    dimensions: Vec<Value>,
-    points: HashMap<String, String>,
-    curves: HashMap<String, String>,
-    dropped: Vec<String>,
-    constraints_mapped: usize,
-    dimensions_mapped: usize,
+pub(super) struct Translated {
+    pub entities: Vec<Value>,
+    pub constraints: Vec<Value>,
+    pub dimensions: Vec<Value>,
+    pub points: HashMap<String, String>,
+    pub curves: HashMap<String, String>,
+    pub dropped: Vec<String>,
+    pub constraints_mapped: usize,
+    pub dimensions_mapped: usize,
 }
 
 impl<K: Kernel> Importer<'_, '_, K> {
     pub(super) fn sketch(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let s: SketchFeature = f.typed()?;
+        // 3D curves only: the 3D sketch is the sketch (mitcad#2157).
+        if only_3d(&s.sketch) {
+            let (spatial, notes) =
+                self.spatial_sketch(f.id, &f.name, &s.sketch, f.component, component)?;
+            self.sketches.insert(
+                f.id,
+                SketchMade {
+                    uid: spatial.uid,
+                    points: HashMap::new(),
+                    curves: HashMap::new(),
+                    frame: Frame::XY,
+                    sketch: s.sketch.clone(),
+                    spatial: Some(spatial),
+                },
+            );
+            return Ok(Mapped::partial(notes));
+        }
         let mut names = f.param_names.iter().map(String::as_str);
         let plane = self.plane_for_sketch(&s.plane, &mut names, component)?;
         let t = self.translate_sketch(&s.sketch)?;
@@ -111,10 +202,21 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     dimensions_mapped: 0,
                     dropped: vec![format!("every constraint: {e}")],
                 });
-                self.record_sketch(f, uid, component, &s, t.points, t.curves, plane.world);
-                return Ok(Mapped::partial(vec![format!(
+                let mut notes = vec![format!(
                     "the sketch came in without its constraints and dimensions: {e}"
-                )]));
+                )];
+                let spatial = self.spatial_after(f, &s, component, &mut notes);
+                self.record_sketch(
+                    f,
+                    uid,
+                    component,
+                    &s,
+                    t.points,
+                    t.curves,
+                    plane.world,
+                    spatial,
+                );
+                return Ok(Mapped::partial(notes));
             }
         };
         let (constraints, dimensions) = s.sketch.counts();
@@ -133,8 +235,43 @@ impl<K: Kernel> Importer<'_, '_, K> {
             dimensions_mapped: t.dimensions_mapped,
             dropped: t.dropped,
         });
-        self.record_sketch(f, uid, component, &s, t.points, t.curves, plane.world);
+        let spatial = self.spatial_after(f, &s, component, &mut notes);
+        self.record_sketch(
+            f,
+            uid,
+            component,
+            &s,
+            t.points,
+            t.curves,
+            plane.world,
+            spatial,
+        );
         Ok(Mapped::partial(notes))
+    }
+
+    /// The 3D sketch of a sketch's 3D curves, right after it (`<name>
+    /// 3D`); its notes, or why it did not come in, among the sketch's.
+    fn spatial_after(
+        &mut self,
+        f: &Feature,
+        s: &SketchFeature,
+        component: ComponentUid,
+        notes: &mut Vec<String>,
+    ) -> Option<SpatialMade> {
+        if s.sketch.wires.is_empty() {
+            return None;
+        }
+        let name = format!("{} 3D", f.name);
+        match self.spatial_sketch(f.id, &name, &s.sketch, f.component, component) {
+            Ok((made, more)) => {
+                notes.extend(more);
+                Some(made)
+            }
+            Err(NotMapped::Failed(e) | NotMapped::Unmapped(e)) => {
+                notes.push(format!("its 3D curves did not come in: {e}"));
+                None
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -147,6 +284,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         points: HashMap<String, String>,
         curves: HashMap<String, String>,
         world: Option<Frame>,
+        spatial: Option<SpatialMade>,
     ) {
         let frame = self
             .doc
@@ -166,11 +304,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 curves,
                 frame,
                 sketch: s.sketch.clone(),
+                spatial,
             },
         );
     }
 
-    fn translate_sketch(&mut self, s: &Sketch) -> Result<Translated, NotMapped> {
+    pub(super) fn translate_sketch(&mut self, s: &Sketch) -> Result<Translated, NotMapped> {
         let mut t = Translated {
             entities: Vec::new(),
             constraints: Vec::new(),
@@ -504,10 +643,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 o.remove("fixed");
             }
         }
+        // (3D curves come in as a 3D sketch of their own, mitcad#2157.)
         for (what, n) in [
             ("sketch pattern", s.patterns.len()),
             ("offset", s.offsets.len() + s.freeform_offsets.len()),
-            ("3D curve", s.wires.len()),
         ] {
             if n > 0 {
                 t.dropped
@@ -525,7 +664,16 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 )
             });
         }
+        let wire_links = wire_links(s);
         for l in &s.links {
+            // A link that owns only 3D curves: they are the 3D sketch's.
+            let id = l.get("id").and_then(Value::as_str).unwrap_or_default();
+            if wire_links.iter().any(|w| w == id)
+                && !s.points.iter().any(|p| p.link.as_deref() == Some(id))
+                && !s.curves.iter().any(|c| c.link.as_deref() == Some(id))
+            {
+                continue;
+            }
             let kind = l.get("type").and_then(Value::as_str).unwrap_or("link");
             let what = match kind {
                 "text" => "a text",
@@ -676,7 +824,7 @@ fn constraint_points(c: &ConstraintKind) -> Vec<usize> {
 }
 
 /// Whether a point lies inside a closed polygon (even-odd).
-fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
+pub(super) fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
     let mut c = false;
     let n = poly.len();
     for i in 0..n {

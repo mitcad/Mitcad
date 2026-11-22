@@ -2031,6 +2031,43 @@ void SketchController::freePattern(const QString& id) {
   qDebug().noquote() << QStringLiteral("Freed pattern %1").arg(id);
 }
 
+const TextData* SketchController::selectedText() const {
+  const Selection& selection = m_host.selection();
+  if (selection.size() != 1) {
+    return nullptr;
+  }
+  return m_model.textOfPick(selection.first());
+}
+
+void SketchController::explodeText() {
+  const TextData* text = selectedText();
+  if (text == nullptr) {
+    hint(tr("Explode Text: select a text or a QR code first."));
+    return;
+  }
+  const QString id = text->id;
+  SketchOp op(*this);
+  QJsonObject cmd = op.command(QStringLiteral("sketch.explode_text"));
+  cmd.insert(QStringLiteral("text"), id);
+  QJsonObject result;
+  if (!op.run(cmd, &result)) {
+    const QString reason = op.error();
+    op.rollback();
+    error(tr("Could not explode the text: %1").arg(reason));
+    return;
+  }
+  m_host.setSelection({});
+  op.commit();
+  const qsizetype curves = result.value(QStringLiteral("made")).toArray().size();
+  // "Exploded text t2 in Sketch1: 46 curves", for UI tests.
+  qDebug().noquote() << QStringLiteral("Exploded text %1 in %2: %3 curves").arg(id, m_model.name).arg(curves);
+  // Names later features use that no new curve matches, in words.
+  const QStringList warnings = shownTexts(result, QStringLiteral("warnings"), QStringLiteral("warning_messages"));
+  if (!warnings.isEmpty()) {
+    notice(tr("Explode Text: %1").arg(warnings.join(QStringLiteral("; "))), NoticeLevel::Warning);
+  }
+}
+
 QStringList SketchController::selectedItems(bool active) const {
   QStringList ids;
   for (const SelectionItem& item : m_host.selection()) {
@@ -3444,6 +3481,15 @@ bool SketchController::viewerEvent(QEvent* event) {
   }
   if (!isActive() || m_forwarding || m_paused) {
     return false;
+  }
+  // A key the tool takes while the view has the keyboard (mitcad#2178:
+  // Extend to Meet's Tab), before the view moves the focus with it.
+  if (event->type() == QEvent::KeyPress && m_tool != nullptr) {
+    const auto* key = static_cast<const QKeyEvent*>(event);
+    if (m_tool->viewKey(key->key(), key->modifiers())) {
+      m_overlay->update();
+      return true;
+    }
   }
   // The orientation cube is the view's: clicks turn the view, drags orbit (U5).
   if (event->type() == QEvent::MouseButtonPress &&

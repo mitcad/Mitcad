@@ -23,15 +23,8 @@ of a fillet with some of a closed chain's edges ran for hours.
   edge it does not take. Round such a chain the contour is every edge of
   the chain once, both its ends at W.
 
-Test: geometry/tests/test_fillet_chain_loops.cpp,
-test_contour_round_a_closed_chain_stops_where_it_turns (ctest
-geometry.fillet_chain_loops): a plate whose top outline turns twice: the
-contour from a selected edge takes the outline's four edges once each
-(without the patch the contour does not end within the test's 30 s);
-test_mitcad_fillet_round_a_closed_chain_ends, MitCad's fillet of three of
-them. Its failure without the patch is still to be shown: with it and the
-8 later patches that change the same lines reverted at the port's tip, the
-test does not build (tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0840.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 index 7bc592e4..26465aa8 100644

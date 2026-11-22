@@ -173,10 +173,12 @@ int export_drawing(const std::vector<std::string>& args) {
     return 0;
   }
   // As the application logs it: "Exported <path>: drawing, 3 views,
-  // 2 bodies, A3, 1:1".
+  // 2 bodies in 4 placements, A3, 1:1" (a body of a component placed
+  // several times is drawn at each placement, mitcad#2147).
   const QJsonObject r = QJsonDocument::fromJson(QByteArray::fromStdString(result)).object();
   std::cout << "Exported " << a.positional[1] << ": drawing, " << r.value(QStringLiteral("views")).toInt()
-            << " views, " << r.value(QStringLiteral("bodies")).toArray().size() << " bodies, "
+            << " views, " << r.value(QStringLiteral("bodies")).toArray().size() << " bodies in "
+            << r.value(QStringLiteral("placements")).toInt() << " placements, "
             << r.value(QStringLiteral("sheet")).toString().toStdString() << ", "
             << r.value(QStringLiteral("scale")).toString().toStdString() << "\n";
   for (const QJsonValue warning : r.value(QStringLiteral("warnings")).toArray()) {

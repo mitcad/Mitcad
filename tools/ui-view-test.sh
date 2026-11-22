@@ -409,6 +409,15 @@ shot wireframe-hidden wireframe
 # The faces hide what is behind them in the background's colour.
 more "the faces are not drawn red" "$((SHADED_WARM / 10))" "$STAT_warm"
 more "edges behind faces are drawn differently" "$STAT_changed" 150
+HIDDEN_OBJECT=$STAT_object
+# The same faces, the edges in sight solid and no dashed ones (mitcad#2155;
+# the outlines of curved faces: tools/ui-view-outline-test.sh).
+ui_step "wireframe visible only (search)"  ui_command "Wireframe with Visible Edges Only"
+ui_expect_new "Visual style Wireframe with Visible Edges Only" "wireframe with visible edges only"
+shot wireframe-visible wireframe-hidden
+more "the faces are not drawn red" "$((SHADED_WARM / 10))" "$STAT_warm"
+more "the edges in sight are drawn" "$STAT_object" 500
+more "no dashed edges behind faces" "$HIDDEN_OBJECT" $((STAT_object + 100))
 ui_step "back to visible edges (search)"   ui_command "Shaded with Visible Edges Only"
 ui_expect_new "Visual style Shaded with Visible Edges Only" "the default style again"
 

@@ -54,13 +54,9 @@ fail with OCCT's reports of a computation it cannot make
 (ChFi3d_IsComputationFailure, 0016) where the blend cannot be carried over
 the notch so: the stripes are restored and end at the notch as before.
 Any other failure (a broken invariant, a signal) is rethrown.
-Test: geometry/tests/port/p0241-roundings-meeting-across-a-notch.cpp (ctest
-geometry.port.0241): the rim of a half-round bay of radius 10 in a plate (a
-concave wall) broken at its deepest point by a notch 0.1 deep and 0.34
-wide, both arcs rounded with 0.3: built, valid, one torus face across the
-notch, the volume of the whole rim rounded and the notch cut after; a
-notch 1 deep as stock (two torus faces, the same volume). The disc's
-convex rim: test_fillet_results.cpp.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0241.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 3a56eb4c..7202921e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

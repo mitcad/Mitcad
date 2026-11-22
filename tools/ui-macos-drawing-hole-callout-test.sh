@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/drawings app/framework/TestDriver.cpp tools/cli
-# check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/drawings.rs core/model-drawing/src
+# check-all sources: app/drawings app/framework/TestDriver.cpp app/framework/TestDriverSketch.cpp tools/cli
+# check-all sources: core/model-api/src/drawing_annotations.rs core/model-api/src/drawing_spacing.rs core/model-api/src/drawings.rs core/model-drawing/src
 # check-all sources: tools/ui-scripts/drawing-hole-callout.mitcad-ui tools/ui-scripts/drawing-hole-callout.json
 # A drawing's own hole callout (mitcad#2054): the shared input script
 # tools/ui-scripts/drawing-hole-callout.mitcad-ui of

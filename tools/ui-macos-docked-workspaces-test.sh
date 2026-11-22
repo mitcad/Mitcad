@@ -67,6 +67,10 @@ ui_expect_log '^Drawing docks shown again: commandDock, projectsDock$' 'Close Dr
 ui_expect_log '^Docked toolbar panel hidden [(]Start[)]$' 'Home: the Start page without the toolbar panel'
 ui_expect_log '^Start page left by the design' "the design's tab leads back"
 ui_expect_log '^Docked toolbar panel shown$' 'the toolbar panel back'
+# On the screen (mitcad#2031): the shared script also takes a window not
+# exposed (Windows' session 0).
+ui_expect_log '^Toolbar panel after the Start page: shown at [0-9]+,[0-9]+ [0-9]+x[0-9]+ [(]Docked; the window exposed, ' \
+  'the toolbar panel shown in the exposed window after the Start page'
 ui_expect_log '^TestDriver: done' 'the Docked workspaces'
 ui_expect_no_log 'TestDriver: FAIL' 'no failed driver assertion'
 [ "$UI_FAILURES" = 0 ] || exit 1

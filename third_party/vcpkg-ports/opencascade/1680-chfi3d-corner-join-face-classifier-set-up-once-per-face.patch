@@ -16,12 +16,8 @@ projected on the surface within the same bounds and with the same
 tolerances, its nearest projection classified against the face's edges
 by the same classifier, a point without a projection out as before.
 
-Test: none, because the patch changes only the time of the join across a
-corner (each face's bounds, projection and explorer set up once, the same
-answers for every point); the fillet and chamfer tests of geometry
-(geometry.suite.fillet_*, geometry.fillet_*) check that the results are
-unchanged, and the gain (on a threaded design's join) is below what a
-bound in a test of seconds can tell on a loaded machine.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1680.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
 index 7ef1dcd4..fa225835 100644

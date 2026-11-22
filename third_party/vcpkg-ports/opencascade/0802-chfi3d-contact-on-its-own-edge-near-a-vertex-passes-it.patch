@@ -23,18 +23,8 @@ the contact's way as its vector: SearchFace and StartSol go on through the
 vertex into that face (SearchFaceOnV), and the walk goes on along the
 spine's next edge.
 
-Test: none, because no synthetic body reaches the case (mitcad#1986): its
-contact meets the spine's own edge only through the stored bodies'
-micrometre deviations at the walk's steps there. A probe in
-ChFi3d_OwnEdgeNearVertex found no case in the geometry tests, in OCCT's
-blend and chamfer DRAW groups, or in a synthetic analogue of the thread: a
-plate whose top runs tangentially into a cylinder of radius 2 (the crest's
-rounding and the flank), cut by a plane 1.7 to 8 degrees from the top along
-a line that crosses their tangent edge at 10 to 60 degrees, the cut's two
-edges rounded with 0.5 as one contour (the blend 0.015 wide at the vertex
-for 1.7 degrees). With the edge's p-curve on the cylinder moved by 10 or 20
-micrometres (its tolerance raised to match), the rounding fails without
-reaching the case. Verified on the stored bodies only.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0802.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 index 34fb451..b8bbd25 100644

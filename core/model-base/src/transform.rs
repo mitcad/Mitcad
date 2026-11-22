@@ -185,8 +185,8 @@ impl Instance {
 }
 
 /// A primitive solid on `frame`: the box's first corner, the base centre
-/// of a cylinder, the centre of a sphere or a torus, with the frame normal
-/// as the height or axis direction.
+/// of a cylinder or a cone, the centre of a sphere or a torus, with the
+/// frame normal as the height or axis direction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PrimitiveShape {
     Box {
@@ -204,6 +204,16 @@ pub enum PrimitiveShape {
     Torus {
         major_radius: f64,
         minor_radius: f64,
+    },
+    /// A cone or a frustum (mitcad#2239): `radius` at the base on the
+    /// frame, `top_radius` at `height` along the normal (0: an apex); the
+    /// radii are not negative, not both zero and not equal, the height
+    /// greater than zero. Faces `bottom` (none when `radius` is 0), `top`
+    /// (none when `top_radius` is 0) and `side0`.
+    Cone {
+        radius: f64,
+        top_radius: f64,
+        height: f64,
     },
 }
 

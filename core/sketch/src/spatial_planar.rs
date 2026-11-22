@@ -770,6 +770,7 @@ fn projection_of(source: &SpatialSource, entities: Vec<Ref>) -> Option<Projectio
         chain: Vec::new(),
         after: None,
         outline: false,
+        automatic: false,
     })
 }
 

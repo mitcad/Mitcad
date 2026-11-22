@@ -42,6 +42,16 @@
 // <reason>" and exits with 1. A script that cannot be read or has a syntax
 // error fails the same way before it runs anything.
 //
+// Where the steps are (mitcad#2173): TestDriver.cpp has the script's parser,
+// the input and the common steps (keys, clicks, menus, buttons, the log,
+// variables, waits, screenshots); the other steps are in area files
+// (TestDriverModel.cpp, TestDriverSketch.cpp, TestDriverViewPixels.cpp, ...),
+// each with its steps' specs and their chain (StepArea). The scoped check
+// gives a UI test that declares TestDriver.cpp only the area files whose
+// steps its scripts use (docs/development.md, "UI tests by what changed"),
+// so a new step goes into the area file of its kind, its name with a
+// hyphen.
+//
 // Test script format
 // ------------------
 // One step per line: a name and arguments, separated by spaces. `#` starts a
@@ -269,6 +279,14 @@
 //                           (mitcad#1299)
 //   expect-formula-builder          the open expression editor's real controls
 //   open-formula-field <name>        open the editor attached to a real value field
+//   expect-cell-editor-whole        the table cell's line editor with the keyboard
+//                           shows its whole text: within the table, its first
+//                           and last positions in sight (left of fx), or the
+//                           wrapped strip under it showing it (mitcad#2179) (6 s)
+//   expect-formula-token <text> <kind>  the first <text> in the open Formula
+//                           Editor's formula is a token of <kind> (name,
+//                           unknown, function, keyword, number, unit,
+//                           operator, text, ...) and shows its colour (6 s)
 //   expect-navigation-controls <mode>  default|configure|restored|reset, or
 //                           lock-rotation-button: the 3D Mouse tab's button 2
 //                           chosen to run Lock Rotation (mitcad#1910)
@@ -360,6 +378,8 @@
 //   sketch-pointer press|move|release <x> <y> [mods]  separate held left-drag
 //                           events; mods (shift, alt, ...) held on that event
 //                           only, e.g. Shift during a drag (mitcad#1538)
+//   drawing-sheet-pointer press|move|release <x> <y> [mods]  the same
+//                           left-drag events at drawing sheet millimetres
 //   expect-profiles <count> inspect the actual displayed profile objects
 //   type-in <regex> <text>  reveal/focus the identified panel field, select
 //                           all and type through its actual frontend editor
@@ -451,7 +471,9 @@
 //                           command <id>", "(disabled)" when it cannot
 //                           start), then closed again: its popups, dialogs
 //                           and new windows closed, its panel cancelled
-//                           with Esc, after its computation
+//                           with Esc, after its computation; fails when a
+//                           command left the one open before the walk (a
+//                           sketch: exclude Finish and Cancel Sketch)
 //   walk-menus              every menu of the window (the menu bar's, the
 //                           ribbon's and the panels' drop-downs and their
 //                           submenus) filled as when it opens
@@ -692,6 +714,10 @@
 //   expect-model-busy true|false assert the worker's actual state immediately
 //   hold-model-preview true|false hold asynchronous previews before model
 //                           work until released or cancelled by real UI input
+//   hold-model-display true|false hold asynchronous display meshing (a
+//                           preview's refinement) until released, also
+//                           through a cancel: another job a panel's next
+//                           preview waits for (mitcad#2118)
 //   expect-native-history-wheel  mouse/trackpad history scrolling reaches
 //                           both endpoints without leaving the history strip
 //   test-manipulator-feedback check actual subpixel length/angle overlay
@@ -858,6 +884,17 @@
 //                           (no cleanup, autosave files stay), exit code 0
 //   stay                    at the end of the script: do not exit
 //
+// Native windows (mitcad#2152, TestDriverNativeWindows.cpp):
+//   expect-design-native yes|no   whether the 3D view or one of its parents
+//                           below the top-level window has a native window
+//                           of its own (logged "Design native windows: …")
+//   expect-screen-beside-cards <card>...   the screen as the system shows it
+//                           (QScreen::grabWindow), 6 px right of each named
+//                           Floating card, has the view's background, no
+//                           dark frame; where the system draws no window
+//                           (Windows' session 0) logged "Screen beside
+//                           cards: not drawn here, not checked"
+//
 // Example (see tools/ui-scripts/ for the workflow tests):
 //   command sketch.create
 //   expect-log 'Create Sketch: select a plane'
@@ -871,8 +908,10 @@
 //   expect-log 'Added rectangle 40 x 25 mm'
 
 #include <atomic>
+#include <cstddef>
 #include <deque>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -920,6 +959,27 @@ public:
 
   // A log line (from the message handler, any thread).
   void record(const QString& message);
+
+  // How a step gives input: kIdle waits for the model, the others also for
+  // the window to be free of modal dialogs (of the target window, or of the
+  // main window).
+  enum StepKind { kPlain = 0, kIdle = 1, kInputOfTarget = 2, kInputOfMain = 3 };
+  struct StepSpec {
+    const char* name;
+    int minArgs;
+    int maxArgs; // -1: any number
+    int kind;
+  };
+  // The steps of an area file (mitcad#2173): their specs, and the chain that
+  // runs them (nullptr for the files whose run function run() calls first).
+  // TestDriver.cpp keeps the common steps (keys, clicks, menus, the log,
+  // screenshots); the check's UI test selection gives a test that declares
+  // TestDriver.cpp only the area files whose steps its scripts use.
+  struct StepArea {
+    const StepSpec* specs;
+    std::size_t count;
+    void (TestDriver::*run)(const QString& name, const QStringList& args, int line);
+  };
 
 private:
   struct Step {
@@ -1015,6 +1075,8 @@ private:
   void agentMenuChoice(const QString& row, const QString& state);
   void testFormulaBuilder();
   void openFormulaField(const QString& name);
+  void testCellEditorWhole();
+  void testFormulaToken(const QString& text, const QString& kind);
   void sendWheel(const QPoint& windowPos, int notches, Qt::KeyboardModifiers modifiers);
   // The main window (or the 3D view only), cut to `crop` when given.
   bool saveScreenshot(const QString& path, bool viewOnly, QWidget* crop = nullptr);
@@ -1033,7 +1095,64 @@ private:
   // The orbit's center (mitcad#1791, TestDriverOrbitCenter.cpp): runs the
   // step if it is one of those.
   bool runOrbitCenterStep(const QString& name, const QStringList& args, int line);
-  void walkClose(qint64 notBefore, qint64 until);
+  // The design window's native windows and the screen beside the Floating
+  // cards (mitcad#2152, TestDriverNativeWindows.cpp): runs the step if it
+  // is one of those.
+  bool runNativeWindowStep(const QString& name, const QStringList& args, int line);
+  void walkClose(qint64 notBefore, qint64 until, int line);
+
+  // A step's spec, from TestDriver.cpp's table or an area's; the area of a
+  // step that an area file runs (mitcad#2173).
+  static const StepSpec* findSpec(const QString& name);
+  static const StepArea* areaOf(const QString& name);
+  // The area files (mitcad#2173), each with its steps and their chain.
+  static const StepArea kDocumentWindowSteps; // TestDriverDocumentWindows.cpp
+  void runDocumentWindowStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kModelSteps; // TestDriverModel.cpp
+  void runModelStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kViewShapeSteps; // TestDriverViewShapes.cpp
+  void runViewShapeStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kViewPixelSteps; // TestDriverViewPixels.cpp
+  void runViewPixelStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kViewCameraSteps; // TestDriverViewCamera.cpp
+  void runViewCameraStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kNativeControlSteps; // TestDriverNativeControls.cpp
+  void runNativeControlStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kSketchSteps; // TestDriverSketch.cpp
+  void runSketchStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kPointerSteps; // TestDriverPointer.cpp
+  void runPointerStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kPickSteps; // TestDriverPicks.cpp
+  void runPickStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kWidgetSteps; // TestDriverWidgets.cpp
+  void runWidgetStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kCommandSteps; // TestDriverCommands.cpp
+  void runCommandStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kEnvironmentSteps; // TestDriverEnvironment.cpp
+  void runEnvironmentStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kFileSteps; // TestDriverFiles.cpp
+  void runFileStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kNavigationSteps; // TestDriverNavigation.cpp
+  void runNavigationStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kAssistantSteps; // TestDriverAssistant.cpp
+  void runAssistantStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kFormulaSteps; // TestDriverFormula.cpp
+  void runFormulaStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kManipulatorSteps; // TestDriverManipulators.cpp
+  void runManipulatorStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kDialogSteps; // TestDriverDialogs.cpp
+  void runDialogStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kMacControlSteps; // TestDriverMacControls.cpp
+  void runMacControlStep(const QString& name, const QStringList& args, int line);
+  static const StepArea kChromeSteps; // TestDriverChrome.cpp
+  void runChromeStep(const QString& name, const QStringList& args, int line);
+  // The steps of the files whose run function run() calls first.
+  static const StepArea kWindowFitSteps;     // TestDriverWindowFit.cpp
+  static const StepArea kDocumentFrameSteps; // TestDriverDocuments.cpp
+  static const StepArea kDockSteps;          // TestDriverDocks.cpp
+  static const StepArea kWalkSteps;          // TestDriverWalk.cpp
+  static const StepArea kOrbitCenterSteps;   // TestDriverOrbitCenter.cpp
+  static const StepArea kNativeWindowSteps;  // TestDriverNativeWindows.cpp
 
   bool m_active = false;
   QTimer* m_timer = nullptr;

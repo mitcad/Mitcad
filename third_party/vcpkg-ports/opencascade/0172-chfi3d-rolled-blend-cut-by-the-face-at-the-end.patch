@@ -39,13 +39,9 @@ it cannot make (ChFi3d_IsComputationFailure, 0016) where the blend cannot
 be carried to the face at the end so: the stripe's own state is restored
 and the end is left to OCCT's corner as before, which its caller is told.
 Any other failure (a broken invariant, a signal) is rethrown.
-Test: geometry/tests/port/p0172-rolled-blend-cut-at-the-end.cpp (ctest
-geometry.port.0172): a round pocket cut into a post off its axis, its floor
-a lens between the pocket's wall and the post's rim narrower than the
-radius, the floor's edge at the wall rounded with 2.5 and 2 (the ball
-touching the wall and rolling on the rim): built, valid, the lens consumed,
-the blend cut by the post's side at each tip; a pocket within the post,
-its floor wide enough for the ball all round, as stock.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0172.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index b25afc06..84221db7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx

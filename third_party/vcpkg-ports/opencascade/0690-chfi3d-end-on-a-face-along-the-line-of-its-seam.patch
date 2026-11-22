@@ -33,12 +33,9 @@ the wrong way round.
   a piece of the seam. The OCC32 pseudo-seam code leaves that arc alone.
 
 Before, the result was invalid.
-Test: geometry/tests/test_fillet_results.cpp,
-test_bar_top_rounded_into_a_bore_along_its_seam (ctest
-geometry.suite.fillet_results): a bar's top edge rounded where the bar
-meets a tube's bore at its seam, as fused and copied. It fails without the
-patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted together
-with 1850, which changes the same lines).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0690.
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

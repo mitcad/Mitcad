@@ -41,6 +41,8 @@ mod untrusted;
 mod library_https;
 // In-app tutorials fetched as libraries are (mitcad#2012).
 mod tutorials_tests;
+// Components not for print services (mitcad#2214).
+mod library_print;
 
 /// A fresh folder in the temporary directory, removed afterwards.
 struct Scratch(PathBuf);

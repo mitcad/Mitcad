@@ -212,12 +212,16 @@ ui_expect_new "Visibility Root/Sketches/Sketch1: shown" "the sketch shown"
 ui_step "fit (F6)"                         ui_key F6
 ui_step "extrude (E)"                      ui_key e
 ui_expect_log "Pick profile F1/r{$TEXT.g0.c0}" "the M can be picked"
-ui_expect_log "Extrude Profiles: 1 profile" "the newest profile taken"
-PRESET=$(grep "Extrude Profiles: 1 profile" "$UI_LOG" | tail -1 | sed -n 's/.*\[profile \(.*\) of F1\].*/\1/p')
-if [ "$PRESET" != "r{$TEXT.g1.c0}" ]; then
-  ui_step "take $PRESET away"              ui_click_pick "profile F1/$PRESET"
+# The start is the sketch's outline set (mitcad#2194): the letters and the
+# offset's ring about the ellipse, not the holes' discs. Everything but
+# the I is taken away.
+ui_expect_new "Extrude Profiles: " "the start's profiles taken"
+START=$(grep "Extrude Profiles: " "$UI_LOG" | tail -1)
+for KEY in $(grep -o 'profile r{[^ ]*} of F1' <<< "$START" | sed 's/^profile \(.*\) of F1$/\1/'); do
+  [ "$KEY" = "r{$TEXT.g1.c0}" ] || ui_step "take $KEY away" ui_click_pick "profile F1/$KEY"
+done
+grep -qF "profile r{$TEXT.g1.c0} of F1" <<< "$START" ||
   ui_step "pick the I"                     ui_click_pick "profile F1/r{$TEXT.g1.c0}"
-fi
 ui_expect_log "Extrude Profiles: 1 profile [profile r{$TEXT.g1.c0} of F1]" "the I picked"
 ui_step "distance 2"                       ui_type_in "Panel Extrude input distance" "2"
 ui_expect_log "Preview Extrude: ok" "previewed"

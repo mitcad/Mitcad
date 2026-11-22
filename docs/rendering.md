@@ -669,7 +669,8 @@ metalness and an occlusion map (mitcad#313, commands.md "Texture map
 sets"); single faces can have appearances of their own, which override
 the body's (mitcad#53). The rendered view, Render Image and `mitcad-cli
 render` use all of it (mitcad#314), the shaded view the base colours of
-the body and of its faces.
+the body and of its faces and their textures' base colour images
+(mitcad#2186, "Textures in the shaded view" below).
 
 - **Application:** `MainWindow::modelBodies` gives each shown body its
   appearance from the `appearances` query (`BodyDisplay::appearance`); a
@@ -721,7 +722,7 @@ the body and of its faces.
   `mitcad-cli render` on stderr ("a texture image is not drawn: …").
   One the worker cannot read gives its warning ("cannot read the texture
   image …; the map is left out") and is left out too. The shaded view
-  still shows the base colour only.
+  draws the base colour image only (mitcad#2186).
 - **Scene update:** each body's `material` in the `scene` command
   ([Scene updates](#scene-updates)): `base_color`, `metallic`,
   `roughness`, `specular`, `transmission`, `ior`, `coat`,
@@ -770,6 +771,42 @@ the body and of its faces.
   through a Normal Map node in tangent space (Cycles works out the
   tangents from the UV map); on a mesh without texture coordinates
   `geometryOf` gives it a box-projected shader instead.
+- **Along the grain** (mitcad#2186, `MaterialData::textureGrain`,
+  commands.md "Built-in wood and panel textures"): each face from a plane
+  of its own, the image's width along the face's longest side, so the
+  built-in woods' grain runs along each panel. The directions come from
+  the face's triangles (`app/render/GrainProjection.hpp`, the model's rule
+  `appearance::grain_axes` followed exactly): the worker works them out
+  from the mesh it has (`grainMeshOf`: the faces by
+  `MeshData::faceTriangles`, each with its own vertices), so the meshes
+  and the mesh files carry nothing more. `geometryOf` gives a mesh whose
+  body or face groups have such a material three corner attributes: the
+  grain coordinates in mm (`mitcad_grain`, a UV map) and the face's u and
+  v directions (`mitcad_grain_u`, `mitcad_grain_v`). The shader reads the
+  coordinates through a UV Map node and the same Mapping node as planar
+  and box (turned by the rotation, divided by the size); a normal map's
+  tangent frame is the two directions read by Attribute nodes, turned by
+  the rotation and made perpendicular to the normal as box's axes are.
+- **Textures in the shaded view** (mitcad#2186,
+  `app/view/TexturedBody.hpp`): a body whose appearance or a face's has a
+  texture with a found base colour image (not by the mesh's own texture
+  coordinates) is drawn as a `TexturedBody` in the shaded styles: its
+  faces' display meshes as OCCT's `StdPrs_ShadedShape` draws them, but
+  with texture coordinates of MitCad's own per vertex (the projection as
+  the renderer's: grain by the face's directions, planar, or box by the
+  vertex normal; turned and divided by the size), in one group per look
+  (the body's, each face group's in its colour or texture), and the
+  lines as `FineEdges` draws them. The image is an OCCT texture made once
+  per file (`viewTexture`: at most 2048 pixels a side, sRGB, repeated,
+  mipmapped, anisotropic), lit as a white body: OCCT's Phong shading
+  multiplies the lit colour by it, so the image is the colour. Only the
+  base colour image is drawn there; the normal and roughness maps are
+  the rendered view's. The component palette, see-through and ghosted
+  bodies stay without texture. The view logs `View textured body <uid>:
+  <n> textured looks` once per body and look count (UI tests). Before,
+  the shaded view drew no textures, as OCCT generates texture
+  coordinates from object coordinates only in its fixed-function
+  pipeline.
 - **Packed maps** (mitcad#1862): a map whose values are one channel of
   its image (glTF's roughness in green, metalness in blue, occlusion in
   red of one image) goes through a Separate Color node to that channel;
@@ -893,6 +930,22 @@ the body and of its faces.
   normal map is left out, the image … is missing` and a roughness map
   that is no image the worker's warning, and both render the same image
   as the texture without that map.
+- `tools/ui-wood-textures-test.sh` (mitcad#2186): a cabinet of Plywood -
+  Birch (six panels; the design names the id and embeds no image) and a
+  reference panel in a plain copy of the same plywood. In the light and
+  the dark color scheme the shaded view draws each cabinet body textured
+  (`View textured body F1.b0: 1 textured looks` …) and the panel in its
+  colour; where the view shows the cabinet, neighbouring pixels differ
+  by the grain clearly more than on the panel. The rendered view sends
+  the bodies as `plywood_birch` with every image found and renders the
+  cabinet with the same difference against the panel. Its pictures stay
+  in `build/ui-wood-textures-pictures`.
+- `app.unit` `grainProjectionTests` (`app/tests/grain_projection.cpp`):
+  the application's grain directions agree with the model's tests
+  (`core/model-base/src/appearance/grain.rs`): a panel's faces and edges
+  along its length, its ends along their own longest side, a turned or
+  finely meshed face, square faces, a dowel, and a panel's mesh's
+  coordinates per face.
 
 Decisions and limits:
 
@@ -919,11 +972,20 @@ Decisions and limits:
   than scaling it: the sets come with maps meant to be used as they are,
   and the base colour image already replaces the base colour. The
   parameters still apply where a set has no such map.
-- The shaded view does not draw textures, only the base colour: OCCT
-  generates texture coordinates from object coordinates
-  (`Graphic3d_TOTM_OBJECT`) only in its fixed-function pipeline, not in
-  the shaders the view uses, so it would need texture coordinates of
-  MitCad's own in each face's triangulation.
+- The shaded view draws a texture's base colour image with texture
+  coordinates of MitCad's own (mitcad#2186; OCCT generates them from
+  object coordinates, `Graphic3d_TOTM_OBJECT`, only in its fixed-function
+  pipeline, and its own texels stretch each face's parameter range over
+  the image), computed when the body's presentation is computed, not
+  stored in the faces' triangulations, which the view never writes
+  (mitcad#1553). Normal and roughness maps are not drawn there: OCCT's
+  Phong shading has no normal map, and its PBR mode would change every
+  body's look.
+- `grain` decides per face, so its directions are exact on planar faces;
+  a curved face takes the directions of its whole area (a dowel's side
+  along its axis) and shows its image as a plane would, without box's
+  per-point seams. A plywood's edge shows the face texture along its
+  length, not the plies (no texture of its own for the edges).
 - Cost: `mitcad-render --bench 640x480 --samples 64` with the 64 x 64
   checker on the block took 2.97–3.11 s with box projection and
   2.97–3.02 s planar, against 2.79–2.84 s without (load about 12 on the

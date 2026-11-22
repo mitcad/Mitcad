@@ -17,8 +17,8 @@ use serde_json::{Map, Value, json};
 
 use super::ApiError;
 use super::annotations::{Units as WordUnits, frame_words};
-use super::drawing_annotations::{AddAnnotationCommand, Asked, EditAnnotationCommand};
-use super::drawings::Evaluated;
+use super::drawing_annotations::{AddAnnotationCommand, Asked, EditAnnotationCommand, bounds_json};
+use super::drawings::{Evaluated, group_json};
 use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::kernel::Kernel;
@@ -287,7 +287,7 @@ fn snap_new<K: Kernel>(
     made(&mut value, &placed, &seen, &frame);
     // What it writes there (mitcad#1691): the preview shows the value the
     // placed dimension gets, in the same words and precision.
-    if let Some((measured, label)) = doc.placed_label(drawing, si, &view, &placed) {
+    if let Some((_, measured, label)) = doc.placed_layout(drawing, si, &view, &placed) {
         value["label"] = json!(label);
         if let Some(measured) = measured {
             value["value"] = json!(measured);
@@ -370,6 +370,14 @@ fn snap_moved<K: Kernel>(
         });
         if let Some(snap) = snap {
             value["angle"] = json!(snap.angle);
+        }
+        if annotation.kind == AnnotationType::HoleCallout
+            && let Some((laid, _, _)) = doc.placed_layout(drawing, si, &view, &placed)
+        {
+            value["preview"] = json!({
+                "group": group_json(&laid.group),
+                "box": bounds_json(&laid.bounds),
+            });
         }
         return Ok(value);
     }

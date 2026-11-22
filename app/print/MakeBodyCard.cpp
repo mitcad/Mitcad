@@ -442,6 +442,20 @@ void MakeBodyCard::setSendEnabled(bool enabled) {
   }
 }
 
+bool MakeBodyCard::rowsShown() const {
+  if (!isVisible()) {
+    return true; // nothing to wait for: places() logs nothing then
+  }
+  for (int i = 0; i < m_grid->count(); ++i) {
+    const QWidget* widget = m_grid->itemAt(i)->widget();
+    // Hidden without a hide() of its own: its show is still queued.
+    if (widget != nullptr && widget->isHidden() && !widget->testAttribute(Qt::WA_WState_ExplicitShowHide)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 QStringList MakeBodyCard::places() const {
   QStringList lines;
   if (!isVisible()) {

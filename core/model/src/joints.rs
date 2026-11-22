@@ -32,7 +32,14 @@
 //! one already joined to something fixed) and a free one moves the free
 //! side, with what is joined to it so far, onto the other at the driven
 //! values (else at the free values nearest to where it is); between two
-//! free sides `a`'s side moves. Joints that close loops are iterated. The
+//! free sides `a`'s side moves. Joints that close loops are iterated.
+//! A new joint moves only what it needs to hold (mitcad#2199): the joints
+//! before it that hold where the occurrences are start their free motions
+//! there (not at their `start` values), and units that hang on the rest
+//! by such joints alone (cut off by one joint from everything fixed and
+//! from the new joint's sides) are left out of the solve and follow the
+//! unit they hang on, so an earlier joint's free motions do not take up
+//! the new joint's motion. The
 //! occurrences that moved get placement changes of the joint feature
 //! (`PlacementChange::Set`, applied as other features' are); their own
 //! transforms stay the starting placements. Joints that contradict each
@@ -1383,6 +1390,36 @@ pub(crate) fn envelope_frames<K: Kernel>(
     frames
 }
 
+/// A joint origin of a feature of `component` as the recompute `result`
+/// has it: its frame in the coordinates of the component its path ends
+/// in, with its override (a design linked with its components,
+/// mitcad#2209, whose joints take these frames as fixed planes).
+pub(crate) fn resolved_origin_frame<K: Kernel>(
+    kernel: &K,
+    state: &DocState,
+    result: &Recomputed<K::Shape>,
+    component: ComponentUid,
+    origin: &JointOrigin,
+) -> Result<Transform, String> {
+    let at = path_component(&state.assembly, component, &origin.occurrence.0)?;
+    let mut resolver = StepResolver {
+        kernel,
+        assembly: &state.assembly,
+        component: at,
+        bodies: Some(&*result.bodies),
+        datums: &result.datums,
+        sketches: &result.sketches,
+        features: &state.features,
+        history: &result.results,
+        renamed: Vec::new(),
+    };
+    let mut local = origin_frame(&mut resolver, &origin.geometry)?;
+    if let Some(o) = &origin.frame_override {
+        local = apply_override(&local, o)?;
+    }
+    Ok(local)
+}
+
 /// The value of an optional parameter, zero without one.
 fn value_or_zero(params: &Parameters, id: Option<&ParamId>) -> Result<f64, String> {
     match id {
@@ -1916,12 +1953,14 @@ pub(crate) fn solve_in<S>(
 
     // The joints and constraints in effect that share moving units with
     // these, through each other and through motion links.
+    let new_count = solving.len();
     let mine: Vec<&ActiveJoint> = joints
         .active
         .iter()
         .filter(|j| j.component == component)
         .chain(solving)
         .collect();
+    let first_new = mine.len() - new_count;
     let links: Vec<&crate::motion_links::ActiveLink> = joints
         .links
         .iter()
@@ -1978,11 +2017,50 @@ pub(crate) fn solve_in<S>(
             break;
         }
     }
-    let cluster: Vec<&ActiveJoint> = mine
+    let taken_at: Vec<usize> = (0..mine.len()).filter(|i| taken[*i]).collect();
+    // The joints before these that hold where the occurrences are start
+    // their free motions there, not at their `start` values (mitcad#2199).
+    let started: Vec<Option<ActiveJoint>> = taken_at
         .iter()
-        .zip(&taken)
-        .filter(|(_, t)| **t)
-        .map(|(j, _)| *j)
+        .map(|&i| {
+            (i < first_new)
+                .then(|| started_where_it_is(mine[i], &done.placements, &joints.flexed))
+                .flatten()
+        })
+        .collect();
+    let cluster: Vec<&ActiveJoint> = taken_at
+        .iter()
+        .zip(&started)
+        .map(|(&i, s)| s.as_ref().unwrap_or(mine[i]))
+        .collect();
+    // The new joints and those the taken links couple move in the solve;
+    // units that hang on the rest by joints that hold only follow it
+    // (mitcad#2199).
+    let anchored: Vec<bool> = taken_at
+        .iter()
+        .zip(&cluster)
+        .map(|(&i, j)| {
+            i >= first_new || (j.row.is_none() && linked.contains(&(j.uid, j.under.clone())))
+        })
+        .collect();
+    let hanging = hanging_units(
+        assembly,
+        joints,
+        component,
+        hold,
+        &cluster,
+        &anchored,
+        &done.placements,
+    );
+    let followers: BTreeSet<usize> = hanging
+        .iter()
+        .flat_map(|h| h.joints.iter().copied())
+        .collect();
+    let cluster: Vec<&ActiveJoint> = cluster
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| !followers.contains(k))
+        .map(|(_, j)| *j)
         .collect();
     let cluster_links: Vec<&crate::motion_links::ActiveLink> = links
         .iter()
@@ -2022,7 +2100,10 @@ pub(crate) fn solve_in<S>(
             &joints.groups,
         ));
     }
-    let (changes, flexed) = mechanism.changes(&done.placements, &joints.flexed);
+    let (mut changes, flexed) = mechanism.changes(&done.placements, &joints.flexed);
+    for h in &hanging {
+        changes.extend(mechanism.carried(h.on.as_ref(), &h.riders, &done.placements));
+    }
     let mut moved: Vec<OccurrenceUid> = changes
         .iter()
         .map(|c| match c {
@@ -2071,6 +2152,202 @@ fn unit_fixed(assembly: &Assembly, unit: &Unit, hold: &[OccurrenceUid]) -> bool 
             .members
             .iter()
             .any(|o| assembly.occurrence(*o).is_some_and(|o| o.grounded)))
+}
+
+/// Whether a joint or constraint row holds where the occurrences are as
+/// a solve would leave it (mitcad#2199): driven motions at their values,
+/// free ones within their limits.
+fn rests_where_it_is(
+    joint: &ActiveJoint,
+    placements: &BTreeMap<OccurrenceUid, Transform>,
+    flexed: &Flexed,
+) -> bool {
+    let near = |v: f64, x: f64| (v - x).abs() <= 1e-9 * (1.0 + x.abs());
+    let within = |spec: &MotionSpec, v: f64| match spec.target {
+        Some(t) => near(v, t),
+        None => {
+            spec.min.is_none_or(|lo| v >= lo || near(v, lo))
+                && spec.max.is_none_or(|hi| v <= hi || near(v, hi))
+        }
+    };
+    if joint.row.is_some() {
+        let (holds, value) = joint.holds(placements, flexed);
+        return holds
+            && match (joint.motions.first(), value) {
+                (Some(spec), Some(v)) => within(spec, v),
+                _ => true,
+            };
+    }
+    let Some(values) = joint.values(placements, flexed) else {
+        return false;
+    };
+    joint
+        .motions
+        .iter()
+        .all(|spec| values.get(&spec.motion).is_none_or(|v| within(spec, *v)))
+}
+
+/// A joint before a solve's new ones that holds where the occurrences are,
+/// its free motions starting there instead of at its `start` values
+/// (mitcad#2199): placed again in a later joint's solve, it keeps its side
+/// where it is. None for a constraint row and for a joint that does not
+/// hold there.
+fn started_where_it_is(
+    joint: &ActiveJoint,
+    placements: &BTreeMap<OccurrenceUid, Transform>,
+    flexed: &Flexed,
+) -> Option<ActiveJoint> {
+    if joint.row.is_some() {
+        return None;
+    }
+    let values = joint.values(placements, flexed)?;
+    let mut joint = joint.clone();
+    for spec in &mut joint.motions {
+        if spec.target.is_none()
+            && let Some(v) = values.get(&spec.motion)
+        {
+            spec.start = Some(*v);
+        }
+    }
+    Some(joint)
+}
+
+/// Units of a solve that hang on the rest by one joint and only follow it
+/// (mitcad#2199): `joints` (indices into the solve's joints) join them to
+/// each other and, by one of them, to `on` (a unit's chain of flexible
+/// occurrences and a member; None: something fixed); `riders` are their
+/// occurrences.
+struct Hanging {
+    joints: Vec<usize>,
+    riders: Vec<OccurrenceUid>,
+    on: Option<(Vec<OccurrenceUid>, OccurrenceUid)>,
+}
+
+/// The units of a solve's joints (`cluster`) that hang on the rest: cut
+/// off from every unit that must move in the solve (the sides of the
+/// `anchored` joints: the new ones and those motion links couple) and
+/// from everything fixed by one joint, with every joint among them
+/// holding where the occurrences are ([`rests_where_it_is`]). Moving
+/// them as the unit they hang on moves keeps those joints holding as
+/// they are, so the solve leaves them out: a new joint does not turn or
+/// slide what an earlier joint holds on a unit it moves (iterating, the
+/// solver would move each unit as little as it can, letting the earlier
+/// joint's free motions take the difference). Only top-level units that
+/// are not flexible occurrences hang, on joints of the solve's own
+/// component; the largest groups are taken.
+fn hanging_units(
+    assembly: &Assembly,
+    joints: &JointsState,
+    component: ComponentUid,
+    hold: &[OccurrenceUid],
+    cluster: &[&ActiveJoint],
+    anchored: &[bool],
+    placements: &BTreeMap<OccurrenceUid, Transform>,
+) -> Vec<Hanging> {
+    // Node 0 is everything fixed; node k + 1 is units[k].
+    let mut units: Vec<Unit> = Vec::new();
+    let mut node = |path: &[OccurrenceUid]| -> usize {
+        match unit_of(assembly, joints, component, path) {
+            Some(u) if !unit_fixed(assembly, &u, hold) => {
+                match units.iter().position(|x| *x == u) {
+                    Some(k) => k + 1,
+                    None => {
+                        units.push(u);
+                        units.len()
+                    }
+                }
+            }
+            _ => 0,
+        }
+    };
+    let edges: Vec<(usize, usize)> = cluster.iter().map(|j| (node(&j.a), node(&j.b))).collect();
+    let n = units.len() + 1;
+    let mut adjacent: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+    for (k, &(a, b)) in edges.iter().enumerate() {
+        if a != b {
+            adjacent[a].push((k, b));
+            adjacent[b].push((k, a));
+        }
+    }
+    let mut anchor = vec![false; n];
+    anchor[0] = true;
+    for (&(a, b), _) in edges.iter().zip(anchored).filter(|(_, x)| **x) {
+        anchor[a] = true;
+        anchor[b] = true;
+    }
+    let can_hang: Vec<bool> = (0..n)
+        .map(|v| {
+            v > 0
+                && units[v - 1].under.is_empty()
+                && units[v - 1]
+                    .members
+                    .iter()
+                    .all(|o| assembly.occurrence(*o).is_none_or(|o| o.flexible.is_none()))
+        })
+        .collect();
+    let at_rest: Vec<bool> = cluster
+        .iter()
+        .zip(anchored)
+        .map(|(j, anchored)| {
+            !anchored && j.under.is_empty() && rests_where_it_is(j, placements, &joints.flexed)
+        })
+        .collect();
+    // Per joint that cuts units off: those units and the joints on them.
+    let mut found: Vec<(Vec<usize>, Vec<usize>, usize)> = Vec::new();
+    for (k, &(a, b)) in edges.iter().enumerate() {
+        if a == b || !at_rest[k] {
+            continue;
+        }
+        let mut reached = anchor.clone();
+        let mut stack: Vec<usize> = (0..n).filter(|v| anchor[*v]).collect();
+        while let Some(v) = stack.pop() {
+            for &(m, w) in &adjacent[v] {
+                if m != k && !reached[w] {
+                    reached[w] = true;
+                    stack.push(w);
+                }
+            }
+        }
+        if reached[a] == reached[b] {
+            continue;
+        }
+        let on = if reached[a] { a } else { b };
+        let off: Vec<usize> = (0..n).filter(|v| !reached[*v]).collect();
+        let on_them: Vec<usize> = edges
+            .iter()
+            .enumerate()
+            .filter(|(m, (x, y))| *m == k || !reached[*x] || !reached[*y])
+            .map(|(m, _)| m)
+            .collect();
+        if off.iter().all(|v| can_hang[*v]) && on_them.iter().all(|m| at_rest[*m]) {
+            found.push((off, on_them, on));
+        }
+    }
+    // The groups nest or are apart: the largest ones.
+    found.sort_by_key(|(off, _, _)| std::cmp::Reverse(off.len()));
+    let mut taken = vec![false; n];
+    let mut out = Vec::new();
+    for (off, on_them, on) in found {
+        if off.iter().any(|v| taken[*v]) {
+            continue;
+        }
+        for v in &off {
+            taken[*v] = true;
+        }
+        out.push(Hanging {
+            joints: on_them,
+            riders: off
+                .iter()
+                .flat_map(|v| units[v - 1].members.iter().copied())
+                .collect(),
+            on: (on > 0).then(|| {
+                let unit = &units[on - 1];
+                let member = *unit.members.first().expect("a unit has a member");
+                (unit.under.clone(), member)
+            }),
+        });
+    }
+    out
 }
 
 /// The unit a path from `component` moves with: the top-level
@@ -2638,6 +2915,14 @@ fn transform(p: &Pose) -> Transform {
     }
 }
 
+/// A placement a solve moved, a rotation and translation again to
+/// rounding (mitcad#1664, mitcad#1666), so that rounding does not pile up
+/// solve after solve; one far off is left to the command that would keep
+/// it, which refuses.
+fn straightened(t: Transform) -> Transform {
+    crate::assembly::solved_placement(&t).unwrap_or(t)
+}
+
 /// Joints of a component as the joint solver takes them: a body per unit
 /// (an occurrence with those its rigid groups join to it), fixed when a
 /// member is grounded; a side that is the component's own geometry is the
@@ -2839,16 +3124,8 @@ impl Mechanism {
         placements: &BTreeMap<OccurrenceUid, Transform>,
         flexed: &Flexed,
     ) -> (Vec<PlacementChange>, Vec<FlexedChange>) {
-        let motion_of = |b: usize| -> Option<Transform> {
-            let motion = self.system.body_pose(BodyId(b as u32));
-            let (distance, turn) = motion.distance(&Pose::IDENTITY);
-            (distance > 1e-12 || turn > 1e-12).then(|| transform(&motion))
-        };
-        // Rotations and translations again, to rounding (mitcad#1664,
-        // mitcad#1666), so that rounding does not pile up solve after
-        // solve; one far off is left to the command that would keep it,
-        // which refuses.
-        let straight = |t: Transform| crate::assembly::solved_placement(&t).unwrap_or(t);
+        let motion_of = |b: usize| self.body_motion(b);
+        let straight = straightened;
         let mut changes = Vec::new();
         for (b, (unit, _)) in self.units.iter().enumerate() {
             if !unit.under.is_empty() {
@@ -2896,6 +3173,38 @@ impl Mechanism {
             }
         }
         (changes, inner)
+    }
+
+    /// How a body moved in the solve or drag, None when it stayed.
+    fn body_motion(&self, b: usize) -> Option<Transform> {
+        let motion = self.system.body_pose(BodyId(b as u32));
+        let (distance, turn) = motion.distance(&Pose::IDENTITY);
+        (distance > 1e-12 || turn > 1e-12).then(|| transform(&motion))
+    }
+
+    /// The placements of top-level occurrences left out of the solve that
+    /// follow the unit `on` (its chain of flexible occurrences and a
+    /// member; None: something fixed) as its body moved (mitcad#2199):
+    /// none when it stayed.
+    pub(crate) fn carried(
+        &self,
+        on: Option<&(Vec<OccurrenceUid>, OccurrenceUid)>,
+        riders: &[OccurrenceUid],
+        placements: &BTreeMap<OccurrenceUid, Transform>,
+    ) -> Vec<PlacementChange> {
+        let Some(motion) = on
+            .and_then(|(under, o)| self.body_of(under, *o))
+            .and_then(|b| self.body_motion(b.0 as usize))
+        else {
+            return Vec::new();
+        };
+        riders
+            .iter()
+            .map(|o| {
+                let current = placements.get(o).copied().unwrap_or(Transform::IDENTITY);
+                PlacementChange::Set(*o, straightened(motion.after(&current)))
+            })
+            .collect()
     }
 
     /// Each joint's values after a solve or drag (constraint rows have

@@ -34,14 +34,9 @@ that failed already; where it fails with OCCT's reports of a computation it
 cannot make (ChFi3d_IsComputationFailure, 0016) the stripe stays bad and
 the fillet fails as before. Any other failure (a broken invariant, a
 signal) is rethrown.
-Test: geometry/tests/port/p0173-occt-inverse-second-solver.cpp (ctest
-geometry.port.0173): a sheet of a plate 10 x 20 with a round hole of radius
-3 whose rim comes within 3e-5, 2.5e-5 (size 1) or 1.5e-5 (size 0.5) of the
-plate's edge, a conical wall of polynomial B-splines on the rim and a side
-wall hanging from that edge; the rim's near half rounded with 0.5: the
-ball rolls on the plate's edge with the side wall and back; built, valid,
-the area as at wider gaps (without the patch: not built). The boundary:
-gaps of 5e-5 and 1e-4, built with the rolling equations alone.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0173.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 6bfa76eb..7a4364d6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

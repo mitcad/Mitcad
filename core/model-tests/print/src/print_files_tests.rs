@@ -1067,7 +1067,7 @@ fn bambu_lists_across_filaments_have_one_entry_per_written_slot() {
                 text(white.into)
             ])
         );
-        assert_eq!(written["flush_multiplier"], "1");
+        assert_eq!(written["flush_multiplier"], json!(["1"]));
         if self_index {
             assert_eq!(written["filament_self_index"], json!(["1", "2"]));
         }

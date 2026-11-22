@@ -275,4 +275,24 @@ bool TestDriver::runOrbitCenterStep(const QString& name, const QStringList& a, i
   return true;
 }
 
+// This file's steps (mitcad#2173): their specs, run by its run function before the others.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    // The orbit's center (mitcad#1791, TestDriverOrbitCenter.cpp).
+    {"view-orbit-center", 1, 1, TestDriver::kIdle},
+    {"capture-view-orbit-center", 2, 2, TestDriver::kIdle},
+    {"expect-view-orbit-center", 1, 1, TestDriver::kIdle},
+    {"capture-view-point", 2, 2, TestDriver::kIdle},
+    {"capture-view-place", 3, 3, TestDriver::kIdle},
+    {"expect-view-point", 4, 4, TestDriver::kIdle},
+    {"click-view-point", 1, 3, TestDriver::kInputOfMain},
+    {"drag-view-point", 3, 5, TestDriver::kInputOfMain},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kOrbitCenterSteps{
+    kStepSpecs, std::size(kStepSpecs), nullptr};
+
 } // namespace mitcad

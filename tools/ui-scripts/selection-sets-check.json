@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Saved by the UI after the selection set steps (mitcad#2192): the set Favourites with Block, Sketch1 and Extrude1, linked by reference; the items in place."},
+  {"expect": {"query": {"query": "selection_sets"},
+    "some": {"name": "Favourites"}}},
+  {"expect": {"query": {"query": "selection_sets"},
+    "none": {"name": "SelectionSet1"}}},
+  {"expect": {"query": {"query": "selection_sets"},
+    "result": [{"name": "Favourites", "members": [
+      {"kind": "body", "body": "F3.b0", "name": "Block", "exists": true},
+      {"kind": "feature", "feature": "F1", "name": "Sketch1", "type": "sketch", "exists": true},
+      {"kind": "feature", "feature": "F2", "name": "Extrude1", "type": "extrude", "exists": true}]}]}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"expect": {"feature": "F3", "status": "ok"}}
+]

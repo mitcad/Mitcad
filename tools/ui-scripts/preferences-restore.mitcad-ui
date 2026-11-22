@@ -7,7 +7,8 @@
 #      wrappers check the log: in macOS's Settings window it stays, saved).
 #   1. A few preferences changed on three pages: Display (Orientation cube
 #      Perspective, Small circles Full Detail, Ghost inactive components
-#      off), General (Open in the current window on) and Sketch (Click adds
+#      off), General (Open in the current window and Quit MitCad when the
+#      last design is closed on, mitcad#2142) and Sketch (Click adds
 #      to the selection in sketches on); a recent file and a library source
 #      saved beside them.
 #   2. Display, Restore Defaults › Current Group (Display): the question says
@@ -54,11 +55,13 @@ mark
 command tools.preferences.general
 focus-dialog '^(Preferences|Settings)$'
 button '^Open in the current window$' openInCurrentWindow
+button '^Quit MitCad when the last design is closed$' quitOnLastClose
 key Return
 wait-log '^Preferences: navigation [a-z-]+, zoom to cursor '
 focus-main
 wait-idle
 expect-setting documents/openInCurrentWindow true
+expect-setting documents/quitOnLastClose true
 mark
 command tools.preferences.sketch
 focus-dialog '^(Preferences|Settings)$'
@@ -86,12 +89,14 @@ expect-widget-property preferencesCubeSize currentIndex 1
 expect-widget-property preferencesSmallCircles currentIndex 0
 expect-widget-property ghostInactive checked true
 expect-widget-property openInCurrentWindow checked true
+expect-widget-property quitOnLastClose checked true
 expect-widget-property clickAddsToSelection checked true
 expect-setting view/cubeProjection follow-view
 expect-setting view/cubeSize 100
 expect-setting view/smallCircles adaptive
 expect-setting view/ghostInactive true
 expect-setting documents/openInCurrentWindow true
+expect-setting documents/quitOnLastClose true
 expect-setting sketch/clickAddsToSelection true
 
 # 3. Restore Defaults › All Settings.
@@ -105,10 +110,12 @@ wait-log '^Preferences: restore defaults, all settings: general, navigation, dis
 focus-dialog '^(Preferences|Settings)$'
 wait-idle
 expect-widget-property openInCurrentWindow checked false
+expect-widget-property quitOnLastClose checked false
 expect-widget-property clickAddsToSelection checked false
 expect-widget-property preferencesCubeProjection currentIndex 0
 expect-widget-property ghostInactive checked true
 expect-setting documents/openInCurrentWindow false
+expect-setting documents/quitOnLastClose false
 expect-setting sketch/clickAddsToSelection false
 expect-setting view/cubeProjection follow-view
 expect-setting recentFiles kept-recent.mitcad

@@ -1,6 +1,6 @@
 {
-  "format": "solidcraft/58",
-  "name": "Format 58 newer",
+  "format": "solidcraft/64",
+  "name": "Format 64 newer",
   "units": "mm",
   "params": [
     {"name": "side", "expr": "20 mm", "unit": "mm"},

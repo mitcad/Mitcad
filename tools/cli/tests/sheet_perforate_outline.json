@@ -1,0 +1,9 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. The grid starts at (17.5,12.5) in the outline. Four columns and three rows fit before the bend. The circular island excludes (27.5,22.5), leaving 11 holes."},
+  {"cmd":"add_feature","def":{"type":"sheet_perforate","body":"F3.b0","diameter":5,"pitch":10,"margin":5,"pattern":"square","outline":{"profiles":[{"sketch":"F4","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}}},
+  {"expect":{"feature":"F5","status":"ok","body":"F3.b0","bodies":1,"volume":9596.34954084936}},
+  {"cmd":"set_flat_pattern","body":"F3.b0"},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":4766.758843888783}}},
+  {"cmd":"export_flat_pattern_dxf","body":"F3.b0","path":"sheet_perforate_outline.dxf"},
+  {"expect":{"query":{"query":"dxf_info","path":"sheet_perforate_outline.dxf"},"result":{"entities":16,"layers":[{"name":"CUT_OUTER","entities":4},{"name":"CUT_INNER","entities":11},{"entities":1}]}}}
+]

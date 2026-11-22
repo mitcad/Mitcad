@@ -18,6 +18,17 @@ namespace mitcad {
 // which is Unknown where the platform gives none.
 bool isDarkPalette(const QPalette& palette = QGuiApplication::palette());
 
+// Whether MitCad's theme is dark now (mitcad#2145): the one answer that the
+// window style (windowColors() of the application palette, the Docked
+// window and the Floating chrome), the theme's log (AppTheme) and the 3D
+// view's Follow System background (ViewSettings::Background::Automatic)
+// share. It is the application
+// palette that the theme settles on: the platform's for Theme System and
+// for a choice the platform honours, MitCad's own (themePalette) where it
+// does not (AppTheme.cpp, settle()). Not a widget's own palette: a widget
+// that paints its own colours decides by this, not by what it was given.
+bool isDarkTheme();
+
 // The color roles (mitcad#1041, docs/ui-conventions.md "Colors"): one table
 // of what each color means, with a light and a dark value, read by the Qt
 // chrome, the 3D view and the AppKit chrome (through dynamic colors that
@@ -145,10 +156,31 @@ enum class ColorRole {
   CamLeftThin,
   CamLeftThick,
   CamGouge,
+  // Draft Analysis' classes (mitcad#2166): draft towards the pull, too
+  // little draft either way, draft against the pull; with the legend.
+  DraftPositive,
+  DraftUnder,
+  DraftNegative,
   // A call to support the project (mitcad#1990): the top bar's Boost
   // development pill's outline and rocket (its label in the window's text);
   // a warm pink apart from the error's red and the accent's blue.
   Support,
+  // The top bar's Discord pill (mitcad#2159): Discord's blurple fill, the
+  // same on both themes, and its logo mark and × in white on it.
+  DiscordFill,
+  DiscordMark,
+  // The formula editor's text by its tokens' kinds (mitcad#2179): no
+  // status hue (an unknown name is the error's), each at least 4.5:1 on
+  // the fields and on the current line's and the matching bracket's fills.
+  FormulaName,
+  FormulaFunction,
+  FormulaKeyword,
+  FormulaNumber,
+  FormulaUnit,
+  FormulaOperator,
+  FormulaString,
+  FormulaLine,    // the line with the caret, under the text
+  FormulaBracket, // the bracket at the caret and its match, under the text
 };
 
 // How a role is used, for the contrast test: text (at least 4.5:1 on a

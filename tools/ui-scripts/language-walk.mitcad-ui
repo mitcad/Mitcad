@@ -25,11 +25,13 @@ wait-idle
 walk-commands '.' '^(file[.](exit|quit|close|new|new_design|new_project|recover|sync|check_remote|open_remote|remote_browser|update_web_viewer|web_viewer|create_drawing)|edit[.](undo|redo)|window[.]|help[.](open_log_folder|user_guide)|tools[.]web_search|sketch[.]|drawing[.])'
 wait-idle
 
-# The sketch commands, in a sketch on the XY plane.
+# The sketch commands, in a sketch on the XY plane, but those that leave it
+# (Finish Sketch, Cancel Sketch, mitcad#2261: every command after one of them
+# would wait for a sketch that is gone).
 command sketch.create
 click-logged 'Datum xy'
 wait-log '^Ribbon tab shown: SKETCH' 20
-walk-commands '^sketch[.]' '^sketch[.](create|finish|exit)'
+walk-commands '^sketch[.]' '^sketch[.](create|finish|exit|cancel$)'
 wait-idle
 command sketch.finish
 wait-idle

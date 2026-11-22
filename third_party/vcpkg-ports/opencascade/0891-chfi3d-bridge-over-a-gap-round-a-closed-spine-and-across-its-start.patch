@@ -48,11 +48,8 @@ Failures (mitcad#1986): the blend's surface extended along the spine
 it cannot make (ChFi3d_IsComputationFailure, 0016): it is intersected as
 it is. Any other failure (a broken invariant, a signal) is rethrown.
 
-Test: geometry/tests/test_fillet_end_overflow.cpp (ctest
-geometry.fillet_end_overflow), test_disc_rim_over_a_rounded_hole_mouth: a
-disc's bottom rim rounded over a hole whose mouth is rounded wider than
-the ball reaches: built. Fails without the patch (no result), passes with
-it (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0891.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: MIT
+# The Parameters window's empty row, its rows' delete buttons and its
+# bottom row (mitcad#2202, GitHub mitcad/Mitcad#512) on
+# parameters-new-row.json: the user parameters used = 20 mm (the length of
+# First block), spare = 5 mm (used by nothing) and slide = 30 mm with a
+# slider between 10 mm and 50 mm, in this creation order:
+#   1. User Parameters ends in the empty row, in the design's unit (mm),
+#      after slide.
+#   2. Three parameters typed one after the other: name, Tab, value,
+#      Enter; after each one the new empty row takes the keyboard.
+#   3. A taken name (spare) is refused: the row keeps what was typed, the
+#      message line says why, no new empty row; a free name then makes it
+#      a parameter.
+#   4. spare deleted by its row's button; used's button is disabled, its
+#      tooltip saying what uses it.
+#   5. Sorted by Name both ways and back: the empty row stays last; the
+#      search hides it, and clearing the search shows it again.
+#   6. slide's slider dragged: the row's Expression and Value and a
+#      tooltip at the handle show the value before the release, the model
+#      gets it at the release.
+#   7. The bottom row on both tabs: Import, Export, Edit Formula and OK on
+#      the Parameters tab, OK alone on the Tables tab (pictures in
+#      MITCAD_PARAMETERS_SHOTS).
+# Run by tools/ui-parameters-new-row-test.sh (Linux),
+# tools/ui-windows-parameters-new-row-test.ps1 (Windows) and
+# tools/ui-macos-parameters-new-row-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+set-setting parameters/sort none
+
+# 1. The empty row, last in User Parameters, in millimetres.
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters new row: unit mm, after slide$'
+wait-log '^Parameters new name at '
+expect-widget-property parametersMessage visible false
+wait-idle
+
+# 2. Three parameters, one after the other.
+mark
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
+type a1
+key Tab
+wait-log '^Editing new parameter expression$'
+type 11
+key Return
+wait-log '^Created user parameter a1 = 11 mm [(]mm[)] in the new row$'
+wait-log '^Parameters new row: unit mm, after a1$'
+wait-idle
+type a2
+key Tab
+type 12
+key Return
+wait-log '^Created user parameter a2 = 12 mm [(]mm[)] in the new row$'
+wait-idle
+type a3
+key Tab
+type 13
+key Return
+wait-log '^Created user parameter a3 = 13 mm [(]mm[)] in the new row$'
+wait-log '^Parameters order: [[]User Parameters[]] used, spare, slide, a1, a2, a3 [[]Model Parameters[]] [^;]+; selected a3$'
+wait-log '^Parameters new row: unit mm, after a3$'
+expect-parameter-cell a2 2 '^12 mm$' visible
+wait-idle
+
+# 3. A taken name: refused, kept as typed, said why; then a free name.
+mark
+type spare
+key Tab
+type 3
+key Return
+wait-log '^New user parameter spare refused: '
+wait-log '^Parameters new row: unit mm, after a3, typed spare = 3, refused: '
+expect-widget-property parametersMessage visible true
+expect-no-log '^Created user parameter spare'
+wait-idle
+mark
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
+key ctrl+a
+type a4
+key Return
+wait-log '^Created user parameter a4 = 3 mm [(]mm[)] in the new row$'
+wait-log '^Parameters new row: unit mm, after a4$'
+expect-widget-property parametersMessage visible false
+key Escape
+focus-dialog '^Parameters$'
+wait-idle
+
+# 4. Deleting: spare by its row's button; used's button is disabled.
+expect-ever '^Parameters in use: used [(][^)]*First block'
+expect-widget-property parameterDelete_used enabled false
+expect-widget-property parameterDelete_spare enabled true
+mark
+dialog-click-logged '^Parameters spare delete at '
+wait-log '^Deleted user parameter spare by its row button$'
+wait-log '^Parameters order: [[]User Parameters[]] used, slide, a1, a2, a3, a4 [[]Model Parameters[]] '
+expect-parameter-cell spare 0 '^spare$' absent
+expect-parameter-cell used 0 '^used$' visible
+wait-idle
+
+# 5. The empty row stays last under a sort and hides under the search.
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted by name ascending$'
+wait-log '^Parameters new row: unit mm, after used$'
+wait-idle
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted by name descending$'
+wait-log '^Parameters new row: unit mm, after a1$'
+wait-idle
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted in creation order$'
+wait-log '^Parameters new row: unit mm, after a4$'
+expect-setting parameters/sort none
+wait-idle
+mark
+focus-widget parametersFilter
+type a
+wait-log '^Parameters new row hidden by the filter$'
+key ctrl+a
+key Backspace
+wait-log '^Parameters new row shown$'
+wait-idle
+
+# 6. The slider's value while its handle is dragged, then in the model.
+mark
+expect-ever '^Parameters slide slider handle at '
+dialog-drag-logged '^Parameters slide slider handle at ' 0 0 30 0
+wait-log '^Parameter slide slider held at ([0-9.]+ mm): expression \1, value \1, tooltip \1$'
+wait-log '^Parameter slide slider: [0-9.]+ mm = [0-9.]+ mm$'
+wait-idle
+
+# 7. The bottom row on both tabs.
+screenshot-dialog '${MITCAD_PARAMETERS_SHOTS}/parameters-bottom-row-parameters.png'
+mark
+dialog-click-logged '^Parameters tab Tables at '
+wait-log '^Parameters bottom row: OK$'
+wait-idle
+screenshot-dialog '${MITCAD_PARAMETERS_SHOTS}/parameters-bottom-row-tables.png'
+mark
+dialog-click-logged '^Parameters tab Parameters at '
+wait-log '^Parameters bottom row: Import, Export, Edit Formula, OK$'
+wait-idle
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+expect-never 'TestDriver: FAIL'

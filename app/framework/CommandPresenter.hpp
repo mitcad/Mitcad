@@ -89,6 +89,10 @@ public:
   // Latest accepted feature preview, including recoverable error metadata;
   // empty means previous candidates are stale while inputs change.
   virtual void setPreviewReport(const QJsonObject&) {}
+  // Whether a preview of the inputs is being computed now (mitcad#2118):
+  // the Affected components list says it is updating only then, not while
+  // the inputs are incomplete or a preview failed.
+  virtual void setPreviewComputing(bool /*computing*/) {}
   // A structural input action has applied, including a rejected no-op.
   // Frontends may hold the affected controls until this acknowledgement.
   virtual void inputActionApplied(const QString&) {}
@@ -114,7 +118,9 @@ public:
   // and Cancel, once the work has lasted a moment (BusyMark), with the text
   // as its accessible name and tooltip; the message stays for problems and
   // hints. A frontend without it shows nothing (OK stays disabled meanwhile
-  // either way).
+  // either way). Also while the panel's preview waits for the model to
+  // finish another job ("Waiting for the design to finish computing…",
+  // mitcad#2118).
   virtual void setBusy(const QString& /*text*/) {}
   virtual void setResult(const QString& text) = 0;
   // An inspection's answer as a whole: its rows of names and values where

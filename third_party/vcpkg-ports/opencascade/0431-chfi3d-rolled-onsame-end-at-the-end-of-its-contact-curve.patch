@@ -10,25 +10,8 @@ non ecrit"). IntersUpdateOnSame's Update now takes an intersection within
 the curve's parametric resolution of its bounds (at least
 Precision::PConfusion), at the bound.
 
-Test: none, because what the patch changes is a rounding error, not a
-geometric condition. The blend rolling on an edge ends where that edge
-ends, on the face at the end, and its contact curve on its other face is
-bounded there, so the face at the end crosses that curve exactly at its
-last parameter; IntCurveSurface finds the crossing within a few 1e-15 to
-either side of it, and only a crossing past the end was dropped. Which
-side it lands on comes from the arithmetic: the window of
-geometry/tests/test_fillet_corners.cpp,
-test_roundings_roll_before_each_others_faces (with 0430: its end's two
-vertical edges rounded with 2, the end 3.54 wide, the rounding beside the
-strip rolling on the strip's far edge), reaches this crossing and lands
-inside the range: it passes with this patch and 1332, which changes the
-same lines, reverted together, as the port's before/after run showed
-(mitcad#1986). A crossing set past the end on purpose cannot be made
-either: the curve's end comes from the walk and its approximation, within
-1e-7 to 1e-4 of the exact section, so a face tilted to cross it a
-nanometre past its end crosses it anywhere within those tolerances. A
-body that failed without the patch would fail by chance, and lose it with
-any change to the walk.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0431.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

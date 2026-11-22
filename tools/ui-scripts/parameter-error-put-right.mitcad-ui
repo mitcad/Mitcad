@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: MIT
+# A parameter error put right leaves the band, and expression errors in
+# words (mitcad#2181), on parameter-error-put-right.json (the user
+# parameters sheet_thickness = 18 mm and depth = 600 mm):
+#   1. The Parameters window's empty row (mitcad#2202) checks the
+#      expression while it is typed: cabinet_lenght =
+#      table_lenght+sheet_thickness, before table_lenght exists, shows
+#      "table_lenght is not a parameter" in the message line, the name
+#      marked in the cell; the expression emptied again, Enter asks for one.
+#   2. A refused change reaches the band in words: depth's Expression
+#      cell set to table_lenght / 2 is refused with "The expression of
+#      depth uses table_lenght, which is not a parameter." in the band and
+#      the dialog's message line, without a byte offset or the name said
+#      twice.
+#   3. The missing parameter added in the empty row (table_lenght =
+#      1200 mm, a successful command of the dialog) puts the error right:
+#      it goes from the band, which shows nothing (no stub of it).
+#   4. The add again in the new empty row: a near miss (table_lenhgt) is
+#      offered ("Did you mean table_lenght?"); the right expression adds
+#      cabinet_lenght = 1218 mm, and no error comes to the band.
+# Run by tools/ui-parameter-error-put-right-test.sh (Linux),
+# tools/ui-windows-parameter-error-put-right-test.ps1 (Windows) and
+# tools/ui-macos-parameter-error-put-right-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+set-setting parameters/sort none
+
+# 1. Checked while it is typed in the empty row: the problem in the
+#    message line; the expression emptied again, Enter asks for one.
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+expect-parameter-cell depth 2 '^600 mm$' visible
+wait-log '^Parameters new name at '
+wait-idle
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
+type cabinet_lenght
+key Tab
+wait-log '^Editing new parameter expression$'
+type 'table_lenght+sheet_thickness'
+wait-log '^Parameter cabinet_lenght expression problem while typed: table_lenght is not a parameter [(]marked 0[.][.]12[)]$'
+expect-widget-property parametersMessage text 'table_lenght is not a parameter'
+key ctrl+a
+key Delete
+key Return
+wait-log '^New user parameter cabinet_lenght refused: '
+expect-no-log '^Created user parameter cabinet_lenght'
+expect-parameter-cell cabinet_lenght 2 '.*' absent
+wait-idle
+
+# 2. A refused change of a cell: in words, in the band and the dialog.
+mark
+click-parameter depth 2
+key F2
+wait-log '^Editing parameter depth expression$'
+key ctrl+a
+type 'table_lenght / 2'
+wait-log '^Parameter depth expression problem while typed: table_lenght is not a parameter [(]marked 0[.][.]12[)]$'
+key Return
+wait-log '^Parameter depth expression: table_lenght / 2 refused: The expression of depth uses table_lenght, which is not a parameter[.]$'
+wait-log '^Message band full: error The expression of depth uses table_lenght, which is not a parameter[.]$'
+wait-log '^Status error about parameter/depth$'
+expect-parameter-cell depth 2 '^table_lenght / 2$' refused
+expect-widget-property parametersMessage text 'The expression of depth uses table_lenght, which is not a parameter.'
+expect-model-parameter depth 600 user
+
+# 3. The missing parameter added in the empty row (which still holds the
+#    name of step 1): the error is put right and goes.
+mark
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
+key ctrl+a
+type table_lenght
+key Tab
+wait-log '^Editing new parameter expression$'
+type 1200
+key Return
+wait-log '^Created user parameter table_lenght = 1200 mm [(]mm[)] in the new row$'
+wait-log '^Message band put right: error The expression of depth uses table_lenght, which is not a parameter[.] [(]parameter[)]$'
+wait-log '^Message band cleared [(]put right[)]$'
+expect-no-log '^Message band stub: error '
+expect-model-parameter table_lenght 1200 user
+wait-idle
+
+# 4. The add again: a near miss offered, then the expression it meant.
+#    The new empty row has the keyboard after step 3.
+mark
+type cabinet_lenght
+key Tab
+wait-log '^Editing new parameter expression$'
+type 'table_lenhgt+sheet_thickness'
+wait-log '^Parameter cabinet_lenght expression problem while typed: table_lenhgt is not a parameter[.] Did you mean table_lenght[?] [(]marked 0[.][.]12[)]$'
+key ctrl+a
+type '(table_lenght+sheet_thickness)'
+wait-log '^Parameter cabinet_lenght expression problem while typed: none$'
+key Return
+wait-log '^Created user parameter cabinet_lenght = [(]table_lenght[+]sheet_thickness[)] [(]mm[)] in the new row$'
+expect-model-parameter cabinet_lenght 1218 user
+expect-no-log '^Message band full: error '
+key Escape
+focus-dialog '^Parameters$'
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+expect-never '^(Message band|Status error|Add User Parameter expression problem|Parameter [a-z_]+ expression problem while typed)[^\n]*at byte'
+expect-never 'TestDriver: FAIL'

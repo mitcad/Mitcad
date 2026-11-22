@@ -18,9 +18,8 @@ collections were left with a freed block or rewired nodes:
 - NCollection_BaseMap::BeginResize freed nothing when the second bucket
   array failed (a leak).
 
-Test: geometry/tests/test_allocation.cpp (ctest
-geometry.suite.allocation), test_collections_intact_after_failure: It
-fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0032.
 diff --git a/src/FoundationClasses/TKernel/NCollection/NCollection_Array1.hxx b/src/FoundationClasses/TKernel/NCollection/NCollection_Array1.hxx
 index 36107c7..ef40145 100644
 --- a/src/FoundationClasses/TKernel/NCollection/NCollection_Array1.hxx

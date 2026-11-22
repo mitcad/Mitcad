@@ -4,7 +4,7 @@
 //! (`document.json`) and its blobs (STEP text and meshes). No geometry.
 //!
 //! A design of any format is first upgraded to one format, [`PINNED`]
-//! (57, the format of SolidCraft's release 0.43.0), by SolidCraft's own
+//! (63, the format of SolidCraft's release 0.45.0), by SolidCraft's own
 //! upgrade steps (`third_party/solidcraft/format.rs`), so that the import
 //! maps a single version. A design a newer build saved (a format past it,
 //! or changes this reader does not know) is read as far as this reader
@@ -66,11 +66,11 @@ pub struct SolidcraftFile {
     pub left_out: Vec<String>,
 }
 
-/// The top-level sections of a design SolidCraft 0.43.0 (format
+/// The top-level sections of a design SolidCraft 0.45.0 (format
 /// [`PINNED`]) writes (`crates/doc/src/document.rs`, `Document`), and the
 /// blobs its container adds: a newer design's other sections are named in
 /// [`SolidcraftFile::left_out`].
-pub const KNOWN_SECTIONS: [&str; 44] = [
+pub const KNOWN_SECTIONS: [&str; 45] = [
     "render",
     "format",
     "format_pending",
@@ -109,6 +109,8 @@ pub const KNOWN_SECTIONS: [&str; 44] = [
     "notes",
     "visibility",
     "plugin_data",
+    // A plain JSON design's drawings (format 59).
+    "drawings",
     "step_blob",
     "mesh_blob",
     "image_blob",

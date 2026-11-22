@@ -11,7 +11,8 @@
 //     plate yet, Plate 1 is added first;
 //   - Item, Count and Take Off Plate: what is on the plate, each item's
 //     count ("4 of this on plate 2"), an item taken off (back on the first
-//     plate);
+//     plate; its tooltip and the note under the rows say so, and that a
+//     hidden body stays off the plates unless it is an item, mitcad#2222);
 //   - Spiral Vase, and Settings with Plate Settings…: the plate's own
 //     process values in the same settings form as the profiles
 //     (OwnSettingsDialog::setPlate).
@@ -455,6 +456,7 @@ CommandDef MainWindow::platesCommand() {
             }
           })
           .withFieldColumn()
+          .withTooltip(tr("Puts the item back on the first plate; hiding a body keeps it off the plates"))
           .withVisible(hasItems),
       // Vase mode, the plate setting a plate of its own is most often for.
       checkInput(QStringLiteral("vase"), tr("Spiral Vase"), false)
@@ -495,18 +497,24 @@ CommandDef MainWindow::platesCommand() {
           },
           tr("Settings"))
           .withVisible(hasPlate),
-      // What prints on the first plate besides its items.
+      // What prints on the first plate besides its items, and what keeps a
+      // body off the plates (mitcad#2222): an item taken off goes back to
+      // the first plate; a hidden body that no item names prints nowhere.
       noteInput(
           QStringLiteral("unplaced"),
           [panel](const CommandState&) {
-            const int count = static_cast<int>(panel->plates.value(QStringLiteral("unplaced")).toArray().size());
-            if (count == 0) {
+            if (platesOf(panel->plates).isEmpty()) {
               return InputNote();
             }
-            return InputNote{count == 1 ? tr("1 placement on no plate prints on the first.")
-                                        : tr("%1 placements on no plate print on the first.").arg(count),
-                             {},
-                             {}};
+            const int count = static_cast<int>(panel->plates.value(QStringLiteral("unplaced")).toArray().size());
+            QString note = tr("Taken off its plate, an item goes back to the first. Hiding a body keeps it off the "
+                              "plates unless it is an item.");
+            if (count > 0) {
+              note = (count == 1 ? tr("1 placement on no plate prints on the first.")
+                                 : tr("%1 placements on no plate print on the first.").arg(count)) +
+                     QLatin1Char(' ') + note;
+            }
+            return InputNote{note, {}, {}};
           },
           [](int, const CommandState&, const CommandContext&) {}),
   };
@@ -527,6 +535,9 @@ CommandDef MainWindow::platesCommand() {
   // A note row's button or the plate settings beside the panel changed the
   // design: the rows and the plate in the view follow.
   def.modelChanged = [follow](CommandState& state, const CommandContext&) { follow(state); };
+  // A body hidden or shown leaves the first plate or comes back on it
+  // (mitcad#2222): the rows, the note and the plate in the view follow.
+  def.followsVisibility = true;
   def.ended = [this](bool) {
     showPlateView(QString());
     endFilamentChanges();

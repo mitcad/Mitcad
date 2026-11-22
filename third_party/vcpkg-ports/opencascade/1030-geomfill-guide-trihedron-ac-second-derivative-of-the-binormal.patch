@@ -19,14 +19,8 @@ fraction of the lengths, held 784.9 (775.9 at a tolerance of 1e-7) of its
 0.27 off the turned bar between the sections. With |d|^2 the result is
 800, as by the plane rule (GuideTrihedronPlan) that turns the bar alike.
 
-Test: geometry/tests/test_sweeps.cpp, test_sweep_frames (ctest
-geometry.suite.sweeps.3): an 8 x 2 bar swept 50 along a line and turned a
-quarter turn by an auxiliary spine, with curvilinear equivalence
-(GuideTrihedronAC, this patch) and without it (the plane rule,
-GuideTrihedronPlan, the other caller, unchanged): the volume 800 within
-1e-7 and the end cap's extents the turned bar's. Without the patch the
-curvilinear sweep held 784.9. It fails without the patch (shown 2026-11-20
-by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1030.
 
 diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_GuideTrihedronAC.cxx b/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_GuideTrihedronAC.cxx
 --- a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_GuideTrihedronAC.cxx

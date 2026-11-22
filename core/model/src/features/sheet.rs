@@ -433,8 +433,11 @@ fn short(value: f64) -> String {
 pub enum ReliefKind {
     Rectangular,
     Round,
+    /// A corner relief, or a legacy square-ended bend relief in a saved file.
     Tear,
 }
+
+const LEGACY_BEND_RELIEF: &str = "This saved Tear bend relief cuts a rectangular slot. Choose Rectangular or Round to replace it.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -443,6 +446,29 @@ pub struct Relief<P> {
     pub kind: ReliefKind,
     pub width: P,
     pub depth: P,
+}
+
+pub(super) fn warn_legacy_bend_relief<K: Kernel>(
+    relief: Option<&Relief<f64>>,
+    ctx: &mut EvalContext<'_, K>,
+) {
+    if relief.is_some_and(|relief| relief.kind == ReliefKind::Tear) {
+        ctx.warn(LEGACY_BEND_RELIEF);
+    }
+}
+
+impl<P> super::FeatureDef<P> {
+    /// Whether this definition explicitly stores the retired bend relief.
+    pub(crate) fn has_legacy_bend_relief(&self) -> bool {
+        let relief = match self {
+            Self::SheetRules(rules) => Some(&rules.bend_relief),
+            Self::SheetFlange(flange) => flange.relief.as_ref(),
+            Self::SheetBend(bend) => bend.relief.as_ref(),
+            Self::SheetFold(fold) => fold.relief.as_ref(),
+            _ => None,
+        };
+        relief.is_some_and(|relief| relief.kind == ReliefKind::Tear)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -555,6 +581,7 @@ impl<K: Kernel> Evaluate<K> for SheetRulesDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let rules = self.map_params(&mut |_, id| ctx.param(*id))?;
         rules.validate()?;
+        warn_legacy_bend_relief(Some(&rules.bend_relief), ctx);
         Ok(FeatureOutput {
             sheet_rules: Some(rules),
             ..FeatureOutput::default()

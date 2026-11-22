@@ -485,3 +485,123 @@ fn the_size_limit_holds_per_image() {
         "{error}"
     );
 }
+
+/// mitcad#2186: the library's woods and panels bring built-in texture sets,
+/// listed as embedded images (the query carries no image data) and given
+/// by `appearance_image`, laid along the grain. A design that uses one
+/// saves only its id, no image, as before, and has the textures again when
+/// it opens; a copy made from one embeds the images; an own appearance
+/// without a texture (a copy made before) keeps its look.
+#[test]
+fn built_in_woods_bring_their_textures_without_changing_designs() {
+    const REGION: &str = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 600, "height": 300},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": REGION}],
+              "extent": {"type": "distance", "distance": 18}, "operation": "new_body"}},
+            {"cmd": "set_body_appearance", "uid": "F2.b0", "appearance": "plywood_birch"},
+        ]),
+    );
+    let wood = listed(&doc, "plywood_birch");
+    assert_eq!(wood["library"], true);
+    assert_eq!(wood["name"], "Plywood - Birch");
+    assert_eq!(wood["class"], "wood");
+    // Its colour stays: the display colour too.
+    let colour = json!([230.0 / 255.0, 207.0 / 255.0, 164.0 / 255.0]);
+    assert_eq!(wood["base_color"], colour);
+    assert_eq!(wood["display_color"], colour);
+    let texture = wood["texture"].clone();
+    assert_eq!(texture["projection"], "grain");
+    assert_eq!(texture["size"], json!([1000.0, 1000.0]));
+    assert_eq!(texture["path"], "plywood_birch-color.jpg");
+    assert_eq!(texture["embedded"], true);
+    assert_eq!(
+        texture["source"],
+        json!({"id": "mitcad", "asset": "plywood_birch", "resolution": "1k", "license": "MIT"})
+    );
+    for map in ["normal", "roughness"] {
+        assert_eq!(texture[map]["embedded"], true, "{map}");
+    }
+    assert!(texture.get("metalness").is_none() && texture.get("occlusion").is_none());
+    // No image data in the query, which the application asks often.
+    let all = query(&doc, json!({"query": "appearances"}))
+        .unwrap()
+        .to_string();
+    assert!(
+        !all.contains("\"data\""),
+        "the appearances query lists image data"
+    );
+    assert!(all.len() < 256 << 10, "{} bytes", all.len());
+    for map in ["base_color", "normal", "roughness"] {
+        let image = query(
+            &doc,
+            json!({"query": "appearance_image", "id": "plywood_birch", "map": map}),
+        )
+        .unwrap();
+        assert_eq!(image["format"], "jpeg", "{map}");
+        let listed_sha = if map == "base_color" {
+            texture["image_sha256"].clone()
+        } else {
+            texture[map]["image_sha256"].clone()
+        };
+        assert_eq!(image["sha256"], listed_sha, "{map}");
+    }
+
+    // The design file names the id only: no images, no appearance of its
+    // own.
+    let count =
+        |file: &Value, key: &str| file.get(key).and_then(Value::as_array).map_or(0, Vec::len);
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(count(&file, "images"), 0);
+    assert_eq!(count(&file, "appearances"), 0);
+    assert!(saved.contains("\"plywood_birch\""));
+    assert!(saved.len() < 64 << 10, "{} bytes", saved.len());
+    // Opened again (as a design saved before the textures): the body has
+    // its wood, with the textures.
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert!(
+        loaded.load_warnings().is_empty(),
+        "{:?}",
+        loaded.load_warnings()
+    );
+    assert_eq!(loaded.to_json(), saved);
+    assert_eq!(listed(&loaded, "plywood_birch")["texture"], texture);
+    // The bodies are there once the opened design is computed.
+    command(&mut loaded, json!({"cmd": "recompute"}));
+    assert_eq!(
+        query(&loaded, json!({"query": "bodies"})).unwrap()[0]["appearance"],
+        "plywood_birch"
+    );
+
+    // A copy of it embeds the images (once each) and keeps the grain.
+    command(
+        &mut loaded,
+        json!({"cmd": "create_appearance", "id": "my_ply", "based_on": "plywood_birch",
+               "name": "My Plywood"}),
+    );
+    let copy = listed(&loaded, "my_ply")["texture"].clone();
+    assert_eq!(copy["image_sha256"], texture["image_sha256"]);
+    assert_eq!(copy["projection"], "grain");
+    let with_copy: Value = serde_json::from_str(&loaded.to_json()).unwrap();
+    assert_eq!(count(&with_copy, "images"), 3);
+    // An own appearance without a texture, as a copy made before the
+    // textures was, keeps its plain look, saved and read back.
+    command(
+        &mut loaded,
+        json!({"cmd": "create_appearance", "id": "old_ply", "based_on": "plywood_pine",
+               "name": "Old Plywood", "texture": null}),
+    );
+    assert!(listed(&loaded, "old_ply").get("texture").is_none());
+    let reread = Document::from_json(&loaded.to_json(), MockKernel::default()).unwrap();
+    assert!(listed(&reread, "old_ply").get("texture").is_none());
+    assert_eq!(
+        listed(&reread, "old_ply")["base_color"],
+        listed(&reread, "plywood_pine")["base_color"]
+    );
+    assert_eq!(listed(&reread, "my_ply")["texture"], copy);
+}

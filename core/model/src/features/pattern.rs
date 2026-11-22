@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 use super::base::{Joined, body_lumps, join_pieces};
 use super::bodies::{BodySet, apply_tool, apply_tool_strays};
 use super::dressup_copies::{copied_features, is_dressup, repeat_dressup};
+use super::extrude_scope::ReplayRefusal;
 use super::face_refs::UNSUPPORTED;
 use super::geom_ref::{GeomRef, PathChain, PathCurve, PathRef, Want, path_curve};
 use super::mapping::map_params;
@@ -664,10 +665,12 @@ impl PatternObjects {
 }
 
 /// Scoped cuts need document-aware target resolution, which the ordinary
-/// FeatureInfo::tool_use contract deliberately cannot provide (mitcad#569).
+/// FeatureInfo::tool_use contract deliberately cannot provide (mitcad#569):
+/// a scoped cut has a tool here, and [`replay_tool`] tells at the replay
+/// point whether its copies may repeat it, in words that name the other
+/// component (mitcad#2126).
 fn replay_tool_definition(entry: &FeatureEntry) -> Result<Option<ToolUse>, String> {
-    if let Some(scope) = entry.def.active_cut_scope() {
-        scope.check_local_replay()?;
+    if entry.def.active_cut_scope().is_some() {
         return Ok(Some(ToolUse {
             operation: Operation::Cut,
             participants: Vec::new(),
@@ -682,6 +685,9 @@ fn replay_tool<K: Kernel>(
     set: Option<&BodySet<K::Shape>>,
 ) -> Result<Option<ToolUse>, String> {
     let entry = ctx.feature_entry(uid)?;
+    // What the scoped cut changed as it was evaluated: its Affected
+    // components (mitcad#2126).
+    let mut report = None;
     if entry.def.active_cut_scope().is_some() {
         // Read the source before classification can fail. An edit of its
         // selection must invalidate a failed replay even when the local
@@ -692,6 +698,9 @@ fn replay_tool<K: Kernel>(
             .iter()
             .find(|result| result.uid == uid)
             .and_then(|result| result.output.as_ref());
+        report = output
+            .filter(|output| output.result.is_ok())
+            .and_then(|output| output.cut_targets.clone());
         ctx.reads
             .push(Read::Output(uid, output.map(|output| output.version)));
     }
@@ -699,7 +708,7 @@ fn replay_tool<K: Kernel>(
     if let Some(scope) = entry.def.active_cut_scope()
         && let Some(tool) = &mut tool
     {
-        tool.participants = scope.local_replay_bodies(ctx)?;
+        tool.participants = scope.local_replay_bodies(ctx, uid, report.as_ref())?;
         if let Some(set) = set {
             // Each copy may split a selected body. Its new pieces remain
             // targets of the component selection for subsequent copies.
@@ -716,11 +725,38 @@ fn replay_tool<K: Kernel>(
                 })
                 .collect();
             if tool.participants.is_empty() {
-                return Err("no eligible local bodies selected for cut feature replay".to_owned());
+                return Err(ReplayRefusal::NoOwnBodies.text(ctx, uid));
             }
         }
     }
     Ok(tool)
+}
+
+/// Whether feature `uid` is a cut with a target scope.
+fn is_scoped_cut<K: Kernel>(ctx: &EvalContext<'_, K>, uid: FeatureUid) -> bool {
+    ctx.feature_entry(uid)
+        .is_ok_and(|entry| entry.def.active_cut_scope().is_some())
+}
+
+/// A scoped cut's copies that would also cut a body of another component
+/// refuse the mirror or the pattern (mitcad#2126): the copies cut only the
+/// bodies of the cut's own component, and a copy is never left uncut in
+/// another component silently (mitcad#569). `copies` are all of the
+/// place's copies, before those that reach no own body are left out.
+/// Nothing for other features.
+fn refuse_foreign_copies<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    uid: FeatureUid,
+    copies: &[K::Shape],
+) -> Result<(), String> {
+    let entry = ctx.feature_entry(uid)?;
+    let Some(scope) = entry.def.active_cut_scope() else {
+        return Ok(());
+    };
+    match scope.copy_reach(ctx, copies)? {
+        Some(target) => Err(ReplayRefusal::CopyCuts(target).text(ctx, uid)),
+        None => Ok(()),
+    }
 }
 
 pub(super) fn check_suppressed(suppressed: &[u32]) -> Result<(), String> {
@@ -2489,14 +2525,25 @@ pub(crate) fn repeat<K: Kernel>(
             // features they round) instead of rounding at each copy. A
             // failure there is the pattern's: the roundings are not worked
             // out copy by copy as the other options do.
-            if compute == ComputeOption::Optimized
-                && !dressups.is_empty()
-                && super::face_copy::copy_faces(ctx, &mut set, &places, elements)?
-            {
-                return Ok(FeatureOutput {
-                    changes: set.changes(),
-                    ..FeatureOutput::default()
-                });
+            if compute == ComputeOption::Optimized && !dressups.is_empty() {
+                // The face copy acts only on the bodies the features
+                // changed: a scoped cut's copy that would reach another
+                // component's body refuses the pattern first, as the other
+                // options do, instead of leaving that body uncut
+                // (mitcad#2171).
+                for place in &places {
+                    if is_scoped_cut(ctx, place.feature) {
+                        let stored = ctx.feature_tool(place.feature)?;
+                        let all = moved_list(ctx, &stored, &place.steps, elements)?;
+                        refuse_foreign_copies(ctx, place.feature, &all)?;
+                    }
+                }
+                if super::face_copy::copy_faces(ctx, &mut set, &places, elements)? {
+                    return Ok(FeatureOutput {
+                        changes: set.changes(),
+                        ..FeatureOutput::default()
+                    });
+                }
             }
             let saved = (set.clone(), ctx.next_body, ctx.warnings.len());
             match copying.by_places(ctx, &mut set, elements) {
@@ -3047,6 +3094,10 @@ impl Copying<'_> {
         let mut tools = Vec::with_capacity(places.len());
         for place in places {
             let stored = ctx.feature_tool(place.feature)?;
+            if is_scoped_cut(ctx, place.feature) {
+                let all = moved_list(ctx, &stored, &place.steps, elements)?;
+                refuse_foreign_copies(ctx, place.feature, &all)?;
+            }
             match moved_copies(
                 ctx,
                 &stored,
@@ -3146,6 +3197,7 @@ impl Copying<'_> {
         let mut reached = false;
         if self.compute == ComputeOption::Adjust {
             let mut copies = adjust_copies(ctx, &entry, place, &stored, elements)?;
+            refuse_foreign_copies(ctx, *uid, &copies)?;
             if matches!(tool_use.operation, Operation::Cut | Operation::Join) {
                 copies = reaching(ctx, set, &participants, copies);
             }
@@ -3158,6 +3210,10 @@ impl Copying<'_> {
                 }
             }
         } else if !elements.is_empty() {
+            if is_scoped_cut(ctx, *uid) {
+                let all = moved_list(ctx, &stored, &place.steps, elements)?;
+                refuse_foreign_copies(ctx, *uid, &all)?;
+            }
             // A join's copies that touch nothing become bodies here, so only
             // a cut's are left out.
             let reach =

@@ -93,6 +93,10 @@ if(BUILD_TESTING)
   add_test(NAME cli.f4_pattern_scaled COMMAND mitcad-cli run "${scripts}/f4_pattern_scaled.json")
   # Pattern on Path along a body's edges, with and without a tangent chain (mitcad#2105).
   add_test(NAME cli.f4_pattern_edge_path COMMAND mitcad-cli run "${scripts}/f4_pattern_edge_path.json")
+  # Cone (mitcad#2239): a cone's and a frustum's volumes, its faces, a
+  # negative height, a fillet on the base edge through a radius change,
+  # equal radii refused, a cone cut from a box.
+  add_test(NAME cli.primitive_cone COMMAND mitcad-cli run "${scripts}/primitive_cone.json")
 
   # Face operations (F2): the T0 models' volumes, names through edits, failures.
   foreach(script f2_fillet_chamfer f2_shell_draft f2_face_ops f2_names_follow_parameters f2_failures)
@@ -120,6 +124,10 @@ if(BUILD_TESTING)
   endforeach()
   # A rib's and a web's Draft Angle (mitcad#2102): drafted, edited, patterned.
   add_test(NAME cli.f3_rib_web_draft COMMAND mitcad-cli run "${scripts}/f3_rib_web_draft.json")
+  # A loft's Tangent Edges merged (mitcad#2162): a slot to a circle is one
+  # side face, with two and three sections and a tangent end; fillets on the
+  # merged faces build through the slot edited into a rectangle and back.
+  add_test(NAME cli.f3_loft_tangent_edges COMMAND mitcad-cli run "${scripts}/f3_loft_tangent_edges.json")
   # Plastic part features and plastic rules (mitcad#459): analytic volumes,
   # the rules' defaults and warnings, refused rims and hooks.
   add_test(NAME cli.plastic COMMAND mitcad-cli run "${scripts}/plastic.json")
@@ -211,7 +219,7 @@ if(BUILD_TESTING)
   set_tests_properties(cli.f6_part_edit PROPERTIES FIXTURES_REQUIRED cli_f6_linked FIXTURES_SETUP cli_f6_edited)
   add_test(NAME cli.f6_link_update COMMAND mitcad-cli info "${f6}/linked.mitcad")
   set_tests_properties(cli.f6_link_update PROPERTIES FIXTURES_REQUIRED cli_f6_edited PASS_REGULAR_EXPRESSION
-    "Warning: plate is updated from plate\\.mitcad.*Placed bodies: 8.*plate:1/Body1 \\(F1\\.b0\\): volume 8000\\.000 mm3")
+    "Warning: plate is updated from plate\\.mitcad.*Placed bodies: 8.*plate:1/Plate:1/Body1 \\(F2\\.b0\\): volume 8000\\.000 mm3")
 
   # A version 1 file of V0 opens and recomputes to the same geometry.
   add_test(NAME cli.info_v1 COMMAND mitcad-cli info "${scripts}/v1_boss.mitcad")
@@ -1446,6 +1454,13 @@ if(BUILD_TESTING)
   # Ordinary cuts (Extrude, Hole) across a bend keep the sheet (mitcad#1628).
   add_test(NAME cli.sheet_cut_across_bend COMMAND mitcad-cli run "${scripts}/sheet_cut_across_bend.json")
   # Contour Flange, Convert to Sheet Metal and Perforate (mitcad#461).
+  set(perforation_fixture "${CMAKE_CURRENT_BINARY_DIR}/sheet_perforate_outline.mitcad")
+  add_test(NAME cli.sheet_perforate_outline_setup
+    COMMAND mitcad-cli run "${PROJECT_SOURCE_DIR}/tools/ui-scripts/sheet-perforate.json" --save "${perforation_fixture}")
+  set_tests_properties(cli.sheet_perforate_outline_setup PROPERTIES FIXTURES_SETUP cli_sheet_perforate_outline)
+  add_test(NAME cli.sheet_perforate_outline
+    COMMAND mitcad-cli run "${scripts}/sheet_perforate_outline.json" --open "${perforation_fixture}")
+  set_tests_properties(cli.sheet_perforate_outline PROPERTIES FIXTURES_REQUIRED cli_sheet_perforate_outline)
   foreach(sheet_case sheet_contour sheet_perforate sheet_convert)
     set(sheet_file "${CMAKE_CURRENT_BINARY_DIR}/${sheet_case}.mitcad")
     add_test(NAME cli.${sheet_case}
@@ -1735,6 +1750,20 @@ if(BUILD_TESTING)
             "-DWORK=${drawing}/keeps-content" -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-keeps-content-test.cmake")
   if(WIN32)
     set_property(TEST cli.drawing_design cli.export_drawing cli.drawing_hidden_holes cli.drawing_keeps_content
+      APPEND PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# A laid-out drawing of an imported assembly (mitcad#2147): every shown
+# placement of a component placed four times drawn, a hidden one left out,
+# and the placements counted in export-drawing's line.
+if(BUILD_TESTING)
+  add_test(NAME cli.drawing_assembly
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DDESIGN=${CMAKE_CURRENT_SOURCE_DIR}/tests/drawing_assembly.solidcraft.json"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/drawing/assembly" -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-assembly-test.cmake")
+  if(WIN32)
+    set_property(TEST cli.drawing_assembly
       APPEND PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()
@@ -2757,6 +2786,224 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/chamfer-remnants-reported-test.cmake")
   set_tests_properties(cli.chamfer_remnants_reported PROPERTIES
     SKIP_REGULAR_EXPRESSION "chamfer remnants reported: skipped" TIMEOUT 1800)
+endif()
+
+# GitHub #466's Shell (mitcad#2050): the reporter's plate with a cylinder on
+# a rounded corner, its foot rounded, shelled 2 mm inside with the
+# cylinder's top and the plate's bottom open, builds into one solid with
+# 2 mm walls (skipped without the report's archive under
+# MITCAD_MITCAD_REPORTED; the synthetic shells are geometry.shell_*).
+if(BUILD_TESTING)
+  add_test(NAME cli.shell_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/shell-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/shell-reported-test.cmake")
+  set_tests_properties(cli.shell_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "shell reported: skipped" TIMEOUT 900)
+endif()
+
+# The owner's loft from a circle to a slot (mitcad#2141, mitcad#2143),
+# found by its content ids under MITCAD_MITCAD_REPORTED and opened in a
+# copy: the solid loft shells 2 mm inside with the slot's end removed, the
+# surface loft thickens 1 mm to each side and symmetric (skipped without the
+# designs).
+if(BUILD_TESTING)
+  add_test(NAME cli.loft_circle_slot_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/loft-circle-slot-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/loft-circle-slot-reported-test.cmake")
+  set_tests_properties(cli.loft_circle_slot_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "loft circle slot reported: skipped" TIMEOUT 900)
+endif()
+
+# Extend of a planar surface body's slanted edge (mitcad#2056, GitHub #462):
+# the reported design, found by its content id under MITCAD_MITCAD_REPORTED,
+# its slanted edge extended by 26 along the long edges continued, the new
+# end edge parallel to it (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.extend_slanted_plane_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/extend-slanted-plane-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/extend-slanted-plane-reported-test.cmake")
+  set_tests_properties(cli.extend_slanted_plane_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "extend slanted plane reported: skipped" TIMEOUT 600)
+endif()
+
+# The reported design's sketch pattern with its spacing set to a driven
+# length of its own sketch (mitcad#2057, GitHub #470), found by its content
+# id under MITCAD_MITCAD_REPORTED and unpacked into a folder of its own:
+# accepted, the copies that far and following a new measure (skipped
+# without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.pattern_spacing_driven_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/pattern-spacing-driven-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/pattern-spacing-driven-reported-test.cmake")
+  set_tests_properties(cli.pattern_spacing_driven_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "pattern spacing driven reported: skipped" TIMEOUT 300)
+endif()
+
+# A reported sheet-metal design keeps its sheet (mitcad#2117, GitHub #497),
+# found by its content id under MITCAD_MITCAD_REPORTED: its edge flanges,
+# Unfold and Refold parametric and verified, its bodies the file's by
+# volume, and a valid sheet with a flat pattern at the end (skipped without
+# the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.f3d_sheet_unfold_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/f3d-sheet-unfold-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/f3d-sheet-unfold-reported-test.cmake")
+  set_tests_properties(cli.f3d_sheet_unfold_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "f3d sheet unfold reported: skipped" TIMEOUT 1800)
+endif()
+
+# An Extrude Cut up to a face behind its profiles (mitcad#2118) on the
+# reported design of GitHub mitcad/Mitcad#492, unpacked from its report's
+# zip: the cut turns round to reach the face and cuts its slots (skipped
+# without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.extrude_cut_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/extrude-cut-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/extrude-cut-reported-test.cmake")
+  set_tests_properties(cli.extrude_cut_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "extrude cut reported: skipped" TIMEOUT 600)
+endif()
+
+# Mirror and patterns of a scoped Extrude Cut beside another component's
+# body it does not reach (mitcad#2126, GitHub #495), on the reported design
+# found by its content id under MITCAD_MITCAD_REPORTED and unpacked into a
+# work folder: both repeat the pocket in its own component (skipped without
+# the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.scoped_cut_mirror_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/scoped-cut-mirror-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/scoped-cut-mirror-reported-test.cmake")
+  set_tests_properties(cli.scoped_cut_mirror_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "scoped cut mirror reported: skipped" TIMEOUT 600)
+endif()
+
+# GitHub #517's Y tube (mitcad#2140, port patch 2140), found by its content
+# id under MITCAD_MITCAD_REPORTED and opened in a copy: the crotch's Fillet1
+# at 6 and 50 mm and the reporter's Shell (the three ends open, 2 mm inside,
+# Sharp) after each, one valid solid without a note (skipped without the
+# design).
+if(BUILD_TESTING)
+  add_test(NAME cli.y_tube_crotch_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/y-tube-crotch-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/y-tube-crotch-reported-test.cmake")
+  set_tests_properties(cli.y_tube_crotch_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "y tube crotch reported: skipped" TIMEOUT 900)
+endif()
+
+# GitHub #527's design (mitcad#2174), found by its content id under
+# MITCAD_MITCAD_REPORTED and copied: export-drawing's top view as the
+# reporter wrote it draws each of the six placements of its component at
+# its place and prints "1 bodies in 6 placements"; a hidden occurrence is
+# left out (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.drawing_placements_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/drawing-placements-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-placements-reported-test.cmake")
+  set_tests_properties(cli.drawing_placements_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "drawing placements reported: skipped" TIMEOUT 300)
+endif()
+
+# GitHub #526's reduced pipe network (mitcad#2175), a format-63 .sc design
+# found by its content id under MITCAD_MITCAD_REPORTED: no newer-design
+# warning, its three sketches 3D sketches, one Pipe per line of each round
+# tube member with the file's diameter and wall, every feature parametric
+# and every body valid (skipped without the file).
+if(BUILD_TESTING)
+  add_test(NAME cli.solidcraft_pipe_network_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/solidcraft-pipe-network-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/solidcraft-pipe-network-reported-test.cmake")
+  set_tests_properties(cli.solidcraft_pipe_network_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "solidcraft pipe network reported: skipped" TIMEOUT 600)
+endif()
+
+# An extrude edited from Join to New Component takes its fillets along
+# (mitcad#2185), on the reported design found by its content id in
+# extrude-new-component-fillets/ under MITCAD_MITCAD_REPORTED: the fillets
+# compute in the component it makes, on its body; undone, and edited back
+# to Join, as saved; New Body puts them on its body without a move
+# (skipped without the design).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.extrude_new_component_fillets_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/extrude-new-component-fillets-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/extrude-new-component-fillets-reported")
+    set_tests_properties(cli.extrude_new_component_fillets_reported PROPERTIES TIMEOUT 900
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "extrude new component fillets reported: skipped")
+  endif()
+endif()
+
+# GitHub #560's design (mitcad#2208), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in a copy: the rounding wider than the
+# riser beside its edge, which goes on tangentially into a half disc, takes
+# the riser away and rolls on over the disc at its exact size, before the
+# design's other fillet (its own order), alone and after it: one valid
+# solid without a note, the
+# volume exact, within the body's box (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_narrow_face_tangent_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-narrow-face-tangent-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-narrow-face-tangent-reported-test.cmake")
+  set_tests_properties(cli.fillet_narrow_face_tangent_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet narrow face tangent reported: skipped" TIMEOUT 900)
+endif()
+
+# mitcad-cli export to .glb and .gltf (mitcad#2210, gltf.cpp): File >
+# Export's glTF writer (app/web/GltfExport.hpp) with the web page's bodies
+# (app/web/WebBodies.cpp), reading the model as the main window answers it
+# (app/web/DocumentContext.hpp); with the render sources above (the
+# appearances, the meshes), not the page's viewer. test_gltf_export builds
+# the same sources.
+set(mitcad_cli_gltf_sources
+  "${app}/framework/Command.cpp" "${app}/framework/Command.hpp"
+  "${app}/web/DocumentContext.hpp" "${app}/web/GltfExport.cpp" "${app}/web/GltfExport.hpp"
+  "${app}/web/WebBodies.cpp" "${app}/web/WebGlb.cpp" "${app}/web/WebGlb.hpp" "${app}/web/WebPage.hpp")
+target_sources(mitcad-cli PRIVATE gltf.cpp gltf.hpp ${mitcad_cli_gltf_sources})
+if(BUILD_TESTING)
+  # mitcad-cli's .glb and .gltf files of a component placed three times
+  # checked, and compared with the application's writer called as File >
+  # Export calls it, without a window (gltf-export-test.cmake).
+  add_executable(test_gltf_export test-gltf-export.cpp ${mitcad_cli_gltf_sources}
+    "${app}/framework/Appearances.cpp" "${app}/framework/Appearances.hpp"
+    "${app}/render/RenderBatch.cpp" "${app}/render/RenderBatch.hpp"
+    "${app}/render/RenderDevice.cpp" "${app}/render/RenderDevice.hpp"
+    "${app}/render/RenderMesh.cpp" "${app}/render/RenderMesh.hpp"
+    "${app}/render/RenderScene.cpp" "${app}/render/RenderScene.hpp")
+  mitcad_utf8_code_page(test_gltf_export)
+  set_target_properties(test_gltf_export PROPERTIES AUTOMOC ON)
+  target_include_directories(test_gltf_export PRIVATE "${app}")
+  target_include_directories(test_gltf_export SYSTEM PRIVATE "${MITCAD_CGLTF_INCLUDE_DIR}")
+  target_link_libraries(test_gltf_export PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io Qt6::Gui TKMesh
+    TKFillet TKPrim TKTopAlgo TKGeomBase TKG3d TKBRep mitcad_warnings)
+  if(APPLE)
+    target_link_libraries(test_gltf_export PRIVATE mitcad_mac_work)
+  endif()
+  add_test(NAME cli.export_gltf
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DTEST=$<TARGET_FILE:test_gltf_export>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/export-gltf"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/gltf-export-test.cmake")
+  set_tests_properties(cli.export_gltf PROPERTIES TIMEOUT 300)
 endif()
 
 # A test's PASS_REGULAR_EXPRESSION is a list: a ';' in its text splits it

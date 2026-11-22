@@ -75,6 +75,7 @@ CommandDef boxCommand(const CommandContext& context);
 CommandDef cylinderCommand(const CommandContext& context);
 CommandDef sphereCommand(const CommandContext& context);
 CommandDef torusCommand(const CommandContext& context);
+CommandDef coneCommand(const CommandContext& context);
 
 // PatternCommands.cpp
 CommandDef rectangularPatternCommand(const CommandContext& context);
@@ -180,5 +181,9 @@ CommandDef meshDecimateCommand(const CommandContext& context);
 CommandDef meshRemoveCommand(const CommandContext& context);
 CommandDef meshSegmentCommand(const CommandContext& context);
 CommandDef meshFitSurfaceCommand(const CommandContext& context);
+
+// BoundaryFillCommands.cpp (mitcad#2149): the space solids, surfaces and
+// planes close off filled, its cells clicked in the view.
+CommandDef boundaryFillCommand(const CommandContext& context);
 
 } // namespace mitcad::cmd

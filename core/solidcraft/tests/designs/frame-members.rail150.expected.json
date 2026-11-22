@@ -1,0 +1,11 @@
+{
+  "comment": "frame-members with rail = 150 mm (mitcad#2157): the rail's 3D line ends 150 from its start, and its member follows it: 224 x 150 = 33600, x from 0 to 150; the rest as before. Total 64329.2019.",
+  "volume_tolerance": 1e-9,
+  "bbox_tolerance": 1e-6,
+  "body_count": 5,
+  "total": {"volume_mm3": 64329.20186454391},
+  "bodies": [
+    {"name": "Top rail", "volume_mm3": 33600,
+     "bbox": {"min": [0, 77.67949192431122, -18.660254037844386], "max": [150, 122.32050807568878, 18.660254037844386]}}
+  ]
+}

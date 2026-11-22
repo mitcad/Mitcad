@@ -107,3 +107,14 @@ mod acknowledged_warnings_tests;
 // Recompute All: every feature evaluated again, without the cached
 // results (mitcad#1982).
 mod recompute_all_tests;
+// Groups of user parameters: nested paths, moves, renames, deletes, undo
+// and the design file (mitcad#2180).
+mod parameter_groups_tests;
+// Refused parameter expressions in words, without the parser's byte
+// offsets, with the near miss of an unknown name (mitcad#2181).
+mod parameter_refusal_words_tests;
+// The outline set in the sketch and profiles queries (mitcad#2194).
+mod outline_set_2194_tests;
+// What uses a user parameter: the `parameters` query's `used_by`, and the
+// refusals of `delete_parameter` (mitcad#2202).
+mod parameter_users_2202_tests;

@@ -220,6 +220,9 @@ impl LibrarySourceDef {
                 // record their own row's standard and articles.
                 standard: String::new(),
                 supplier_parts: Vec::new(),
+                // Not for print services (mitcad#2214): every part made of
+                // the source records it.
+                non_printable: source.non_printable,
             },
             name: source.name.clone(),
             standard: source.standard.clone(),

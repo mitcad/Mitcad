@@ -225,6 +225,9 @@ bool NoteRow::setNote(const QString& text, const QStringList& actions, const QSt
       button->setFocusPolicy(Qt::NoFocus);
       button->setObjectName(QStringLiteral("note_action_%1").arg(i));
       connect(button, &QPushButton::clicked, this, [this, i] { emit actionClicked(i); });
+      if (icon.isEmpty() || icon == linkActionIcon()) {
+        button->setToolTip(m_actionTooltip);
+      }
       if (icon == linkActionIcon()) {
         // A link on a row of its own under the buttons, the note's width
         // (mitcad#655: 3D Print's import line under Import from Slicer…,

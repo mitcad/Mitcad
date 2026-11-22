@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <typeinfo>
 
 #include <BOPAlgo_Alerts.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
@@ -172,20 +173,134 @@ std::string offset_failure(const BRepOffset_MakeOffset& offset) {
   }
 }
 
+// What named_failure says of an offset that raised an error without a
+// message. A shell whose cavity cannot be built either says why in words
+// instead (shell_refusal); this stays in its detail.
+constexpr const char* kOffsetRaised = "the geometry kernel's offset raised an error";
+
 // Runs the kernel's offset of a shell, giving a failure it raises without
 // a message one (mitcad#158: an offset of stored B-spline roundings that
 // fails to extend an edge). Other failures, out of memory among them, go
-// on as they are.
+// on as they are. A test asking the kernel to refuse the shell
+// (MITCAD_TEST_OCCT_REFUSES=shell, mitcad#2140) gets such a failure.
 template <class Offset>
 void named_failure(Offset&& offset) {
   try {
+    if (detail::refusal_asked("shell")) {
+      throw Standard_Failure("");
+    }
     offset();
   } catch (const Standard_Failure& failure) {
     if (std::string(failure.what()).empty()) {
-      throw Standard_Failure("the geometry kernel's offset raised an error");
+      throw Standard_Failure(kOffsetRaised);
     }
     throw;
   }
+}
+
+// The sine of the angle between the normals of the edge's faces `a` and `b`
+// at the edge's parameter t; -1 where a normal is not defined there.
+double normals_sine(const TopoDS_Edge& edge, const TopoDS_Face& a, const TopoDS_Face& b, double t) {
+  gp_Vec normals[2];
+  const TopoDS_Face* faces[2] = {&a, &b};
+  for (int k = 0; k < 2; ++k) {
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(edge, *faces[k], first, last);
+    if (pcurve.IsNull()) {
+      return -1.0;
+    }
+    const gp_Pnt2d uv = pcurve->Value(t);
+    const BRepAdaptor_Surface surface(*faces[k], false);
+    gp_Pnt p;
+    gp_Vec du;
+    gp_Vec dv;
+    surface.D1(uv.X(), uv.Y(), p, du, dv);
+    normals[k] = du.Crossed(dv);
+    if (normals[k].Magnitude() <= 1.0e-12 * std::max(1.0, du.Magnitude() * dv.Magnitude())) {
+      return -1.0;
+    }
+  }
+  return normals[0].Crossed(normals[1]).Magnitude() / (normals[0].Magnitude() * normals[1].Magnitude());
+}
+
+// The named edges between two kept faces (not `removed`) that meet at an
+// angle along the edge but tangentially at an end of it: a crease that
+// fades out to a smooth join, such as the crotch of a Y tube where its arms
+// leave their common straight part (mitcad#2140). The geometry kernel's
+// offset finds the faces' offsets meeting there along several branches.
+std::vector<int> fading_creases(const Shape& body, const std::set<int>& removed) {
+  // (The sine of 1e-4 rad, as the port's offset patches take faces for
+  // tangent at a crease's end; a crease at least ten times that in its
+  // middle.)
+  constexpr double kTangent = 1.0e-4;
+  constexpr double kCrease = 1.0e-3;
+  std::vector<int> creases;
+  for (int e = 0; e < body.edge_count(); ++e) {
+    const std::array<int, 2> faces = body.edge_faces(e);
+    if (body.edge_name(e).empty() || faces[0] < 0 || faces[1] < 0 || faces[0] == faces[1] ||
+        removed.count(faces[0]) > 0 || removed.count(faces[1]) > 0) {
+      continue;
+    }
+    const TopoDS_Edge& edge = body.edge(e);
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    double first = 0.0;
+    double last = 0.0;
+    BRep_Tool::Range(edge, first, last);
+    const TopoDS_Face& a = body.face(faces[0]);
+    const TopoDS_Face& b = body.face(faces[1]);
+    const double middle = normals_sine(edge, a, b, 0.5 * (first + last));
+    const double start = normals_sine(edge, a, b, first);
+    const double end = normals_sine(edge, a, b, last);
+    if (middle > kCrease && ((start >= 0.0 && start <= kTangent) || (end >= 0.0 && end <= kTangent))) {
+      creases.push_back(e);
+    }
+  }
+  return creases;
+}
+
+// Why a shell fails whose offset the geometry kernel refused without a
+// message and whose cavity could not be built either (mitcad#2140), in
+// words: along the creases that fade out to a smooth join (their places
+// painted), or else at the step that failed. The kernel's own text stays in
+// the detail.
+std::string shell_refusal(const Shape& body, const std::set<int>& removed) {
+  const std::vector<int> creases = fading_creases(body, removed);
+  const std::string kernel = std::string("; ") + kOffsetRaised + " without a message, and the cavity could not be built";
+  if (!creases.empty()) {
+    std::vector<ErrorPlace> places;
+    std::string names;
+    for (const int e : creases) {
+      places.push_back(edge_place(body.edge_name(e)));
+      names += (names.empty() ? "" : ", ") + body.edge_name(e);
+    }
+    const std::string said =
+        creases.size() == 1
+            ? "shell failed; the geometry kernel cannot offset the faces along an edge where their angle fades out "
+              "to a smooth join at an end of it"
+            : "shell failed; the geometry kernel cannot offset the faces along edges where their angle fades out to "
+              "a smooth join at an end";
+    return placed_error(said, said + " (" + names + ")" + kernel, places);
+  }
+  const std::string said =
+      "shell failed; the geometry kernel cannot join the offsets of the faces into the inside of the wall at this "
+      "thickness";
+  return placed_error(said, said + kernel);
+}
+
+// Whether an error is the kernel's offset failure without a message.
+bool said_nothing(const std::exception_ptr& failure) {
+  try {
+    std::rethrow_exception(failure);
+  } catch (const Standard_Failure& error) {
+    return std::string(error.what()) == kOffsetRaised;
+  } catch (const std::exception& error) {
+    return std::string(error.what()) == kOffsetRaised;
+  } catch (...) {
+  }
+  return false;
 }
 
 // One solid of an offset or thick solid result; throws if there is none.
@@ -489,9 +604,10 @@ std::set<int> as_set(const std::vector<int>& faces) { return {faces.begin(), fac
 
 // The shell `primary` builds, or where the geometry kernel fails on it, the
 // body less a cavity (shell_cavity.hpp, mitcad#1233): `fallback`, null
-// when that cannot be built either (then the kernel's failure stands).
-template <class Primary, class Fallback>
-ShapePtr or_by_cavity(Primary&& primary, Fallback&& fallback) {
+// when that cannot be built either (then the kernel's failure stands, in
+// `refused`'s words where the kernel gave none, mitcad#2140).
+template <class Primary, class Fallback, class Refused>
+ShapePtr or_by_cavity(Primary&& primary, Fallback&& fallback, Refused&& refused) {
   std::exception_ptr failure;
   try {
     return primary();
@@ -499,13 +615,20 @@ ShapePtr or_by_cavity(Primary&& primary, Fallback&& fallback) {
     throw;
   } catch (const Standard_OutOfMemory&) {
     throw;
-  } catch (const std::runtime_error&) {
+  } catch (const std::runtime_error& error) {
+    detail::shell_trace(std::string("the kernel's offset failed: ") + error.what());
     failure = std::current_exception();
-  } catch (const Standard_Failure&) {
+  } catch (const Standard_Failure& error) {
+    detail::shell_trace(std::string("the kernel's offset raised ") + typeid(error).name() + ": " +
+                        error.what());
     failure = std::current_exception();
   }
   ShapePtr result = fallback();
   if (!result) {
+    detail::shell_trace("the cavity built nothing; the kernel's failure stands");
+    if (said_nothing(failure)) {
+      throw std::runtime_error(refused());
+    }
     std::rethrow_exception(failure);
   }
   return result;
@@ -515,6 +638,10 @@ ShapePtr or_by_cavity(Primary&& primary, Fallback&& fallback) {
 // of (null: the body); null when it cannot be built.
 ShapePtr cavity_shell(const std::string& feature, const Shape& input, const std::set<int>& removed_faces,
                       double inside, GeomAbs_JoinType join, const Shape* outer) {
+  // (A test asking the kernel to refuse the shell, mitcad#2140: no cavity.)
+  if (detail::refusal_asked("shell")) {
+    return nullptr;
+  }
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
   std::set<int> removed = removed_faces;
@@ -522,7 +649,12 @@ ShapePtr cavity_shell(const std::string& feature, const Shape& input, const std:
   const Shape& body = split ? *split : *copy;
   ShapePtr result = detail::shell_by_cavity(feature, body, removed, inside, join, outer ? *outer : body);
   if (result) {
-    check_result(result, "the shell");
+    try {
+      check_result(result, "the shell");
+    } catch (const std::runtime_error& error) {
+      detail::shell_trace(std::string("the cavity's result was refused: ") + error.what());
+      throw;
+    }
   }
   return result;
 }
@@ -559,7 +691,8 @@ ShapePtr shell(const std::string& feature, const Shape& body, const ShellSpec& s
             detail::note_missing_walls(feature, body, removed, spec.inside, *wall);
             return wall;
           },
-          [&] { return cavity_shell(feature, body, removed, spec.inside, join, outer); });
+          [&] { return cavity_shell(feature, body, removed, spec.inside, join, outer); },
+          [&] { return shell_refusal(body, removed); });
     };
     ShapePtr result;
     if (faces.empty()) {

@@ -11,7 +11,9 @@
 #   2. Snap to Grid in the bar and in the View menu stay in step: the bar's
 #      button turns the View menu's action off, the View menu's command (by
 #      its shortcut, the same action) turns the bar's button on. Layout
-#      Grid likewise. The View menu's Wireframe is the bar's style.
+#      Grid likewise. The View menu's Wireframe is the bar's style; the
+#      bar's list has Wireframe with Visible Edges Only (mitcad#2155), which
+#      chosen is the bar's style, also after a restart.
 #   3. Fit in the bar fits the view.
 #   4. In a sketch on XZ, after Isometric View, the bar's Look At looks at
 #      the sketch plane (from FRONT, along 0 1 0); the Sketch Palette's
@@ -32,6 +34,7 @@ param(
 
 Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.snap_grid' = 'F8'; 'view.grid' = 'F9';
   'view.style.wireframe' = 'Shift+F5'; 'view.style.visible_edges' = 'Shift+F6'; 'view.iso' = 'F12';
+  'view.style.wireframe_visible' = 'Shift+F7';
   'tools.preferences.display' = 'Shift+F8' } -StepPause 0
 
 # Expect-States grid snap style description: the bar's last states line, as
@@ -87,6 +90,24 @@ function Round([string]$Layout, [string]$Chrome, [string]$Place) {
   Ui-Mark
   Ui-Step 'Wireframe (View menu command, Shift+F5)' { Ui-Key 'shift+F5' }
   Expect-States 'on' 'on' 'Wireframe' "${Layout}: the bar's style is the View menu's Wireframe"
+  # The sixth style (mitcad#2155): in the bar's list (logged as it opens),
+  # chosen by its command, kept after a restart.
+  Ui-Mark
+  Ui-Step 'Visual Style (bar)'            { Ui-ClickLogged 'Navigation bar Visual Style' }
+  Ui-ExpectNew '| Wireframe with Hidden Edges | Wireframe with Visible Edges Only' "${Layout}: the bar's list has the new style last"
+  # An open menu takes the keys (the shortcut below was lost in it,
+  # mitcad#2248): Esc closes the list; with the list already closed it
+  # only reaches the idle view.
+  Ui-Step 'close the list (Esc)'          { Ui-Key 'Escape' }
+  Start-Sleep -Milliseconds 300
+  Ui-Mark
+  Ui-Step 'Wireframe with Visible Edges Only (Shift+F7)' { Ui-Key 'shift+F7' }
+  Ui-ExpectNew 'Visual style Wireframe with Visible Edges Only' "${Layout}: Wireframe with Visible Edges Only chosen"
+  Expect-States 'on' 'on' 'Wireframe with Visible Edges Only' "${Layout}: the bar's style is Wireframe with Visible Edges Only"
+  Ui-StartApp "view-nav-bar-$Chrome-restart" @("--chrome=$Chrome")
+  Ui-ExpectLog "Navigation bar shown ($Place) at " "${Layout}: the bar shown after the restart"
+  $script:UiMark = 0
+  Expect-States 'on' 'on' 'Wireframe with Visible Edges Only' "${Layout}: the style kept after a restart"
   Ui-Mark
   Ui-Step 'Shaded with Visible Edges Only (Shift+F6)' { Ui-Key 'shift+F6' }
   Expect-States 'on' 'on' 'Shaded with Visible Edges Only' "${Layout}: the default style again"

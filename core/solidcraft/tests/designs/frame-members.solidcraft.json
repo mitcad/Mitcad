@@ -1,0 +1,110 @@
+{
+  "format": "solidcraft/58",
+  "name": "Frame members",
+  "units": "mm",
+  "params": [
+    {"name": "rail", "expr": "200 mm", "unit": "mm"},
+    {"name": "d1", "expr": "rail", "unit": "mm", "model": true}
+  ],
+  "features": [
+    {
+      "id": 1, "name": "Route", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+        "curves": [],
+        "constraints": [],
+        "wires": [
+          {"id": "w1", "space": "component", "fit": [[0, 0, 0], [100, 0, 0]], "pts": [[0, 0, 0], [100, 0, 0]]},
+          {"id": "w2", "space": "component", "fit": [[100, 0, 0], [100, 0, 80]], "pts": [[100, 0, 0], [100, 0, 80]]}
+        ]
+      }
+    },
+    {
+      "id": 2, "name": "Tubes", "type": "frame_member", "path_sketch": 1,
+      "profile": {"source": "library", "profile": {"kind": "round_tube", "diameter": "20", "wall": "2"}},
+      "body_name": "Tube"
+    },
+    {
+      "id": 3, "name": "Rails", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+        "curves": [],
+        "constraints": [],
+        "wires": [
+          {"id": "w1", "space": "component", "fit": [[0, 100, 0], [200, 100, 0]], "pts": [[0, 100, 0], [200, 100, 0]]}
+        ],
+        "wire_constraints": [
+          {"id": "k1", "type": "fix", "p": {"wire": "w1", "index": 0}, "at": [0, 100, 0]},
+          {"id": "k2", "type": "along_axis", "line": "w1", "axis": "x"},
+          {"id": "k3", "type": "distance", "a": {"wire": "w1", "index": 0}, "b": {"wire": "w1", "index": 1},
+           "value": 200, "param": "d1"}
+        ],
+        "wires_joined": true
+      }
+    },
+    {
+      "id": 4, "name": "Rail", "type": "frame_member", "path_sketch": 3, "lines": ["w1"],
+      "profile": {"source": "library", "profile": {"kind": "rect_tube", "width": "40", "height": "20", "wall": "2",
+                  "outer_radius": "0", "inner_radius": "0"}},
+      "angle": "30", "names": {"w1": "Top rail"}
+    },
+    {
+      "id": 5, "name": "Profile", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "a", "pos": [10.0, 0.0], "fixed": true},
+          {"id": "b", "pos": [10.0, 10.0], "fixed": true},
+          {"id": "c", "pos": [0.0, 10.0], "fixed": true},
+          {"id": "m", "pos": [5.0, 5.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 0, "b": 1},
+          {"id": "l2", "type": "line", "a": 1, "b": 2},
+          {"id": "l3", "type": "line", "a": 2, "b": 3},
+          {"id": "l4", "type": "line", "a": 3, "b": 0},
+          {"id": "c1", "type": "circle", "c": 4, "r": 2.0}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 6, "name": "Posts", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+        "curves": [],
+        "constraints": [],
+        "wires": [
+          {"id": "w1", "fit": [[300, 0, 0], [300, 0, 50]], "pts": [[300, 0, 0], [300, 0, 50]]}
+        ]
+      }
+    },
+    {
+      "id": 7, "name": "Post", "type": "frame_member", "path_sketch": 6,
+      "profile": {"source": "sketch", "sketch": 5}, "mirror": true
+    },
+    {
+      "id": 8, "name": "Base", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [0.0, -100.0], "fixed": true},
+          {"id": "p2", "pos": [100.0, -100.0], "fixed": true}
+        ],
+        "curves": [{"id": "l1", "type": "line", "a": 1, "b": 2}],
+        "constraints": []
+      }
+    },
+    {
+      "id": 9, "name": "Beam", "type": "frame_member", "path_sketch": 8,
+      "profile": {"source": "library", "profile": {"kind": "bar", "width": "10", "height": "6"}},
+      "anchor": "top"
+    }
+  ],
+  "next_id": 10
+}

@@ -187,6 +187,10 @@ fn a_line_across_the_face_creates_two_profiles_without_a_closed_sketch_loop() {
     assert!(sketch(&doc, "F3")["regions"].as_array().unwrap().is_empty());
 }
 
+/// A sketch circle about the whole face is one disc: the face's edge
+/// inside it splits nothing (mitcad#2197). The ring the edge cut off it
+/// before (a key with the face's edge in a hole) still means that ring on
+/// the face, but not the whole circle once the sketch is off the face.
 #[test]
 fn a_face_boundary_in_a_hole_cannot_rebind_to_the_whole_sketch_circle() {
     let (mut doc, _, _) = circle_face();
@@ -196,18 +200,33 @@ fn a_face_boundary_in_a_hole_cannot_rebind_to_the_whole_sketch_circle() {
     );
     let value = sketch(&doc, "F3");
     let regions = value["regions"].as_array().unwrap();
-    assert_eq!(regions.len(), 2, "{value}");
-    let ring = regions
+    assert_eq!(regions.len(), 1, "{value}");
+    assert_eq!(regions[0]["loops"].as_array().unwrap().len(), 1, "{value}");
+    assert!((regions[0]["area"].as_f64().unwrap() - PI * 1600.0).abs() < 1e-6);
+    let whole = regions[0]["key"].clone();
+    assert!(!whole.as_str().unwrap().contains("b{E{"), "{whole}");
+    // The ring of the rule before.
+    let output = doc.sketch_output(FeatureUid(3)).unwrap();
+    let ring = output
+        .own
+        .earlier()
         .iter()
-        .find(|r| r["loops"].as_array().unwrap().len() == 2)
-        .unwrap();
-    let key = ring["key"].clone();
+        .find(|r| r.profile.loops.len() == 2)
+        .unwrap_or_else(|| panic!("{:?}", output.own.earlier()));
+    let key = json!(ring.profile.key.to_string());
     assert!(key.as_str().unwrap().contains("b{E{"));
+    let found = query(
+        &doc,
+        json!({"query": "profile", "sketch": "F3", "region": key}),
+    );
+    assert_eq!(found["region"], key, "{found}");
     command(
         &mut doc,
         json!({"cmd": "sketch.redefine_plane", "sketch": "F3", "plane": "xy"}),
     );
-    assert_eq!(sketch(&doc, "F3")["regions"].as_array().unwrap().len(), 1);
+    let value = sketch(&doc, "F3");
+    assert_eq!(value["regions"].as_array().unwrap().len(), 1);
+    assert_eq!(value["regions"][0]["key"], whole, "{value}");
     assert!(
         query(
             &doc,
@@ -229,7 +248,9 @@ fn a_tangent_own_circle_survives_losing_its_face_edge_neighbor() {
     assert_eq!(regions.len(), 2, "{value}");
     let own = regions.iter().find(|r| r["face_bounded"] != true).unwrap();
     let key = own["key"].clone();
-    assert!(key.as_str().unwrap().contains("b{E{"), "{key}");
+    // Keyed by its circle alone: the face's edge that touches it is not
+    // part of an area the sketch's own curves close (mitcad#2197).
+    assert!(!key.as_str().unwrap().contains("b{E{"), "{key}");
     command(
         &mut doc,
         json!({"cmd": "sketch.redefine_plane", "sketch": "F3", "plane": "xy"}),
@@ -249,6 +270,9 @@ fn a_tangent_own_circle_survives_losing_its_face_edge_neighbor() {
 /// key its circles alone give it (a design saved before the face's edges
 /// bounded profiles): the extrude takes the whole ring, as saved, not the
 /// face-bounded piece most like it (mitcad#1182, an extra lobe on reopen).
+/// Since mitcad#2197 the face's edge does not split the ring at all: it is
+/// one region under that key, and the pieces of the rule before stay
+/// found by theirs.
 #[test]
 fn a_whole_sketch_region_across_the_face_edge_keeps_its_reference() {
     let (mut doc, _, edge) = circle_face();
@@ -275,11 +299,24 @@ fn a_whole_sketch_region_across_the_face_edge_keeps_its_reference() {
         .iter()
         .map(|r| r["key"].as_str().unwrap())
         .collect();
-    assert!(!keys.contains(&whole.as_str()), "{keys:?}");
+    assert!(keys.contains(&whole.as_str()), "{keys:?}");
     assert!(
-        keys.iter()
-            .any(|k| k.starts_with(&format!("r{{{outer},")) && k.contains(&edge.to_string())),
+        !keys.iter().any(|k| k.contains(&edge.to_string())),
         "{keys:?}"
+    );
+    let earlier: Vec<String> = doc
+        .sketch_output(FeatureUid(3))
+        .unwrap()
+        .own
+        .earlier()
+        .iter()
+        .map(|r| r.profile.key.to_string())
+        .collect();
+    assert!(
+        earlier
+            .iter()
+            .any(|k| k.starts_with(&format!("r{{{outer},")) && k.contains(&edge.to_string())),
+        "{earlier:?}"
     );
     command(
         &mut doc,

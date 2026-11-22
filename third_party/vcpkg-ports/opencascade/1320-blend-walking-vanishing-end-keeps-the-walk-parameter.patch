@@ -33,10 +33,8 @@ twice the 3D point tolerance of each other (the blend vanishing there),
 whatever the surfaces and radii. The change is a wrong overload's
 argument, with no size of its own.
 
-Test: geometry/tests/test_fillet_vanishing_side.cpp, the reported plate's
-sides rounded on the body MitCad builds: the result is valid and its faces
-lie on the stored body after the rounding within 0.01 mm (invalid without
-the patch, the faces' wires crossing at both vanishing ends).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1320.
 
 Upstream: new.
 

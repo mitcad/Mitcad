@@ -260,6 +260,58 @@ int cutTargetsTests() {
   preview({}, 0);
   check(status && status->text() == QStringLiteral("No eligible components intersect the cut."),
         "a miss both ways does not suggest Flip");
+
+  // The list's line (mitcad#2118): "Updating affected components…" only
+  // while a preview computes; a preview that failed before its cut's
+  // targets were found gives the failure in words, without names; inputs
+  // that make no cut yet say so.
+  const QString updating = QStringLiteral("Updating affected components…");
+  mitcad::CutTargetsPanel lone;
+  auto* line = lone.findChild<QLabel*>(QStringLiteral("cut_targets_status"));
+  auto* rows = lone.findChild<QTreeWidget*>(QStringLiteral("cut_targets_list"));
+  check(line != nullptr && rows != nullptr, "the list has its line and its rows");
+  if (line != nullptr && rows != nullptr) {
+    lone.setPreviewResult({});
+    check(line->text() != updating, "stale, no preview computing: not updating");
+    lone.setComputing(true);
+    check(line->text() == updating, "a preview computing: updating");
+    lone.setPreviewResult({});
+    check(line->text() == updating, "stale while it computes: still updating");
+    lone.setComputing(false);
+    lone.setPreviewResult(
+        {{QStringLiteral("status"), QStringLiteral("error")},
+         {QStringLiteral("error"),
+          QStringLiteral("the target lies behind the start of the sweep\n[placed: {\"faces\":[\"F4:side(c1)\"]}]")}});
+    check(line->text() == QStringLiteral("Affected components could not be found: the target lies behind the start "
+                                         "of the sweep"),
+          "a failure without cut targets in words");
+    check(!line->text().contains(QStringLiteral("F4")) && !line->text().contains(QStringLiteral("placed")),
+          "no names or places in it");
+    check(!rows->isEnabled(), "its rows are off");
+    lone.setPreviewResult({{QStringLiteral("status"), QStringLiteral("incomplete")}});
+    check(line->text() == QStringLiteral("Affected components show once the inputs make a cut."),
+          "inputs that make no cut yet");
+    lone.setComputing(true);
+    check(line->text() == updating, "a new preview computing: updating");
+    lone.setComputing(false);
+    lone.setPreviewResult({{QStringLiteral("status"), QStringLiteral("ok")},
+                           {QStringLiteral("cut_targets"),
+                            QJsonObject{{QStringLiteral("rows"), QJsonArray{candidate(QStringLiteral("C2"), QStringLiteral("O2"), true)}},
+                                        {QStringLiteral("selected_components"), 1},
+                                        {QStringLiteral("selected_bodies"), 1},
+                                        {QStringLiteral("can_commit"), true}}}});
+    check(line->text() == QStringLiteral("1 component selected (1 body)") && rows->isEnabled(),
+          "a result's targets listed");
+    lone.setPreviewResult({{QStringLiteral("status"), QStringLiteral("error")},
+                           {QStringLiteral("error"), QStringLiteral("does not cut into any participant body")},
+                           {QStringLiteral("cut_targets"),
+                            QJsonObject{{QStringLiteral("rows"), QJsonArray{}},
+                                        {QStringLiteral("selected_components"), 0},
+                                        {QStringLiteral("selected_bodies"), 0},
+                                        {QStringLiteral("can_commit"), false}}}});
+    check(line->text() == QStringLiteral("No eligible components intersect the cut."),
+          "a failure with its cut targets keeps the list's own line");
+  }
   failures += hiddenTargetsTests();
   failures += movingTargetsTests();
   return failures;

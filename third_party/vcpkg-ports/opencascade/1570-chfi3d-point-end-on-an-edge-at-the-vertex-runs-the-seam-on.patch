@@ -23,11 +23,8 @@ PerformFilletOnVertex now runs the seam on for a lone stripe ending so
 (ChFi3d_SeamRunOnAtPointEnd, both end points on one edge at the vertex),
 with patch 1331's ChFi3d_SeamRunOnAlongEdge, made visible to it.
 
-Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
-picked at its other side (y = -25) rounded with 1, 3 and 6, alone and with
-the boss's top edge, on the synthetic bodies and on the body MitCad's UI
-builds from a slot and a circle (MITCAD_GEOMETRY_CASES): valid, the
-material removed as the exact one within 1e-6 of it.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1570.
 
 Upstream: new.
 

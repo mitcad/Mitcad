@@ -451,6 +451,9 @@ CommandDef surfaceSweepCommand(const CommandContext& context) {
 
 const QString kLoftRails = QStringLiteral("rails");
 
+// Tangent Edges (mitcad#2162), as the solid Loft's.
+const QString kLoftTangentEdges = QStringLiteral("tangent_edges");
+
 CommandDef surfaceLoftCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.loft", QObject::tr("Surface Loft"), "surface-loft",
                                   QObject::tr("A surface through sections in order: sketch curves or profiles"));
@@ -485,6 +488,10 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("From the last section back to the first")),
       checkInput(QStringLiteral("ruled"), QObject::tr("Ruled"), false)
           .withTooltip(QObject::tr("Straight between neighboring sections")),
+      choiceInput(kLoftTangentEdges, QObject::tr("Tangent Edges"),
+                  {{QStringLiteral("merge"), QStringLiteral("Merge")}, {QStringLiteral("keep"), QStringLiteral("Keep")}},
+                  QStringLiteral("merge"))
+          .withTooltip(QObject::tr("Merge: a section's smoothly joined curves make one face; Keep: a face per curve")),
   };
   // A 3D sketch alone enables it (mitcad#1550).
   def.enabled = [&context] { return hasSketches(context, true); };
@@ -545,6 +552,10 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
     if (state.checked(QStringLiteral("ruled"))) {
       definition.insert(QStringLiteral("ruled"), true);
     }
+    // Keep is the field left out (mitcad#2162).
+    if (state.choice(kLoftTangentEdges) == QStringLiteral("merge")) {
+      definition.insert(kLoftTangentEdges, QStringLiteral("merge"));
+    }
     result.def = definition;
     return result;
   };
@@ -575,6 +586,10 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
     state.setChecked(QStringLiteral("chain"), chain);
     state.setChecked(QStringLiteral("closed"), feature.value(QStringLiteral("closed")).toBool());
     state.setChecked(QStringLiteral("ruled"), feature.value(QStringLiteral("ruled")).toBool());
+    // A surface loft without the field keeps its tangent edges (mitcad#2162).
+    state.setChoice(kLoftTangentEdges, feature.value(kLoftTangentEdges).toString() == QStringLiteral("merge")
+                                           ? QStringLiteral("merge")
+                                           : QStringLiteral("keep"));
   };
   // Sections of one curve each (chained) or profiles, and rails of curves
   // or edges chained alike (one Chain Selection holds them), without end
@@ -1595,6 +1610,37 @@ std::optional<Selection> singleCurveItems(const QJsonArray& entries, const Comma
   return items;
 }
 
+// The sketches of the sketch curves, in the order their first curves were
+// picked (mitcad#2198: a loop may run through several sketches).
+QStringList curveSketches(const Selection& items) {
+  QStringList sketches;
+  for (const SelectionItem& item : items) {
+    if (item.kind == SelectKind::SketchCurve && !sketches.contains(item.owner)) {
+      sketches << item.owner;
+    }
+  }
+  return sketches;
+}
+
+// The sketch curves of one sketch among the items.
+Selection curvesOf(const Selection& items, const QString& sketch) {
+  Selection own;
+  for (const SelectionItem& item : items) {
+    if (item.kind == SelectKind::SketchCurve && item.owner == sketch) {
+      own.append(item);
+    }
+  }
+  return own;
+}
+
+// Whether a planar sketch's curves are among the items: Tangent to Sketch
+// Plane is for those (a 3D sketch has no one plane).
+bool hasPlanarCurves(const Selection& items, const CommandContext& context) {
+  const QStringList sketches = curveSketches(items);
+  return std::any_of(sketches.begin(), sketches.end(),
+                     [&context](const QString& sketch) { return !isSpatialSketch(sketch, context); });
+}
+
 CommandDef boundarySurfaceCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.boundary", QObject::tr("Boundary Surface"), "boundary-surface",
                                   QObject::tr("A surface filling a loop of curves, or through a network of curves"));
@@ -1606,14 +1652,17 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
       choiceInput(QStringLiteral("mode"), QObject::tr("Type"),
                   {{kLoop, QStringLiteral("Fill a Loop")}, {kNetwork, QStringLiteral("Network")}}, kLoop),
       selectionInput(QStringLiteral("curves"), QObject::tr("Boundary Curves"), SelectKind::SketchCurve, 0, 0)
-          .withTooltip(QObject::tr("Sketch curves of one sketch round the loop"))
+          .withTooltip(QObject::tr("Sketch curves round the loop, of one sketch or several, 3D sketches too"))
           .withVisible(loop),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
           .withTooltip(QObject::tr("Also take the curves joined to the selected ones"))
           .withVisible(loop),
+      // Only while a planar sketch's curves are picked (mitcad#2198).
       checkInput(QStringLiteral("tangent"), QObject::tr("Tangent to Sketch Plane"), false)
-          .withTooltip(QObject::tr("The surface leaves the curves along their sketch's plane"))
-          .withVisible(loop),
+          .withTooltip(QObject::tr("The surface leaves the curves of planar sketches along their sketch's plane"))
+          .withVisible([loop, &context](const CommandState& state) {
+            return loop(state) && hasPlanarCurves(state.items(QStringLiteral("curves")), context);
+          }),
       selectionInput(QStringLiteral("edges"), QObject::tr("Boundary Edges"), SelectKind::Edge, 0, 0)
           .withTooltip(QObject::tr("Edges of one body round the loop, open edges of a surface body too"))
           .withoutMeshes()
@@ -1624,9 +1673,14 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("Faces of a surface body: their open edges close the loop"))
           .withoutMeshes()
           .withVisible(loop),
+      // How the surface meets the faces beside the edges: only while edges
+      // are picked (mitcad#2198); sketch curves have Tangent to Sketch Plane.
       choiceInput(QStringLiteral("continuity"), QObject::tr("Edge Continuity"), kContinuity,
                   QStringLiteral("g0"))
-          .withVisible(loop),
+          .withVisible([loop](const CommandState& state) {
+            return loop(state) && (!state.items(QStringLiteral("edges")).isEmpty() ||
+                                   !state.items(QStringLiteral("open_faces")).isEmpty());
+          }),
       selectionInput(QStringLiteral("u"), QObject::tr("Curves One Way"), SelectKind::SketchCurve, 0, 0)
           .withTooltip(QObject::tr("Two or more, the surface lofted through them in order"))
           .withVisible(network),
@@ -1634,8 +1688,9 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("None, or two or more crossing every curve one way"))
           .withVisible(network),
   };
-  def.enabled = [&context] { return hasSketches(context) || hasBodies(context); };
-  def.build = [](const CommandState& state, const CommandContext&) {
+  // Any sketch, 3D sketches too (mitcad#2198), or a body.
+  def.enabled = [&context] { return hasSketches(context, true) || hasBodies(context); };
+  def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
     QJsonObject definition{{QStringLiteral("type"), QStringLiteral("boundary_surface")}};
     if (state.choice(QStringLiteral("mode")) == kNetwork) {
@@ -1653,19 +1708,18 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
       }
       return Built::of(definition);
     }
+    // One entry for each sketch's curves (mitcad#2198), planar or 3D; the
+    // model joins them end to end in the loop's order and refuses a loop
+    // that does not close. Tangent to Sketch Plane for the planar ones.
     QJsonArray boundary;
     const Selection& curves = state.items(QStringLiteral("curves"));
-    if (!curves.isEmpty()) {
-      const QString sketch = oneSketch(curves, result, QStringLiteral("curves"));
-      if (sketch.isEmpty()) {
-        return result;
-      }
+    for (const QString& sketch : curveSketches(curves)) {
       QJsonObject entry{{QStringLiteral("sketch"), sketch},
-                        {QStringLiteral("curves"), names(curves, SelectKind::SketchCurve)}};
+                        {QStringLiteral("curves"), names(curvesOf(curves, sketch), SelectKind::SketchCurve)}};
       if (state.checked(QStringLiteral("chain"))) {
         entry.insert(QStringLiteral("chain"), true);
       }
-      if (state.checked(QStringLiteral("tangent"))) {
+      if (state.checked(QStringLiteral("tangent")) && !isSpatialSketch(sketch, context)) {
         entry.insert(QStringLiteral("continuity"), kG1);
       }
       boundary.append(entry);
@@ -1700,38 +1754,64 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
       return;
     }
     state.setChoice(QStringLiteral("mode"), kLoop);
+    // Every sketch's curves into Boundary Curves (mitcad#2198); canEdit
+    // holds their entries to one Chain Selection and one Tangent to Sketch
+    // Plane (a 3D sketch's are never tangent).
+    Selection curves;
+    bool tangent = false;
     for (const QJsonValue& value : feature.value(QStringLiteral("boundary")).toArray()) {
       const QJsonObject entry = value.toObject();
       if (entry.contains(QStringLiteral("sketch"))) {
-        bool chain = false;
-        if (const auto items = pathItems(entry, context, &chain)) {
-          state.setItems(QStringLiteral("curves"), *items);
+        if (const auto items = pathItems(entry, context)) {
+          curves += *items;
         }
         state.setChecked(QStringLiteral("chain"), entry.value(QStringLiteral("chain")).toBool());
-        state.setChecked(QStringLiteral("tangent"), str(entry, "continuity") == kG1);
+        tangent = tangent || str(entry, "continuity") == kG1;
       } else {
         loadEdgesOf(entry, state, context, QStringLiteral("edges"), QStringLiteral("open_faces"));
         const QString continuity = str(entry, "continuity");
         state.setChoice(QStringLiteral("continuity"), continuity.isEmpty() ? QStringLiteral("g0") : continuity);
       }
     }
+    if (!curves.isEmpty()) {
+      state.setItems(QStringLiteral("curves"), curves);
+    }
+    state.setChecked(QStringLiteral("tangent"), tangent);
   };
-  // The panel shows one chain of one sketch's curves and one chain of a
-  // body's edges, open edges of its faces and its openings (loop), or
-  // single curves (network).
+  // The panel shows the curves of one sketch or several (each sketch's in
+  // one entry, all chained or none, the planar ones all tangent to their
+  // planes or none, a 3D sketch's never) and one chain of a body's edges,
+  // open edges of its faces and its openings (loop), or single curves
+  // (network).
   def.canEdit = [&context](const QJsonObject& feature) {
     if (feature.contains(QStringLiteral("u"))) {
       return singleCurveItems(feature.value(QStringLiteral("u")).toArray(), context).has_value() &&
              singleCurveItems(feature.value(QStringLiteral("v")).toArray(), context).has_value();
     }
-    int sketches = 0;
+    QStringList sketches;
+    std::optional<bool> chain;
+    std::optional<bool> tangent;
     int bodies = 0;
     for (const QJsonValue& value : feature.value(QStringLiteral("boundary")).toArray()) {
       const QJsonObject entry = value.toObject();
       if (entry.contains(QStringLiteral("sketch"))) {
+        const QString sketch = str(entry, "sketch");
         const QString continuity = str(entry, "continuity");
-        if (++sketches > 1 || !(continuity.isEmpty() || continuity == kG1)) {
+        const bool chained = entry.value(QStringLiteral("chain")).toBool();
+        const bool tangential = continuity == kG1;
+        if (sketches.contains(sketch) || !(continuity.isEmpty() || tangential) || (chain && *chain != chained)) {
           return false;
+        }
+        sketches << sketch;
+        chain = chained;
+        if (isSpatialSketch(sketch, context)) {
+          if (tangential) {
+            return false;
+          }
+        } else if (tangent && *tangent != tangential) {
+          return false;
+        } else {
+          tangent = tangential;
         }
       } else if (entry.contains(QStringLiteral("point")) || entry.contains(QStringLiteral("face")) ||
                  ++bodies > 1 || !sheetEdgesEditable(entry)) {

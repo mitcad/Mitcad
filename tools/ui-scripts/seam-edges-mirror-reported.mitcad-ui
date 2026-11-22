@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Seam edges between a sweep's pieces (mitcad#2148, GitHub mitcad/Mitcad#516)
+# on the reported design of the private test files (MITCAD_MITCAD_REPORTED,
+# github-515/; never committed): the line-and-arc sweep mirrored in a plane
+# through its straight part and joined (F3.b0), the copy's torus branching
+# off the shared cylinder. The circle between the cylinder and the torus is
+# drawn on the original as on the copy; the counts are logged.
+# Run by tools/ui-seam-edges-test.sh when the design is there.
+expect-ever 'View area'
+wait-idle
+
+expect-view-seams F3.b0 4+ 1+

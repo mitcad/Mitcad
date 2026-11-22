@@ -182,6 +182,13 @@ struct FileOut<'a> {
     // Sketch blocks (mitcad#2110), when there are any.
     #[serde(skip_serializing_if = "<[crate::sketch::block::SketchBlock]>::is_empty")]
     sketch_blocks: &'a [crate::sketch::block::SketchBlock],
+    // The user parameters' groups (mitcad#2180), when there are any: every
+    // group's path, also of those that hold no parameter, in their order.
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    parameter_groups: &'a [String],
+    // Selection sets (mitcad#2192), when there are any.
+    #[serde(skip_serializing_if = "<[crate::document::SelectionSet]>::is_empty")]
+    selection_sets: &'a [crate::document::SelectionSet],
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -305,6 +312,9 @@ struct ParameterOut<'a> {
     // Favourite parameters (P9).
     #[serde(skip_serializing_if = "is_false")]
     favorite: bool,
+    // A user parameter's group (mitcad#2180), when it is in one.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    group: &'a str,
     // Limits (mitcad#665).
     #[serde(skip_serializing_if = "Option::is_none")]
     min: Option<&'a str>,
@@ -430,6 +440,7 @@ pub(super) fn save_with(
                 comment: p.comment(),
                 owner: parameters.owner(p.id()),
                 favorite: state.favorites.contains(&p.id()),
+                group: state.parameter_groups.group_of(p.id()).unwrap_or_default(),
                 min: p.limits().min.as_deref(),
                 max: p.limits().max.as_deref(),
                 step: p.limits().step.as_deref(),
@@ -600,6 +611,8 @@ pub(super) fn save_with(
         gravity: &state.gravity,
         cam: &state.cam,
         sketch_blocks: &state.sketch_blocks,
+        parameter_groups: state.parameter_groups.paths(),
+        selection_sets: &state.selection_sets,
         statistics,
         preview,
     };
@@ -776,6 +789,9 @@ struct ParameterIn {
     owner: Option<FeatureUid>,
     #[serde(default)]
     favorite: bool,
+    // A user parameter's group (mitcad#2180); none in older files.
+    #[serde(default)]
+    group: String,
     // Limits (mitcad#665).
     #[serde(default)]
     min: Option<String>,
@@ -925,7 +941,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 49] = [
+const TOP_FIELDS: [&str; 51] = [
     "format",
     "version",
     "units",
@@ -1002,6 +1018,10 @@ const TOP_FIELDS: [&str; 49] = [
     "cam",
     // Sketch blocks (mitcad#2110).
     "sketch_blocks",
+    // The user parameters' groups (mitcad#2180).
+    "parameter_groups",
+    // Selection sets (mitcad#2192).
+    "selection_sets",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1725,6 +1745,20 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             cam
         }
     };
+    // The user parameters' groups (mitcad#2180): their paths, in order;
+    // the parameters say which one each is in.
+    let group_paths = array(&mut top, "parameter_groups", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| match value {
+            Value::String(path) => Ok(path),
+            _ => Err(schema(format!("parameter_groups[{i}]: not a text"))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let parameter_groups = crate::parameter_groups::ParameterGroups::from_paths(
+        group_paths.iter().map(String::as_str),
+    )
+    .map_err(|e| invalid(format!("parameter_groups: {e}")))?;
     // Sketch blocks (mitcad#2110): names unique, nesting without a cycle.
     let sketch_blocks = array(&mut top, "sketch_blocks", false)?
         .into_iter()
@@ -1736,6 +1770,27 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         .collect::<Result<Vec<_>, _>>()?;
     crate::sketch::block::check_blocks(&sketch_blocks)
         .map_err(|e| invalid(format!("sketch_blocks: {e}")))?;
+    // Selection sets (mitcad#2192): names once each; members whose items
+    // are gone are left out once the state is read.
+    let selection_sets = array(&mut top, "selection_sets", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            serde_json::from_value::<crate::document::SelectionSet>(value)
+                .map_err(|e| schema(format!("selection_sets[{i}]: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (i, set) in selection_sets.iter().enumerate() {
+        if set.name.trim().is_empty() {
+            return Err(invalid(format!("selection_sets[{i}]: the name is empty")));
+        }
+        if selection_sets[..i].iter().any(|s| s.name == set.name) {
+            return Err(invalid(format!(
+                "selection_sets[{i}]: selection set {} is listed more than once",
+                set.name
+            )));
+        }
+    }
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -1824,6 +1879,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
 
     let mut state = DocState {
         tables,
+        parameter_groups,
         ..DocState::default()
     };
     let mut warnings = Vec::new();
@@ -2226,6 +2282,8 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.gravity = gravity;
     state.cam = cam;
     state.sketch_blocks = sketch_blocks;
+    state.selection_sets = selection_sets;
+    state.prune_selection_sets();
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(
@@ -2693,6 +2751,25 @@ fn load_parameters(
             .find(renamed.get(&p.name).unwrap_or(&p.name))
         {
             state.favorites.insert(id);
+        }
+    }
+    // The user parameters' groups (mitcad#2180): a model parameter's is
+    // left out, as a command never gives it one.
+    for (i, p) in parameters.iter().enumerate() {
+        if p.group.is_empty() {
+            continue;
+        }
+        let group = crate::parameter_groups::group_path(&p.group)
+            .map_err(|e| invalid(format!("parameters[{i}].group: {e}")))?;
+        if let Some(id) = state
+            .parameters
+            .find(renamed.get(&p.name).unwrap_or(&p.name))
+            && state
+                .parameters
+                .get(id)
+                .is_some_and(|param| param.kind() == crate::expr::ParamKind::User)
+        {
+            state.parameter_groups.set(id, &group);
         }
     }
     Ok(renamed)

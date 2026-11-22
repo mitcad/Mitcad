@@ -529,11 +529,13 @@ pub struct ViewAnnotation {
     pub line_offset: Option<f64>,
     /// The text's shift from its default place, paper mm (along and across
     /// a dimension line); a leader's text, a datum's square, a frame, a
-    /// finish symbol from the arrow's point.
+    /// finish symbol from the arrow's point; a hole callout's on a circle
+    /// seen end on from the circle's centre (`text_from_center`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_offset: Option<P2>,
     /// Where on the view (view mm) a leader's pick was clicked: its arrow
-    /// points at the pick's point nearest it.
+    /// points at the pick's point nearest it (not a hole callout's on a
+    /// circle seen end on kept from its centre: `text_from_center`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<P2>,
     #[serde(default, skip_serializing_if = "AnnotationFormat::is_default")]
@@ -586,6 +588,20 @@ pub struct ViewAnnotation {
     /// annotation is not brought into that sheet's views again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept_from: Option<String>,
+    /// A hole callout's text kept from its hole's centre (mitcad#2212):
+    /// on a circle seen end on, `text_offset` is the leader's shoulder from
+    /// the circle's centre and the arrow lands where the line from the
+    /// shoulder to the centre crosses the circle. Unset (a callout written
+    /// before, one kept from the model): `text_offset` is from where its
+    /// arrow was (the circle's point nearest `at`, else its point at 0°),
+    /// read so when laid out (the text stays where it was drawn, the arrow
+    /// points at the centre) and stored from the centre at its next move.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub text_from_center: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// A text note on the sheet, without a leader.
@@ -645,6 +661,7 @@ impl ViewAnnotation {
             tip_along: None,
             terminator: None,
             kept_from: None,
+            text_from_center: false,
         }
     }
 
@@ -727,6 +744,12 @@ impl ViewAnnotation {
         }
         if self.terminator.is_some() && kind != AnnotationType::Datum {
             return Err(format!("a {name} has no terminator: a datum label has"));
+        }
+        if self.text_from_center && kind != AnnotationType::HoleCallout {
+            return Err(format!(
+                "a {name} keeps its text from its arrow: a hole callout keeps it from its hole's \
+                 centre"
+            ));
         }
         if kind.is_dimension() {
             crate::document::check_format(&self.format)?;

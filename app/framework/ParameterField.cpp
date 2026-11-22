@@ -54,6 +54,7 @@
 #include <QtLogging>
 
 #include "Dialogs.hpp"
+#include "ExpressionCheck.hpp"
 #include "FormulaEditor.hpp"
 #include "LengthUnits.hpp"
 #include "ParameterUnits.hpp"
@@ -195,6 +196,14 @@ public:
     setErrorStyleSheet(m_error);
     form->addRow(tr("Name"), m_name);
     form->addRow(tr("Expression"), m_expression);
+    // What is wrong with the expression, under it while it is typed
+    // (mitcad#2181).
+    m_expressionProblem = new QLabel;
+    m_expressionProblem->setObjectName(QStringLiteral("createParameterExpressionProblem"));
+    m_expressionProblem->setWordWrap(true);
+    m_expressionProblem->hide();
+    setErrorStyleSheet(m_expressionProblem);
+    form->addRow(QString(), m_expressionProblem);
     form->addRow(tr("Unit"), m_unit);
     form->addRow(tr("Comment"), m_comment);
     form->addRow(m_error);
@@ -217,6 +226,10 @@ public:
       m_use->hide();
       m_error->clear();
     });
+    // The expression checked while it is typed and when the unit changes
+    // (mitcad#2181): Create stays disabled while the design would refuse it.
+    connect(m_expression, &QLineEdit::textChanged, this, [this] { checkExpression(); });
+    connect(m_unit, &QComboBox::currentTextChanged, this, [this] { checkExpression(); });
     if (m_setup.name.isEmpty()) {
       m_name->setFocus();
     } else {
@@ -291,6 +304,32 @@ private:
     qDebug().noquote() << QStringLiteral("Add User Parameter %1 refused: %2").arg(name, problem);
   }
 
+  // The expression as the design would take it (mitcad#2181): what is
+  // wrong in words under the field, the part it is about marked in the
+  // field, and Create disabled while it is wrong.
+  void checkExpression() {
+    const QString unit = unitOfBox(m_unit);
+    const QString typed = m_expression->text();
+    const std::function<QJsonObject(const QJsonObject&)> query =
+        m_setup.source != nullptr ? m_setup.source->query : std::function<QJsonObject(const QJsonObject&)>();
+    const ExpressionProblem problem =
+        mitcad::checkExpression(query, typed, numberWithUnit(typed.trimmed(), unit), unit);
+    m_expressionProblem->setText(problem.message);
+    m_expressionProblem->setVisible(!problem.isEmpty());
+    markExpressionRange(m_expression, problem.start, problem.end);
+    m_create->setEnabled(problem.isEmpty());
+    const QString logged = problem.isEmpty()
+                               ? QStringLiteral("none")
+                               : QStringLiteral("%1 (marked %2..%3)").arg(problem.message).arg(problem.start).arg(problem.end);
+    if (logged != m_loggedProblem) {
+      m_loggedProblem = logged;
+      qDebug().noquote() << QStringLiteral("Add User Parameter expression problem: %1; Create %2")
+                                .arg(logged, problem.isEmpty() ? QStringLiteral("enabled") : QStringLiteral("disabled"));
+    }
+  }
+
+  QLabel* m_expressionProblem = nullptr;
+  QString m_loggedProblem = QStringLiteral("none");
   Setup m_setup;
   QLineEdit* m_name = nullptr;
   QLineEdit* m_expression = nullptr;
@@ -377,6 +416,7 @@ ParameterField* ParameterField::attach(QLineEdit* edit, ParameterFieldOptions op
   }
   if (ParameterField* existing = of(edit)) {
     existing->m_options = std::move(options);
+    existing->updateFxTip();
     return existing;
   }
   return new ParameterField(edit, std::move(options));
@@ -391,12 +431,20 @@ ParameterField::ParameterField(QLineEdit* edit, ParameterFieldOptions options)
   setObjectName(QStringLiteral("parameterField"));
   m_fx = new QAction(edit);
   m_fx->setObjectName(QStringLiteral("parameterFx"));
-  m_fx->setToolTip(m_options.naming
-                       ? tr("Insert a parameter (fx), or type part of its name. name = value names this value.")
-                       : tr("Insert a parameter (fx). Type part of a name to see the parameters."));
+  updateFxTip();
   updateIcon();
   edit->addAction(m_fx, QLineEdit::TrailingPosition);
-  connect(m_fx, &QAction::triggered, this, [this] { openBrowser(); });
+  connect(m_fx, &QAction::triggered, this, [this] {
+    // Edit Formula through the field's owner (mitcad#2179), else the list.
+    if (m_options.formula) {
+      close();
+      qDebug().noquote() << QStringLiteral("Parameter fx %1: Edit Formula with %2").arg(m_options.label, m_edit->text());
+      const std::function<void(const QString&)> formula = m_options.formula;
+      formula(m_edit->text());
+      return;
+    }
+    openBrowser();
+  });
   connect(edit, &QLineEdit::textEdited, this, [this] { textEdited(); });
   // A name shown again (the field's undo, typed or set): Backspace no
   // longer took it off (mitcad#1614).
@@ -1508,6 +1556,19 @@ void ParameterField::showMenu(const QPoint& at) {
   }
 }
 
+void ParameterField::updateFxTip() {
+  if (m_fx == nullptr) {
+    return;
+  }
+  if (m_options.formula) {
+    m_fx->setToolTip(tr("Edit Formula (fx). Type part of a name to see the parameters."));
+  } else {
+    m_fx->setToolTip(m_options.naming
+                         ? tr("Insert a parameter (fx), or type part of its name. name = value names this value.")
+                         : tr("Insert a parameter (fx). Type part of a name to see the parameters."));
+  }
+}
+
 void ParameterField::updateIcon() {
   if (m_fx != nullptr) {
     m_fx->setIcon(fxIcon(*m_edit));
@@ -1751,6 +1812,10 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
   case QEvent::Resize:
     if (isOpen()) {
       place();
+    }
+    // A cell's editor that grows with its text (mitcad#2179) moves its fx.
+    if (m_edit->hasFocus()) {
+      QTimer::singleShot(0, this, [this] { logFx(); });
     }
     break;
   case QEvent::PaletteChange:

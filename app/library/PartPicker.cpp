@@ -206,6 +206,11 @@ QString partDetails(const PickerPart& shown, int uses, bool rich) {
                               : QStringLiteral("%1 (%2)").arg(shown.libraryName, shown.library);
   text += line(PartGrid::tr("Library:"), QStringList{library, shown.version}.join(QLatin1Char(' ')).trimmed());
   text += line(PartGrid::tr("License:"), shown.license.isEmpty() ? PartGrid::tr("none") : shown.license);
+  // Its library does not allow printing it as a service (mitcad#2214).
+  if (shown.nonPrintable) {
+    const QString noPrint = PartGrid::tr("Not for print services");
+    text += rich ? QStringLiteral("<br><b>%1</b>").arg(noPrint.toHtmlEscaped()) : QStringLiteral("\n") + noPrint;
+  }
   if (uses > 0) {
     text += line(PartGrid::tr("In this design:"), QString(QChar(0x00D7)) + QString::number(uses));
   }
@@ -471,6 +476,7 @@ PickerPart pickerPart(const QJsonObject& component) {
   part.partNumber = str(component, "part_number");
   part.suppliers = componentSuppliers(component);
   part.license = str(component, "license");
+  part.nonPrintable = component.value(QStringLiteral("non_printable")).toBool();
   const QJsonValue preview = component.value(QStringLiteral("preview"));
   part.preview = preview.isBool() ? preview.toBool() : true;
   part.table = component.value(QStringLiteral("configurations")).toObject();
@@ -579,6 +585,7 @@ QList<PickerPart> pickerParts(const QVector<build::Part>& parts) {
       part.description = found->description;
       part.keywords = found->keywords;
       part.license = found->license;
+      part.nonPrintable = found->nonPrintable;
       part.preview = found->preview;
       // A tile of the component (no row): its rows' suppliers.
       if (part.config.isEmpty()) {

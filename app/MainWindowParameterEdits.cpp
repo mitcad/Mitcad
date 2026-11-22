@@ -32,6 +32,7 @@
 #include "framework/CommandRegistry.hpp"
 #include "framework/CommandSession.hpp"
 #include "framework/ParameterEdits.hpp"
+#include "framework/UserText.hpp"
 #ifdef MITCAD_MACOS_NATIVE_UI
 #include "platform/NativeForms.hpp"
 #endif
@@ -130,8 +131,23 @@ ParameterEditScope MainWindow::parameterScope() const {
 }
 
 bool MainWindow::runParameterCommand(const QJsonObject& command) {
-  const ParameterEditScope scope = parameterScope();
   const QString name = command.value(QStringLiteral("name")).toString();
+  // A refusal is about the parameter; a success puts right the errors of
+  // the parameter commands before it (mitcad#2181).
+  m_nextStatusSubject = name.isEmpty() ? QStringLiteral("parameter") : QStringLiteral("parameter/") + name;
+  const bool done = runParameterCommandIn(command, name);
+  m_nextStatusSubject.clear();
+  if (done) {
+    resolveMessages(QStringLiteral("parameter"));
+  } else if (!lastCancelled()) {
+    qDebug().noquote() << QStringLiteral("Parameter command %1 refused: %2")
+                              .arg(command.value(QStringLiteral("cmd")).toString(), agentText(m_lastModelError));
+  }
+  return done;
+}
+
+bool MainWindow::runParameterCommandIn(const QJsonObject& command, const QString& name) {
+  const ParameterEditScope scope = parameterScope();
   if (!scope.editedFeature.isEmpty() && !name.isEmpty()) {
     // The edited feature's own name and expression are its panel's.
     QString owner;

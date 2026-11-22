@@ -41,14 +41,9 @@ make (ChFi3d_IsComputationFailure, 0016) where the corner cannot be cut so:
 no piece is made and the corner is left to OCCT, as the code after the
 handlers reports. Any other failure (a broken invariant, a signal) is
 rethrown.
-Test: geometry/tests/port/p0143-chamfer-corner-beyond-the-common-face.cpp
-(ctest geometry.port.0143): a second geometry to test_chamfer_overflow.cpp's
-hexagon, a square prism under a disc, the edges where its walls meet the
-disc's underside chamfered 2, wider than the underside near the corners:
-built, valid, exact volume, each corner cut by the disc's cylinder where
-the chamfers' intersection meets it, with the cylinder's seam away from the
-corners and on a corner's diagonal; chamfers of 0.8, whose contacts cross
-on the underside, as stock.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0143.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index aa28fd4e..12310284 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

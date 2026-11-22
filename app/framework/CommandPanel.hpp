@@ -59,6 +59,7 @@ public:
   // Counts, checks, choices, list rows and which rows are shown.
   void refresh(const CommandState& state) override;
   void setPreviewReport(const QJsonObject& report) override;
+  void setPreviewComputing(bool computing) override;
   void setActiveSelection(const QString& key) override;
   // A problem with one input, under it; empty clears it.
   void setInputError(const QString& key, const QString& message) override;
@@ -255,6 +256,14 @@ private:
   QString m_messageActionText;
   // A new error or warning not yet scrolled into view (revealMessage).
   bool m_revealMessage = false;
+  // Where in the panel the message box was when it was last brought into
+  // view (its top; -1 for none): the same error again after the rows above
+  // it moved it is brought into view again (mitcad#2118).
+  int m_revealedMessageTop = -1;
+  // Whether the latest change of the inputs was typed in a field (not a
+  // choice, a check or a pick): only then does the field with the keyboard
+  // hold the page for a new message (revealMessage, mitcad#2118).
+  bool m_typed = false;
   QLabel* m_result = nullptr;
   // The answer as rows, when the inspection gives them (mitcad#1010); the
   // label above keeps its text, hidden then.

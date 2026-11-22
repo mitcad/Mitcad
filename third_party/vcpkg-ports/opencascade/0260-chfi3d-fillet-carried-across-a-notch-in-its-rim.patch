@@ -43,12 +43,9 @@ with OCCT's reports of a computation it cannot make
 (ChFi3d_IsComputationFailure, 0016) only where that edge's faces cannot be
 evaluated there: no edge is added and the contour ends at the notch as
 before. Any other failure (a broken invariant, a signal) is rethrown.
-Test: geometry/tests/port/p0260-contour-carried-across-a-notch.cpp (ctest
-geometry.port.0260): a D of radius 20 whose rim is broken by a tapered
-notch 0.25 deep and 0.57 wide, one arc given and rounded with 0.5: one
-contour carried, built, valid, the volume of both arcs given and of the
-whole rim rounded with the notch cut after; a notch 2 wide (wider than the
-ball): nothing carried, one contour.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0260.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
 index b1af6fe6..9963c775 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx

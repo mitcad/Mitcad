@@ -36,14 +36,9 @@ at both ends' parameters on the arc, with a margin of a factor 2 for the
 ends' parameters differing and Precision::Confusion() for the evaluations;
 ends farther apart than their faces' curves explain are not one point, as
 before 0503, however large the arc's tolerance.
-Test: geometry/tests/port/p0503-corner-ends-within-curves-spread.cpp
-(ctest geometry.port.0503): a slot through a chamfered boss whose chamfer's
-lower edges are rounded, the creases' curve on the cone turned 2e-7 off the
-plane's within a tolerance of 1e-4: the corners are the two roundings'
-intersections, valid, with the exact body's volume change (stock: plates
-of no width); with the curves exact and the boss's roundings 1e-6 larger
-than the walls' (ends about 4e-7 apart on both creases, the curves' spread
-nought): a plate as before, or no result.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0503.
 
 Upstream: changes only corners whose ends were within an arc's tolerance
 but more than 1e-7 apart; PerformTwoCornerSameExt checks its intersection

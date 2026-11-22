@@ -34,13 +34,8 @@ whose null shell it passed on to ExpandShell.
 What is null has no sub-shape in the transferred shape to put a name on;
 the names of everything else are set as before.
 
-Test: geometry.port.1820 (geometry/tests/port/p1820-step-sub-shape-names-
-unresolved-bound.cpp): a box as a MANIFOLD_SOLID_BREP of a named product,
-one face with a second FACE_BOUND whose bound is an entity not in the
-file, read through STEPCAFControl_Reader with sub-shape names: stock OCCT
-crashes; with the patch it is one valid solid of 1000 mm3 with six faces
-under the product's name. geometry.io reads the same text with
-read_step_structured.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1820.
 
 Upstream: changes only files with unresolved references, which crashed
 before; every other file is read as before. OCCT master has the same

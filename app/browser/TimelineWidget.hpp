@@ -253,6 +253,10 @@ private:
   // component colors: Bolt #e0892a, Plate #3aa35b" (the root has no band;
   // "none" without components), the colours the Browser's bars take too.
   QString m_loggedComponentColors;
+  // The features' colour marks as last logged (mitcad#2185): "Timeline
+  // feature colors: Extrude1 root, Extrude2 #e0892a", each feature by the
+  // component it makes, else its own.
+  QString m_loggedFeatureColors;
   TimelineStrip* m_strip = nullptr;
   QScrollArea* m_scroll = nullptr;
   QLineEdit* m_editor = nullptr;

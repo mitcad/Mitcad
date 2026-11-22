@@ -39,3 +39,5 @@ mod press_pull_tests;
 mod flex_hang_tests;
 // Panelize: a body's faces split off as panels, step by step (mitcad#2005).
 mod panelize_tests;
+// Cone: a cone or a frustum beside the other primitives (mitcad#2239).
+mod cone_tests;

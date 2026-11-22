@@ -170,7 +170,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
             sketch: s.sketch,
             profiles: s.profiles.clone().unwrap_or_default(),
             path_sketch: s.path_sketch,
-            path: s.path.clone(),
+            path: s
+                .path
+                .iter()
+                .cloned()
+                .map(k::PathEntry::OfPathSketch)
+                .collect(),
             path_body: s.path_body.clone(),
             path_edges: s.path_edges.clone(),
             orientation: s.orientation.clone(),
@@ -192,6 +197,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
         )?;
         self.as_surface(&mut def, s.sketch, &profiles, &s.curves)?;
         self.add(&def, Some(&f.name), component)?;
+        // A path along a 3D sketch curve of a design before format 58
+        // (`spline_as_samples`): MitCad sweeps along the 3D curve itself
+        // (mitcad#2157), as the file does since format 58.
+        if s.spline_as_samples {
+            notes.push(
+                "it sweeps along the 3D curve itself, where the file (saved before format 58) sweeps along the lines between a spline's samples, a wall along each"
+                    .to_owned(),
+            );
+        }
         Ok(Mapped::partial(notes))
     }
 

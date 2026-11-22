@@ -24,11 +24,8 @@ same body.
   corners of two stripes first (as before), then the corners of three or
   more stripes, then the rest.
 
-Test: geometry/tests/test_fillet_top_chains.cpp, test_whole_fillet1: the
-whole of Fillet1 on the case `fillet-wall-run-on` of
-MITCAD_GEOMETRY_CASES in the listed order and with the top's 0.5 right
-after the foot's 3: every vertex within 0.05 and the same volume (without
-the patch 0.66 and 0.14 mm3 apart).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1781.
 
 Upstream: new.
 

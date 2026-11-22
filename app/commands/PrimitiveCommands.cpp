@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// New Component (the ASSEMBLE group) and the primitives Box, Cylinder,
+// New Component (the ASSEMBLE group) and the primitives Box, Cylinder, Cone,
 // Sphere and Torus (the CREATE group; U4;
-// commands.md, "box, cylinder, sphere, torus" and "Components and
+// commands.md, "box, cylinder, cone, sphere, torus" and "Components and
 // occurrences (F6)"). A primitive is placed by a pick (mitcad#656,
 // PlaceInputs.hpp): on an axis, at a point, or on a face or a plane at
 // distances from two of its edges; a box also turns about its axis.
@@ -18,7 +18,7 @@
 namespace mitcad::cmd {
 namespace {
 
-enum class Primitive { Box, Cylinder, Sphere, Torus };
+enum class Primitive { Box, Cylinder, Sphere, Torus, Cone };
 
 PlacePanel placePanel(Primitive primitive, const QString& name) {
   PlacePanel panel;
@@ -55,7 +55,7 @@ handle(const PlacePanel& panel, Along along, double factor, double dx = 0.0, dou
     m.boxAtTip = true; // a size reads at its end (mitcad#656)
     // Stepped by the part's smallest size (mitcad#1431): a 10 mm cube's
     // arrows by 0.1 mm.
-    for (const char* key : {"length", "width", "height", "diameter", "section"}) {
+    for (const char* key : {"length", "width", "height", "diameter", "section", "radius", "top_radius"}) {
       const double size = std::abs(state.value(QString::fromLatin1(key)));
       if (std::isfinite(size) && size > 0.0 && (m.scale <= 0.0 || size < m.scale)) {
         m.scale = size;
@@ -70,6 +70,7 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
   const QString type = kind == Primitive::Box        ? QStringLiteral("box")
                        : kind == Primitive::Cylinder ? QStringLiteral("cylinder")
                        : kind == Primitive::Sphere   ? QStringLiteral("sphere")
+                       : kind == Primitive::Cone     ? QStringLiteral("cone")
                                                      : QStringLiteral("torus");
   def.id = QStringLiteral("solid.") + type;
   def.icon = type;
@@ -78,6 +79,7 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
   def.name = kind == Primitive::Box        ? QObject::tr("Box")
              : kind == Primitive::Cylinder ? QObject::tr("Cylinder")
              : kind == Primitive::Sphere   ? QObject::tr("Sphere")
+             : kind == Primitive::Cone     ? QObject::tr("Cone")
                                            : QObject::tr("Torus");
   const PlacePanel place = placePanel(kind, def.name);
   def.inputs = placeInputs(place);
@@ -131,6 +133,22 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
                     QStringLiteral("on_center")),
     };
     break;
+  case Primitive::Cone:
+    // A cone or a frustum (mitcad#2239): Cylinder's panel by radii, the
+    // top one 0 for a cone ending in an apex.
+    def.tooltip = QObject::tr("A cone or a frustum standing on a face, an axis or a point");
+    def.keywords << QStringLiteral("frustum") << QStringLiteral("taper");
+    def.inputs += {
+        valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0)
+            .withManipulator(handle(place, Along::X, 1.0)),
+        valueInput(QStringLiteral("top_radius"), QObject::tr("Top Radius"), ValueKind::Length, QStringLiteral("0 mm"))
+            .withStepMinimum(0.0)
+            .withTooltip(QObject::tr("0: a cone ending in an apex")),
+        valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("30 mm"))
+            .withManipulator(handle(place, Along::Normal, 1.0)),
+        direction,
+    };
+    break;
   }
   def.inputs += operationInputs();
   def.init = [place](CommandState& state, const CommandContext& model) { initPlace(state, model, place); };
@@ -159,8 +177,13 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
       result.def.insert(QStringLiteral("section_diameter"), state.expression(QStringLiteral("section")));
       result.def.insert(QStringLiteral("position"), state.choice(QStringLiteral("position")));
       break;
+    case Primitive::Cone:
+      result.def.insert(QStringLiteral("radius"), state.expression(QStringLiteral("radius")));
+      result.def.insert(QStringLiteral("top_radius"), state.expression(QStringLiteral("top_radius")));
+      result.def.insert(QStringLiteral("height"), state.expression(QStringLiteral("height")));
+      break;
     }
-    if ((kind == Primitive::Box || kind == Primitive::Cylinder) &&
+    if ((kind == Primitive::Box || kind == Primitive::Cylinder || kind == Primitive::Cone) &&
         state.choice(QStringLiteral("direction")) == QStringLiteral("symmetric")) {
       result.def.insert(QStringLiteral("symmetric"), true);
     }
@@ -172,7 +195,7 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
     // An earlier box's `corner`, the others' `center`, on their plane.
     loadPlace(feature, state, context, place,
               kind == Primitive::Box ? QStringLiteral("corner") : QStringLiteral("center"));
-    for (const char* key : {"length", "width", "height", "diameter"}) {
+    for (const char* key : {"length", "width", "height", "diameter", "radius", "top_radius"}) {
       loadValue(state, QString::fromLatin1(key), feature.value(QLatin1String(key)), feature, context);
     }
     loadValue(state, QStringLiteral("section"), feature.value(QStringLiteral("section_diameter")), feature, context);
@@ -200,6 +223,7 @@ CommandDef boxCommand(const CommandContext& context) { return primitive(context,
 CommandDef cylinderCommand(const CommandContext& context) { return primitive(context, Primitive::Cylinder); }
 CommandDef sphereCommand(const CommandContext& context) { return primitive(context, Primitive::Sphere); }
 CommandDef torusCommand(const CommandContext& context) { return primitive(context, Primitive::Torus); }
+CommandDef coneCommand(const CommandContext& context) { return primitive(context, Primitive::Cone); }
 
 // ---------------------------------------------------------------------------
 // New Component

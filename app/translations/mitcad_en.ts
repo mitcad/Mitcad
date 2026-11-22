@@ -240,6 +240,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>%n point(s)</source>
+        <translation>
+            <numerusform>%n point</numerusform>
+            <numerusform>%n points</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Import %n files into this design as components, or each as a new design?</source>
         <translation>
             <numerusform>Import %n file into this design as a component, or as a new design?</numerusform>
@@ -496,6 +503,13 @@
         <translation>
             <numerusform>%n degree of freedom</numerusform>
             <numerusform>%n degrees of freedom</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%1: %n item(s); click to select them</source>
+        <translation>
+            <numerusform>%1: %n item; click to select it</numerusform>
+            <numerusform>%1: %n items; click to select them</numerusform>
         </translation>
     </message>
     <message numerus="yes">
@@ -827,6 +841,13 @@ What is not sent within %n seconds is sent the next time the project opens.</num
             <numerusform>%n images: %1</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>Exported %n bend(s) to %1.</source>
+        <translation>
+            <numerusform>Exported %n bend to %1.</numerusform>
+            <numerusform>Exported %n bends to %1.</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>mitcad::MaterialsPanel</name>
@@ -852,6 +873,13 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>Exported %n parameter to %1.</numerusform>
             <numerusform>Exported %n parameters to %1.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Delete the group %1? Its %n parameter(s) move up a level, to %2; no parameter is deleted.</source>
+        <translation>
+            <numerusform>Delete the group %1? Its %n parameter moves up a level, to %2; no parameter is deleted.</numerusform>
+            <numerusform>Delete the group %1? Its %n parameters move up a level, to %2; no parameter is deleted.</numerusform>
         </translation>
     </message>
 </context>

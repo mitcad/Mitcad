@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: MIT
+# The 3D view's Follow System background follows MitCad's theme
+# (mitcad#2145): with no saved background (Follow System, the default on
+# every platform) the view is dark whenever the window is dark and light
+# whenever it is light, also after Restore Defaults. MitCad started with
+# appearance/theme=dark and no view/background:
+#   1. Dark at launch: the dark gradient (#3b424d to #1c2027).
+#   2. Light chosen in Preferences: the light gradient at once, Dark
+#      again: the dark one.
+#   3. System: the system light (color-scheme light), the light gradient;
+#      the system switching to dark (color-scheme dark;
+#      MITCAD_TEST_THEME_DESKTOP_DARK says whether the platform has a dark
+#      scheme) redraws it.
+#   4. White Background chosen in the View menu stays white whatever the
+#      theme.
+#   5. Restore Defaults › All Settings while the system is dark (Theme
+#      System kept): Follow System again, saved, and the view dark.
+# Run by tools/ui-view-background-theme-test.sh (Linux),
+# tools/ui-windows-view-background-theme-test.ps1 (Windows) and
+# tools/ui-macos-view-background-theme-test.sh (macOS).
+expect-ever 'View area' 30
+expect-ever '^Theme: dark [(]preference' 10
+wait-idle
+sleep 500
+
+# 1. Theme Dark at launch, no saved background.
+expect-view-background dark
+
+# 2. Light, then Dark, in Preferences: the view follows at once.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property preferencesBackground currentIndex 5
+qt-choice preferencesTheme 'Light'
+key Return
+expect-log '^Preferences: theme light$' 10
+expect-log '^Theme: light [(]preference' 10
+focus-main
+wait-idle
+expect-view-background light
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice preferencesTheme 'Dark'
+key Return
+expect-log '^Theme: dark [(]preference' 10
+focus-main
+wait-idle
+expect-view-background dark
+expect-log '^Background #3b424d #1c2027$' 6
+
+# 3. System: the system light (whatever the test machine's own scheme),
+# then the system turning dark.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice preferencesTheme 'System'
+key Return
+expect-log '^Preferences: theme system$' 10
+expect-log '^Theme: system [(](light|dark)[)]$' 10
+focus-main
+wait-idle
+color-scheme light
+wait-idle
+sleep 500
+expect-view-background light
+color-scheme dark
+wait-idle
+sleep 500
+expect-view-background ${MITCAD_TEST_THEME_DESKTOP_DARK}
+
+# 4. A chosen background is not the theme's.
+mark
+command view.environment.white
+wait-log '^Background #ffffff #ffffff$'
+expect-setting view/background 2
+expect-view-background '#ffffff' '#ffffff'
+
+# 5. Restore Defaults › All Settings, the system still dark.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+button '^Restore Defaults$' preferencesRestoreDefaults
+popup 'All Settings'
+wait-log '^Preferences restore defaults asked: Restore the defaults of all settings[?]'
+focus-dialog '^(Restore Defaults|Restore the defaults of (the Display|all) settings[?])$'
+button '^Restore Defaults$'
+wait-log '^Preferences: restore defaults, all settings: '
+focus-dialog '^(Preferences|Settings)$'
+wait-idle
+expect-widget-property preferencesBackground currentIndex 5
+expect-setting view/background 5
+key Escape
+focus-main
+wait-idle
+expect-view-background ${MITCAD_TEST_THEME_DESKTOP_DARK}
+expect-never 'TestDriver: FAIL'

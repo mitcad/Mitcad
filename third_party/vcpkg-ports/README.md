@@ -13,8 +13,15 @@ vcpkg's `opencascade` port for OCCT 8.0.1 as of the baseline in
 
 | Files | Origin | Licence |
 |---|---|---|
-| `portfile.cmake`, `vcpkg.json`, patches 0001 to 0005 | microsoft/vcpkg, `ports/opencascade` at the baseline; unchanged but for `port-version`, the list of patches, the fixed source folder for the compiler cache (mitcad#2106), the SPDX line and the `Test:` line atop each of the five patches (mitcad#1986) | MIT |
+| `portfile.cmake`, `vcpkg.json`, patches 0001 to 0005 | microsoft/vcpkg, `ports/opencascade` at the baseline; unchanged but for `port-version`, the list of patches, the fixed source folder for the compiler cache (mitcad#2106), the SPDX line atop each of the five patches (mitcad#1986) and the line pointing to its test in [opencascade-patch-tests.md](docs/opencascade-patch-tests.md) (mitcad#2133), and OpenGL through EGL on Linux (below) | MIT |
 | patches 0006 and later | MitCad | LGPL-2.1-only WITH OCCT-exception-1.0, as OCCT |
+
+On Linux the port builds OCCT without Xlib (`USE_XLIB=OFF`), so that its
+OpenGL driver uses EGL instead of GLX, and adds `OpenCASCADE_WITH_EGL` to
+OCCT's CMake config (mitcad#2031): MitCad can then run natively on Wayland
+(opt-in, `MITCAD_WAYLAND=1`, until its toolbar panel shows there), and on X11
+through Qt's EGL integration
+([architecture](../../docs/architecture.md), 3D view).
 
 The patches change OCCT, so they are under OCCT's licence (the GNU LGPL
 version 2.1 with the Open CASCADE exception), published here with MitCad's
@@ -26,7 +33,13 @@ says at its top what it changes and why.
 The port folder (`opencascade/`) holds only what vcpkg reads: vcpkg hashes
 every file in it, so any change there, a comment or a new file included,
 rebuilds OCCT on every machine. The description of the patches lives in
-[`docs/`](docs/) beside it instead.
+[`docs/`](docs/) beside it instead, and so do their tests: each patch's
+`Test:` paragraph, with the sentence on its before/after proof, is its
+section of [opencascade-patch-tests.md](docs/opencascade-patch-tests.md),
+and its header only points there (mitcad#2133). A patch's header says what
+the change is (the case, the cause, the condition, the origin); a test
+note or a proof result goes into that document and leaves the port as it
+is.
 
 ## The patches by topic
 
@@ -46,9 +59,9 @@ reports and tests last. The [index](#index) below lists every patch.
 | [fillet-walks-and-contours.md](docs/fillet-walks-and-contours.md) | 0160, 0180, 0190, 0250, 0260, 0840, 0860, 0861, 0920 | mitcad#238, mitcad#241, mitcad#261, mitcad#307, mitcad#308, mitcad#434, mitcad#441, mitcad#464 | walks over a rounded rim; which edges a contour takes, with what radius |
 | [fillet-rolling-ball.md](docs/fillet-rolling-ball.md) | 0170–0173, 0390, 0391, 0500–0503, 1230, 1370 | mitcad#237, mitcad#378, mitcad#1215, mitcad#1370, mitcad#1902 | the blend rolling on an edge as a true rolling ball; rolling on a face's far edges before an earlier blend, past a seam |
 | [fillet-census.md](docs/fillet-census.md) | 0320–0331, 0350–0352, 0420, 0440 | mitcad#300, mitcad#322, mitcad#323, mitcad#331, mitcad#334, mitcad#337 | fillets the `.f3d` census found failing; consumed faces |
-| [booleans-and-face-merge.md](docs/booleans-and-face-merge.md) | 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695 | mitcad#235, mitcad#284, mitcad#400, mitcad#642, mitcad#1280, mitcad#1819, mitcad#1881 | the face merge after booleans and the wire splitter; the solid classifier where its segments run out; a walking intersection line read past its ends |
+| [booleans-and-face-merge.md](docs/booleans-and-face-merge.md) | 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170 | mitcad#235, mitcad#284, mitcad#400, mitcad#642, mitcad#1280, mitcad#1819, mitcad#1881, mitcad#2170 | the face merge after booleans and the wire splitter; the solid classifier where its segments run out; a walking intersection line read past its ends; a vertex the edges of a face meet a period apart |
 | [multi-turn-faces.md](docs/multi-turn-faces.md) | 0510–0512, 0560, 0591–0593 | mitcad#235, mitcad#349, mitcad#380 | booleans on faces and edges that run many turns |
-| [offset-projection-and-pipes.md](docs/offset-projection-and-pipes.md) | 0100, 0960, 1030, 1130, 1160, 1180, 1190, 1200 | mitcad#172, mitcad#504, mitcad#539, mitcad#1184, mitcad#1199, mitcad#1201, mitcad#1193, mitcad#1202 | the offset, the projection's boundary search, the pipe's guide trihedron, offsets tangent past or inside the solid's end, images meeting along a tangential edge, an extended edge's curves, enlarging across a tangential side |
+| [offset-projection-and-pipes.md](docs/offset-projection-and-pipes.md) | 0100, 0960, 1030, 1130, 1160, 1180, 1190, 1200, 2050 | mitcad#172, mitcad#504, mitcad#539, mitcad#1184, mitcad#1199, mitcad#1201, mitcad#1193, mitcad#1202, mitcad#2050 | the offset, the projection's boundary search, the pipe's guide trihedron, offsets tangent past or inside the solid's end, images meeting along a tangential edge, an extended edge's curves, enlarging across a tangential side, an intersection all round a circle trimmed across its origin |
 | [fillet-replay-0550-0692.md](docs/fillet-replay-0550-0692.md) | 0550, 0580, 0581, 0600, 0620, 0650, 0651, 0670, 0671, 0690–0692 | mitcad#235, mitcad#343 | fillets and chamfers of stored designs: pockets, ribs, teeth, threads, recesses |
 | [fillet-replay-0700-0772.md](docs/fillet-replay-0700-0772.md) | 0700, 0720, 0721, 0740–0742, 0750, 0770–0772, 1060 | mitcad#343, mitcad#415, mitcad#840 | notched blends, a thread's crest, a block on a post, a housing's corner, a slot beside a ledge |
 | [fillet-replay-0790-0822.md](docs/fillet-replay-0790-0822.md) | 0790, 0800–0803, 0820–0822 | mitcad#343, mitcad#422 | a thread's run-out, traits of stored bodies, a key's lenses |
@@ -114,6 +127,13 @@ reports and tests last. The [index](#index) below lists every patch.
 | [step-reader.md](docs/step-reader.md) | 1820 | mitcad#2028 | the STEP reader's sub-shape name pass walks past a face bound, loop, shell or edge list the file reader left unresolved instead of crashing on it, as the shape transfer does: such a file opens with the names and colours of the rest |
 | [fillet-end-past-tangent-face-1830.md](docs/fillet-end-past-tangent-face-1830.md) | 1830 | mitcad#2039 | the end of a fillet or chamfer at a vertex of more than three edges, past a face tangent to the faces beside it that the blend does not reach, cut on those two faces, which meet along the intersection of their surfaces from the vertex; the shortcut that cuts the end on one face alone taken only where its premise holds: a concave edge ending where a flat side runs on into two curved faces no longer gives an invalid shape |
 | [view-lines-1840.md](docs/view-lines-1840.md) | 1840 | mitcad#2063 | lines wider than 1 pixel in an OpenGL core profile (the macOS view) drawn as screen-space quads of their width, with their depth, stipple pattern and colours: selected edges, the hover and sketch curves no longer 1 device pixel wide |
+| [fillet-rib-foot-corner-1805.md](docs/fillet-rib-foot-corner-1805.md) | 1805 | mitcad#2038 | the corner where one rounding ends at a vertex with a concave sharp edge (a rib's sloped edge at its foot beside a channel's rim) is set back along the concave edges only and its plate meets its borders G0: the plate no longer turns the concave corner on its air side, 0.02 to 0.03 out of the body |
+| [view-window-less-egl-2031.md](docs/view-window-less-egl-2031.md) | 2031 | mitcad#2031 | a view on a window-less EGL context (Qt's on Wayland): OCCT selected `GL_BACK`, which such a context does not have, and the pending error dropped the first frame's MSAA scene FBO after every attach and resize |
+| [offset-crease-fading-into-smooth-face-2140.md](docs/offset-crease-fading-into-smooth-face-2140.md) | 2140 | mitcad#2140 | the offset of a crease that flattens to tangency where its faces go on smoothly into a further face (a Y tube's crotch above the common cylinder): the branch along the crease alone, not joined to its continuation past the tangency as at a removed end |
+| [fillet-walk-trace-2141.md](docs/fillet-walk-trace-2141.md) | 2141 | mitcad#2140 | a trace of a rounding's walk on the standard error while `MITCAD_TRACE_FILLET_WALK` is set: where it starts, each piece it walks and why it fails |
+| [offset-apex-cut-2143.md](docs/offset-apex-cut-2143.md) | 2143 | mitcad#2140 | the offset of a face with a degenerated edge: its apex cut only where the cut's construction has a solution (a rounding's vanishing end is no apex), instead of `Standard_OutOfRange` without a message |
+| [fillet-start-by-vanishing-end-2142.md](docs/fillet-start-by-vanishing-end-2142.md) | 2142 | mitcad#2140 | a constant rounding's walk not started at a section narrower than a vanishing end (5e-4 of the radius), where the walk back to that end stalled: a Y tube's crotch rounded with more than 7 mm |
+| [fillet-approximation-branch-1870.md](docs/fillet-approximation-branch-1870.md) | 1870 | mitcad#2161 | a walked blend between a face and an edge the ball rolls on, its sections between the walk's points solved on the walked ball instead of the ball on the edge's other side: the foot of a wide, low round step rounded higher than the step no longer fails |
 
 ## Adding a patch
 
@@ -128,25 +148,40 @@ A patch to OCCT is the last resort: only when nothing else works
 2. Start it, as every patch of MitCad's does, with a header that names the
    origin and the licence (`Mitcad's patch to OCCT 8.0.1, under OCCT's
    licence:` and the line `SPDX-License-Identifier: LGPL-2.1-only WITH
-   OCCT-exception-1.0`), then what it changes and why, with the ticket.
+   OCCT-exception-1.0`), then what it changes and why, with the ticket,
+   and the paragraph that points to its test (`The patch's
+   test and its before/after proof:` and the line
+   `third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section
+   NNNN.`). The header has no `Test:` paragraph: a later test note or proof
+   result would change the port and rebuild OCCT.
 3. Append it to the `PATCHES` list of `opencascade/portfile.cmake`; vcpkg
    applies the patches in that order.
 4. Give it a test with OCCT alone in `geometry/tests/` that fails without
    it, where a synthetic body can reproduce the case, and a report with the
-   reproduction and the measurements in its ticket. Show that it fails
-   without the patch with `tools/occt-port-proof.py <number>` (Linux): it
-   reverts the patch at the port's tip, runs the header's named ctests,
-   adds the result to
+   reproduction and the measurements in its ticket. Name the test in the
+   patch's section of
+   [opencascade-patch-tests.md](docs/opencascade-patch-tests.md): the
+   heading `## NNNN`, a line linking the patch, a paragraph starting with
+   `Test:`.
+   Show that it fails without the patch with `tools/occt-port-proof.py
+   <number>` (Linux): it reverts the patch at the port's tip, runs the
+   ctests the section names, adds the result to
    [opencascade-before-after.md](docs/opencascade-before-after.md) and,
-   with `--update-headers`, to the header. Where it does not revert at the
-   tip, `--in-chain` shows it at its own place in the chain instead.
+   with `--update-tests`, to the section's proof sentence. Where it does
+   not revert at the tip, `--in-chain` shows it at its own place in the
+   chain instead. The tool never writes a `.patch` file; `--list` shows the
+   ctests it reads.
 5. Describe it here: a section headed by the patch's name in the file of
    its topic under [`docs/`](docs/) (or a new file for a new topic, listed
    in the table above), its test in that file's *Reports and tests*, and a
    row in the [index](#index).
 
 A change to the port folder rebuilds OCCT on every machine; a change to
-`docs/` or to this README does not.
+`docs/` or to this README does not. The next configure picks it up, and
+so does a plain `cmake --build` (the port's files are configure
+dependencies, `cmake/VcpkgPortDepends.cmake`); no fresh configure is
+needed ([development.md](../../docs/development.md#a-fresh-configure),
+mitcad#2134).
 
 ## Reports, upstream and newer OCCT
 
@@ -517,3 +552,12 @@ mitcad#77 and mitcad#79; their column names each one's report.
 | [1820](docs/step-reader.md#1820-stepcafcontrol-sub-shape-names-skip-what-the-reader-left-unresolved) | mitcad#2028 | data exchange: STEPCAFControl_Reader's ExpandManifoldSolidBrep, ExpandSBSM and ExpandShell skip a null item, boundary array, shell, face array, face bound, loop and edge list, as StepToTopoDS_TranslateFace skips a null face bound and loop |
 | [1830](docs/fillet-end-past-tangent-face-1830.md#1830-chfi3d-end-cut-across-the-faces-beside-a-tangent-face) | mitcad#2039 | fillets and chamfers: ChFi3d_Builder::PerformIntersectionAtEnd takes the five-edge shortcut (pro15368) only where the end's first point lies on the last face's surface, and a face round the vertex whose two edges there are tangent and not crossed is passed: the faces beside it meet along the intersection of their surfaces through the vertex (GeomInt_IntSS), its curves on them in their periods at the vertex |
 | [1840](docs/view-lines-1840.md#1840-tkopengl-lines-wider-than-a-pixel-in-a-core-profile-drawn-as-quads) | mitcad#2063 | view: Graphic3d_ShaderFlags_WideLine, a geometry stage of the standard line programs that draws each segment as a quad occLineWidth pixels wide (near-plane clipped, ends extended by half the width, the segment's depth); OpenGl_ShaderManager::ToExpandWideLines (no fixed-function pipeline, a geometry stage, width above 1 pixel) chooses it in BindLineProgram, OpenGl_Context::SetLineWidth sets occLineWidth, OpenGl_PrimitiveArray::Render draws it without polygon offset or face culling |
+| [1805](docs/fillet-rib-foot-corner-1805.md#1805-chfi3d-corner-of-one-rounding-sets-back-along-its-concave-edges-only) | mitcad#2038 | fillets: PerformMoreThreeCorner, for one stripe (not two tangent stripes, not OnSame + OnDiff, no free border, no seam) where a sharp edge at the vertex, neither regular nor tangent to another, is concave (ChFi3d::DefineConnectType): set back along the concave edges only, the other sharp edges' points at the vertex (the vertex in the DS, the edge not limited, no walk over a vertex), every plate constraint G0 |
+| [2031](docs/view-window-less-egl-2031.md#2031-tkopengl-window-less-egl-context-draws-into-its-default-fbo-not-the-back-buffer) | mitcad#2031 | view: OpenGl_Window::init() selects GL_COLOR_ATTACHMENT0 of the offscreen default FBO it makes for a window-less EGL context, not GL_BACK (which bound framebuffer 0 again and raised GL_INVALID_OPERATION); otherwise GL_BACK as before |
+| [2140](docs/offset-crease-fading-into-smooth-face-2140.md#2140-brepoffset-crease-fading-into-a-smooth-face-keeps-its-branch-alone) | mitcad#2140 | offset: BRepOffset_Tool::Inter3D takes the shape's analysis (ConnexIntByInt passes it); DropCrossingsPastTangentEnd, where the crease's faces go on smoothly past its tangent end (an edge of the first face there tangential to a third face), keeps the branch along the crease alone wherever the tangency lies, not joined to its continuation, its edges cut at the tangencies of the crease's smooth ends (Inter3D takes the pieces) |
+| [2141](docs/fillet-walk-trace-2141.md#2141-chfi3d-trace-of-the-walk-of-a-rounding) | mitcad#2140 | fillets: with MITCAD_TRACE_FILLET_WALK set, StartSol, PerformSetOfSurfOnElSpine and the two-face ComputeData print where the walk starts, each piece and why it fails; StartSol's first-section states start as TopAbs_UNKNOWN |
+| [2142](docs/fillet-start-by-vanishing-end-2142.md#2142-chfi3d-no-start-on-a-section-narrower-than-a-vanishing-end) | mitcad#2140 | fillets: ChFi3d_Builder::StartSol skips a constant rounding's first section whose contacts are less than 5e-4 of the radius apart (as 0771's vanishing end) and tries the next place, taking the first such section only where no place gives another |
+| [2143](docs/offset-apex-cut-2143.md#2143-brepoffset-apex-cut-only-where-its-construction-has-a-solution) | mitcad#2140 | offset: BRepOffset_Offset::Init cuts the apex of a face with a degenerated edge only where the generatrix crosses the apex line and, offset inwards, that crossing projects onto the iso; elsewhere the side is left as it is, not a singularity |
+| [2050](docs/offset-projection-and-pipes.md#2050-brepoffset-intersection-round-a-periodic-curve-trimmed-over-its-edges-across-the-origin) | mitcad#2050 | offset: TrimEdge gets the map of the edges' intersections; for an edge all round a periodic curve TrimOverOrigins keeps the arcs between its vertices whose middles project inside the range of an edge it is the image of (IsOverOrigins), where they make one run round the curve, cut in two at the vertex on the origin where the run crosses it (TrimEdge's theSecond, added by TrimEdges to the intersections of the edges; a cylinder's concave foot running three quarters round, the cylinder continuing a plate's rounded corner); ConnexIntByInt applies 1160's rule also to a line and a conic whose edges leave their common vertex in the same direction within 1e-3 rad (LeaveInOneDirection) |
+| [1870](docs/fillet-approximation-branch-1870.md#1870-brepblend-approximation-solves-sections-on-the-walked-ball) | mitcad#2161 | fillets: BRepBlend_AppFuncRoot::SearchPoint, for a surface/restriction blend, solves a section again from the contact a cubic Hermite interpolation of the walked points' contacts and tangents gives (BRepBlend_HermiteContact) where the solution from the linear start lies farther from that contact than the start did, and takes the second solution where it lies nearer to it |
+| [2170](docs/booleans-and-face-merge.md#2170-bopalgo-wiresplitter-vertex-met-a-period-apart) | mitcad#2170 | wire splitter: a vertex that a face's edges meet at points a period apart in its parameters, with no closed edge there (a cylinder's face without a seam passing a vertex at u = 0 and u = 2 pi), closes a loop only at the point it left from and goes on only along edges leaving the point it came to |

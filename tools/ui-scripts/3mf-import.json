@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"3MF import (mitcad#2156), the file of tools/ui-scripts/3mf-import.mitcad-ui: two boxes, Plate 40 x 30 x 5 mm and Pin 5 x 5 x 10 mm; Pin made a component placed twice (at 5, 5, 5 and 25, 5, 5); written by MitCad's 3MF export to plate.3mf in the folder it runs in, Plate red and Pin blue: a part placed once and a part placed twice, each with its base material colour."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":40,"width":30,"height":5,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":5,"width":5,"height":10,"operation":"new_body"}},
+  {"cmd":"rename_body","uid":"F1.b0","name":"Plate"},
+  {"cmd":"rename_body","uid":"F2.b0","name":"Pin"},
+  {"cmd":"components_from_bodies","bodies":["F2.b0"]},
+  {"cmd":"set_occurrence_transform","occurrence":"Pin:1","transform":{"translation":[5,5,5]}},
+  {"cmd":"copy_occurrence","occurrence":"Pin:1","transform":{"translation":[25,5,5]}},
+  {"cmd":"export","path":"plate.3mf","colors":{"Plate":[0.8,0.1,0.1],"Pin":[0.1,0.1,0.8]}}
+]

@@ -41,15 +41,8 @@ them by those faces.
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_lens_overflow.cpp,
-test_joined_roundings_one_face_each (ctest geometry.fillet_lens_overflow):
-the housing of 0772's test, the joined blend one face per edge (the first's
-with the cut by the first side, the second's with the cuts by the corner's
-rounding and the second side, sharing an edge from the first side's
-junction), in both orders of the edges. Its failure without the patch is
-still to be shown: the patch does not revert at the port's tip without the
-more than 40 later patches that change the same lines (tried 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0820.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 56ff43fe..ee660216 100644

@@ -19,13 +19,8 @@ a gap found none, and the fillet failed (Chaining is impossible).
   continues the contact's face whatever its curvature along the spine; the
   test of 0160 applies to other faces only.
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow),
-test_rounding_round_a_chamfered_box_walks_on_along_its_rounded_corners,
-test_top_rounding_larger_than_the_rounded_corners_walks_round_them: Its
-failure without the patch is still to be shown: the patch does not revert
-at the port's tip without the 48 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0250.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 73c1e08b..ffd514b2 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

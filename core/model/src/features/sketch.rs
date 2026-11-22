@@ -174,7 +174,9 @@ impl LinkedReferences for SketchDef {
 
 /// The driving dimensions of `def` whose values use reference parameters of
 /// its own driven dimensions (mitcad#1116), directly or through other
-/// parameters' expressions, with those driven dimensions.
+/// parameters' expressions, with those driven dimensions; so do its
+/// patterns whose spacings or angle use them (mitcad#2057), keyed by the
+/// pattern's id.
 pub(crate) fn driven_uses(def: &SketchDef, params: &Parameters) -> DrivenUses {
     let own: BTreeMap<ParamId, ConstraintUid> = def
         .dimensions
@@ -186,13 +188,11 @@ pub(crate) fn driven_uses(def: &SketchDef, params: &Parameters) -> DrivenUses {
         return uses;
     }
     let table = params.table();
-    for d in &def.dimensions {
-        let Some(value) = d.value else {
-            continue;
-        };
+    // The driven dimensions whose references `values` use.
+    let used = |values: &[ParamId]| -> BTreeSet<ConstraintUid> {
         let mut found = BTreeSet::new();
-        let mut seen = BTreeSet::from([value]);
-        let mut todo = vec![value];
+        let mut seen: BTreeSet<ParamId> = values.iter().copied().collect();
+        let mut todo = values.to_vec();
         while let Some(p) = todo.pop() {
             if let Some(driven) = own.get(&p) {
                 found.insert(*driven);
@@ -203,15 +203,30 @@ pub(crate) fn driven_uses(def: &SketchDef, params: &Parameters) -> DrivenUses {
                 }
             }
         }
+        found
+    };
+    for d in &def.dimensions {
+        let Some(value) = d.value else {
+            continue;
+        };
+        let found = used(&[value]);
         if !found.is_empty() {
             uses.insert(d.id, found);
+        }
+    }
+    for p in &def.patterns {
+        let values: Vec<ParamId> = p.values().into_iter().copied().collect();
+        let found = used(&values);
+        if !found.is_empty() {
+            uses.insert(p.id, found);
         }
     }
     uses
 }
 
-/// Solves a sketch whose driving dimensions use its own driven ones
-/// (`uses`, mitcad#1116) in stages ([`crate::sketch::driven`]): each stage
+/// Solves a sketch whose driving dimensions or patterns use its own driven
+/// ones (`uses`, mitcad#1116, mitcad#2057) in stages
+/// ([`crate::sketch::driven`]): each stage
 /// leaves out the users whose references are not known yet, and evaluates
 /// the parameters with the references known so far at their measured
 /// values. `stored` is the definition, `followed` the one whose linked
@@ -403,8 +418,8 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         // driving dimensions' values).
         let params = ctx.env.params;
         let name = |id: ParamId| params.name(id);
-        // Driving dimensions that use the sketch's own driven ones are
-        // solved after them (mitcad#1116).
+        // Driving dimensions and patterns that use the sketch's own driven
+        // ones are solved after them (mitcad#1116, mitcad#2057).
         let uses = driven_uses(def, ctx.env.params);
         let solving = if uses.is_empty() {
             match &followed {
@@ -503,17 +518,24 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             );
         }
         let boundary = face_boundary(self, &plane, &frame, ctx)?;
-        let (region_info, layout, own) = if boundary.is_empty() {
-            let (region_info, layout) = def.regions_and_layout_of(&solved, &texts);
+        let curves = def.region_curves_of(&solved, &texts);
+        // The face's edges and the outline the sketch got when it was made
+        // do not split an area of the user's curves (mitcad#2197).
+        let (own_curves, mut automatic) = def.split_automatic(curves.clone());
+        automatic.extend(boundary);
+        let (region_info, layout, own) = if automatic.is_empty() {
+            let (region_info, layout) = crate::sketch::regions::regions_and_layout(&curves);
             (region_info, layout, OwnRegions::default())
         } else {
-            let own = def.region_curves_of(&solved, &texts);
-            let mut curves = own.clone();
-            curves.extend(boundary);
-            let (region_info, layout) = crate::sketch::regions::face_bounded_regions(&curves);
+            let found = crate::sketch::regions::own_area_regions(&own_curves, &automatic);
             // The sketch's own regions too, for references to a region the
-            // face's edges cut (mitcad#1182).
-            (region_info, layout, OwnRegions::new(own))
+            // face's edges cut (mitcad#1182), and the pieces the automatic
+            // boundaries cut before (mitcad#2197).
+            (
+                found.regions,
+                found.layout,
+                OwnRegions::new(curves).with_earlier(found.earlier),
+            )
         };
         // The definition shown, with the stored one it was made from.
         let retrimmed = retrimmed.map(|def| {

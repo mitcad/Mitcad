@@ -25,12 +25,8 @@ radiuses").
   end of A's contact on the same arc (theSharedEnd), and A's SurfData is
   split once, at B's other end.
 
-Test: geometry/tests/test_fillet_ride_corners.cpp, test_slab_end_face_pair
-(ctest geometry.fillet_ride_corners): the roof slab's end face's two edges
-along a slope rounded with 1 (and 0.9), the underside's rounding riding on
-the slope's contact line and ending on the line's end on the eave's edge;
-the material taken 14.029 against 14.019 of the roundings' union. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1641.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 60496947..412bd3c6 100644

@@ -275,7 +275,7 @@ fn path_down(
 }
 
 /// A fixed plane with a frame's origin, z and x.
-fn fixed_plane(at: &Transform) -> GeomRef {
+pub(crate) fn fixed_plane(at: &Transform) -> GeomRef {
     let [origin, x_axis, _, z_axis] = frame_parts(at);
     GeomRef::FixedPlane {
         origin,

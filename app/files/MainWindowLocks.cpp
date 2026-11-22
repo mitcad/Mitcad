@@ -116,6 +116,7 @@ bool MainWindow::readOnlyModelCommand(const QString& name) {
       // A Flat Pattern's drawing (mitcad#210), a drawing's file
       // (mitcad#707; one kept is only read).
       QStringLiteral("export_flat_pattern_dxf"), QStringLiteral("export_drawing"),
+      QStringLiteral("export_bend_table"),
       // A cut sheet's file, as File › Print writes it (mitcad#1089).
       QStringLiteral("export_cut_sheet"),
       // The Center of Mass marker (mitcad#1094): display state, as the

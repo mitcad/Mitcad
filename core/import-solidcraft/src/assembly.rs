@@ -635,6 +635,17 @@ fn joint<K: Kernel>(im: &mut Importer<'_, '_, K>, j: &Value) -> JointReport {
                 );
             }
         }
+        // Offsets along A's frame x and y (format 58): MitCad's joint
+        // offset is along z alone.
+        if j["offset_xy"]
+            .as_array()
+            .is_some_and(|xy| xy.iter().any(|v| v.as_f64().is_some_and(|v| v != 0.0)))
+        {
+            notes.push(
+                "its offsets along the first origin's x and y are left out (MitCad's joint offset is along z)"
+                    .to_owned(),
+            );
+        }
         let flip = !j["flip"].as_bool().unwrap_or(false);
         let def = json!({"type": "joint", "kind": mitcad_kind, "a": a, "b": b, "offset": offset, "angle": angle,
             "flip": flip, "position": position, "limits": limits});

@@ -17,7 +17,11 @@ namespace mitcad {
 // the label of the button the band shows with it (mitcad#1416: Update, Open
 // Linked Design); empty for none. `source`: what raised it and lasts only
 // while it is open (mitcad#1621: `sketch/editor`, `sketch/tool`, `sketch`,
-// `command`); empty for a message of the window's own.
+// `command`); empty for a message of the window's own. `subject`: what an
+// error is about, which a later success can put right (mitcad#2181:
+// `parameter/<name>` for a refused command on a parameter,
+// `feature/<uid>` for a failed feature); empty for none. `resolved`: put
+// right since (MessageLog::resolve).
 struct MessageEntry {
   QDateTime time;
   NoticeLevel level = NoticeLevel::Hint;
@@ -26,6 +30,8 @@ struct MessageEntry {
   int count = 1;
   QString action;
   QString source;
+  QString subject;
+  bool resolved = false;
 };
 
 // What the message band shows and the session's message history
@@ -47,6 +53,10 @@ struct MessageEntry {
 // - Another design in the window (New, Open, recovery; mitcad#1174) clears
 //   the band: neither the message shown in full nor the stub stays, until
 //   the next message (clear). The history keeps them.
+// - An error put right goes (mitcad#2181): when what it is about (its
+//   subject) succeeds later, it goes from the band, shown in full or as
+//   the stub, and the band shows nothing until the next message (resolve).
+//   The history keeps it, marked put right.
 // - The history keeps this session's messages, newest first, at most
 //   kMaxEntries of them; nothing is saved.
 class MessageLog {
@@ -68,8 +78,10 @@ public:
   // full that is not a problem into the stub (a cleared status line).
   // `action`: the label of the message's button (mitcad#1416), or empty;
   // `source`: what raised it (MessageEntry::source), or empty.
+  // `subject`: what an error is about (MessageEntry::subject), or empty.
   bool add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time,
-           const QString& action = QString(), const QString& source = QString());
+           const QString& action = QString(), const QString& source = QString(),
+           const QString& subject = QString());
 
   // The message shown in full timed out: the stub. Not for an error.
   // Returns whether the band changed.
@@ -99,6 +111,18 @@ public:
   // within it (`sketch` covers `sketch/tool` and `sketch/editor`). Never
   // for an empty source.
   static bool sourceCovers(const QString& closing, const QString& raised);
+  // What errors were about was put right (mitcad#2181: a later command on
+  // the same parameter succeeded, a successful command of the Parameters
+  // dialog, a failed feature that computes again): every error whose
+  // subject is `subject` or within it (sourceCovers: `parameter` covers
+  // `parameter/width`) is resolved. Shown in full, it goes; the stub does
+  // not show it (the band shows nothing until the next message). The
+  // history keeps it. Returns whether the band changed.
+  bool resolve(const QString& subject);
+  // The error shown, in full or as the stub, that is about a subject
+  // within `prefix` and not put right (`feature` for a failed
+  // feature's); null for none.
+  const MessageEntry* shownError(const QString& prefix) const;
 
   Shown shown() const;
   // The message shown in full; null unless shown() is Full.

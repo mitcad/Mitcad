@@ -125,17 +125,20 @@ function(profile_x json out)
   message(FATAL_ERROR "the profile sketch was not imported")
 endfunction()
 
-# The timeline's features without an error, by name.
-function(rebuilt json out)
+# The timeline's features whose status is ok (no error and no warning), by
+# name; a feature that is not ok fails with its notices.
+function(rebuilt json out what)
   set(names)
   string(JSON count LENGTH "${json}" document timeline features)
   math(EXPR last "${count} - 1")
   foreach(i RANGE ${last})
     string(JSON name GET "${json}" document timeline features ${i} name)
-    string(JSON error ERROR_VARIABLE none GET "${json}" document timeline features ${i} error)
-    if(NOT none STREQUAL "NOTFOUND" OR error STREQUAL "" OR error STREQUAL "null")
-      list(APPEND names "${name}")
+    string(JSON status GET "${json}" document timeline features ${i} status)
+    if(NOT status STREQUAL "ok")
+      string(JSON notices ERROR_VARIABLE none GET "${json}" document timeline features ${i} notices)
+      message(FATAL_ERROR "${what}: ${name} is ${status}: ${notices}")
     endif()
+    list(APPEND names "${name}")
   endforeach()
   set(${out} "${names}" PARENT_SCOPE)
 endfunction()
@@ -225,9 +228,12 @@ near("${x_after}" "${x_before}" "-5" 1000 "the profile sketch's centre")
 
 # Every feature rebuilds, the Fillet on the ends included, before and
 # after the change (mitcad#1960), and with the smaller radius
-# (mitcad#2009).
+# (mitcad#2009), each with its status ok: no warning either (mitcad#2038:
+# before OCCT port patch 1805 the Fillet warned at 45 mm, the document's
+# own radius, that a corner reaches 0.02 mm out of the body; the timeline's
+# error is empty for a warning, so that an error-only check passed).
 foreach(state IN LISTS states)
-  rebuilt("${${state}}" ok)
+  rebuilt("${${state}}" ok "${state} the change")
   string(JSON count LENGTH "${${state}}" document timeline features)
   list(LENGTH ok rebuilt_count)
   if(NOT rebuilt_count EQUAL count)
@@ -334,4 +340,4 @@ foreach(radius 24.5 25 32)
   endforeach()
 endforeach()
 
-message(STATUS "ok   the bend follows its radius: the profile and the body move 5 mm, every feature rebuilds at 20, 24, 24.5, 25, 30, 32, 45 and 50 mm, nothing skipped, the body within its pads and its volume on the line, its box within the guide at 24.5 and 25 mm, its faces meshed at 24.5, 25 and 32 mm down to the finest settings")
+message(STATUS "ok   the bend follows its radius: the profile and the body move 5 mm, every feature rebuilds without a warning at 20, 24, 24.5, 25, 30, 32, 45 and 50 mm, nothing skipped, the body within its pads and its volume on the line, its box within the guide at 24.5 and 25 mm, its faces meshed at 24.5, 25 and 32 mm down to the finest settings")

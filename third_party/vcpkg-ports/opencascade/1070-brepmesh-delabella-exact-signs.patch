@@ -61,9 +61,8 @@ bits, BRepMesh on the face with the radius swept from 400 to 1550 mm at
 
 Upstream: new.
 
-Test: geometry/io/tests/test_io.cpp (test_nearly_cocircular_planes,
-mitcad#846: the face with the concave arc meshed at every radius of the
-sweep; it crashed without the patch).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1070.
 diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAlgo.cxx b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAlgo.cxx
 index b6b12026..16540d64 100644
 --- a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAlgo.cxx

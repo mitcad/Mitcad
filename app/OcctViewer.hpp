@@ -25,6 +25,7 @@
 #include <QPolygonF>
 #include <QRect>
 #include <QRectF>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QSurfaceFormat>
@@ -261,6 +262,8 @@ enum class VisualStyle {
   ShadedHiddenEdges,    // also the edges behind faces, dashed
   Wireframe,            // edges only
   WireframeHiddenEdges, // edges in sight, those behind faces dashed
+  // Appended last, so that a stored style keeps its meaning (mitcad#2155).
+  WireframeVisibleEdges, // edges in sight only, none behind faces
 };
 
 // How the orientation cube is projected (mitcad#774): as the view is
@@ -788,12 +791,19 @@ public:
   // so that they cannot drift apart.
   QColor sketchHaloColor() const;
   // Replaces the visible sketch profiles (planar faces, placed already);
-  // `occurrences` are those that place the sketches of components.
+  // `occurrences` are those that place the sketches of components. Those
+  // in `unfilled` (regions outside their sketch's outline set, a hole's
+  // disc, mitcad#2194) are drawn without fill: their outline only, hovered
+  // and picked as the others; logs "Profiles without fill: <n> [<sketch>
+  // <region>, ...]" ("none") when that set changes.
   void setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shape>>& profiles,
-                   const std::map<std::string, QString>& occurrences = {});
+                   const std::map<std::string, QString>& occurrences = {},
+                   const std::set<ProfileKey>& unfilled = {});
   // Remove only this sketch's filled regions while its geometry is dragged.
   void removeSketchProfiles(const QString& sketch);
   std::size_t profileCount() const { return m_profiles.size(); }
+  // The shown profiles drawn without fill (mitcad#2194, setProfiles).
+  std::size_t unfilledProfileCount() const { return m_unfilledProfiles.size(); }
   void setSketchEntities(const std::vector<SketchEntityDisplay>& entities);
   // The Sketch Palette's Show points off (mitcad#1705, mitcad#1764): the
   // points of every shown sketch, the edited one and finished ones, are
@@ -1277,6 +1287,11 @@ public:
   // refused, when the click picked nothing (mitcad#474: Create Sketch says
   // why a face cannot take a sketch); once per click.
   std::optional<SelectionItem> takeRefusedClick();
+  // Whether the last click was a double click's second one, as the system
+  // classed its events by their own times (Qt's MouseButtonDblClick): not
+  // by when the app got round to the click's pick, which comes later under
+  // load (mitcad#2189).
+  bool clickWasDoubleClick() const { return m_clickDoubleClick; }
   // What the last click would have taken of the filter's kinds without the
   // finer test, whatever it picked (mitcad#844: a plane behind the model
   // picked where a face the test refuses lies in front of it); nothing
@@ -1359,8 +1374,9 @@ signals:
   // A navigation of the view ended (isNavigating()): the camera is where the
   // user left it.
   void navigationFinished();
-  // The application's palette changed (a dark or light mode): what depends
-  // on it outside the view follows.
+  // The application's palette or the view's own changed (a dark or light
+  // mode; one change may come as both): what depends on it outside the
+  // view follows.
   void themeChanged();
   // The background turned from light to dark or back (backgroundDark()):
   // drawings over the view that log their tone follow (mitcad#633).
@@ -1457,6 +1473,7 @@ private:
   // An orbit past the edge of the screen (view/OrbitWrap.hpp).
   void wrapOrbitCursor(const QMouseEvent* event);
   void resetOrbitWrap();
+  QPointF orbitPosition(const QMouseEvent* event);
   Aspect_VKeyMouse viewButtons(Qt::MouseButtons buttons) const;
   Aspect_VKeyFlags viewFlags(Qt::KeyboardModifiers modifiers) const;
   // The keys that decide a press on the view (mitcad#1571): those of the
@@ -1751,6 +1768,9 @@ private:
   // picked point) or the last window (its samples inside) hit.
   SelectFilter activeKinds() const;
   void setShiftHeld(bool held, bool hover);
+  // A Shift release read while a click was still to be picked, applied once
+  // the frame has picked it (m_shiftReleaseDeferred, mitcad#2189).
+  void applyDeferredShiftRelease();
   bool occluded(const gp_Pnt& point) const;
   EdgeSight edgeSight(const occ::handle<SelectMgr_EntityOwner>& owner) const;
   EdgeSight windowSight(const TopoDS_Edge& edge, const gp_Trsf& toWorld) const;
@@ -1785,11 +1805,12 @@ private:
   // `log` tells which (for UI tests), not each snap.
   void updateCursor(bool log);
 
-#if !defined(_WIN32) && !defined(Q_OS_MACOS)
+#if !defined(_WIN32) && !defined(Q_OS_MACOS) && !defined(MITCAD_OCCT_EGL)
   // Qt 6 makes the widget's context current on an offscreen pbuffer, but
   // OCCT's GLX backend needs an X11 window to make the context current on.
   // This hidden window is created with the context's own format, so the two
-  // are compatible.
+  // are compatible. OCCT built for EGL (mitcad#2031) takes the surface Qt
+  // made current instead and needs no window.
   std::unique_ptr<QWindow> m_glxWindow;
 #endif
   occ::handle<V3d_Viewer> m_viewer;
@@ -1817,6 +1838,10 @@ private:
   std::set<std::string> m_transparentBodies;
   QString m_loggedTransparent = QStringLiteral("none");
   std::map<ProfileKey, occ::handle<AIS_Shape>> m_profiles;
+  // The profiles drawn without fill (setProfiles, mitcad#2194), and the
+  // log line last written of them.
+  std::set<const AIS_InteractiveObject*> m_unfilledProfiles;
+  QString m_loggedUnfilled = QStringLiteral("none");
   std::vector<occ::handle<AIS_Shape>> m_sketchEntities;
   // The shown sketch entities by "<sketch>/<id>@<occurrence>", with their
   // signatures.
@@ -1925,6 +1950,9 @@ private:
   // "View preview (...): transparency ..., back faces culled|both sides
   // drawn", for UI tests, mitcad#1575).
   QString m_loggedPreviewBodyLook;
+  // The textured bodies as logged ("View textured body <uid>: <n> textured
+  // looks", for UI tests, mitcad#2186), each once.
+  QSet<QString> m_loggedTexturedBodies;
   QString m_loggedPreviewLook;
   QString m_loggedOriginDrawing; // "View origin drawn: ..." (mitcad#1642)
   bool m_cullSeeThrough = true; // setSeeThroughCulling
@@ -1953,6 +1981,9 @@ private:
   SelectFilter m_expandedFilter; // the kinds while Shift is held
   bool m_scoped = false;
   bool m_shiftHeld = false;
+  // Shift released while a Shift+click waits for its frame's pick
+  // (applyDeferredShiftRelease, mitcad#2189).
+  bool m_shiftReleaseDeferred = false;
   Qt::KeyboardModifiers m_pointerModifiers;
   bool m_contextPick = false; // a right click finds what a Shift+click would take
   // A window selection is being applied (from its release until the
@@ -2017,6 +2048,11 @@ private:
   void watchGlTestScreen();
   QString attachGl();
   void reportGlFailure(const QString& reason);
+  // How the window shows the view (mitcad#2031): the first frame after an
+  // attach logs "View composition: ..." (logComposition), what a Wayland
+  // session's report needs when the widgets over the view do not show.
+  bool m_compositionPending = false;
+  void logComposition();
   // The left press that starts a pick, and whether its release was a drag.
   QPointF m_pressPosition;
   // Where the last click was released, and whether it picked nothing
@@ -2024,6 +2060,10 @@ private:
   // m_untestedPicks is set.
   QPointF m_clickPosition;
   bool m_clickPickedNothing = false;
+  // The left press was a double click's second press (MouseButtonDblClick),
+  // and so was the last click's (clickWasDoubleClick).
+  bool m_pressDoubleClick = false;
+  bool m_clickDoubleClick = false;
   // The last click's number (clickedAt, picked).
   quint64 m_clickSerial = 0;
   // Diagnostic probes must not replace detection before queued pointer
@@ -2152,7 +2192,7 @@ private:
   AnnotationActions m_annotationActions;
   QStringList m_highlightedAnnotations;
   QString m_loggedAnnotationPlaces; // their labels' and lines' places as last logged
-  QColor m_paper = QColor(0xd8, 0xdc, 0xe2); // the hidden-line style's faces
+  QColor m_paper = QColor(0xd8, 0xdc, 0xe2); // the wireframe paper styles' faces
   bool m_gridShown = true;
   bool m_gridOnCurvedFace = false; // the sketch edited lies on a curved face: no grid drawn (mitcad#1853)
   double m_gridStep = 0.0; // mm; 0: follows the zoom

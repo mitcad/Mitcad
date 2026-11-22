@@ -321,3 +321,44 @@ fn a_refusal_of_meeting_walls_names_their_domains() {
         "F3:sheet_side0(F3:sheet_curve(2))"
     );
 }
+
+/// Edges and faces named after an ordinary feature on a sheet (mitcad#2117:
+/// material a Join added to a panel keeps the Join's own face names) are
+/// named by where they lie: a straight edge on a panel's surface along a
+/// boundary is that boundary, with the surface it lies on; a point on a
+/// panel's surface is that panel. Edges through the thickness, inside the
+/// material or off both surfaces, and points off the material, are none.
+#[test]
+fn ordinary_edges_and_faces_are_named_by_where_they_lie() {
+    let state = panel_beside_bend();
+    let panel = SheetDomainRef::Panel(beside_panel());
+    let domain = |answer: &Value| {
+        serde_json::from_value::<SheetDomainRef>(answer["domain"].clone()).unwrap()
+    };
+    // Part of the bottom side on the back surface.
+    let answer = boundary_at(&state, 1.0, [2.0, 0.0, 1.0], [7.0, 0.0, 1.0]).unwrap();
+    assert_eq!(
+        answer["boundary"]["curve"],
+        json!(beside_curve(1)),
+        "{answer}"
+    );
+    assert_eq!(answer["surface"], "back", "{answer}");
+    assert_eq!(answer["straight"], json!(true), "{answer}");
+    assert_eq!(domain(&answer), panel);
+    // The whole left side on the front surface, either way round.
+    let answer = boundary_at(&state, 1.0, [0.0, 10.0, 0.0], [0.0, 0.0, 0.0]).unwrap();
+    assert_eq!(
+        answer["boundary"]["curve"],
+        json!(beside_curve(4)),
+        "{answer}"
+    );
+    assert_eq!(answer["surface"], "front", "{answer}");
+    assert!(boundary_at(&state, 1.0, [2.0, 5.0, 0.0], [7.0, 5.0, 0.0]).is_err());
+    assert!(boundary_at(&state, 1.0, [10.0, 0.0, 0.0], [10.0, 0.0, 1.0]).is_err());
+    assert!(boundary_at(&state, 1.0, [2.0, 0.0, 0.5], [7.0, 0.0, 0.5]).is_err());
+    assert!(boundary_at(&state, 1.0, [8.0, 0.0, 0.0], [12.0, 0.0, 0.0]).is_err());
+    let answer = panel_at(&state, 1.0, [5.0, 5.0, 1.0]).unwrap();
+    assert_eq!(domain(&answer), panel);
+    assert!(panel_at(&state, 1.0, [15.0, 5.0, 0.0]).is_err());
+    assert!(panel_at(&state, 1.0, [5.0, 5.0, 0.5]).is_err());
+}

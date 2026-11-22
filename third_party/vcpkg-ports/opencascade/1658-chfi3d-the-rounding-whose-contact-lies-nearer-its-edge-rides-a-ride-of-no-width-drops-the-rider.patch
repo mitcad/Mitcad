@@ -25,14 +25,8 @@ round: the volume jumped by 2.
   its corners (as 1650 drops it once the other rolls on its edge), not
   ridden on the other way round.
 
-Test: geometry/tests/test_fillet_roof_slab.cpp, test_slab (ctest
-geometry.fillet_roof_slab): the roof slab rounded on all its edges with
-0.862 and 0.865, valid and closed, its volume against the roundings' union
-(a jump of 2 without the patch). It fails with this patch and 10 later
-patches that change the same lines reverted together, so the test does not
-single this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the
-patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1658.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 9717114e..2d41f105 100644

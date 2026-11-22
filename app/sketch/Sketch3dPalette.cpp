@@ -444,6 +444,7 @@ void Sketch3dPalette::refresh() {
     m_loggedEditLayout.clear();
     m_selectionShown.clear();
     m_revealSelection = false;
+    m_selectionRevealed = false;
     refreshKind();
     refreshTool();
     refreshEdit();
@@ -468,6 +469,7 @@ void Sketch3dPalette::refresh() {
   if (shown != m_selectionShown) {
     m_selectionShown = shown;
     m_revealSelection = !shown.isEmpty() && !m_c.toolActive();
+    m_selectionRevealed = false;
   }
   m_hover->setText(m_c.hoverText().isEmpty() ? QString() : tr("Under the pointer: %1").arg(m_c.hoverText()));
   m_hover->setVisible(!m_c.hoverText().isEmpty() && !m_c.toolActive());
@@ -1451,11 +1453,24 @@ void Sketch3dPalette::logEditLayout() {
     scroll = qobject_cast<QScrollArea*>(up);
   }
   // Scrolling the card (the wheel, its bar) moves every row: the places
-  // are logged again where they are then.
+  // are logged again where they are then. A scroll that is not the
+  // palette's own (the user's, a focus moving to a row) ends the held
+  // reveal of the selection (mitcad#2189).
   if (scroll != nullptr && !m_scrollWatched) {
     m_scrollWatched = true;
-    connect(scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { scheduleEditLayout(); });
+    connect(scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+      if (!m_scrollingCard) {
+        m_revealSelection = false;
+      }
+      scheduleEditLayout();
+    });
   }
+  // The palette's own scroll of the card.
+  const auto scrollCard = [this](QScrollBar* bar, int value) {
+    m_scrollingCard = true;
+    bar->setValue(value);
+    m_scrollingCard = false;
+  };
   // A list that the user's edit changed is brought into the card's sight
   // (a long card, a small screen: the row just edited stays where it can
   // be clicked), before the places are read: vertically only, its top
@@ -1468,30 +1483,41 @@ void Sketch3dPalette::logEditLayout() {
     const int top = m_itemsBox->mapTo(scroll->widget(), QPoint(0, 0)).y();
     const int bottom = top + std::min(m_itemsBox->height(), std::max(height / 2, 1));
     if (top < bar->value()) {
-      bar->setValue(top);
+      scrollCard(bar, top);
     } else if (bottom > bar->value() + height) {
-      bar->setValue(bottom - height);
+      scrollCard(bar, bottom - height);
+    }
+    // A list edit after the selection's reveal is the newer one: the
+    // selection no longer pulls the card back to it.
+    if (m_selectionRevealed) {
+      m_revealSelection = false;
     }
   }
   m_revealItems = false;
   // A new selection's description is brought into sight the same way, its
   // whole height where the card is tall enough, else its top (mitcad#1592:
-  // in the Docked card it was below the visible part).
+  // in the Docked card it was below the visible part). The reveal is held
+  // for the later passes (mitcad#2189): the card may still be laid out
+  // again after this one (the relations' rows growing under load, when the
+  // pass came before the card had settled), which moved the description
+  // below the card's sight after it had been scrolled into it; each pass
+  // scrolls only when it is out of sight, so a settled card stays still.
   if (m_revealSelection && scroll != nullptr && scroll->widget() != nullptr && m_selection->isVisible()) {
     QScrollBar* bar = scroll->verticalScrollBar();
     const int height = scroll->viewport()->height();
     const int top = m_selection->mapTo(scroll->widget(), QPoint(0, 0)).y();
     const int bottom = top + std::min(m_selection->height(), std::max(height, 1));
     if (top < bar->value()) {
-      bar->setValue(top);
+      scrollCard(bar, top);
     } else if (bottom > bar->value() + height) {
-      bar->setValue(bottom - height);
+      scrollCard(bar, bottom - height);
     }
+    m_selectionRevealed = true;
   }
-  m_revealSelection = false;
   // While Symmetric or On Plane waits for its plane (mitcad#1661), the
   // sketch's plane buttons are in sight: the selection's reveal above may
-  // have scrolled them out of the card's top.
+  // have scrolled them out of the card's top, and does not pull the card
+  // back to it while they are shown.
   if (scroll != nullptr && scroll->widget() != nullptr &&
       m_c.sourcePick() == Sketch3dController::SourcePick::Plane) {
     if (const QWidget* first = m_editControls.value(QStringLiteral("plane XY")); first != nullptr && first->isVisible()) {
@@ -1500,10 +1526,11 @@ void Sketch3dPalette::logEditLayout() {
       const int top = first->mapTo(scroll->widget(), QPoint(0, 0)).y();
       const int bottom = top + first->height();
       if (top < bar->value()) {
-        bar->setValue(top);
+        scrollCard(bar, top);
       } else if (bottom > bar->value() + height) {
-        bar->setValue(bottom - height);
+        scrollCard(bar, bottom - height);
       }
+      m_revealSelection = false;
     }
   }
   if (scroll != nullptr) {

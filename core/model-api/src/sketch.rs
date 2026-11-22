@@ -327,6 +327,12 @@ named_enum! {
             /// others imply it, it conflicts, or the solve moves anything.
             #[serde(default)]
             auto: bool,
+            /// Nothing changes (mitcad#2184): the answer says that the
+            /// constraint would be added (`"check": true`), or the command
+            /// is refused as it would be. Horizontal/Vertical asks with it
+            /// which direction it can add.
+            #[serde(default)]
+            check: bool,
         },
         "sketch.add_dimension" => AddDimension {
             sketch: FeatureUid,
@@ -797,11 +803,126 @@ named_enum! {
             #[serde(default)]
             continuity: mitcad_model::sketch::blend::Continuity,
         },
+        // Explode Text (mitcad#2163, `sketch_explode_text.rs` of the
+        // model): a text or QR code as plain lines and splines.
+        "sketch.explode_text" => ExplodeText {
+            sketch: FeatureUid,
+            /// The text, `t5`.
+            text: String,
+        },
+        // Extend to Meet (mitcad#2178, `modify/meet.rs` of the sketch
+        // crate): two lines or arcs extended or shortened to where they
+        // meet, ending in one point.
+        "sketch.extend_to_meet" => ExtendToMeet {
+            sketch: FeatureUid,
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            a: EntityUid,
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            b: EntityUid,
+            /// The picks: the part of each curve that stays.
+            at_a: [f64; 2],
+            at_b: [f64; 2],
+            /// Which of the results, nearest the picks first (0), counted
+            /// round.
+            #[serde(default)]
+            result: usize,
+        },
+        // Insert Points (mitcad#2232, `point_file.rs` and `point_fit.rs`
+        // of the sketch crate): a file's x y coordinates as one spline or
+        // as points, an airfoil's at its chord and angle of attack.
+        "sketch.import_points" => ImportPoints {
+            sketch: FeatureUid,
+            /// The `.csv`, `.txt` or `.dat` file read; or `text`.
+            #[serde(default)]
+            path: Option<String>,
+            /// The file's text instead of `path`: nothing is read.
+            #[serde(default)]
+            text: Option<String>,
+            /// `spline` (the default) or `points`.
+            #[serde(default, rename = "as")]
+            shape: PointsAs,
+            /// The file's numbers in the design's length unit, times this.
+            #[serde(default = "one")]
+            scale: f64,
+            /// Where the file's origin goes (an airfoil's leading edge), mm.
+            #[serde(default)]
+            at: Option<[f64; 2]>,
+            /// Default: when the first and last points coincide.
+            #[serde(default)]
+            closed: Option<bool>,
+            /// mm; default the larger of 0.01 mm and half the file's last
+            /// decimal place times the scale (an airfoil's chord).
+            #[serde(default)]
+            tolerance: Option<f64>,
+            /// Default: when the file is an airfoil.
+            #[serde(default)]
+            airfoil: Option<bool>,
+            /// An airfoil's chord length, mm (default 100).
+            #[serde(default)]
+            chord: Option<f64>,
+            /// An airfoil's angle of attack, radians.
+            #[serde(default)]
+            angle: f64,
+            /// The share of the chord `at` places and `angle` turns about.
+            #[serde(default)]
+            pivot: f64,
+            /// An airfoil mirrored across its chord.
+            #[serde(default)]
+            flip: bool,
+            #[serde(default = "yes")]
+            close_trailing_edge: bool,
+        },
     }
+}
+
+/// What `sketch.import_points` makes of the points (mitcad#2232).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PointsAs {
+    #[default]
+    Spline,
+    Points,
 }
 
 fn one() -> f64 {
     1.0
+}
+
+/// `sketch.explode_text` (mitcad#2163): the sketch edit's answer with the
+/// new curves in `made` (contour by contour, piece by piece), the later
+/// features whose names of the text's pieces were rewritten in `rewritten`
+/// (`{"uid", "name"}` each), and the names that could not be mapped and
+/// the contours left out in `warnings`.
+fn explode_text<K: Kernel>(
+    doc: &mut Document<K>,
+    sketch: FeatureUid,
+    text: &str,
+) -> Result<Value, ApiError> {
+    let uid = mitcad_model::internal::ids::parse_number(text, "t")
+        .map(EntityUid)
+        .ok_or_else(|| ApiError(format!("{text} is not a text like \"t5\"")))?;
+    let exploded = doc.explode_sketch_text(sketch, uid)?;
+    let mut value = report_json(&exploded.report, doc.sketch_def(sketch));
+    value["made"] = json!(
+        exploded
+            .curves
+            .iter()
+            .map(|c| Ref::Curve(*c).to_string())
+            .collect::<Vec<_>>()
+    );
+    value["rewritten"] = json!(
+        exploded
+            .rewritten
+            .iter()
+            .map(|(uid, name)| json!({"uid": uid, "name": name}))
+            .collect::<Vec<_>>()
+    );
+    let mut warnings = exploded.report.warnings.clone();
+    warnings.extend(exploded.warnings);
+    if !warnings.is_empty() {
+        value["warnings"] = json!(warnings);
+    }
+    Ok(value)
 }
 
 /// A code's content, size and place checked before it is added or
@@ -864,6 +985,70 @@ pub(super) fn svg_info_json(path: &str) -> Result<Value, ApiError> {
         "stroked": drawing.shapes.iter().filter(|s| s.stroke.is_some()).count(),
         "texts": drawing.texts.len(),
         "warnings": drawing.warnings,
+    }))
+}
+
+/// A point file read (mitcad#2232), from its path or its text, with the
+/// name its undo step gets (the file's name; `Points` for a text). A
+/// panic of the reader is its error (mitcad#922).
+fn read_point_file(
+    path: Option<&str>,
+    text: Option<&str>,
+) -> Result<(mitcad_model::sketch::point_file::PointFile, String), ApiError> {
+    use mitcad_model::sketch::point_file;
+    match (path, text) {
+        (Some(path), None) => {
+            let file = mitcad_model::reader_guard::catch_panic(
+                path,
+                || {
+                    let bytes =
+                        std::fs::read(path).map_err(|e| ApiError(format!("{path}: {e}")))?;
+                    point_file::read(&String::from_utf8_lossy(&bytes))
+                        .map_err(|e| ApiError(format!("{path}: {e}")))
+                },
+                ApiError,
+            )?;
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned());
+            Ok((file, name))
+        }
+        (None, Some(text)) => point_file::read(text)
+            .map(|file| (file, "Points".to_owned()))
+            .map_err(ApiError),
+        _ => Err(ApiError(
+            "give the points' file as path or their text as text, one of the two".to_owned(),
+        )),
+    }
+}
+
+/// The `points_info` query (mitcad#2232): what the Insert Points dialog
+/// shows of a point file: its points, its name, whether it is an airfoil
+/// and in which layout, its extent, and whether its first and last points
+/// coincide.
+pub(super) fn points_info_json(path: &str) -> Result<Value, ApiError> {
+    use mitcad_model::sketch::point_file::SAME_POINT;
+    let (file, _) = read_point_file(Some(path), None)?;
+    let extent = |axis: usize| {
+        let values = file.points.iter().map(|p| p[axis]);
+        [
+            values.clone().fold(f64::INFINITY, f64::min),
+            values.fold(f64::NEG_INFINITY, f64::max),
+        ]
+    };
+    let (first, last) = (file.points[0], file.points[file.points.len() - 1]);
+    Ok(json!({
+        "points": file.points.len(),
+        "name": file.name,
+        "airfoil": file.airfoil.is_some(),
+        "layout": file.airfoil.as_ref().map(|a| a.layout.name()),
+        "profile_points": file.airfoil.as_ref().map(|a| a.profile.len()),
+        "not_airfoil": (!file.not_airfoil.is_empty()).then_some(&file.not_airfoil),
+        "x": extent(0),
+        "y": extent(1),
+        "closed": (first[0] - last[0]).hypot(first[1] - last[1]) <= SAME_POINT,
+        "decimals": file.decimals,
+        "warnings": file.warnings,
     }))
 }
 
@@ -1115,6 +1300,58 @@ fn held_whole(value: &Value) -> Value {
     }
 }
 
+/// `sketch.add_constraint`'s edit, also for its `check` (mitcad#2184):
+/// with `auto` only when safe (mitcad#1024); else a coincident of two
+/// curve ends joins them (mitcad#260) and an older constraint the new one
+/// makes redundant goes in its favour (mitcad#287). `joined` takes the
+/// answer's `merged` and `implied_removed`.
+fn add_constraint_edit(
+    edit: &mut SketchEdit<'_>,
+    constraint: ConstraintKind,
+    auto: bool,
+    joined: &mut Option<Value>,
+) -> Result<(), String> {
+    if auto {
+        // Added automatically by a drawing tool, only when safe
+        // (mitcad#1024): nothing else changes.
+        edit.add_constraint_if_safe(constraint)?;
+        return Ok(());
+    }
+    let before = edit.solved().ok().map(|s| s.status);
+    // Two curve ends made coincident become one point (mitcad#260).
+    let merge = edit.coincident_merge(&constraint);
+    let id = edit.add_constraint(constraint);
+    // A curve of a kind it does not take is refused in words before the
+    // solve (mitcad#2114).
+    edit.def.check_new_constraint(id)?;
+    if let Some((keep, drop)) = merge {
+        edit.merge_coincident(id, keep, drop)?;
+        *joined = Some(json!({
+            "merged": {"kept": Ref::Point(keep), "removed": Ref::Point(drop)}
+        }));
+    }
+    if let Some(before) = before {
+        // A Symmetry of circles or arcs whose radii are fixed already
+        // mirrors their positions only (mitcad#865).
+        edit.fit_symmetric(id, &before);
+        // An older constraint the new one makes redundant goes in its
+        // favour (mitcad#287).
+        let implied = edit.drop_implied(id, &before);
+        if !implied.is_empty() {
+            let list: Vec<Value> = implied
+                .iter()
+                .map(|c| {
+                    json!({"constraint": c.id.to_string(),
+                           "type": c.kind.type_name()})
+                })
+                .collect();
+            joined.get_or_insert_with(|| json!({}))["implied_removed"] = json!(list);
+        }
+        edit.require_needed(Freedom::of(&before))?;
+    }
+    Ok(())
+}
+
 /// A circular pattern's new centre point no longer fixed: the dimensions
 /// of its coordinates written as expressions hold it (mitcad#1912).
 fn free_center(edit: &mut SketchEdit<'_>, pattern: ConstraintUid) {
@@ -1205,7 +1442,7 @@ fn refused_change(command: &SketchCommand) -> &'static str {
         C::Fillet { .. } => "the fillet",
         C::Chamfer { .. } => "the chamfer",
         C::Trim { .. } => "the trim",
-        C::Extend { .. } => "the extension",
+        C::Extend { .. } | C::ExtendToMeet { .. } => "the extension",
         C::Break { .. } => "the split",
         C::Offset { .. } | C::EditOffset { .. } => "the offset",
         C::Mirror { .. } => "the mirror",
@@ -1363,9 +1600,18 @@ pub(super) fn step_kind(command: &Value) -> Option<String> {
 
 /// The curves a `sketch.*` command changes that its work step names as
 /// `changed` (mitcad#1750): a `sketch.trim`'s or `sketch.extend`'s
-/// `curve`. They stay with the step that made them.
+/// `curve`, a `sketch.extend_to_meet`'s `a` and `b` (mitcad#2178). They
+/// stay with the step that made them.
 pub(super) fn step_changes(command: &Value) -> Vec<EntityUid> {
     let name = command["cmd"].as_str().unwrap_or_default();
+    // Extend to Meet (mitcad#2178) changes both its curves.
+    if name == "sketch.extend_to_meet" {
+        return ["a", "b"]
+            .iter()
+            .filter_map(|key| command[*key].as_str())
+            .filter_map(|curve| EntityUid::parse_curve(curve).ok())
+            .collect();
+    }
     if name != "sketch.trim" && name != "sketch.extend" && name != "sketch.break" {
         return Vec::new();
     }
@@ -1727,6 +1973,43 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
             SketchCommand::ExplodeBlock { sketch, instance } => {
                 super::sketch_blocks::explode_block(self, sketch, instance)?
             }
+            SketchCommand::ExplodeText { sketch, text } => explode_text(self, sketch, &text)?,
+            SketchCommand::ImportPoints {
+                sketch,
+                path,
+                text,
+                shape,
+                scale,
+                at,
+                closed,
+                tolerance,
+                airfoil,
+                chord,
+                angle,
+                pivot,
+                flip,
+                close_trailing_edge,
+            } => {
+                let unit = self
+                    .parameters()
+                    .context()
+                    .default_length_unit
+                    .millimetres();
+                let options = mitcad_model::sketch::point_file::PointOptions {
+                    as_points: shape == PointsAs::Points,
+                    scale: scale * unit,
+                    at: at.unwrap_or_default(),
+                    closed,
+                    tolerance,
+                    airfoil,
+                    chord: chord.unwrap_or(100.0),
+                    angle,
+                    pivot,
+                    flip,
+                    close_trailing_edge,
+                };
+                self.import_points(sketch, path.as_deref(), text.as_deref(), &options)?
+            }
             SketchCommand::RedefinePlane(command) => {
                 super::sketch_plane::SketchPlaneOps::redefine_plane_command(self, command)?
             }
@@ -2028,6 +2311,20 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                     .collect()
             })
             .unwrap_or_default();
+        // The outline set (mitcad#2194): the regions at an even nesting
+        // depth, a plate less its holes; none when two of the sketch's
+        // closed curves cross, which `curves_cross` tells.
+        let outlines = output.map(|o| (o, o.outline_set()));
+        let outline_set: Vec<String> = outlines
+            .as_ref()
+            .map(|(o, set)| {
+                set.regions
+                    .iter()
+                    .map(|&i| o.region_info[i].profile.key.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let curves_cross = outlines.as_ref().is_some_and(|(_, set)| set.crossing);
         let frame = output.map(|o| {
             json!({"origin": o.frame.origin, "x_axis": o.frame.x_axis, "y_axis": o.frame.y_axis,
                    "normal": o.frame.normal()})
@@ -2282,6 +2579,8 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             "patterns": patterns,
             "offsets": offsets,
             "regions": regions,
+            "outline_set": outline_set,
+            "curves_cross": curves_cross,
         });
         let value = status_json(&status, def);
         for key in ["dof", "fully_constrained", "redundant", "conflicts"] {
@@ -2716,6 +3015,17 @@ trait SketchLocal<K: Kernel> {
         stroke_outline: bool,
     ) -> Result<Value, ApiError>;
 
+    /// `sketch.import_points` (mitcad#2232): the points of the file at
+    /// `path` (or its `text`) as one spline or as points; one undo step
+    /// named after the file (`Insert naca2412.dat`).
+    fn import_points(
+        &mut self,
+        sketch: FeatureUid,
+        path: Option<&str>,
+        text: Option<&str>,
+        options: &mitcad_model::sketch::point_file::PointOptions,
+    ) -> Result<Value, ApiError>;
+
     /// The commands that edit a sketch through [`SketchEdit`].
     fn edit_command(&mut self, command: SketchCommand) -> Result<Value, ApiError>;
 
@@ -2875,6 +3185,60 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         Ok(value)
     }
 
+    fn import_points(
+        &mut self,
+        sketch: FeatureUid,
+        path: Option<&str>,
+        text: Option<&str>,
+        options: &mitcad_model::sketch::point_file::PointOptions,
+    ) -> Result<Value, ApiError> {
+        use mitcad_model::sketch::point_file::{self, PlannedCurve};
+        let (file, label) = read_point_file(path, text)?;
+        let planned = point_file::plan(&file, options).map_err(|e| match path {
+            Some(path) => ApiError(format!("{path}: {e}")),
+            None => ApiError(e),
+        })?;
+        let depth = self.undo_depth();
+        let (made, report) = self.edit_sketch(sketch, "Insert Points into {sketch}", |edit| {
+            point_file::insert(edit, &planned)
+        })?;
+        // One step named after the file, as Insert SVG's in a new sketch.
+        self.merge_undo(depth, &format!("Insert {label}"));
+        let mut value = report_json(&report, self.sketch_def(sketch));
+        let curve = |id: Option<EntityUid>| id.map(|c| Ref::Curve(c).to_string());
+        value["curves"] = json!(made.curves);
+        value["points"] = json!(made.points);
+        value["spline"] = json!(curve(made.spline));
+        value["closing_line"] = json!(curve(made.closing_line));
+        value["leading_edge"] = json!(made.leading_edge.map(|p| Ref::Point(p).to_string()));
+        value["fit"] = json!(match planned.curve {
+            PlannedCurve::Points => None,
+            PlannedCurve::Through => Some("through"),
+            PlannedCurve::Fitted(_) => Some("least_squares"),
+        });
+        value["control_points"] = json!(match planned.curve {
+            PlannedCurve::Fitted(_) => made.spline_points,
+            _ => 0,
+        });
+        value["fit_points"] = json!(match planned.curve {
+            PlannedCurve::Through => made.spline_points,
+            _ => 0,
+        });
+        value["closed"] = json!(planned.closed);
+        value["airfoil"] = json!(planned.airfoil);
+        value["airfoil_name"] = json!(if planned.airfoil {
+            file.name.clone()
+        } else {
+            None
+        });
+        value["tolerance"] = json!(planned.tolerance);
+        value["deviation"] = json!(planned.deviation);
+        let mut warnings = report.warnings.clone();
+        warnings.extend(planned.warnings);
+        value["warnings"] = json!(warnings);
+        Ok(value)
+    }
+
     fn edit_command(&mut self, command: SketchCommand) -> Result<Value, ApiError> {
         use SketchCommand as C;
         let mut made: Vec<String> = Vec::new();
@@ -2955,6 +3319,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             C::InsertSplinePoint { sketch, .. } => (*sketch, "Insert Spline Point in {sketch}"),
             C::Scale { sketch, .. } => (*sketch, "Scale {sketch}"),
             C::BlendCurve { sketch, .. } => (*sketch, "Blend Curve in {sketch}"),
+            C::ExtendToMeet { sketch, .. } => (*sketch, "Extend to Meet in {sketch}"),
             C::Create { .. }
             | C::AddRectangle { .. }
             | C::AddCircle { .. }
@@ -2970,7 +3335,9 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             | C::InsertBlock { .. }
             | C::ExplodeBlock { .. }
             | C::AutoConstrain { .. }
-            | C::RedefinePlane(_) => {
+            | C::RedefinePlane(_)
+            | C::ExplodeText { .. }
+            | C::ImportPoints { .. } => {
                 unreachable!("handled above")
             }
         };
@@ -2979,6 +3346,28 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         };
         // What a refusal for conflicting constraints names (mitcad#1566).
         let change = refused_change(&command);
+        // A constraint only checked (mitcad#2184): the same edit on a copy
+        // of the design, which is then dropped; refused as it would be.
+        if let C::AddConstraint {
+            constraint,
+            auto,
+            check: true,
+            ..
+        } = command
+        {
+            let mut joined = None;
+            self.check_sketch_edit(sketch, label, |edit| {
+                edit.change = change.to_owned();
+                add_constraint_edit(edit, constraint, auto, &mut joined)
+            })?;
+            let mut value = json!({"check": true});
+            if let Some(Value::Object(fields)) = joined {
+                for (key, field) in fields {
+                    value[key] = field;
+                }
+            }
+            return Ok(value);
+        }
         // The drawing tools' point inputs as written: the points they
         // became, and coordinates written as expressions (mitcad#1897).
         let drawn = DrawnInputs::default();
@@ -3452,51 +3841,8 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     made_ref.push(id);
                 }
                 C::AddConstraint {
-                    constraint,
-                    auto: true,
-                    ..
-                } => {
-                    // Added automatically by a drawing tool, only when
-                    // safe (mitcad#1024): nothing else changes.
-                    edit.add_constraint_if_safe(constraint)?;
-                }
-                C::AddConstraint { constraint, .. } => {
-                    let before = edit.solved().ok().map(|s| s.status);
-                    // Two curve ends made coincident become one point
-                    // (mitcad#260).
-                    let merge = edit.coincident_merge(&constraint);
-                    let id = edit.add_constraint(constraint);
-                    // A curve of a kind it does not take is refused in
-                    // words before the solve (mitcad#2114).
-                    edit.def.check_new_constraint(id)?;
-                    if let Some((keep, drop)) = merge {
-                        edit.merge_coincident(id, keep, drop)?;
-                        *joined_ref = Some(json!({
-                            "merged": {"kept": Ref::Point(keep), "removed": Ref::Point(drop)}
-                        }));
-                    }
-                    if let Some(before) = before {
-                        // A Symmetry of circles or arcs whose radii are
-                        // fixed already mirrors their positions only
-                        // (mitcad#865).
-                        edit.fit_symmetric(id, &before);
-                        // An older constraint the new one makes redundant
-                        // goes in its favour (mitcad#287).
-                        let implied = edit.drop_implied(id, &before);
-                        if !implied.is_empty() {
-                            let list: Vec<Value> = implied
-                                .iter()
-                                .map(|c| {
-                                    json!({"constraint": c.id.to_string(),
-                                           "type": c.kind.type_name()})
-                                })
-                                .collect();
-                            joined_ref.get_or_insert_with(|| json!({}))["implied_removed"] =
-                                json!(list);
-                        }
-                        edit.require_needed(Freedom::of(&before))?;
-                    }
-                }
+                    constraint, auto, ..
+                } => add_constraint_edit(edit, constraint, auto, joined_ref)?,
                 C::AddDimension {
                     dimension,
                     value,
@@ -4082,6 +4428,21 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let blend = edit.blend_curve(curve1, at1, curve2, at2, continuity)?;
                     made_ref.push(Ref::Curve(blend.spline).to_string());
                 }
+                C::ExtendToMeet {
+                    a,
+                    b,
+                    at_a,
+                    at_b,
+                    result,
+                    ..
+                } => {
+                    let met = edit.extend_to_meet(a, at_a, b, at_b, result)?;
+                    *joined_ref = Some(json!({
+                        "joined": Ref::Point(met.point),
+                        "results": met.results,
+                        "result": met.result,
+                    }));
+                }
                 C::Create { .. }
                 | C::AddRectangle { .. }
                 | C::AddCircle { .. }
@@ -4097,7 +4458,9 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 | C::InsertBlock { .. }
                 | C::ExplodeBlock { .. }
                 | C::AutoConstrain { .. }
-                | C::RedefinePlane(_) => {
+                | C::RedefinePlane(_)
+                | C::ExplodeText { .. }
+                | C::ImportPoints { .. } => {
                     unreachable!("handled above")
                 }
             }
@@ -4632,10 +4995,10 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         context: &Option<OccurrencePath>,
         value: &mut Value,
     ) {
-        let source = TopoName::Face(face.clone());
         let occurrence = occurrence.as_ref().map(|o| &o.0[..]);
         let context = context.as_ref().map(|c| &c.0[..]);
-        match self.project_from(uid, &source, body, true, occurrence, context) {
+        // Marked as the sketch's automatic outline (mitcad#2197).
+        match self.project_face_outline(uid, face, body, occurrence, context) {
             Ok(report) => value["projected"] = names(&report.entities),
             Err(error) => {
                 value["warnings"] =

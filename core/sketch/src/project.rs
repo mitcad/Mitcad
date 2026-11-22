@@ -2846,6 +2846,7 @@ mod tests {
             chain: Vec::new(),
             after: None,
             outline: false,
+            automatic: false,
         };
         let warning = |ids: &[u32]| {
             ProjectionFollow {

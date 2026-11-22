@@ -192,13 +192,17 @@ ui_expect_new "Projects tree: Shop (local, current): parts/ | bracket.mitcad v1 
 
 echo "--- Save of an untitled design starts in the selected folder"
 ui_mark
-ui_step "close (Ctrl+W)"                 ui_key ctrl+w
-ui_expect_new "Document closed" "an untitled design (New Design would name one here)"
 row "Shop/parts/"
+# Selected before the close: the last design closes to the Start page
+# (mitcad#2142), which hides the Docked layout's panels.
 ui_step "select the folder"              ui_click_logged "Projects row Shop/parts/"
 # Logged when the selection changes: the folder may be selected already
 # (the new design's row went, its folder stayed selected).
 ui_expect_log "Projects panel selected Shop/parts/" "selected"
+ui_step "close (Ctrl+W)"                 ui_key ctrl+w
+ui_expect_new "Document closed" "the design closed (New Design would name one here)"
+ui_expect_new "Last design closed: Start page" "the Start page, an empty untitled design under it"
+# Save As of the untitled design waiting under the page shows it.
 ui_step "save (Ctrl+S)"                  ui_key ctrl+s
 # The project picker (mitcad#176), the selected folder preselected.
 ui_expect_new "Project picker target Shop/parts/Untitled.mitcad: free" "the picker starts in the selected folder" 20

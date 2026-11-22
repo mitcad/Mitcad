@@ -13,18 +13,8 @@ The vector of the inverse function Blend_SurfCurvFuncInv is (guide,
 restriction, arc): the restriction's parameter is solinvs(2) and the arc's
 solinvs(3), as the Blend_OnRst1 case and PerformFirstSection use them.
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow),
-test_concave_rounding_rolls_on_a_strips_far_edge,
-test_rounding_beside_a_round_corner_ends_inside_its_faces,
-test_rounding_rolls_beside_a_round_corner,
-test_rounding_rolls_on_a_bevel_edge_round_the_corners,
-test_roundings_on_a_low_step and test_roundings_over_several_narrow_faces:
-roundings whose ball rolls on an edge of a face (a restriction) beside
-other faces; without the patch they fail or come out wrong. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py). (The
-rib's top edge rounded wider than its top, named before, succeeds without
-the patch.)
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0010.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
 index 7b05208..5f06577 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx

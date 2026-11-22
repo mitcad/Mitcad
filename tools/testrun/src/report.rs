@@ -68,6 +68,35 @@ pub struct Summary<'a> {
     /// A release gate's geometry tests skipped by their fingerprints and
     /// the passes kept (`fingerprint::Plan::text`, mitcad#1822).
     pub release: Option<&'a str>,
+    /// The first claims on memory that held other tests back
+    /// (`claims_line`, mitcad#2177).
+    pub claims: Option<&'a str>,
+}
+
+/// The report's line of the first claims on memory (`schedule::claimant`,
+/// mitcad#2177): each test whose claim held tests ranked below it back,
+/// since when, when it started and its prediction. `claims`: the index
+/// into `outcomes` and the seconds from the run's start. None without one.
+pub fn claims_line(outcomes: &[Outcome], claims: &[(usize, f64)]) -> Option<String> {
+    let parts: Vec<String> = claims
+        .iter()
+        .filter_map(|&(i, at)| {
+            let o = outcomes.get(i)?;
+            Some(format!(
+                "{} from {}, started {} ({} predicted)",
+                o.name,
+                clock(at),
+                clock(o.start),
+                size(o.predicted_memory)
+            ))
+        })
+        .collect();
+    (!parts.is_empty()).then(|| {
+        format!(
+            "First claim on memory (the tests ranked below left it room): {}",
+            parts.join("; ")
+        )
+    })
 }
 
 /// A duration as "41 min 12 s".
@@ -189,6 +218,9 @@ pub fn render(s: &Summary) -> String {
     let _ = writeln!(out, "Measured with {}.", s.method);
     if let Some(free) = s.free {
         let _ = writeln!(out, "{free}");
+    }
+    if let Some(claims) = s.claims {
+        let _ = writeln!(out, "{claims}");
     }
     let _ = writeln!(out, "Results: {}", counts(outcomes));
     if let Some(stop) = s.stop {
@@ -462,6 +494,27 @@ mod tests {
         };
         let text = render(&summary);
         assert!(text.contains(release), "{text}");
+    }
+
+    #[test]
+    fn the_first_claims_on_memory_are_reported() {
+        let mut outcomes = [
+            outcome("geometry.small", ResultKind::Passed, 0.0, 30.0),
+            outcome("core.cargo_build", ResultKind::Passed, 41.0, 900.0),
+        ];
+        outcomes[1].predicted_memory = 25 << 30;
+        assert_eq!(claims_line(&outcomes, &[]), None);
+        let line = claims_line(&outcomes, &[(1, 12.0)]).unwrap();
+        let expected = "First claim on memory (the tests ranked below left it room): \
+                        core.cargo_build from 0:12, started 0:41 (25.0 GiB predicted)";
+        assert_eq!(line, expected);
+        let summary = Summary {
+            elapsed: 900.0,
+            outcomes: &outcomes,
+            claims: Some(&line),
+            ..Summary::default()
+        };
+        assert!(render(&summary).contains(expected));
     }
 
     #[test]

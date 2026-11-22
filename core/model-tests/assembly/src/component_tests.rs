@@ -217,15 +217,17 @@ fn new_component_operations_make_and_remove_components() {
         .unwrap()
         .uid;
     assert_eq!(b.doc.status(fillet), Some(&FeatureStatus::Ok));
-    // Another operation would leave the fillet's component without its
-    // maker: refused.
+    // Another operation takes the fillet of its body along (mitcad#2185),
+    // but a sketch of the component on none of its geometry would be left
+    // without the component's maker: refused.
+    let sketch = b.doc.add_sketch(SketchPlane::Xy).unwrap().uid;
     let error = b
         .doc
         .edit_feature(uid, &extrude(b.sketch, &[&b.region], 5.0, "new_body", &[]))
         .unwrap_err()
         .to_string();
     assert!(error.contains("has features or occurrences"), "{error}");
-    b.doc.delete_feature(fillet, false).unwrap();
+    b.doc.delete_feature(sketch, false).unwrap();
     b.doc
         .edit_feature(uid, &extrude(b.sketch, &[&b.region], 5.0, "new_body", &[]))
         .unwrap();
@@ -235,9 +237,16 @@ fn new_component_operations_make_and_remove_components() {
         b.doc.body_component(BodyUid::new(uid, 0)),
         Some(ComponentUid::ROOT)
     );
-    // And back; deleting the feature removes its component.
+    assert_eq!(b.doc.feature(fillet).unwrap().component, ComponentUid::ROOT);
+    assert_eq!(b.doc.status(fillet), Some(&FeatureStatus::Ok));
+    // And back, the fillet with it; deleting the feature (and its fillet)
+    // removes its component.
     b.doc.edit_feature(uid, &new).unwrap();
     assert_eq!(b.doc.assembly().components.len(), 1);
+    let made = b.doc.assembly().created_by(uid).unwrap();
+    assert_eq!(b.doc.feature(fillet).unwrap().component, made);
+    assert_eq!(b.doc.status(fillet), Some(&FeatureStatus::Ok));
+    b.doc.delete_feature(fillet, false).unwrap();
     b.doc.delete_feature(uid, false).unwrap();
     assert!(b.doc.assembly().is_empty());
     // Undo brings it back.

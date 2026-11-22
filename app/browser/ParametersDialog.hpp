@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
+
 #include <QDialog>
 #include <QHash>
 #include <QJsonObject>
@@ -49,25 +51,35 @@ public:
   void refresh();
 
 private:
-  // Limits' columns come after the first six (whose numbers test scripts use).
-  enum Column { kName, kUnit, kExpression, kValue, kComment, kFavorite, kMin, kMax, kStep, kStrict, kSlider };
+  // Limits' columns come after the first six (whose numbers test scripts
+  // use); a user parameter's delete button last (mitcad#2202).
+  enum Column { kName, kUnit, kExpression, kValue, kComment, kFavorite, kMin, kMax, kStep, kStrict, kSlider, kDelete };
 
   QTreeWidgetItem* addRow(QTreeWidgetItem* parent, const QJsonObject& parameter);
   void edit(QTreeWidgetItem* item, int column);
   void cellEdited(QTreeWidgetItem* item, int column);
-  void addParameter();
-  void deleteParameter();
   void editFormula();
+  // Edit Formula for a parameter with a text (mitcad#2179): from the
+  // button with the saved expression, from a cell's fx with what is typed
+  // in the cell (whose editing ends first, without applying it). OK sets
+  // the formula and its limits as one undo step.
+  void formulaFromCell(QLineEdit* editor, const QString& name, const QString& unit, const QString& text);
+  void runFormulaEditor(const QString& name, const QString& unit, const QString& text);
   void updateButtons();
   void applyFilter();
   void logLayout();
+  // Narrows the wide columns towards their minimums when the window is
+  // narrower than the columns want (a small screen clamps it), so that the
+  // rows' delete buttons at their ends stay in view; widths the user set
+  // by dragging a header's edge are kept.
+  void fitColumns();
+  bool m_fittingColumns = false;
+  bool m_columnsByUser = false;
 
   DocumentHost& m_host;
   QTreeWidget* m_table = nullptr;
   QLineEdit* m_filter = nullptr;
   QLabel* m_message = nullptr;
-  QPushButton* m_add = nullptr;
-  QPushButton* m_delete = nullptr;
   QPushButton* m_formula = nullptr;
   QPushButton* m_ok = nullptr;
   bool m_building = false;
@@ -133,6 +145,68 @@ private:
   Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
   QString m_select;      // the row to select at the next refresh
   QString m_loggedOrder; // the rows' order as shown, told on each opening
+
+  // Groups of user parameters (mitcad#2180): under User Parameters each
+  // group is a collapsible row with its parameters and subgroups (the
+  // sort orders them within it); ungrouped parameters stay directly under
+  // User Parameters, and Favorites stays a view across the groups. New
+  // Group… makes one (in the selected group); a group row is renamed in
+  // place (double-click or F2) and deleted with Delete (asked only when
+  // it holds parameters, which move up a level). Parameters move by drag
+  // onto a group row or onto User Parameters, and by the context menu's
+  // Move to Group ▸. The filter matches group names too; the collapsed
+  // groups are kept per design for the session.
+  void newGroup();
+  void renameGroup(const QString& path, const QString& name);
+  void deleteGroup(const QString& path);
+  void moveToGroup(const QStringList& names, const QString& group);
+  void showContextMenu(const QPoint& at);
+  void groupExpansionChanged(QTreeWidgetItem* item, bool expanded);
+  // The user parameters selected (each once, Favorites' rows too).
+  QStringList selectedUserParameters() const;
+  // The group a new parameter or group goes in: the selected group row's,
+  // or the group of the selected user parameter; empty for none.
+  QString selectedGroup(bool ofParameter) const;
+  // A name for a new group in `parent` from the user; empty when cancelled.
+  QString askGroupName(const QString& title, const QString& parent,
+                       const std::function<QString(const QString&)>& make);
+  QPushButton* m_newGroup = nullptr;
+  QStringList m_groupPaths; // every group, a parent before its subgroups
+
+  // Adding and deleting in the table (mitcad#2202, GitHub
+  // mitcad/Mitcad#512). User Parameters ends in one empty row ("New
+  // parameter"), last whatever the sort and hidden while the search or
+  // Only limited filters the rows. Its Name, Unit (the design's length
+  // unit first), Expression and Comment are typed in place; Tab goes Name,
+  // Expression, Comment, Unit and round (Shift+Tab back). Enter, or leaving
+  // the row with a name and an expression, makes it a user parameter (one
+  // undo step) and a new empty row takes the keyboard; what the model
+  // refuses stays typed in the row, with the reason in the message line.
+  // Each user parameter's row ends in a delete button, disabled with what
+  // uses the parameter in its tooltip; deleting is undone as any change.
+  struct NewRow {
+    QString name;
+    QString unit; // the model's unit: empty for Number
+    bool unitChosen = false; // else the design's length unit
+    QString expression;
+    QString comment;
+    QString refusal; // the model's reason, in words
+  };
+  QTreeWidgetItem* newRow() const;
+  void addNewRow(QTreeWidgetItem* users, const QString& after);
+  void newRowEdited(QTreeWidgetItem* item, int column);
+  void newRowEditorClosed(int column, int hint);
+  void createFromNewRow(bool asked);
+  void addDeleteButton(QTreeWidgetItem* row, const QJsonObject& parameter);
+  void deleteParameter(const QString& name);
+  // The message line under the table, which takes no room while empty.
+  void setMessage(const QString& text);
+  NewRow m_new;
+  bool m_editNewRow = false; // the new empty row's Name is edited at the next refresh
+  int m_loggedNewHidden = -1;
+  QString m_loggedNewRow;
+  QString m_loggedInUse;
+  QString m_loggedHeld; // the slider value last told during a drag
 };
 
 } // namespace mitcad

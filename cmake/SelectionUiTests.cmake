@@ -39,8 +39,11 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli)
   # pick the same one; the shell UI tests use 90-189 (tools/ui-test-lib.sh).
   function(selection_ui_command_prefix display)
     if(selection_ui_platform STREQUAL "linux")
-      set(selection_ui_prefix "${MITCAD_XVFB_RUN_EXECUTABLE}" -a -n ${display} -s "-screen 0 1600x1000x24"
-          PARENT_SCOPE)
+      # Without WAYLAND_DISPLAY: the app picks Wayland in a Wayland session
+      # (mitcad#2031, DisplayPlatform.cpp) and would open on the desktop
+      # instead of xvfb-run's display.
+      set(selection_ui_prefix env -u WAYLAND_DISPLAY "${MITCAD_XVFB_RUN_EXECUTABLE}" -a -n ${display}
+          -s "-screen 0 1600x1000x24" PARENT_SCOPE)
     else()
       set(selection_ui_prefix "" PARENT_SCOPE)
     endif()
@@ -307,5 +310,31 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   if(selection_ui_platform STREQUAL "linux")
     set_property(TEST "${tutorials_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+  # The example tutorial opened over the Start page (mitcad#2168): at
+  # launch, after the last design closed and over a modified design, in the
+  # Floating and the Docked layout; each starts in an empty design of its own
+  # and is done to its end.
+  set(tutorials_start_ui_test "app.ui-${selection_ui_platform}-tutorials-start-page")
+  if(APPLE)
+    add_test(NAME "${tutorials_start_ui_test}"
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-tutorials-start-page-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-tutorials-start-page" "${selection_ui_web_browser}"
+              "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
+  else()
+    selection_ui_command_prefix(450)
+    add_test(NAME "${tutorials_start_ui_test}"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-tutorials-test.py" start-page
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-tutorials-start-page"
+              "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}"
+              "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
+  endif()
+  set_tests_properties("${tutorials_start_ui_test}" PROPERTIES TIMEOUT 1500 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${tutorials_start_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()

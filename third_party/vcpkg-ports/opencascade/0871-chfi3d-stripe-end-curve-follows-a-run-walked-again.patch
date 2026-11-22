@@ -47,12 +47,9 @@ no step that replaces a stripe's pieces after its extremities are made,
 so the change does nothing there. Within the port, JoinOverNarrowFaceFrom
 also takes pieces off a stripe's ends; its stripes end at corners, which
 make their end curves afterwards.
-Test: geometry/tests/port/p0871-closing-curve-after-a-kept-face.cpp (ctest
-geometry.port.0871): the block above, the chain started from the front
-edge and from the right arc: one valid solid, every tolerance within the
-walk's 1e-4, the same volume; the boundary, a hole of radius 9 leaving the
-strip 5 wide (no run), as before. Before the patch the first two fail
-(4.33 and 174, the second not valid).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0871.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
 index fa9444c9d..87c63d904 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx

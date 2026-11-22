@@ -56,7 +56,9 @@ radii from 0.5 and 2 to 0.9998 and 1. Equal radii and radii within
 tolapp3d keep their ways.
 
 Upstream: new.
-Test: geometry.fillet_unequal_torus_corner.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1860.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
 index a6889599..b507d947 100644

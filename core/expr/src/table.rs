@@ -423,6 +423,107 @@ impl fmt::Display for TableError {
 
 impl std::error::Error for TableError {}
 
+impl TableError {
+    /// The refusal of an expression in words a person reads (mitcad#2181,
+    /// `docs/ui-conventions.md` "What a message says"): what is wrong and
+    /// where in words, without the parser's byte offset that `Display`
+    /// (the agents' and the log's text) keeps. "The expression of
+    /// cabinet_length uses table_lenght, which is not a parameter. Did
+    /// you mean table_length?", with `near` the near miss of an unknown
+    /// name ([`ParameterTable::refusal_message`] finds it). `None` for the
+    /// errors that are not about an expression, whose text is in words
+    /// already.
+    pub fn message(&self, near: Option<&str>) -> Option<String> {
+        Some(match self {
+            Self::Parse { parameter, error } if parameter.is_empty() => {
+                format!("The expression cannot be read: {}.", error.message())
+            }
+            Self::Parse { parameter, error } => format!(
+                "The expression of {parameter} cannot be read: {}.",
+                error.message()
+            ),
+            Self::Eval {
+                parameter,
+                error: EvalError::UnknownReference { name, .. },
+            } => match (parameter.is_empty(), near) {
+                (true, None) => format!("The expression uses {name}, which is not a parameter."),
+                (true, Some(near)) => format!(
+                    "The expression uses {name}, which is not a parameter. Did you mean {near}?"
+                ),
+                (false, None) => {
+                    format!("The expression of {parameter} uses {name}, which is not a parameter.")
+                }
+                (false, Some(near)) => format!(
+                    "The expression of {parameter} uses {name}, which is not a parameter. \
+                     Did you mean {near}?"
+                ),
+            },
+            Self::Eval { parameter, error } if parameter.is_empty() => {
+                format!("The expression cannot be worked out: {}.", error.message())
+            }
+            Self::Eval { parameter, error } => format!(
+                "The expression of {parameter} cannot be worked out: {}.",
+                error.message()
+            ),
+            Self::Limit {
+                parameter,
+                error: LimitError::Parse { limit, error },
+            } => format!(
+                "The {} of {parameter} cannot be read: {}.",
+                limit.describe(),
+                error.message()
+            ),
+            Self::Limit {
+                parameter,
+                error:
+                    LimitError::Eval {
+                        limit,
+                        error: EvalError::UnknownReference { name, .. },
+                    },
+            } => match near {
+                None => format!(
+                    "The {} of {parameter} uses {name}, which is not a parameter.",
+                    limit.describe()
+                ),
+                Some(near) => format!(
+                    "The {} of {parameter} uses {name}, which is not a parameter. \
+                     Did you mean {near}?",
+                    limit.describe()
+                ),
+            },
+            Self::Limit {
+                parameter,
+                error: LimitError::Eval { limit, error },
+            } => format!(
+                "The {} of {parameter} cannot be worked out: {}.",
+                limit.describe(),
+                error.message()
+            ),
+            _ => return None,
+        })
+    }
+
+    /// The parameter whose expression or limit is refused and the unknown
+    /// name it uses, when that is what is wrong.
+    pub fn unknown_name(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Eval {
+                parameter,
+                error: EvalError::UnknownReference { name, .. },
+            }
+            | Self::Limit {
+                parameter,
+                error:
+                    LimitError::Eval {
+                        error: EvalError::UnknownReference { name, .. },
+                        ..
+                    },
+            } => Some((parameter, name)),
+            _ => None,
+        }
+    }
+}
+
 /// Named parameters in creation order. Every parameter's value is the
 /// evaluation of its expression; edits that would break this (syntax
 /// errors, unknown names, cycles, unit mismatches) are refused and leave
@@ -635,6 +736,44 @@ impl ParameterTable {
 
     pub fn find(&self, name: &str) -> Option<ParamId> {
         self.by_name.get(name).copied()
+    }
+
+    /// The parameter name nearest to `name`, an unknown name an expression
+    /// uses (mitcad#2181: "table_lenght" for "table_length"; see
+    /// [`near_name`](crate::near_name)), other than `own`, the parameter
+    /// whose expression it is.
+    pub fn near_name(&self, name: &str, own: &str) -> Option<&str> {
+        crate::near_name(
+            name,
+            self.items
+                .iter()
+                .map(Parameter::name)
+                .filter(|candidate| *candidate != own),
+        )
+    }
+
+    /// A refusal of the table's in words a person reads (mitcad#2181,
+    /// [`TableError::message`]), with the near miss of an unknown name
+    /// among this table's parameters; `None` when the error is not about
+    /// an expression.
+    pub fn refusal_message(&self, error: &TableError) -> Option<String> {
+        let near = error
+            .unknown_name()
+            .and_then(|(own, name)| self.near_name(name, own));
+        error.message(near)
+    }
+
+    /// An evaluation error in words a person reads (mitcad#2181,
+    /// [`EvalError::message`]): an unknown name with its near miss among
+    /// this table's parameters other than `own` ("table_lenght is not a
+    /// parameter. Did you mean table_length?").
+    pub fn eval_message(&self, error: &EvalError, own: &str) -> String {
+        if let EvalError::UnknownReference { name, .. } = error
+            && let Some(near) = self.near_name(name, own)
+        {
+            return format!("{name} is not a parameter. Did you mean {near}?");
+        }
+        error.message()
     }
 
     pub fn get(&self, id: ParamId) -> Option<&Parameter> {

@@ -8,12 +8,8 @@ B-spline knot array before reparametrising it. The mutable copy and the
 segment implementation stay the same; no warning-suppression flags or
 geometric tolerance changes are introduced.
 
-Test: none, because it is a build-only port change: it removes an unused
-binding, names GC_MakeSegment2d instead of its deprecated alias and copies
-a returned knot array before reparametrising it, with the same results;
-its check is the warning-free build of the three translation units
-(third_party/vcpkg-ports/docs/compiler-compatibility-1480.md), not a
-geometric test.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1480.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

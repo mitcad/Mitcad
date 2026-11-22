@@ -1454,11 +1454,14 @@ void ConnectAssistantDialog::setupBundle() {
 // or, its application found here (not just its settings folder), it takes
 // the extension from its own settings only (a Microsoft Store install
 // registers no `.mcpb` association, mitcad#763); the line below the state
-// then says where in Claude Desktop and which file.
+// then says where in Claude Desktop and which file. It names the
+// Extensions page and both ways in on it, which Claude Desktop's settings
+// layouts share, not a full menu path (mitcad#2139).
 void ConnectAssistantDialog::bundleNotOpened(const QString& path) {
   if (claudeDesktopApplicationFound()) {
     m_bundleSaved = path;
-    message(tr("In Claude Desktop: Settings › Extensions › Advanced settings › Install Extension…, then choose %1")
+    message(tr("In Claude Desktop, open Extensions in Settings (under Desktop app in newer versions), then drag %1 "
+               "onto that page or use Advanced settings › Install Extension…")
                 .arg(QDir::toNativeSeparators(path)));
   } else {
     m_desktopNotFound = true;

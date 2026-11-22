@@ -27,6 +27,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
+#include <QSet>
 #include <QTemporaryDir>
 
 #include <BRepBndLib.hxx>
@@ -114,11 +115,21 @@ QJsonValue renderQuery(const mitcad::Document& document, const QString& name) {
 
 DocumentScene documentScene(const mitcad::Document& document, const QString& folder, const QJsonArray& instances) {
   // The bodies' appearances and their faces' (mitcad#53); textures with
-  // their image files.
+  // their image files, of the appearances in use (the library's woods and
+  // panels have textures too, mitcad#2186).
   QHash<QString, Appearance> known =
       appearancesById(appearancesOf(query(document, QStringLiteral("appearances")).toArray()));
+  const QJsonArray bodiesListed = query(document, QStringLiteral("bodies")).toArray();
+  QSet<QString> used;
+  for (const QJsonValue& value : bodiesListed) {
+    const QJsonObject body = value.toObject();
+    used.insert(body.value(QStringLiteral("appearance")).toString());
+    for (const QJsonValue& face : body.value(QStringLiteral("face_appearances")).toArray()) {
+      used.insert(face.toObject().value(QStringLiteral("appearance")).toString());
+    }
+  }
   for (Appearance& appearance : known) {
-    if (appearance.hasTexture) {
+    if (appearance.hasTexture && used.contains(appearance.id)) {
       const QString id = appearance.id;
       // The base colour's image and every map's (mitcad#314).
       resolveTextureMaps(appearance.texture, folder, [&document, &id](const QString& map) {
@@ -137,7 +148,7 @@ DocumentScene documentScene(const mitcad::Document& document, const QString& fol
   }
   QHash<QString, Appearance> looks;
   QHash<QString, QVector<QPair<QStringList, QString>>> faceAppearances;
-  for (const QJsonValue& value : query(document, QStringLiteral("bodies")).toArray()) {
+  for (const QJsonValue& value : bodiesListed) {
     const QJsonObject body = value.toObject();
     const QString uid = body.value(QStringLiteral("uid")).toString();
     const auto appearance = known.constFind(body.value(QStringLiteral("appearance")).toString());

@@ -30,7 +30,7 @@ namespace mitcad {
 //
 // Logged for the UI tests: `Message band: <level> <text>` for each message,
 // `Message band full: <level> <text>` when the band shows it in full and
-// `Message band stub: <level> <text> (faded|closed|next command|cleared|withdrawn)`
+// `Message band stub: <level> <text> (faded|closed|next command|cleared|withdrawn|put right)`
 // when the band turns into the stub of the latest message (cleared: a
 // cleared status line, or the source of the error closed, mitcad#1621), `Message band
 // cleared (another design)` when another design empties it (mitcad#1174).
@@ -44,10 +44,11 @@ public:
 
   // A message of the status line; `feature`: the uid of the feature it is
   // about (its history row selects it), or empty; `source`: what raised it
-  // (MessageEntry::source, mitcad#1621), or empty. An empty text clears a
+  // (MessageEntry::source, mitcad#1621), or empty; `subject`: what an error
+  // is about (MessageEntry::subject, mitcad#2181), or empty. An empty text clears a
   // message shown in full that is no problem.
   void post(const QString& text, NoticeLevel level, const QString& feature = QString(),
-            const QString& source = QString());
+            const QString& source = QString(), const QString& subject = QString());
   // A message with a button (mitcad#1416: "<file> changed" with Update, a
   // linked component with Open Linked Design): `action` its label, `run`
   // what it does. Shown in full, it stays until it is closed, its button is
@@ -83,6 +84,13 @@ public:
   // source closed: <level> <text> (<source>)`, then `Message band stub:
   // <level> <latest text> (cleared)`); otherwise nothing changes.
   void closeSource(const QString& source);
+  // What errors were about was put right (mitcad#2181,
+  // MessageLog::resolve): an error about `subject`, or a subject within
+  // it, goes from the band, shown in full or as the stub (logged `Message
+  // band put right: <level> <text> (<subject>)`, then `Message band
+  // cleared (put right)` when the band shows nothing now); otherwise
+  // nothing changes.
+  void resolve(const QString& subject);
 
 signals:
   // What the band shows changed (another message, or the stub).

@@ -28,7 +28,10 @@
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <Geom2d_Curve.hxx>
+#include <Geom_BSplineSurface.hxx>
 #include <Geom_Curve.hxx>
+#include <Geom_OffsetSurface.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_List.hxx>
 #include <TopExp.hxx>
@@ -504,6 +507,112 @@ ShapePtr offset_sheet(const Shape& sheet, double distance) {
   throw std::runtime_error("thicken failed; the surface could not be offset by half the thickness");
 }
 
+// The surface of a face over the face's own range: a B-spline (or an
+// offset of one) segmented there; null when it is not one or the segment
+// is no smoother than the whole.
+occ::handle<Geom_Surface> own_range(const TopoDS_Face& face) {
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+  if (surface.IsNull() || surface->Continuity() != GeomAbs_C0) {
+    return {};
+  }
+  const occ::handle<Geom_OffsetSurface> offset = occ::down_cast<Geom_OffsetSurface>(surface);
+  const occ::handle<Geom_BSplineSurface> spline =
+      occ::down_cast<Geom_BSplineSurface>(offset.IsNull() ? surface : offset->BasisSurface());
+  if (spline.IsNull()) {
+    return {};
+  }
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  double su0 = 0.0;
+  double su1 = 0.0;
+  double sv0 = 0.0;
+  double sv1 = 0.0;
+  spline->Bounds(su0, su1, sv0, sv1);
+  if (!spline->IsUPeriodic()) {
+    u0 = std::max(u0, su0);
+    u1 = std::min(u1, su1);
+  }
+  if (!spline->IsVPeriodic()) {
+    v0 = std::max(v0, sv0);
+    v1 = std::min(v1, sv1);
+  }
+  if (!(u0 < u1 && v0 < v1)) {
+    return {};
+  }
+  const occ::handle<Geom_BSplineSurface> segment = occ::down_cast<Geom_BSplineSurface>(spline->Copy());
+  segment->Segment(u0, u1, v0, v1);
+  occ::handle<Geom_Surface> result(segment);
+  if (!offset.IsNull()) {
+    result = new Geom_OffsetSurface(segment, offset->Offset());
+  }
+  return result->Continuity() == GeomAbs_C0 ? occ::handle<Geom_Surface>() : result;
+}
+
+// The sheet with each face whose surface is only C0 continuous as a whole
+// but smoother over the face itself on that part of it (own_range), the
+// edges and the face names kept; null when no face needs it. The kernel's
+// offset refuses C0 surfaces. The faces of a loft through two smooth
+// sections are pieces of one surface continuous in its first derivative
+// only where they meet (mitcad#2141); their offset (the half wall of a
+// symmetric thicken, mitcad#2143) is a C0 surface as a whole, smooth over
+// each face.
+ShapePtr on_own_ranges(const Shape& sheet) {
+  std::vector<occ::handle<Geom_Surface>> ranges;
+  bool any = false;
+  for (int i = 0; i < sheet.face_count(); ++i) {
+    ranges.push_back(own_range(sheet.face(i)));
+    any = any || !ranges.back().IsNull();
+  }
+  if (!any) {
+    return nullptr;
+  }
+  BRep_Builder builder;
+  TopoDS_Shell shell;
+  builder.MakeShell(shell);
+  std::vector<Shape::NamedFace> faces;
+  for (int i = 0; i < sheet.face_count(); ++i) {
+    const TopoDS_Face& face = sheet.face(i);
+    if (ranges[static_cast<std::size_t>(i)].IsNull()) {
+      builder.Add(shell, face);
+      faces.push_back({face, sheet.face_names(i)});
+      continue;
+    }
+    const TopoDS_Face forward = TopoDS::Face(face.Oriented(TopAbs_FORWARD));
+    TopLoc_Location location;
+    BRep_Tool::Surface(forward, location);
+    TopoDS_Face fresh = TopoDS::Face(forward.EmptyCopied());
+    builder.UpdateFace(fresh, ranges[static_cast<std::size_t>(i)], location, BRep_Tool::Tolerance(forward));
+    // The edges' curves on the face, the same on the segment (it keeps the
+    // surface's parameters).
+    for (TopExp_Explorer e(forward, TopAbs_EDGE); e.More(); e.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
+      double first = 0.0;
+      double last = 0.0;
+      const double tolerance = BRep_Tool::Tolerance(edge);
+      if (BRep_Tool::IsClosed(edge, forward)) {
+        const TopoDS_Edge ahead = TopoDS::Edge(edge.Oriented(TopAbs_FORWARD));
+        const TopoDS_Edge back = TopoDS::Edge(edge.Oriented(TopAbs_REVERSED));
+        const occ::handle<Geom2d_Curve> c1 = BRep_Tool::CurveOnSurface(ahead, forward, first, last);
+        const occ::handle<Geom2d_Curve> c2 = BRep_Tool::CurveOnSurface(back, forward, first, last);
+        builder.UpdateEdge(ahead, c1, c2, fresh, tolerance);
+      } else {
+        builder.UpdateEdge(edge, BRep_Tool::CurveOnSurface(edge, forward, first, last), fresh, tolerance);
+      }
+      builder.Range(edge, fresh, first, last);
+    }
+    for (TopoDS_Iterator w(forward); w.More(); w.Next()) {
+      builder.Add(fresh, w.Value());
+    }
+    fresh.Orientation(face.Orientation());
+    builder.Add(shell, fresh);
+    faces.push_back({fresh, sheet.face_names(i)});
+  }
+  return std::make_shared<Shape>(shell, faces);
+}
+
 // The solid between the sheet and its offset by `wall` along the faces'
 // normals (against them when negative), named as thicken() says.
 ShapePtr thick_solid(const std::string& feature, const Shape& sheet, double wall) {
@@ -894,7 +1003,8 @@ ShapePtr thicken(const std::string& feature, const Shape& sheet, double thicknes
     // Half the wall behind the faces, then the whole wall from there.
     const double half = std::abs(thickness) / 2;
     const ShapePtr back = offset_sheet(sheet, -half);
-    return thick_solid(feature, *back, 2 * half);
+    const ShapePtr smooth = on_own_ranges(*back);
+    return thick_solid(feature, smooth ? *smooth : *back, 2 * half);
   });
 }
 

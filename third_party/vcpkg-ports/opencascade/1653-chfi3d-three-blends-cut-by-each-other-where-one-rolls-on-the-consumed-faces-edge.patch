@@ -38,13 +38,8 @@ intersection and the underside's cut.
   are those of its pairs. A corner of this kind that fails is a failed
   corner ("ThreeCorner : the blends do not meet").
 
-Test: geometry/tests/test_fillet_eave.cpp, test_tip_corner_of_three (ctest
-geometry.fillet_eave): the tip's edge, the eave's end edge and the slope's
-top edge on the end face, the three blends cut by each other meeting at
-one point; valid, the material taken within 2e-3 of the removal sets'
-union (an invalid sliver without the patch). It fails without the patch
-(shown 2026-11-20 by tools/occt-port-proof.py, reverted together with
-1657, 1659, which change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1653.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
 index 1740b795..0185540c 100644

@@ -4,10 +4,14 @@
 # check-all sources: app/print/OwnSettingsDialog.cpp app/OcctViewer.cpp app/framework/TestDriver.cpp
 # check-all sources: core/model/src/print_plates.rs core/model/src/document/print_plates.rs
 # check-all sources: core/model/src/exchange core/model/src/print_files core/model-api/src/print_plates.rs tools/cli
+# check-all sources: app/framework/NoteRow.cpp app/framework/CommandSessionVisibility.cpp
 # Plates… (mitcad#1050), the shared input script
 # tools/ui-scripts/print-plates.mitcad-ui (also run by
 # tools/ui-windows-print-plates-test.ps1 and tools/ui-macos-print-plates-test.sh)
-# on two boxes: Plates… adds Plate 1 and Plate 2, Body2 picked goes on
+# on two boxes: Plates… adds Plate 1 (with one plate, mitcad#2222: the note
+# and Take Off Plate's tooltip say an item taken off goes back to the first
+# plate and hiding keeps a body off; Body1 hidden leaves the plate), then
+# Plate 2, Body2 picked goes on
 # Plate 2, Spiral Vase is set for it and the plate is drawn beside the
 # design; Send to Slicer (a fixture slicer that does nothing) sends the
 # design's plates, and the 3MF written has two plates with the spiral

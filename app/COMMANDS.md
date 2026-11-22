@@ -278,8 +278,8 @@ The SOLID CREATE menu's sections, in this order (the layout file's
 | `sketch` | New Component (a second place, its home Assemble), Create Sketch |
 | `profiles` | Extrude, Revolve, Sweep, Loft, Rib, Web, Emboss |
 | `faces` | Hole, Thread |
-| `primitives` | Box, Cylinder, Sphere, Torus, Coil, Pipe |
-| `patterns` | the Pattern submenu (`"Pattern"`: Rectangular Pattern, Circular Pattern, Pattern on Path, Pattern at Points), Mirror, then Thicken (a second place, its home Surface › Modify) |
+| `primitives` | Box, Cylinder, Cone (mitcad#2239), Sphere, Torus, Coil, Pipe |
+| `patterns` | the Pattern submenu (`"Pattern"`: Rectangular Pattern, Circular Pattern, Pattern on Path, Pattern at Points), Mirror, then Thicken (a second place, its home Surface › Modify), Boundary Fill (mitcad#2149, [Boundary Fill](#boundary-fill)) |
 | `curves` | the Curves submenu (`"Curves"`: Helix, Intersection Curve (mitcad#1405, [Intersection Curve](#intersection-curve)), Helix Curve (mitcad#1777, [Curve tools](#curve-tools-helix-curve-surface-helix-and-intersection-curve-of-faces-and-bodies-mitcad1777))) |
 | `features` | Plastic Feature, Envelope (mitcad#1276, [Envelope](#envelope)), Form (mitcad#1757, [Form](#form-mitcad1757)), Flex (mitcad#1713, [Flex](#flex-mitcad1713)) |
 | `machine` | the Machine Elements submenu (`"Machine Elements"`: Gear, Gear Pair, Pulley, Belt Drive, Bearing) |
@@ -329,7 +329,7 @@ Buttons: Create Sketch, Surface Extrude, Patch. MODIFY:
 | `edit` | Trim, Untrim, Extend |
 | `bodies` | Stitch, Unstitch, Reverse Normal |
 | `quality` | Match Surface, Fair Surface |
-| `thicken` | Thicken |
+| `thicken` | Thicken, Boundary Fill (a second place, its home Solid › Create) |
 
 Buttons: Trim, Thicken.
 
@@ -381,6 +381,18 @@ markers are placed as the datum is), turned over by Reverse Normal; logged
 `app.ui-windows-construct-reverse-normal`, macOS
 `app.ui-macos-construct-reverse-normal`).
 
+A construction feature's plane input (Offset Plane's Plane, a Reference
+Plane, Midplane's planes) also takes a sketch (mitcad#2167): its profile
+clicked in the view, or the sketch picked in the Browser or the timeline,
+is kept as the plane the sketch lies in (the sketch's own `plane`
+reference: an origin or construction plane, a planar face), so the new
+plane follows it; logged `Construction plane: a profile of F1 taken as its
+sketch's plane: …`. A sketch moved off that plane by its placement, or on a
+curved face, stays as picked and the model refuses it. Test:
+`tools/ui-construct-offset-sketch-test.sh` (Windows
+`app.ui-windows-construct-offset-sketch`, macOS
+`app.ui-macos-construct-offset-sketch`).
+
 ASSEMBLE (New Component from `registerCreateCommands`,
 `registerAssembleCommands` in `JointCommands.cpp`, then the main window's
 Animate Joint and Motion Study):
@@ -396,14 +408,15 @@ Animate Joint and Motion Study):
 Buttons: New Component, Joint, Assembly Constraint.
 
 INSPECT: Measure, Interference, Section Analysis, Print Analysis (a
-second place, its home 3D Print › Prepare), Physical Properties, Center
+second place, its home 3D Print › Prepare), Draft Analysis (mitcad#2166),
+Physical Properties, Center
 of Mass, Add Comment; buttons Measure and Section Analysis. The Make
-workspace's tabs show the same group without Print Analysis, and the sketch's INSPECT
+workspace's tabs show the same group without Print Analysis and Draft Analysis, and the sketch's INSPECT
 group shows Measure (a button).
 
 INSERT: Insert Component and Insert from Library (`registerFileCommands`,
 `registerLibraryCommands`; mitcad#1975, from Assemble), then Insert Mesh,
-Insert DXF, Insert SVG, From an Open Design…, Component from Web…,
+Insert DXF, Insert SVG, Insert Points (mitcad#2232), From an Open Design…, Component from Web…,
 Import…, Image Reference; buttons Insert Component, Insert Mesh, Insert
 DXF.
 
@@ -788,6 +801,17 @@ Modifiers:
 - `Inspection::viewHint`: a line over the top of the view while the
   command waits for something there (BUILD's first part: `Click a plane
   or a face, or press Enter`), logged `View hint <command>: <text>`.
+  It is drawn as a dark pill centered at the top of the view, as the view's
+  banner is placed (mitcad#2190, `framework/ViewHintPlace.hpp`): its top
+  16 px below the part of the view the cards floating over it cover (the
+  Floating layout's title row and toolbar panel, `OcctViewer::overlayInsets`;
+  16 px below the view's top in the Docked layout), centered between the
+  left and right insets and elided to the room there, and below the view's
+  banner when one shows at the same time, so neither covers the other. It
+  follows when the rows, the banner or the view's size change, and its
+  place is logged when it changes as `View hint at x,y WxH` (window
+  coordinates; `tools/ui-view-hint-place-test.sh` checks it below the
+  logged `floating rows bottom`).
 - `withOnPick(call, keep)`: called after a pick, with `item.at` where the
   click hit, in its component's coordinates. With `keep`, picking an item
   already selected keeps it and still calls back (Place On places again
@@ -817,7 +841,7 @@ Modifiers:
   size is 4 area / perimeter: a square's side, a disc's diameter), Extrude
   (Distance, the start Offset), Press Pull and Shell's and Offset Face's
   arrows the profiles' or faces' size, Hole's Depth the hole's diameter,
-  Coil's Height its diameter, Box, Cylinder, Sphere and Torus their
+  Coil's Height its diameter, Box, Cylinder, Cone, Sphere and Torus their
   smallest size; the selection is measured up to its first 16 items. An
   arrow of a length without a scale steps by the value it starts from
   when that is finer (a twentieth of it: 0.4 mm by 0.02 mm), except
@@ -953,6 +977,11 @@ Modifiers:
 - `InputDef::emptyShows` (mitcad#656): what an empty selection row's
   button says instead of `None`, with its swatch's color then (Align on
   a face: `Reference 1` in Reference 1's green).
+- `withMissingText(text)` (mitcad#2194, `InputDef::missingText`): what
+  the panel says while a required selection input still needs items, in
+  place of `Select <label>.` when `text(state, context)` gives one
+  (Extrude's and Revolve's Profiles emptied by a whole sketch whose closed
+  curves cross: click its areas).
 - The first pick of a placement input (`withPlaces`) whose preview is
   drawn moves the view sideways, as little as it takes, so that the part
   is clear of the panels floating over the view
@@ -990,7 +1019,7 @@ Modifiers:
   (its feature's component's), are seen in the design; the session moves
   each handle (origin, direction, a ring's zero) and each line point by
   it. The commands placed by a pick give `placeSeenAt` (Hole, Gear,
-  Pulley, Bearing, Coil, Box, Cylinder, Sphere, Torus): the occurrence
+  Pulley, Bearing, Coil, Box, Cylinder, Cone, Sphere, Torus): the occurrence
   the face, edge or shaft was picked in.
 - `withToggles(made)`: a text input with dots in the view;
   `made(state, context, preview)` builds them from the preview's report
@@ -1109,14 +1138,18 @@ becomes the active one (Extrude's To Object).
 - `editsAlso`: other definition types the command edits (Move/Copy edits
   `move` and `move_occurrence`; `build` gives the type).
 - `init(state, context)`: defaults that depend on the model, applied after
-  the inputs' defaults and the pre-selection (Extrude and Revolve take the
-  newest unused profile: `newestProfile`, of the newest sketch with an
+  the inputs' defaults and the pre-selection (the profile commands take
+  the newest unused profile: `newestProfile`, of the newest sketch with an
   unused one, the last that the sketch's own curves bound; a region that
   the face the sketch lies on bounds in part, `face_bounded`, the face's
   leftover around the drawn shapes, only when the sketch has no other,
-  mitcad#1226: `cmd::automaticProfile`, tested in `app.unit`; a region of
+  mitcad#1226: `cmd::automaticProfile`, tested in `app.unit`; a shape the
+  user closed is one region even across the face's edge or its automatic
+  outline, never `face_bounded`, mitcad#2197; a region of
   a 3D sketch, mitcad#1550, is taken alone, the planar `sketch` query
-  asked only for a planar sketch, mitcad#2087: `commands/ProfilePicks.cpp`).
+  asked only for a planar sketch, mitcad#2087: `commands/ProfilePicks.cpp`.
+  Extrude and Revolve take that sketch's outline set instead,
+  `newestOutline`: see *Profiles of a whole sketch and the outline set*).
 - `ended(committed)`: called once when the command ends (OK, Cancel,
   Close, discarded), before the main window's `finished`: what the
   command opened beside its panel goes with it (BUILD's component picker,
@@ -3638,7 +3671,9 @@ then on): `tools/ui-sketch-esc-leaves-test.sh` and
 
 The Sketch Palette's **Show profiles** (`paletteProfiles`,
 `SketchController::setShowProfiles`) shades the edited sketch's closed
-regions. The preference **Show profiles when a sketch opens**
+regions: those of its outline set, not a hole's disc, which keeps its
+outline, hover and pick without fill (mitcad#2194, see *Profiles of a
+whole sketch and the outline set*). The preference **Show profiles when a sketch opens**
 (Preferences › Sketch, `showProfilesOnOpen`, settings
 `sketch/showProfilesOnOpen`, on by default; mitcad#1670, GitHub
 mitcad/Mitcad#255; `sketch::showProfilesOnOpen`) is what every sketch
@@ -4821,6 +4856,44 @@ one undo step, named after what the action makes.
   `tools/ui-macos-sketch-perpendicular-arc-test.sh`
   (`app.ui-macos-sketch-perpendicular-arc`), the shared input script
   `tools/ui-scripts/sketch-perpendicular-arc.mitcad-ui`.
+- **Horizontal/Vertical in the other direction** (mitcad#2184,
+  `sketch/EditTools.cpp` `inDirectionAdded`, `sketch/AutoConstraint.cpp`
+  `horizontalVerticalDirection`): Horizontal/Vertical (Shift+V; the
+  toolbar's and the sketch palette's button, the context menu and a
+  selection made before it, which all run the same command) chooses the
+  direction its line or two points are nearer to (a line `horizontal`
+  when `|dx| >= |dy|`, else `vertical`; two points `horizontal_points` or
+  `vertical_points` by `alignsHorizontally`). Before it sends that, it
+  asks the model whether the sketch would take it
+  (`sketch.add_constraint` with `check`, which changes nothing;
+  commands.md, "A constraint only checked"). When the nearer direction is
+  already implied (the points level already, the line horizontal by its
+  constraints) or conflicts (the points' heights held apart), and the
+  other direction would be taken, it adds the other one, logged
+  `Horizontal/Vertical: horizontal_points on p1, p2 cannot be added;
+  vertical_points instead`. When neither would be taken it sends the
+  nearer one as before, and its refusal is the message
+  (`Horizontal/Vertical not added: …`). Shift at the click (Replace,
+  mitcad#2090) then acts on that refusal as before. Each line of a
+  selection of several lines is decided on its own. While the tool
+  waits for its last pick, the entity under the pointer that would
+  complete it shows the glyph of the direction the click would add by
+  the cursor, asked once per picks and sketch revision and logged when
+  it changes (`Horizontal/Vertical would add vertical_points on p1, p2`).
+  A pick of an axis or a body edge or vertex not in the sketch yet (made
+  or projected only when the constraint is added) cannot be asked
+  about: the glyph shows the nearer direction, and the click decides
+  after it made or projected them. The MCP server has no direction of
+  its own to choose: `sketch.add_constraint` names `horizontal`,
+  `vertical`, `horizontal_points` or `vertical_points`, and an agent can
+  ask with `check`. `app/tests/horizontal_vertical_direction.cpp` (the
+  decision against a mock sketch);
+  `tools/ui-sketch-horizontal-vertical-other-test.sh`,
+  `tools/ui-windows-sketch-horizontal-vertical-other-test.ps1`
+  (`app.ui-windows-sketch-horizontal-vertical-other`) and
+  `tools/ui-macos-sketch-horizontal-vertical-other-test.sh`
+  (`app.ui-macos-sketch-horizontal-vertical-other`), the shared input
+  script `tools/ui-scripts/sketch-horizontal-vertical-other.mitcad-ui`.
 - The picks are geometry the model gives, not the view's shapes: Hide
   Above Sketch, which cuts what the view draws, leaves the edges in the
   plane pickable.
@@ -4997,7 +5070,8 @@ shared by Qt and AppKit (its word, icon, color role and lifetime).
   cleared (<source> closed)` (mitcad#1621; tests:
   `tools/ui-sketch-value-error-clears-test.sh`,
   `app.ui-windows-sketch-value-error-clears`), `Message band placed: full|stub x,y wxh, row <h>,
-  timeline x,y wxh`, `Message band close at x,y`, `Message stub at x,y`,
+  timeline x,y wxh`, `Message band close at x,y, row middle <y>, icon dismiss <n> px in <w>x<h>`
+  (the close button's middle against the row's, mitcad#2182), `Message stub at x,y`,
   `Message history button at x,y`, `Message history: <n> entries`,
   `Message history row <i>: <level> <text> at x,y` (1 the newest),
   `Message history: selected <uid>` and `Message history: closed`. The
@@ -5414,6 +5488,45 @@ constraint and dimension on a piece, its type and references).
 arc at a point keeping its radius dimension, break a line crossed by a
 circle into three collinear pieces held on the circle, drag the line's
 free end and split the middle piece where the line now runs.
+
+### Extend to Meet
+
+Sketch › Modify's **Extend to Meet** (`sketch.extend_to_meet`, icon
+`extend-to-meet`, right after Extend; mitcad#2178) is a click tool of its
+own (`ExtendToMeetTool` in `app/sketch/ExtendToMeet.cpp`): a click on a
+line or an arc picks the first curve, highlighted, and a click on a
+second sends the model's `sketch.extend_to_meet` (commands.md) with both
+curves, each click's place on its curve as `at_a` and `at_b` (the part
+that stays) and the result the preview shows as `result`, one undo step
+`Extend to Meet`. While the pointer is over the second curve the preview
+draws both curves as they will be over the old ones (marked for removal)
+and marks the meeting point; the results are the model's list
+(`meetResults`, the same formulas as `meet_results` in
+`core/sketch/src/modify/meet.rs`, in the same order: nearest the picks
+first), and where there are several, Tab steps the preview to the next
+and Shift+Tab back; a different second curve starts again at the first.
+The view passes Tab to the tool through `SketchTool::viewKey` (the
+controller's view event filter) before Qt moves the keyboard focus; with
+one result or none, Tab is the view's as before. A click on the first
+curve again picks it anew; Esc drops the first pick, then ends the tool.
+The tool stays on for the next pair. A refusal (curves that never meet, a
+circle, a projected curve) shows in the status line as `Extend to Meet: …`
+in words; the model's notes (an offset or a pattern freed first) as
+information. The work steps list it as `Extend to Meet` (step kind
+`extend_to_meet`). It is a Sketch Palette candidate as a Modify tool, and
+the command search finds it.
+
+For UI tests the tool logs `Extend to Meet first c3 at (x, y)`, `Extend to
+Meet preview c3 and c4: result 1 of 2 at (x, y)` each time the shown
+result changes, `Extend to Meet Tab steps to result 2 of 2`, and `Extended
+c3 and c4 to meet at p9 (x, y), result 2 of 2` with the model's shared
+point and its solved place. `tools/ui-sketch-extend-to-meet-test.sh`,
+`app.ui-windows-sketch-extend-to-meet` and
+`app.ui-macos-sketch-extend-to-meet` (the shared script
+`tools/ui-scripts/sketch-extend-to-meet.mitcad-ui` on
+`sketch-extend-to-meet.json`) bring two lines to their one corner, then a
+line and an arc with two results: the preview shows the nearer, Tab the
+other, and the click makes that one.
 
 ### Sketch commands with panels
 
@@ -6127,7 +6240,7 @@ Texts, patterns and offsets stay editable:
   the expression of the sketch's own parameter); clearing it sends `""`,
   and the text then keeps its string. With a parameter the **Text** field
   may be empty. Edit Parameters lists text parameters with the unit
-  `Text` and their text in Value (Add User Parameter offers the unit
+  `Text` and their text in Value (the empty row and Add User Parameter offer the unit
   **Text**); their Min, Max, Step and Strict cells and slider are off, a
   bare number in their expression gets no unit, and parameter fields
   treat them as a kind of their own (`ParameterKind::Text`: a text field
@@ -6175,6 +6288,25 @@ Texts, patterns and offsets stay editable:
   nothing new, and a profile pick elsewhere (Extrude) is unchanged.
   Tests: `tests/sketch_text_picks.cpp`, `tools/ui-text-region-edit-test.sh`
   and `app.ui-windows-text-region-edit`.
+- **Explode Text** (`sketch.explode_text`, mitcad#2163,
+  `SketchController::explodeText`): in the context menu of a text or QR
+  code and of a region a text bounds, after Edit Text (Edit QR Code), and
+  in the command search; on no toolbar (listed in the default layout's
+  `unplaced`, mitcad#2187). It runs `sketch.explode_text` on
+  the text the single selection stands for (`selectedText`: the picked
+  text, or `textOfPick` of a picked region): the text becomes plain lines
+  and splines where it is laid out, which Trim and the other sketch tools
+  take, one undo step `Explode Text in Sketch1`, the selection cleared.
+  Logged `Exploded text t2 in Sketch1: 46 curves`; the model's warnings
+  (a later feature's name of a piece that no new curve matches) are a
+  warning notice `Explode Text: …`. Without a text selected it hints
+  `Explode Text: select a text or a QR code first.` Its work step is
+  listed as Explode Text. Tests: `tools/ui-sketch-explode-text-test.sh`,
+  `app.ui-windows-sketch-explode-text` and
+  `app.ui-macos-sketch-explode-text` (one shared script,
+  `tools/ui-scripts/sketch-explode-text.mitcad-ui`: the text right-clicked
+  with `sketch-click-text … right`, Explode Text, then Trim on a piece
+  clicked with `sketch-click-curve c4`).
 - A text moves after it is made (mitcad#1911, GitHub mitcad/Mitcad#369;
   commands.md, "Moving and copying texts"), whether placed by a click or
   drawn in a frame:
@@ -6803,7 +6935,11 @@ extend this context through the same commands.
   no more once the user has moved the view. Logged `View for the origin
   planes: moved -120,64 px; the box at x0,y0 to x1,y1, the area at x0,y0
   to x1,y1` (window coordinates); the datums' and faces' pick places are
-  logged again where the view comes to rest.
+  logged again where the view comes to rest. With the Browser's Rows
+  background (the default, mitcad#2144) the area covered is the rows'
+  extent (`GlassCard::coveredRect`), not the card's rectangle: a place
+  in that rectangle beside the rows reaches the view, so the chrome layout
+  tests check XY's place against the Browser's card only with Card.
 - **The editing context.** Sketch mode (`Mode::Sketch`) with the planar
   `SketchController` inactive and `Sketch3dController` active
   (`enterSketch3d`; Edit Sketch, the Timeline's and the Browser's
@@ -7727,6 +7863,18 @@ rail and surface, orientation, Flip); `SweepCommands.cpp` and
   `tools/ui-windows-loft-rail-intersect-test.ps1`,
   `tools/ui-macos-loft-rail-intersect-test.sh` (ctests
   `app.ui-windows-loft-rail-intersect`, `app.ui-macos-loft-rail-intersect`).
+- **Loft's Tangent Edges** (mitcad#2162): a choice after Ruled, **Merge**
+  (the default of a new loft) or **Keep**. Merge writes `"tangent_edges":
+  "merge"`: each section's edges that meet smoothly (a slot's lines and
+  arcs) become one smooth face; Keep leaves the field out (every edge its
+  own face, as before). An edited loft without the field shows Keep, so it
+  builds as it was. Surface Loft has the same choice for its profiles and
+  sketch-curve sections. Tests: `tools/ui-loft-tangent-edges-test.sh`,
+  `tools/ui-windows-loft-tangent-edges-test.ps1`,
+  `tools/ui-macos-loft-tangent-edges-test.sh` (ctests
+  `app.ui-windows-loft-tangent-edges`, `app.ui-macos-loft-tangent-edges`):
+  the panel shows Tangent Edges with Merge, and the circle-to-slot loft has
+  one side face (three faces with its caps).
 - **Walls and surfaces from a 3D sketch's curves** (mitcad#1550). Rib and
   Web (Curves), Extrude's Thin Extrude (Profiles: its sketch curves) and
   Surface Extrude, Surface Revolve and Surface Sweep (Profiles) take a 3D
@@ -8183,6 +8331,66 @@ commands and where rows may be dropped), `tools/ui-browser-folders-test.sh`
 with `app.ui-windows-browser-folders` and `app.ui-macos-browser-folders`
 (the shared script `tools/ui-scripts/browser-folders.mitcad-ui`).
 
+Selection Sets (mitcad#2192, GitHub mitcad/Mitcad#493): named sets of
+links to bodies, components, sketches, construction geometry, joints and
+features, kept with the design (the model's `selection_sets`,
+[commands.md](../core/model-api/src/commands.md) "Selection sets"). A set
+changes no geometry, timeline, bill of materials or export.
+
+- **Create Selection Set** on the row of a body, a component (not the
+  root), a sketch, a datum, a joint or a feature (the rows selected with
+  it when it is one of them; after the row's own entries, before Save as
+  Mesh…), and in the view's context menu when every item selected is one a
+  set takes (bodies, components, sketches, construction features, joints,
+  features; not faces, edges, vertices, the origin's datums). The members
+  are the selected Browser rows (a feature's row as the feature; the
+  bodies of a feature whose row is selected are left out, the row selected
+  them), else the selection's items (`browser/SelectionSets.hpp`). One
+  undo step (`add_selection_set`, the next free `SelectionSet<n>`), logged
+  `Created selection set SelectionSet1: body F3.b0, feature F1`; the new
+  set's row is renamed in place at once (`Renaming Root/Selection
+  Sets/SelectionSet1`).
+- **The Selection Sets folder** (`BrowserNode::Type::SelectionSets`, row
+  key `selection-sets`) is the root's row after Named Views while the
+  design has a set; open at first. The sets by name, case-insensitive
+  (`SelectionSet`, key `selection-set:<name>`), closed at first, each with
+  its members' rows in the set's order. A member's row is a row of its
+  item's own type (Body, Component, Sketch, Datum, Joint, Feature) whose
+  `selectionSet` names the set (key `set-member:<set>>` and the item row's
+  key): the item's icon with the `link` badge, the item's live name (the
+  `selection_sets` query's `name`), no light bulb, grayed (`dimmed`) while
+  the query says it is not `active` (suppressed, after the marker, a body
+  not at the marker). Logged `Browser Selection Sets: Favourites [Block,
+  Sketch1, Extrude1 (inactive)]` as it changes, `Browser Selection Sets:
+  none` when the last set goes.
+- **A set's row**: a click selects every member in the view, the Browser
+  and the timeline (as their rows do; a feature by its uid). A right click
+  keeps the selection (the row is not selected), so that its menu acts on
+  it: **Select**, **Add Selection** and **Replace with Selection**
+  (`set_selection_set_members` with `add` or `members`, one undo step,
+  logged `Selection set Favourites: 4 members`; with nothing a set takes
+  selected, a note says so), **Rename** (also F2 and a slow second click;
+  `rename_selection_set`, a taken name refused), **Delete** (the set alone,
+  `delete_selection_set`, logged `Deleted selection set Favourites`; also
+  the Delete key).
+- **A member's row**: a click selects its item as the item's own row does.
+  Its menu is the item's own row menu (with its Find in Timeline for
+  sketches, datums, joints, features and bodies; its Delete deletes the
+  item, also the Delete key), then **Find in Browser** (the item's own
+  rows selected and shown, never the links; logged `Found Sketch1 in the
+  browser`) and **Remove from Set** (`set_selection_set_members` with
+  `remove`, logged `Removed Block from selection set Favourites`). Member
+  rows are not dragged into folders, take no drops, get no owner marks,
+  and Find in Browser from the view or the timeline never stops at them.
+
+Tests: `app.unit` (`browser_selection_sets.cpp`: the folder only with a
+set, beside Named Views, sets by name, member rows of their items' types
+with live names and the gray state, a set's click selecting its members,
+the members a set takes of a selection and of rows),
+`tools/ui-selection-sets-test.sh` with `app.ui-windows-selection-sets`
+and `app.ui-macos-selection-sets` (the shared script
+`tools/ui-scripts/selection-sets.mitcad-ui`).
+
 Isolate and the Browser's eyes (mitcad#1700, GitHub #258): while an
 isolation is active, the eye of a body, a component and a Bodies folder
 shows what the view shows (`DocumentSnapshot::isolationShows` and
@@ -8482,9 +8690,18 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   `browser/BrowserBackground.*`): Preferences › Display › Browser
   background, the setting `appearance/browserBackground`, shown only in
   the Floating layout and applied at once (OK, or as it changes in the
-  macOS Settings window). Without a saved choice it is **Card**
-  (`defaultBrowserBackground`; under the toolbar panel the Browser is one
-  card, mitcad#1990; Rows on Windows and Linux before it, mitcad#429).
+  macOS Settings window). Without a saved choice it is **Rows** on every
+  platform (`defaultBrowserBackground`, mitcad#2144; macOS has the shared
+  Qt UI, docs/macos-shared-qt.md). It was Rows on Windows and Linux from
+  mitcad#429 and Card from the toolbar panel's experiment (mitcad#1990) until
+  mitcad#2144. The setting is written only when the user changes the choice
+  (OK with another value, `chosenBrowserBackground` reads it back, none
+  when unset): a saved Card stays Card. Restore Defaults (Display) removes
+  it (`clearBrowserBackground`) instead of writing the default, so the
+  Browser shows Rows at once and follows a later default; a settings
+  import without it removes it too (`restoreBrowserBackground`). Card
+  written by Restore Defaults before mitcad#2144 cannot be told from a
+  choice and is kept.
   **Card** (`card`): the Browser on its card, the rows as a sidebar's
   (`SidebarDelegate`); the card's width is dragged by its right edge (the
   Projects card's grip, `GlassCard::setWidthAdjustable`, at least 200 px,
@@ -9199,7 +9416,7 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   (mitcad#564). Favorites are
   `set_parameter` `favorite`. `--set name=value` sets a value the same way.
 - **Edit Parameters and Add User Parameter, the unit Number** (mitcad#1920,
-  GitHub mitcad/Mitcad#378): the Unit list of Add User Parameter (mm, cm,
+  GitHub mitcad/Mitcad#378): the Unit list of the empty row (mitcad#2202; mm, cm,
   m, in, ft, deg, rad, Text, Number) and of the expression fields' Add
   User Parameter ends with **Number** (translated) for a number without a
   unit; choosing it, or typing it, sends the empty unit to the model.
@@ -9214,6 +9431,63 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   `tools/ui-parameters-sort-test.sh` (the shared script
   `parameters-sort.mitcad-ui`: the Unit column of a number without a
   unit, a parameter added with Number).
+- **Edit Parameters, groups** (mitcad#2180; the model's commands:
+  `core/model-api/src/commands.md`, "Parameter groups"): under User
+  Parameters each group of user parameters is a collapsible row (a folder
+  icon, its own name; its path in the tooltip) with its subgroups first
+  and then its parameters; ungrouped parameters stay directly under User
+  Parameters, after the groups. The groups come in the order they were
+  made, by name when the rows sort by Name; the column sort of mitcad#1866
+  sorts the parameters within each group. Favorites stays a view across
+  the groups: a favorite shows there and in its group. The table reads
+  the `parameter_groups` query and each parameter's `group`.
+  - **New Group…** (above the table) asks for a name
+    (`GroupNameDialog`, nested with `/`) and runs `add_parameter_group`,
+    in the selected group's row when one is selected; the new row is
+    selected. A parameter typed in the table's empty row (mitcad#2202)
+    goes directly under User Parameters (`add_parameter` without
+    `group`); moving it puts it in a group.
+  - **Moving.** The table selects several rows (Shift, Ctrl). User
+    parameters dragged onto a group's row, onto a parameter's row in a
+    group or onto User Parameters go there (`set_parameter_group`, one
+    undo step; the table moves no row itself and is built again). The
+    context menu of a user parameter (right-click, the Menu key or
+    Shift+F10) has **Move to Group ▸**: User Parameters (no group), each
+    group by its path, New Group… (a name, then the selected parameters
+    moved into it in one step); the group they are all in already is
+    disabled. Add Comment… stays for a single parameter.
+  - **A group's row:** double-click or F2 renames it in place (the group
+    keeps its parent; `rename_parameter_group`), its context menu has New
+    Group… (a subgroup), Rename and Delete; Delete (the window has no
+    Delete button since mitcad#2202) asks only when the group or its subgroups
+    hold parameters (`Delete Group`: they move up a level, to its parent
+    or User Parameters; none is deleted) and runs
+    `delete_parameter_group`. A double-click on a section's row (Favorites,
+    User Parameters, Model Parameters, a feature) opens or closes it.
+  - **The filter** matches group names too: a group whose name (or a
+    parent's) matches shows all its parameters; a group's row shows while
+    nothing is filtered, else when it holds a shown parameter or its name
+    matches. **Collapsed groups** are kept per design (`designId`) for the
+    session, also when the dialog opens again.
+  - Log lines: `Parameter group added: <path>`, `Parameters moved to group
+    <path>: a, b` (`to User Parameters`), `Parameters dropped on <path>:
+    …`, `Editing parameter group <path>`, `Parameter group <path> renamed
+    to <path>`, `Delete parameter group <path> asked: <n> parameter(s)`,
+    `Parameter group <path> deleted: a, b moved to <parent>|User
+    Parameters`, `Parameters group <path> collapsed|expanded`,
+    `Parameters group <path> at x,y`, `Parameters new group at x,y`;
+    `Parameters order:` writes a group's row as `[<path>]`, the label of
+    a row's group again after a group's subgroups (`[User Parameters]
+    [Table] a, b [User Parameters] c`), and `; collapsed <paths>` and
+    `; selected group <path>`.
+  - Tests: `core.model.api` (`parameter_groups_tests.rs`), and the UI
+    test `tools/ui-parameter-groups-test.sh` with its Windows and macOS
+    wrappers (`app.ui-windows-parameter-groups`,
+    `app.ui-macos-parameter-groups`; the shared script
+    `tools/ui-scripts/parameter-groups.mitcad-ui`: New Group…, two
+    parameters moved by the context menu, the group renamed with F2,
+    collapsed and still collapsed when the dialog opens again, deleted and
+    its parameters back under User Parameters).
 - **Edit Parameters, aligned numbers** (mitcad#566): the Expression and
   Value columns paint a cell whose whole text is one number with an
   optional unit (`3 mm`, `-2.75 mm`, `0.5 in`, `30 deg`, `2,5`) with
@@ -10285,7 +10559,14 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   shows again) and Types... (`Property Types`: the own types with their
   values; Define with name, base type, comma-separated values, unit,
   description; Remove) run one model command each; refusals stay in the
-  window's message line.
+  window's message line. A component's level (not the root's, an
+  occurrence's or a body's) always has the rows Part number and
+  Description in the set Identity (mitcad#2138, the query's `standing`
+  rows): an empty value, no source, Remove off, edited in place like
+  any value; nothing is stored until a value is typed, and a value
+  emptied is removed again. A Part number or Description stored in
+  another set shows in its own row instead. They fill a drawing bill of
+  materials's Part Number and Description columns.
 - **Find in Design by property** (mitcad#496): a search text with a
   comparison (`=`, `<`, `>`, `~`: `FireRating = EI60`,
   `Pset_WallCommon/FireRating = EI60`, `Mass > 10 kg`, `Name ~ wall`)
@@ -11180,6 +11461,12 @@ between two walls), so an edit highlights what the feature uses.
   `app.ui-windows-sheet-corner-edit`).
 - **Sheet Cut** (`sheet.cut`): Profiles (of one or several sketches on the
   face), the flat Face they lie on, Across Bends (bends opened for the cut).
+- **Perforate** (`sheet.perforate`, mitcad#2242) is next to Sheet Cut in
+  Sheet Metal › Modify. Pick the Body and set Diameter, Pitch, Margin and
+  Pattern. A blank Margin follows Diameter. The optional Fixed Panel sets
+  the grid axes and Outline picks closed profiles of a sketch on the
+  sheet. The preview shows the cut holes and their count. Edit the timeline
+  feature to change its picks or values.
 - **Corner Relief** (`sheet.corner_relief`, mitcad#209): faces of the two
   bends, the Face they leave when they leave several (for bends on different
   faces, the face held, one next to either bend; mitcad#125), Own Corner
@@ -11215,6 +11502,11 @@ between two walls), so an edit highlights what the feature uses.
   in, ft), then `export_flat_pattern_dxf` with that `units`; the log line
   ends with the unit written (`…, in in`) and the hint names it; a refusal
   shows the model's reasons. Allowed in a read-only window.
+- **Export Bend Table…** (`sheet.export_bend_table`) is available in Sheet
+  Metal › Modify and Laser › Export. The save dialog offers CSV and JSON.
+  The `export_bend_table` command reads the same Flat Pattern as the DXF
+  export and writes one row per bend center-line piece. The hint gives the
+  number of bends written. Allowed in a read-only window.
 
 In the browser a sheet-metal body's row has two rows under it (expanded by
 default; `BrowserNode::Type::SheetRules`, `FlatPattern`): its rules
@@ -11257,7 +11549,8 @@ layout file's tabs and the native macOS ribbon's list.
   (any plane, the typed path form, an edited rail keeping its direction)
   or edges, with one Chain Selection for them all; rails with curve
   sections are refused before the model is asked. A 3D sketch alone
-  enables Surface Loft (mitcad#1550).
+  enables Surface Loft (mitcad#1550). Its Tangent Edges (Merge by
+  default, or Keep) is the solid Loft's (mitcad#2162).
 - Editing: the solid Extrude, Revolve, Sweep and Loft refuse a definition
   with `surface` set (`canEdit`), so the surface commands, registered
   after them, edit those; each surface command takes only what its panel
@@ -11338,16 +11631,27 @@ layout file's tabs and the native macOS ribbon's list.
   body for every face (no `faces`).
 - **Blend Surface** takes for each end (`from_…`, `to_…`) Edges, Open
   Edges Of, Face Beside, Continuity and Bulge (a number, not a
-  parameter), and Stitch. **Boundary Surface** has a Type: Fill a Loop
-  (Boundary Curves of one sketch with Chain Selection and Tangent to
-  Sketch Plane, one `boundary` entry; Boundary Edges of one body, named
+  parameter), and Stitch. **Boundary Surface** is enabled by any sketch,
+  3D sketches too, or a body (mitcad#2198). It has a Type: Fill a Loop
+  (Boundary Curves of one sketch or several, planar and 3D, with Chain
+  Selection and Tangent to Sketch Plane, one `boundary` entry for each
+  sketch's curves in the order the sketches were first picked, the model
+  joining them end to end in the loop's order and refusing in words a
+  loop that does not close; Tangent to Sketch Plane, shown only while a
+  planar sketch's curves are picked, makes each planar sketch's entry
+  `g1`, a 3D sketch's stays `g0`; Boundary Edges of one body, named
   edges and openings picked by a free edge, and Open Edges Of faces of
-  that body with their Edge Continuity, another) or Network (Curves One Way and Crossing
-  Curves, each sketch curve a curve of its own). **Match Surface** takes
+  that body with their Edge Continuity, shown only while Boundary Edges
+  or Open Edges Of hold something, another) or Network (Curves One Way and Crossing
+  Curves, each sketch curve a curve of its own). Editing a loop of
+  several sketches' curves shows them all in Boundary Curves.
+  **Match Surface** takes
   the Face, Target Edges, Target Open Edges Of, Target Face Beside and
   Continuity; **Fair Surface** Faces/Body, Tolerance, Strength,
   Iterations and Keep Tangents at Edges (`keep_edges`). Definitions the
-  panels cannot show (several sketch chains or points in a loop, chains in
+  panels cannot show (two entries of one sketch, entries chained
+  differently, planar sketches' entries tangent differently, a 3D
+  sketch's tangent, points in a loop, chains in
   a network, a match without a face, openings of their own) open in no
   panel.
 - Log lines: `Added surface extrude of <n> profiles and <m> curves` (and
@@ -11363,6 +11667,10 @@ layout file's tabs and the native macOS ribbon's list.
   `through <u> by <v> curves`), `Added match surface (<continuity>)`,
   `Added fair surface of <n> faces` (or `of a body`). Tests:
   `tools/ui-surface-test.sh`, `tools/ui-surface-fill-test.sh`,
+  `tools/ui-surface-boundary-sketches-test.sh` (mitcad#2198: enabled by a
+  3D sketch alone; a loop of lines of two planar sketches and a 3D sketch
+  filled, Tangent to Sketch Plane and Edge Continuity shown and hidden
+  with the picks, the feature edited with its three curves),
   `tools/ui-patch-opening-test.sh` (a box with its top face unstitched and
   deleted: with Whole Opening on a free edge of the opening picked, the
   hover showing the whole loop, takes the opening; with it off the four
@@ -11426,7 +11734,7 @@ places one and closes it.
 
 | Command | Panel | Model |
 |---|---|---|
-| `build.profile` Profile | grows as the placement needs it (mitcad#394). At first: Part, a tile with the chosen part's picture, name, supplier and part number (`withChoiceTile`, mitcad#427); a click on it, or Enter or Space, opens the component picker with the role's parts, filtered to the system chosen last (mitcad#418); Search and System are hidden inputs (for live MCP); Place On (none needed for the first part); Length (the part's stock length, else 500 mm; also a box at the cursor, `withCursorBox`, and a handle at the free end while the length is a number); for a ground placement Direction, icon buttons Face normal, X, Y, Z, -X, -Y, -Z (`withChoiceIcons`, default Z: standing; `at.direction`; Face normal, offered while a face is picked and chosen by that pick, sends none: the face's outward normal, mitcad#2000). Length's mode as five icon buttons (mitcad#427, `withChoiceIcons`: Auto: to the face it meets, Auto: to its center, Auto: through it, Typed length, Auto: to a face you pick, plus an offset (mitcad#1630); their labels the tooltips; in a ground placement only the last two are offered, `withChoiceOffered`); to a face adds To Face (a face, a plane or a profile's end, picked anywhere, beside the part too; shown empty, it takes the next click, and it stays for the next part placed) and Face Offset (default 0, signed along the part) and, by the pick: an **end pick** adds Direction (mitcad#417: Auto, the click's zone of the end face, `Auto: by the click (+X)`; Straight; the four turns square to the part it meets, `end.turns`, named by the host axis they run along, `+X`, else `Side 1`..`Side 4`), on a corner Offset (the new part's end from the outer side, positive towards the turn, default 0) and Miter (Auto, `Auto (none)`: the panel's turns are square, and a square corner lies on the end face, mitcad#427; `Auto (<cut>)` when the click's preview says another; None; Shared, not offered at a corner offset other than 0; Cut the new part; Cut the existing part) with Miter Angle; the end pick's view hint says that Miter Shared miters both components (mitcad#1940, *Mitering two profiles*); a **side pick** adds Offset and From (End A, End B, Middle, Middle of Gap, mitcad#1401), which the click fills; either adds Rotate (0, 90, 180, 270 deg) and Flip, and a side pick of a profile Tilt below Rotate (mitcad#444: 0 deg, the lean along the part it stands on, positive towards its end B, up to 80 deg; an arc handle at the foot, a ring about the slot's cross axis, drags it, the angle in the box at the cursor while it is dragged; the foot is cut to lie on the side, an auto length ends flush on the face it meets; Offset and From then refer to the foot's long point; sent as `tilt` when not 0). Placement, last, once the design has a part to go on: four icon buttons (mitcad#427, no More; Automatic: where the click is, the default; On a profile's side; On a profile's end; On a plane (as the first part): a ground placement again; their labels the tooltips). **Method** (mitcad#1965, after the part): By clicks (the default: the placements above) or Along sketch lines. Along sketch lines hides the placement inputs by clicks (Rotate and Flip stay) and shows Lines (sketch lines picked in the view, or whole sketches selected in the Browser; any number), Chain (off: adds the lines joined end to end to the picked ones), Align (Centered on the line, the default; On top of or Under the sketch plane; the four corners, left or right looking along the line, on top or under) and Corners (on: shared miters where two lines meet at their ends, butts where a line ends on another); the panel says how many profiles, the preview shows each one along its line with square corners and its length, and Place sends `build_place` with `lines` (`curves`, `chain`, `align`, `corners`, and `rotate` and `flip`; commands.md, *Along sketch lines*): one profile per straight line, each following its line, the corners treated, one undo step; an arc, a circle or a spline among the lines is refused in the model's words; afterwards each corner changes with Ends and the Miter tools, and an end to a face with Length's Auto: to a face you pick. The result names where the part goes (`Adds to: Root`, the `build_host` query). **Place** (Enter) places it, also without a pick in a ground placement (at the origin), and the panel stays for the next one; **Shift + click** (mitcad#451, [Selection inputs](#selection-inputs)) on a place Place On takes picks it and places the part at once with the panel's values, then the next one follows as after Place (a plain click still only previews; one that cannot be placed makes nothing and the panel says why); the view's hint says `Shift+click places at once`; **Close** (Esc) keeps what was placed | `build_host`, `build_preview` while the inputs change, `build_place` on Place |
+| `build.profile` Profile | grows as the placement needs it (mitcad#394). At first: Part, a tile with the chosen part's picture, name, supplier and part number (`withChoiceTile`, mitcad#427); a click on it, or Enter or Space, opens the component picker with the role's parts, filtered to the system chosen last (mitcad#418); Search and System are hidden inputs (for live MCP); Place On (none needed for the first part); Length (the part's stock length, else 500 mm; also a box at the cursor, `withCursorBox`, and a handle at the free end while the length is a number); for a ground placement Direction, icon buttons Face normal, X, Y, Z, -X, -Y, -Z (`withChoiceIcons`, default Z: standing; `at.direction`; Face normal, offered while a face is picked and chosen by that pick, sends none: the face's outward normal, mitcad#2000). Length's mode as five icon buttons (mitcad#427, `withChoiceIcons`: Auto: to the face it meets, Auto: to its center, Auto: through it, Typed length, Auto: to a face you pick, plus an offset (mitcad#1630); their labels the tooltips; in a ground placement only the last two are offered, `withChoiceOffered`); to a face adds To Face (a face, a plane or a profile's end, picked anywhere, beside the part too; shown empty, it takes the next click, and it stays for the next part placed) and Face Offset (default 0, signed along the part) and, by the pick: an **end pick** adds Direction (mitcad#417: Auto, the click's zone of the end face, `Auto: by the click (+X)`; Straight; the four turns square to the part it meets, `end.turns`, named by the host axis they run along, `+X`, else `Side 1`..`Side 4`), on a corner Offset (the new part's end from the outer side, positive towards the turn, default 0) and Miter (Auto, `Auto (none)`: the panel's turns are square, and a square corner lies on the end face, mitcad#427; `Auto (<cut>)` when the click's preview says another; None; Shared, not offered at a corner offset other than 0; Cut the new part; Cut the existing part) with Miter Angle; the end pick's view hint says that Miter Shared miters both components (mitcad#1940, *Mitering two profiles*); a **side pick** adds Offset and From (End A, End B, Middle, Middle of Gap, mitcad#1401), which the click fills; either adds Rotate (0, 90, 180, 270 deg) and Flip, and a side pick of a profile Tilt below Rotate (mitcad#444: 0 deg, the lean along the part it stands on, positive towards its end B, up to 80 deg; an arc handle at the foot, a ring about the slot's cross axis, drags it, the angle in the box at the cursor while it is dragged; the foot is cut to lie on the side, an auto length ends flush on the face it meets; Offset and From then refer to the foot's long point; sent as `tilt` when not 0). Placement, last, once the design has a part to go on: four icon buttons (mitcad#427, no More; Automatic: where the click is, the default; On a profile's side; On a profile's end; On a plane (as the first part): a ground placement again; their labels the tooltips). **Method** (mitcad#1965, after the part): By clicks (the default: the placements above) or Along sketch lines. Along sketch lines hides the placement inputs by clicks (Rotate and Flip stay) and shows Lines (sketch lines picked in the view, or whole sketches selected in the Browser; any number), Chain (off: adds the lines joined end to end to the picked ones), Align (Centered on the line, the default; On top of or Under the sketch plane; the four corners, left or right looking along the line, on top or under) and Corners (mitcad#2200: three icon buttons, their labels the tooltips: Miter, the default, the L's shared miters; Butt, at each L the line picked first running through to the outer corner, the other stopping at its side; Square, every end as drawn; a line ending on another's side stops at that side but with Square; three or more ends at a point: the line picked first runs through); the panel says how many profiles and what Corners does, the preview shows each one along its line with square corners and its length, and a `Runs through` marker on the profile that runs through at each L and point of three or more (`build_preview`'s `lines.joints`), and Place sends `build_place` with `lines` (`curves`, `chain`, `align`, `corners` as `mitre`, `butt` or `none`, and `rotate` and `flip`; commands.md, *Along sketch lines*): one profile per straight line, each following its line, the joints' conditions kept with them, one undo step; an arc, a circle or a spline among the lines is refused in the model's words; afterwards each joint changes with Ends' Joint, and an end to a face with Length's Auto: to a face you pick. The result names where the part goes (`Adds to: Root`, the `build_host` query). **Place** (Enter) places it, also without a pick in a ground placement (at the origin), and the panel stays for the next one; **Shift + click** (mitcad#451, [Selection inputs](#selection-inputs)) on a place Place On takes picks it and places the part at once with the panel's values, then the next one follows as after Place (a plain click still only previews; one that cannot be placed makes nothing and the panel says why); the view's hint says `Shift+click places at once`; **Close** (Esc) keeps what was placed | `build_host`, `build_preview` while the inputs change, `build_place` on Place |
 | `build.timber` Timber | [Timber](#timber), TIMBER group (mitcad#478, mitcad#520): Part (the picker of timber only, `timber`), Mode (four icon buttons: On a member, Spacing, Two points, Along an edge, mitcad#1814), then Mode's inputs; On a member with Profile's Length (Auto: face, center, through, Tab; typed, the box at the cursor, the handle); Place (Enter) repeats, Close keeps what was placed | `build_preview`, `build_place` with `to`, `lie`, `length`, `spacing`, `along` |
 | `build.wall` Wall | [Timber](#timber), TIMBER group (mitcad#479, mitcad#520): Part, Start, End, Length (Auto or Typed, on another wall) and Length, Direction, From and Offset (on another wall), Height, Spacing, Top Plates, Corner, Openings (a tile that opens the Openings window, mitcad#519), Fasteners with Fastener, Size and Count; the members previewed as boxes; Place (Enter) repeats | `build_preview` with `frame`, `build_frame` (`kind: wall`) |
 | `build.floor_roof` Floor / Roof | [Timber](#timber), TIMBER group (mitcad#479, mitcad#520): Part, Kind (two icon buttons: Floor or ceiling, Roof), then only that kind's inputs: a floor's Start, End, Length, Width, Direction, Spacing, Openings (the Openings window), Blocking; a roof's Walls, Roof, Pitch from Walls, Pitch, Overhang; Fasteners with Fastener, Size and Count; Place (Enter) repeats | `build_preview` with `frame`, `build_frame` (`kind: floor`, `roof`) |
@@ -11438,7 +11746,7 @@ places one and closes it.
 | `build.spacing` Spacing Set | Member (a member of a spacing set, mitcad#478; its set's values fill the panel), Spacing (Center distance, Gap), Distance, Last Board (gap: cut, spread), Count (0: from the distance), Size (the rows of the set's source); enabled while the design has a set | `build_edit` of the set's lead with `spacing` (and `config`): the members laid out again in one undo step |
 | `build.frame` Timber Frame | Member (a member of a timber frame, mitcad#479; its frame's values fill the panel), by its kind the inputs Wall or Floor / Roof shows for it (mitcad#520): a wall's Length, Height, Spacing, Top Plates, Corner, Openings (the Openings window, mitcad#519); a floor's Length, Width, Spacing, Openings, Blocking; a roof's Spacing, Pitch, Overhang; Size (the members' row); the members previewed as boxes | `build_preview` with `frame` and `component`, `build_edit` with `frame` (one undo step) |
 | `build.length` Length | Part, Length (Detached: this length, Bound: to the face, to the center, through, Bound: to a face, plus an offset, mitcad#1630), Value, Bound To (none: the face it is bound to now; to a face also a plane), Face Offset (to a face: the part's offset, read from `build_parts`' `bound.add`); the bound target highlighted, a length to a face's offset shown | `build_edit` with `length` (a value detaches, a `bind` binds, to a face `{"mode": "to_face", "face", "offset"}`) |
-| `build.ends` Ends | Part (the end nearer the click; an end face by its name; while the panel is open every profile's ends show `A` and `B` in the view, the chosen one `> A`, and the view's hint says to click near the end), End, Angle, About (for an end that meets another profile's end: Towards the component it meets, Away from it, Across the corner one way and the other, the cut's lean drawn as an arrow from the end; the part's own x, -x, y, -y only for an end that meets nothing), Also the Component It Meets (mitcad#1940: offered for an end that touches, overlaps or comes within 5 mm of another profile's end in a corner, `build_end_meets`; taken, the shared miter a corner placement makes: both ends cut on the bisector and run on to the outer corner, Angle and About then the corner's; not offered, the panel says why in words); End Machining (As it is, A bore: Diameter, Depth, Thread; None takes the part's end machining away) | `build_end_meets` (the ends' labels with `meets: false`; the picked part's ends and what they meet), `build_edit` with `ends` and `machining`, the part's whole list (`[{end, hole: {diameter, depth, thread}}]`): `build_parts`' list with this end's entries replaced by the bore, or left out for None; with Also the Component It Meets `build_edit`'s `shared_mitre` first; one undo step for both parts |
+| `build.ends` Ends | Part (the end nearer the click; an end face by its name; while the panel is open every profile's ends show `A` and `B` in the view, the chosen one `> A`, and the view's hint says to click near the end), End, Angle, About (for an end that meets another profile's end: Towards the component it meets, Away from it, Across the corner one way and the other, the cut's lean drawn as an arrow from the end; the part's own x, -x, y, -y only for an end that meets nothing), Also the Component It Meets (mitcad#1940: offered for an end that touches, overlaps or comes within 5 mm of another profile's end in a corner, `build_end_meets`; taken, the shared miter a corner placement makes: both ends cut on the bisector and run on to the outer corner, Angle and About then the corner's; not offered, the panel says why in words); Joint (mitcad#2200, shown for an end of a profile along a sketch line that meets another one along a line in an L or a T: icon buttons, their labels the tooltips: As it is, the default; for an L Miter, Butt and Square, for a T Near Side, Far Side and Square; the panel says what the joint is and its condition now, `Joint: an L with end B of Bottom: Butt, Bottom runs through`, and what OK makes it; the choice stays for the next end picked; chosen, Angle, About and Also the Component It Meets are off) and with Butt Runs Through (As it is: the one that runs through now, else the one placed first; This component; The component it meets); End Machining (As it is, A bore: Diameter, Depth, Thread; None takes the part's end machining away). The panel stays open after OK for the next end (`repeats`); **Shift + click** on a component picks the end nearer the click and applies at once (mitcad#451), the view's hint says so | `build_end_meets` (the ends' labels with `meets: false`; the picked part's ends, what they meet and the `joint` they are in), `build_edit` with `ends` and `machining`, the part's whole list (`[{end, hole: {diameter, depth, thread}}]`): `build_parts`' list with this end's entries replaced by the bore, or left out for None; with Also the Component It Meets `build_edit`'s `shared_mitre` first; with a Joint chosen `build_edit`'s `joint` (`end`, `condition`, `through` for This component or The component it meets) instead of the cut; one undo step for both parts |
 | `build.flip` Flip, `build.rotate` Rotate 90° | Parts (any number); Rotate repeats (Enter turns them again) | `build_edit` with `flip` / `rotate`, one undo step |
 | `build.placement` Placement | Component (a part on a side or a rail, mitcad#1885, GitHub mitcad/Mitcad#354: its From and Offset fill the panel, `build_parts`' `from` and `offset`; a part on a plane or a face, mitcad#2046: its Offset along the normal and its Rotate, `build_parts`' `ground`, `offset` and `rotate`), Offset, From (End A, End B, Middle, Middle of Gap; not for a part on a plane or a face), Rotate (an angle, only for a part on a plane or a face), Min and Max (a carriage on its rail, mitcad#2088: its travel limits, `build_parts`' `slides` and `limits`; empty while a limit is its default, flush with the rail's end); a part placed otherwise is refused in words (its place is its joint's, which Joint edits). Placement is how a placed part moves: a drag of a part BUILD placed is refused in words that say so (the drag hint, `Drag refused: Arm:1 stays where it was placed: move it with Placement`), but a carriage drags along its rail and stops at its limits | `build_edit` with `at`, and `limits` (both, an empty one null) when Min or Max changed: a new From with the Offset as loaded sends `from` alone (the part stays where it is, measured from the new reference), a typed Offset `offset` and `from`; on a plane or a face `at.offset` and `rotate`; one undo step. Logged `BUILD placement of <component>: from <from>, offset <text>` (on a plane or a face `BUILD placement of <component>: on a plane or a face, offset <text>, rotate <text>`; a carriage also `BUILD travel of <component>: min <mm>, max <mm>`) on the pick and `Placement of <component>: from <from>, kept in place` or `... offset <text>` (on a plane or a face `Placement of <component>: offset <text>, rotate <text>`) after OK. A carriage's changed limits add `, travel <min or default> to <max or default>` to both logs. Tests: `tools/ui-scripts/joint-placement-edit.mitcad-ui`, `tools/ui-scripts/build-ground-offset.mitcad-ui`, `tools/ui-scripts/build-drag-travel.mitcad-ui` |
 | `build.cut_list` Cut List, `build.parts_list` Bill of Materials | an action: `BuildListsDialog` (`build/BuildLists.cpp`) with the tabs Cut List (Kerf; the cut parts grouped as the model groups them: quantity, part, length, end A and B, machining, own features, supplier, part number, mass each; the stock: pieces in cutting order, stock pieces, offcut; the other parts) and Bill of Materials (`parts_list`: quantity, part, supplier, part number, supplier part numbers (the row's suppliers' articles, `supplier_parts_text`, mitcad#949), library, version, license; filtered by Kind and BOM Structure, shown as every component or in a structured or parts-only view, mitcad#1985, [BOM Structure and the Bill of Materials' views](#bom-structure-and-the-bill-of-materials-views-mitcad1985)) and Sheet Metal (`sheet_metal_list`; both mitcad#1980, [Bill of Materials kinds and the Sheet Metal tab](#bill-of-materials-kinds-and-the-sheet-metal-tab-mitcad1980)); **Copy as CSV** (Alt+C) copies the shown tab's tables (rows ending in CRLF on every platform, mitcad#1641), **Copy as Text** (Alt+T) and **Save as Text…** copy and save them as an aligned plain-text table (`textTableOf`, `build/ListTables.cpp`: each table's heading when there are several, a header row, columns padded with spaces to their widest cell, numbers right-aligned, a blank line between tables, CRLF line ends, UTF-8; mitcad#1641), **Save as PDF...** (Alt+P) writes them with `QPdfWriter` (Qt Gui; A4 landscape) under the list's title and the design's name with the date. A design with timber (the cut list's `timber`, mitcad#478) adds columns after these: the cut parts' material, grade, finish, nominal and actual section (thickness first, `48x148`), running meters and volume (m³), and a row of the timber's totals; the stock's size and each stock piece's length; the bill of materials's material and grade. A design with profiled boards (the cut list's `profiled`, mitcad#477) adds three more: the profile, the cover width and the area covered (m²), its total in the totals row. A design with timber frames (a cut row's `frame`, mitcad#522) lists each frame's members apart, by frame, with a last column Frame. A design without timber lists exactly as before. The Bill of Materials tab's Property columns field (Alt+L, mitcad#496) takes property keys separated by commas (`Mark, Pset_WallCommon/FireRating, Mass`): a column each after the others with each part's value (its component's own, its library's or computed), in the CSV and the PDF too; the keys stay for the session | `build_cut_list` (`kerf`), `parts_list` (`properties`) |
@@ -11676,6 +11984,36 @@ places one and closes it.
   filled as between snaps, from the nearer end
   (`BUILD side click: From End B, Offset 175 mm (inline with Profile 3)`),
   so a typed offset still overrides it.
+- **Parallel** (mitcad#2201; commands.md, *BUILD: profiles in
+  parallel*): Profile's Placement has a fifth button, Parallel
+  (`build-place-parallel`, `kPlaces`; Linear Component and Timber do not
+  offer it). One click on a long side of a profile places the new
+  profile along it, a long face against the side's outer plane, above,
+  below or beside it as the side picked (`Against::Parallel`, `at.place`
+  `parallel`); the face picked stays highlighted and the preview shows
+  the new profile before Place. Its inputs: **Across** (`kAcrosses`:
+  Centered on the side, the default; On the slot nearest the click),
+  **Rotate** (quarter turns about the profile's axis: the face that rests
+  on the side; unturned its widest face), **Length** (two buttons: Match
+  target, `build-length-match`, the default, which sends no length; Typed
+  length; dragging the handle at the free end types it), **From** (End A,
+  End B, Middle; no Middle of Gap) and **Offset** (0 mm), always sent as
+  typed, so a click only picks the side: End A and 0 keep both ends flush
+  when the lengths match. Choosing Parallel sets Match target, End A and
+  Offset 0; leaving it puts the length back on Auto: to the face. Flip
+  and Tilt are hidden. The panel says `Along the profile, a long face on
+  its side`, the offset from its reference, `Across: centered on the
+  side` (or `on the slot nearest the click`) on a side with several
+  slots, and the length (`matches the profile it lies along`, `typed`);
+  the log adds `; parallel on <frame>, across <middle|slot|the only
+  slot>, rotate <deg> deg, length <match|typed>` and `BUILD placement
+  parallel: length <mode>` when it is chosen. Afterwards **Placement**
+  (MODIFY) shows Offset, From, Across and Rotate for such a profile
+  (`build_parts`' `parallel`), sending `at.across` and `rotate` only when
+  changed (`Placement of <component> in parallel: across <a>, turn <d>
+  deg`), and **Length** offers Match target and Detached for it (no bound
+  modes; `Length of <name>: matches the target`). Tests:
+  `core/model-tests/build-frames/src/parallel_tests.rs`.
 - **Ends** (mitcad#417): a click on an end face continues the part
   straight in the face's inner half and turns it towards an edge in the
   band along it; the click fills Direction's choices from the preview's
@@ -12619,6 +12957,18 @@ settings in the user's settings (`ViewSettings`, group `view`);
   unlit in the background's middle color, because OCCT draws see-through
   faces after every layer sharing the depth buffer. Bodies keep
   `BodyDisplay::color`; previews, highlights and overlays are untouched.
+  Wireframe with Visible Edges Only (`view.style.wireframe_visible`,
+  mitcad#2155; last in `VisualStyle`, so stored settings keep their
+  meaning) has the same faces, following a background change, and the
+  visible-edge layer without the dashed one. Both paper styles draw the
+  outlines of curved faces with OCCT's outline
+  (`Graphic3d_Aspects::SetDrawSilhouette`, in the edges' color and width):
+  the back faces drawn again pushed out along their normals, which OCCT
+  does only where back faces are culled, so a closed opaque solid has
+  outlines and an open surface body or a body clipped by a section has
+  none. `tools/ui-view-outline-test.sh` checks a cylinder's two outlines
+  from the side and the faces on a dark background;
+  `tools/ui-view-test.sh` the block without dashed edges.
 - **Component Colors** (`view.component_colors`, View menu, mitcad#321):
   draws every body in a stable color of its owning component
   (`BodyDisplay::component`; hues of consecutive component ids a golden
@@ -12991,9 +13341,43 @@ settings in the user's settings (`ViewSettings`, group `view`);
   16 logical pixels of an edge (`OrbitWrap::kMargin`), and the view does
   not see the jump: every later position gets the distance jumped added,
   so the orbit goes on at the same rate (`OcctViewer::wrapOrbitCursor`
-  after `UpdateMousePosition`, the pure `view/OrbitWrap.hpp`). Moves
-  queued before the jump count without it; synthesized events (touch,
-  pens) do not jump. The press and the release get the adjusted
+  after `UpdateMousePosition`, the pure `view/OrbitWrap.hpp`). While the
+  jump is to arrive, a move on the far side of the screen's middle is the
+  jump arrived (a fast move may land well past the margin); a move stamped
+  up to the one that jumped (the event's own timestamp, recorded with the
+  jump) was queued before it and counts without it. A later-stamped move
+  still on the old edge's side means the system put the cursor back (an
+  absolute pointer: a virtual machine's mouse integration, a remote
+  desktop, a pen tablet; GitHub mitcad/Mitcad#546): the timestamp alone
+  decides (mitcad#2205; the cursor is not asked, since no run on X11
+  showed a move the server had before the jump reaching the view after
+  the one that jumped: Qt merges it into the jump's own move). The jump is
+  undone (its distance taken off again), the drag makes no other jump and
+  the orbit stops at the edge, so no position the view gets moves by a
+  screen's width between two moves; logs `Orbit cursor jump not taken:
+  the system put the cursor back at the edge (move at 1919,500, cursor at
+  1919,500)` with the move and where `QCursor::pos` puts the cursor then
+  (a cursor on the far side would be a move that only waited in the
+  queue; `OcctViewer::orbitPosition`). The same when the system first
+  delivers a move at the jump's target and only then puts the cursor back
+  (XWayland: the jump's own move, then the real pointer's next one;
+  mitcad#2188): after the jump arrived, one move from the far side
+  straight back to the old edge (within the margin of where the jump
+  started, or beyond it, along each axis it jumped on:
+  `OrbitWrap::atOldEdge`) undoes it; a drag reaches that edge again only
+  move by move, and a cursor sent back elsewhere on the old side (a
+  test's step back to the press point) keeps the jump. Two screens
+  side by side: the shared edge jumps like an outer one (the cursor stays
+  on the screen the orbit is on, logged as `Orbit on screen 0,0 1600 x 1000
+  of 2` when the orbit starts), also after a move that passed it in one
+  step; the jump's distance the view gets is the widget's
+  (`event->position()` minus `mapFromGlobal` of the target), not the
+  global positions', since Qt keeps each screen's origin in device pixels
+  and at a device pixel ratio other than 1 a move on the next screen has
+  its global position in that screen's scale and origin (3200 and on for
+  the right one of two 1600-pixel screens at ratio 2), which stepped the
+  view by a screen's width. Synthesized events (touch, pens) do
+  not jump. The press and the release get the adjusted
   position too, so a long drag that ends where it began is a drag, not a
   click (a cube drag does not snap to a face, a right drag opens no
   menu). The move without buttons that macOS posts for the jump is known
@@ -13001,13 +13385,26 @@ settings in the user's settings (`ViewSettings`, group `view`);
   guard for a release lost to AppKit menu tracking. Where the system
   does not move the cursor (Wayland, `QCursor::setPos` does nothing), the
   drag tries no more jumps and the orbit stops at the edge as before, with
-  no message. Logs `Orbit cursor jumped to 17,500` for each jump. Tests:
+  no message. Logs `Orbit cursor jumped to 17,500 from 1590,500` for each
+  jump. Tests:
   `app/tests/orbit_wrap.cpp` (`app.unit`: targets on screens with any
-  origin, no step across a jump, queued moves, a refused jump, the jump's
-  own move) and `tools/ui-view-test.sh` ("An orbit past the edge of the
+  origin, no step across a jump, a fast move landing far from the target,
+  queued moves by timestamp, X11's order with a fast mouse, a later-stamped
+  move from the old edge as the cursor put back, a refused jump, a jump put back and undone with no step back past
+  the middle, also after a move at the target, two screens with the shared
+  edge, the next screen at another scale, the jump's own move),
+  `tools/ui-view-test.sh` ("An orbit past the edge of the
   screen": a middle drag over the right edge turns the view as far as its
   whole length, a cube drag over the top edge released where it was
-  pressed is not a click).
+  pressed is not a click) and `tools/ui-orbit-screens-test.sh` (a hidden
+  display split into two screens with `xrandr --setmonitor`, at device
+  pixel ratio 1 and 2: over the shared edge in one move and on past the
+  middle and back, over the outer edge, over the top, each turning the
+  view by its moves only; the cursor put back after the jump's own move,
+  undone, back past the middle by the moves only; four bursts of a move
+  every millisecond over the shared edge, each keeping the jump and
+  turning the view by the moves it got, noting how often the server still
+  had moves to carry out when the cursor jumped).
 - **3D mouse** (mitcad#951, `view/SpaceMouseController.*`,
   `view/SpaceMouseNavigation.hpp`, the backends behind
   `platform/SpaceMouseDevice.hpp`): a 6-DOF device navigates the 3D view
@@ -13511,8 +13908,26 @@ settings in the user's settings (`ViewSettings`, group `view`);
   `Theme: dark (preference; MitCad's own palette, window #1f2024 over the
   platform's light one)` or `Theme: system (light)`, and a change logs
   `Preferences: theme dark` and the same line once it is settled. The 3D
-  view's background is its own setting (View background, unchanged;
-  Follow System follows the palette, so the Theme). The AppKit frontend
+  view's background is its own setting (Environment in Preferences ›
+  Display, View background in macOS's Settings window). Its default on
+  every platform, also after Restore Defaults, is **Follow System**
+  (`Automatic Background (follow system)` in the list and the View menu,
+  `view/background` 5; mitcad#2145, before only on macOS; Windows and
+  Linux had the light Gradient Background): it follows MitCad's theme as
+  the window's chrome does, the dark blue-gray gradient (`#3b424d` to
+  `#1c2027`) whenever the window is dark and the light one (`#f7f8fa` to
+  `#dfe3ea`) whenever it is light, with Theme System on a dark or light
+  system, Theme Dark and Theme Light alike. One answer decides "dark" for
+  both (`isDarkTheme`, `framework/Theme`): the application palette the
+  theme settles on, which the window style also paints by. A change of
+  theme while MitCad runs (the Theme preference, the system switching
+  between light and dark) redraws the view at once, logged `Background
+  #3b424d #1c2027`. A background chosen in the list (Gradient, Light,
+  White, Dark, Custom) stays as chosen whatever the theme. Tests:
+  `tools/ui-view-background-theme-test.sh`,
+  `app.ui-windows-view-background-theme` and
+  `app.ui-macos-view-background-theme`
+  (`tools/ui-scripts/view-background-theme.mitcad-ui`). The AppKit frontend
   has no appearance handling of its own: its colors are dynamic colors
   of the application's appearance (`app/platform/macos/NativeColors`),
   and Qt's macOS platform sets that appearance (`NSApp.appearance`) for
@@ -13815,7 +14230,10 @@ settings in the user's settings (`ViewSettings`, group `view`);
   used sketches under their features** (`browser/consumeSketches`, off by
   default, mitcad#1699: "Used sketches under their features" in the
   Browser section; `Preferences: show used sketches under their features
-  on`). The window title
+  on`). Above the check boxes, **Extrude starts with** (a drop-down,
+  `preferencesExtrudeStart`; `extrude/startOperation`, mitcad#2164: see
+  Extrude under the commands; `Preferences: extrude starts with
+  new_body`). The window title
   carries the version either way: `<document>[*] - MitCad <version>`
   (`MainWindow::updateWindowTitle`), which the published MCP title still
   cuts at the last ` - ` (`TitleBar::documentTitleOf`). The UI tests find
@@ -13883,8 +14301,14 @@ settings in the user's settings (`ViewSettings`, group `view`);
   at 135, in a darker shade of its own color (`capHatchColor`), 1.5 px
   wide, with a spacing per cap face (about eight lines across a small
   face, at most 40 across all the caps of a group, at least 400th of
-  them); the lines lie off the caps toward the removed side, in the layer of
-  the edges in sight, so that they are drawn over the fill. The clip is the
+  them; `view/SectionHatch.hpp`). The lines lie in the section plane
+  itself, cut at each cap face's triangulation so that none runs past a
+  cap's outline (mitcad#2146: a lift toward the removed side, a share of
+  the caps' size, stood them visibly off the caps when zoomed in). They
+  are drawn over the fill by depth alone: the caps lie just behind the
+  plane by their polygon offset (`kSectionCapOffsetUnits`, mitcad#784),
+  the clipped bodies' faces further back, and the hatch is drawn in the
+  layer of the edges in sight, after the caps' layer. The clip is the
   model's `analysis_clips` (the `clip` shape of every body shown at once,
   mitcad#438), worked out on all cores (OCCT's thread pool); a body the
   plane does not reach needs no boolean: one behind it is shown as its own
@@ -13941,14 +14365,22 @@ settings in the user's settings (`ViewSettings`, group `view`);
   as the bodies' own (Project while Hide Above Sketch is on, also the face
   the sketch lies on, which stays whole); the caps cannot be picked
   (mitcad#233). The viewer logs `Section caps: 3 colour(s) [#e0892a hatch
-  #4b2d0b at 135 deg, 12 lines; ...] in <style>, bodies in <component|appearance> colours`
-  (again when the style or Component Colors change). Tests:
+  #4b2d0b at 135 deg, 12 lines, 0.000000 mm off the plane; ...] in <style>,
+  bodies in <component|appearance> colours` (again when the style or
+  Component Colors change; the distance is the hatch's largest from the
+  plane). Tests:
   `tools/ui-section-caps-test.sh` (the colors per component and the
   hatch from the log; the rounds off the UI thread: the panel's numbers
   after the view's caps, a quick change of the distance superseding the
-  round that runs, Cancel while one runs), `tools/ui-windows-section-pick-test.ps1` (ctest
+  round that runs, Cancel while one runs; the hatch in the plane of a
+  large body's square and turned sections, the shared script
+  `tools/ui-scripts/section-caps.mitcad-ui`, also run by
+  `tools/ui-windows-section-caps-test.ps1`, ctest
+  `app.ui-windows-section-caps`), `tools/ui-windows-section-pick-test.ps1` (ctest
   `app.ui-windows-section-pick`; the same rounds), `app.unit`
-  (`tests/section_worker.cpp`: superseded, waiting, stopped rounds).
+  (`tests/section_worker.cpp`: superseded, waiting, stopped rounds;
+  `tests/section_hatch.cpp`: every hatch vertex in the plane within
+  0.000001 mm and inside its cap, for caps of 10 mm and 1000 mm).
   **Feature previews** are cut too (mitcad#943,
   `framework/SectionPreview.hpp`): while Section Analysis or Hide Above
   Sketch is on, every body a command's preview draws with its new shape
@@ -14320,7 +14752,7 @@ UI thread.
 | `commands/ExtrudeCommands.cpp` | Extrude and Revolve |
 | `commands/SweepCommands.cpp` | Sweep, Loft, Rib, Web, Coil, Pipe, Helix |
 | `commands/HoleCommands.cpp` | Hole, Thread |
-| `commands/PrimitiveCommands.cpp` | New Component, Box, Cylinder, Sphere, Torus |
+| `commands/PrimitiveCommands.cpp` | New Component, Box, Cylinder, Cone, Sphere, Torus |
 | `commands/PlaceInputs.*`, `commands/PlaceGeometry.*` | placement by picked geometry (mitcad#656): Place On and the inputs it brings for every part placed by a pick, the `at` they make, earlier placements read into them; snapping, the nearest edges and the point at two distances |
 | `commands/DriveCommands.cpp` | Gear Pair and Belt Drive (mitcad#656): the candidates of a ratio between two axes, both parts made |
 | `commands/PatternCommands.cpp` | Rectangular, Circular and Path Pattern, Mirror |
@@ -14330,7 +14762,7 @@ UI thread.
 | `commands/FaceCommands.cpp` | Shell, Draft, Offset Face, Replace Face, Split Face, Split Body, Delete Face |
 | `commands/MoveCommands.cpp` | Scale, Combine, Move/Copy, Move Face (its summary in `commands/MoveFaceText`), Align, Appearance |
 | `commands/ConstructCommands.cpp` | `registerConstructCommands`: every construction plane, axis and point, from a table; a pick of another component's geometry asks whether to activate it (mitcad#960, `MainWindow::pickComing`, [Activating the picked component](#activating-the-picked-component)); kept in the active component, the pick is linked (mitcad#1029, [Construction geometry of other components](#construction-geometry-of-other-components)) |
-| `commands/InspectCommands.cpp` | `registerInspectCommands`: Measure, Interference, Section Analysis, Print Analysis, Physical Properties |
+| `commands/InspectCommands.cpp` | `registerInspectCommands`: Measure, Interference, Section Analysis, Print Analysis, Draft Analysis, Physical Properties |
 | `commands/PrintAnalysis.cpp` | Print Analysis (mitcad#620): the settings group `print_analysis`, the `print` definition, its three queries, the answers in words and in the log, the overlay's data |
 | `MainWindowPrintAnalysis.cpp`, `view/PrintOverlay.cpp` | the shown Print Analysis followed and computed as model jobs; its triangles, marker and legend in the view |
 | `MainWindowCenterOfMass.cpp`, `view/CenterOfMass.*`, `view/CenterOfMassView.cpp` | Center of Mass (mitcad#1094): the command, the marker followed after every refresh and drawn in the view, its row's state and tooltip ([Center of Mass](#center-of-mass)) |
@@ -14401,7 +14833,7 @@ UI thread.
 | `view/ViewCube.*` | the orientation cube's glass and its Home capsule (mitcad#430) |
 | `view/SpaceMouse*`, `platform/SpaceMouseDevice.hpp`, `platform/*/SpaceMouse*.cpp` | 3D mice (mitcad#951): the mapping to the camera and the settings, the controller, the camera's motion in `OcctViewer` (`SpaceMouseView.cpp`), and the backends (Raw Input, spacenavd's socket, IOKit HID) |
 | `icons/*.svg` | own icons (see [Icons](#icons)) |
-| `web/` | the web viewer's pages (mitcad#423, [Web page](#web-page)): `WebPage` (`writePage` of the open design, `writePageOfFile` of a design file without a window, `pageHtml`: the viewer's template with its import map, module and data inlined; `pageBodies`), `WebGlb` (the bodies as the viewer's glb: a node per placed body, appearances and textures; the component tree; `gltfFile`, glTF files of their own), `GltfExport` (Export's glTF types, mitcad#1826, [glTF files](#gltf-files)); the viewer itself in `web/viewer/` |
+| `web/` | the web viewer's pages (mitcad#423, [Web page](#web-page)): `WebPage` (`writePage` of the open design, `writePageOfFile` of a design file without a window, `pageHtml`: the viewer's template with its import map, module and data inlined), `WebBodies` (`pageBodies`, the page's and the glTF files' bodies), `DocumentContext` (a design loaded without a window read as the window answers the model's queries: `writePageOfFile`, `mitcad-cli export` to glTF), `WebGlb` (the bodies as the viewer's glb: a node per placed body, appearances and textures; the component tree; `gltfFile`, glTF files of their own), `GltfExport` (Export's glTF types, mitcad#1826, [glTF files](#gltf-files)); the viewer itself in `web/viewer/` |
 | `web/MainWindowWeb.cpp`, `web/ProjectWeb.*` | a project's web viewer (mitcad#423): Web Viewer, Update Web Viewer, the Save that writes a design's page; the `web/` folder's slugs, `designs.json` and `index.html` (Qt Core, `app.unit`) |
 | `browser/BrowserMaterialMenu.cpp`, `print/MaterialMenuChoices.*` | Material › of the view's and the Browser's context menus (mitcad#1046): the design's materials, the library materials assigned last (kept in the settings), More… (the Material tool); a pick assigns at once (`bodyMaterialCommands`) |
 | `commands/MaterialCommands.cpp`, `commands/MaterialBinding.*`, `browser/LibraryPicker.*`, `browser/OptionMapping.cpp` | the Material and Appearance tools (mitcad#1059): the picker button and its picker, the fx's rows and their switch() ([Material and Appearance tools](#material-and-appearance-tools)) |
@@ -14424,11 +14856,13 @@ component of the open design (mitcad#1894, after the table).
 | `.rvt`, `.rte`, `.rfa`, `.rft` | a new document with a project's building elements, one component per level (`import_rvt`, same worker, mitcad#274; commands.md, ".rvt import"); a family file: its metadata only; no Stop; the report lists the bodies per level, what was left out and why, and the components are logged (`Imported <file>: components <name> (<n> bodies), …`) |
 | `.sc`, `.solidcraft` | a new document with the design's history (`import_solidcraft`, same worker, mitcad#450; a `.sc` file of another program, by its format key, is refused before the worker starts with "Not a SolidCraft design: …", mitcad#1622; commands.md, ".solidcraft import"); no Stop; the report lists every feature and joint with how it came in (parametric, partial, unmapped, failed) and the kinds without a MitCad counterpart, and is logged (`Import report: <file>: <counts>`) |
 | STEP, IGES, BRep | a base feature (`import_file`, one undo step `Import part.step`). A STEP file with an assembly (the `file_structure` query, mitcad#1274) first asks **Import STEP Assembly** (`askStepStructure`, object name `importStepStructure`; `MainWindow::askImportStructure`), from File › Import, a drop and File › Open (not `--open` or MCP, which take the default): **Components (keep the assembly)** (default; `structure` `components`: a component per distinct part, an occurrence per instance; commands.md, "STEP assemblies as components") or **One base feature** (`structure` `base`); Cancel imports nothing. The log line then ends `, <n> component(s), <m> occurrence(s)`. Its check box **Find repeated parts** (object name `importRepeatedParts`, Alt+R, off by default and not remembered; mitcad#1277) sends `repeated_parts` true: in the import's undo step the copies among the one base feature's bodies, or among each part's with Components, become occurrences of one component each (commands.md, *Find Repeated Parts*); the log line then adds `, repeated parts: <n> component(s), <m> copies`. A STEP file without an assembly asks nothing; its bodies' copies are found afterwards with the browser's Find Repeated Parts. **Into a component of its own** (mitcad#1629): File › Import and a drop into a design with content (the `file_structure` query's `wrap`) then ask **Where to Import** (`askImportPlace`, object name `importPlace`): **New Component** (default; `wrap` true: a component named after the file without its extension, `bracket` for `bracket.step`, a suffix when the name is taken, placed once in the active component at the identity, holding the base feature or the assembly's top occurrences) or **Into the Active Component** (Alt+A; `wrap` false, the file's bodies or components straight into the active component, as before); Cancel imports nothing. The log line then ends `, into component <name>`, and the Browser shows the component's row (`Root/bracket:1`). File › Open, `--open` and a new design take the file as the design itself (`wrap` false); so does a New Design whose only component is its empty Component1 (the file into Component1, the active component) |
-| STL, OBJ | mesh bodies, after asking the unit (Insert Mesh; its file dialog also lists `.glb` and `.gltf`, which come in as File › Import takes them, below) |
+| STL, OBJ | mesh bodies, after asking the unit (Insert Mesh; its file dialog also lists `.glb` and `.gltf`, which come in as File › Import takes them, below, and `.3mf`) |
+| `.3mf` | mesh bodies, a part placed more than once as a component with an occurrence per placement, base material colors as appearances (`import_file`, read by the model, mitcad#2156; commands.md, "3MF import"), a slicer's project too (its meshes in other model parts; its print settings are left to Import from Slicer). A `FileKind::Mesh` as STL: File › Import, a drop and Insert Mesh ask **Insert Mesh** without the unit row (`meshFileHasUnit`: the file says its unit; logged `Insert Mesh dialog opened: unit of the file`, `Insert Mesh: unit of the file, convert to solid off`), File › Open and `--open` ask nothing; no **Where to Import** (it goes into the active component, as STL). The log line `Imported plate.3mf as <feature>: <n> body(ies)`, with `, <c> component(s), <o> occurrence(s)` when a part is placed more than once; its warnings (open meshes, copies moved into place) in the status bar. Component from Web imports a downloaded `.3mf` as an STL (refused when it is no zip package). `tools/ui-3mf-import-test.sh`, `app.ui-windows-3mf-import` |
 | `.glb`, `.gltf` | mesh bodies, the node tree as components (`import_file`, read by the model, mitcad#1826; commands.md, "glTF import"): nothing asked about the unit (glTF's is the meter); into a design with content **Where to Import** as for STEP (`file_structure`'s `wrap` is true for glTF), the log line `Imported <file> as <feature>: <n> body(ies), <c> component(s), <o> occurrence(s)[, into component <name>]`, and the import's warnings (what the file has that is not taken: animations, skins, texture coordinates that are missing, …) in the status bar as every import's ([glTF files](#gltf-files)) |
 | `.serp` | bodies by layer, blocks as components (`import_file`, read by the model, mitcad#1870; commands.md, ".serp import"), as STEP's: File › Open, `--open` and a new design take it as the design itself; File › Import and a drop into a design with content ask **Where to Import**; nothing else asked (its unit is the file's). The log line `Imported vase.serp as <feature>: <n> body(ies)`, with `, <n> component(s), <m> occurrence(s)` when it has placed blocks; its warnings (what is left out) in the status bar. `tools/ui-serp-test.sh` |
 | DXF | a new sketch on a plane (`sketch.create` + `sketch.import_dxf`, one undo step `Insert drawing.dxf`), or into the edited sketch; the dialog uses the `dxf_info` query (origin placement, layers) |
 | SVG | as DXF (`importDrawing`; Insert SVG, `insert.svg` and in sketch mode `sketch.insert_svg`, mitcad#473): a new sketch on a plane (`sketch.create` + `sketch.import_svg`, one undo step `Insert logo.svg`) or into the edited sketch; the dialog (`askSvgInsert`) shows the `svg_info` query's size and contents and asks the scale, where the lower left corner goes and whether strokes become bands; in a new sketch the `filled` regions the result lists are selected as profiles, so Extrude takes them (`tools/ui-svg-test.sh`) |
+| Point files (`.csv`, `.txt`, `.dat`) | Insert Points (`insert.points` in the SOLID tab's INSERT group after Insert SVG, and `sketch.insert_points` in the sketch's INSERT group, mitcad#2232; `insertPoints`, `importPointFile`), not File › Import: the file dialog `Point files (*.csv *.txt *.dat)`, then **Insert Points** (`askPointsInsert`) with the `points_info` query's points and an airfoil's name: Plane (a new sketch on a plane, as Insert DXF; none in sketch mode: into the edited sketch), Insert as Spline or Points, an Airfoil checkbox (checked and enabled when the file was detected as one, switchable off), Scale (the file's numbers in the design's unit, times it) or, with Airfoil, Chord length (default 100 mm, in the design's unit), Angle of attack (degrees, turned about the leading edge, positive raises it) and Close trailing edge, and where the origin (Origin at X/Y) or the airfoil's leading edge (Leading edge at X/Y) goes, in the design's unit. `sketch.import_points` (commands.md, "Point files into sketches"): up to 30 points one Fit Point Spline through each, more one spline fitted within the tolerance (at most 60 control points); an airfoil an open spline with a line across a blunt trailing edge and a point at the leading edge. One undo step `Insert naca2412.dat`; in a new sketch its profile comes selected, so Extrude takes it; a warning of the result (the fit's cap) in the status bar (`tools/ui-points-test.sh`, `app.ui-windows-points`) |
 | `.mitcad` | Insert Component, linked or as a copy (`insert_component`); in a project with versions the design is chosen in the [project picker](#project-picker) (Another File... the file dialog; mitcad#176); a file outside the design's project is offered to be copied into it and linked (mitcad#1719, [Linked designs](#linked-designs-mitcad1416)) |
 
 **Design files of other formats into the open design** (mitcad#1894):
@@ -15451,7 +15885,33 @@ beside it, referred to by percent-encoded URIs.
   body's node is named by the body, its mesh in the body's own
   coordinates (no matrix), its extras `body`, `body_name`, `occurrence`
   as the page's. A component placed twice is written twice (its nodes),
-  its glTF mesh once.
+  its glTF mesh once: every placement's body node refers to the one mesh
+  of that body and look.
+- **Command line** (mitcad#2210): `mitcad-cli export <design> <out.glb|
+  out.gltf>` (`tools/cli/gltf.cpp`) writes the same file with the same
+  writer, not through the model's `export` command: the design opened
+  as the other exports open it, read through `web/DocumentContext.hpp`
+  (the model's queries as the window answers them; also
+  `writePageOfFile`'s), `web::writeGltf` with the root named by the
+  design file, relative texture paths in its folder, the bodies of
+  `--bodies` (uids or names) and the deviations of `--refinement`
+  (medium by default, `io::MeshOptions::from`) or `--deviation` mm and
+  `--angle` degrees. The extension chooses `.glb` or `.gltf`. `--unit`,
+  `--schema`, `--ascii`, `--coordinates` and `--occurrence` are refused
+  before the design is read (`<option> does not apply to glTF files`,
+  exit status 2, no file). It prints `Exported: ` and JSON (`--json`:
+  the JSON alone) with `path`, `format`, `bodies` (body nodes),
+  `triangles`, `files` (the file first), `bytes` and `warnings`. The
+  CLI builds the writer's sources (`framework/Command.cpp`,
+  `web/GltfExport.cpp`, `web/WebBodies.cpp` with `pageBodies`,
+  `web/WebGlb.cpp`) beside the render sources it has for `mitcad-cli
+  render`, not the page's viewer or result store. Test: `cli.export_gltf`
+  (`tools/cli/gltf-export-test.cmake`, `tests/gltf_export.json`: a
+  component with a subcomponent placed three times to `.glb` and
+  `.gltf`; `test_gltf_export` checks one mesh per body, a node per
+  placement with its matrix, the tree and the `.bin` beside the
+  `.gltf`, and compares each file with `web::writeGltf` called as
+  `exportFile` calls it; the refused options write nothing).
 - **Meshes and materials** as the page's glb ([Web page](#web-page)):
   positions in meters, materials named by their appearances (`name`),
   textures with the rendered view's projection, images over 2048 pixels
@@ -15542,9 +16002,11 @@ mode.
   `file.export_drawing` and `export_drawing` for that
   (`MainWindowLocks.cpp`).
 - **Writing** runs the command under a wait cursor (`Export drawing`). The
-  log says `Exported <path>: drawing, 3 views, 2 bodies, A3, 1:1` (the
-  views of a sheet, the bodies, the sheet and the first sheet's scale; a
-  DXF file adds its unit, `…, 1:1, in in`, mitcad#1408),
+  log says `Exported <path>: drawing, 3 views, 2 bodies in 2 placements, A3,
+  1:1` (the views of a sheet, the bodies, the placements drawn: a body of
+  a component placed several times is one body in as many placements,
+  mitcad#2147; the sheet and the first sheet's scale; a DXF file adds its
+  unit, `…, 1:1, in in`, mitcad#1408),
   each of the model's warnings as `Export drawing: <warning>`, the status
   bar the file with the views, bodies, sheet, scale and the sheets when
   more than one; a failure is a sheet (`Could not export:`) and `Export
@@ -15676,7 +16138,7 @@ their own earlier start):
 |---|---|
 | `open` | Open, Open Read-Only, Save As (also the first save of an untitled design, and Another Folder... of the project picker) |
 | `export` | Export (the dialog's suggested file), Export Drawing, Export Flat Pattern, Export DXF, the Cut List's and Bill of Materials's Save as PDF, Help › Diagnostics' Export Report, Render's Save Rendered Image: the last export folder, also while a design is open |
-| `import` | Import, Insert SVG, Insert Mesh, Insert DXF, Insert Component (Another File... in a project) |
+| `import` | Import, Insert SVG, Insert Points, Insert Mesh, Insert DXF, Insert Component (Another File... in a project) |
 | `texture` | Edit Appearances' texture image |
 | `program` | the 3D Print slicer program (the panel's and Preferences'), Preferences' git program |
 
@@ -15701,6 +16163,62 @@ follow the model's `modified` (`document` query), which compares the
 revision with the one marked saved (`mark_saved` after Open and Save; a
 new document starts saved, an imported `.f3d` design does not). Undo back
 to the saved state clears it (`tools/ui-file-test.sh`).
+
+### Save of a new design
+
+Save (`file.save`: Ctrl+S, the File menu, the quick-access button) of a
+design that has no file yet (mitcad#2183; `MainWindow::saveNewDesign`,
+`files/NewDesignSave.*`) follows **Preferences › General › Save of a new
+design** (`GeneralSettings::newDesignSave`, the setting
+`documents/newDesignSave`: `ask`, `computer` or `project`; `ask` by
+default, another text reads as `ask`):
+
+- **Ask**: when a remote project is known (`remoteProjectKnown`: the
+  current project is a Cloud one, or `anyRemoteProject` finds a Cloud
+  project among the known projects and the projects folder's that Remove
+  from List did not hide; a repository whose `.git/config` names no remote
+  is passed over without `inspect_folder`; MitCad Cloud projects,
+  mitcad#1957, count too once they exist), Save asks first, a Question
+  message box (`newDesignSaveQuestion`) "Save <name> on this computer or
+  to a project?" with **Save on This Computer…**, **Save to Project…**
+  (the default) and Cancel, and the check box **Remember my choice**
+  (`newDesignSaveRemember`, off). Esc, Cancel or closing it saves nothing
+  ("Save canceled."). Without a remote project there is no question:
+  Save As as before (the project picker of Save in a Project when a
+  project with versions is current or the untitled design is of a
+  project's folder, else the file dialog).
+- **On this computer** (the answer, or the preference): Save As's file
+  dialog without the project picker (`MainWindow::saveAsFile`).
+- **To a project**: the project picker of Save to Project
+  (`file.save_to_project`, preselecting the design's project and folder or
+  the Projects panel's selection as there; New Project… and Another
+  Folder… as there).
+
+Remember my choice checked saves the answer as the preference
+(`computer` or `project`): later new designs save that way without the
+question, also without a remote project, until the preference is Ask
+again (Restore Defaults of the General page puts Ask back). Save As, Save
+to Project, Save as Copy, a read-only window's Save and the Save of a
+design that has a file are not affected, nor is MCP's `document_save`,
+which names its path. An agent reads the preference as the Preferences
+dialog's field (`ui_dialog` with `open` `tools.preferences.general` and
+`read`: the field Save of a new design with its value). Logged `Save of a
+new design: asked (a remote project is known)`, `Save of a new design:
+Save As (no remote project known)`, `Save of a new design: canceled`,
+`Save of a new design: on this computer (asked)` (`to a project`;
+`(remembered)` with the check box, `(the preference)` without the
+question), and `Preferences: save of a new design <id>` when Preferences
+changes it. Tests: the unit test `new_design_save` (the ids, the message
+box with its buttons, default, Esc and check box, each answer, the
+setting read back); `tools/ui-scripts/new-design-save.mitcad-ui`, run by
+`tools/ui-new-design-save-test.sh`, `tools/ui-windows-new-design-save-test.ps1`
+(`app.ui-windows-new-design-save`) and
+`tools/ui-macos-new-design-save-test.sh` (`app.ui-macos-new-design-save`),
+with a Cloud project of the projects folder whose remote is a local bare
+repository: no question with the project hidden from the list, the
+question and Esc, Save on This Computer…, Remember my choice with Save to
+Project…, the next new design straight to the picker, and the
+preference set back to Ask.
 
 ### New designs' units
 
@@ -15814,7 +16332,7 @@ fields and the value editors send what is typed as text, a bare number
 with the design's unit (`0.875 in`), other expressions as typed; the
 model reads their bare numbers in the design's unit also for a slot's own
 parameter made in another length unit (core/model-api `commands.md`,
-Values). Add User Parameter, and Configurations' Add Option and Add
+Values). The Parameters window's empty row (mitcad#2202), Add User Parameter, and Configurations' Add Option and Add
 Column, start their unit box at the design's unit (`selectUnit`).
 `tools/ui-sketch-inch-entry-test.sh` and
 `tools/ui-windows-sketch-inch-entry-test.ps1`
@@ -17474,7 +17992,7 @@ nothing:
 | Dogbone | Corners |
 | Fill Cavity | Body, Seed Face (not Cap) |
 | Combine | Target Body (not Tool Bodies) |
-| Gear, Pulley, Bearing, Coil, Box, Cylinder, Sphere, Torus (`solid.gear`, …) | Place On (a face or a vertex; not a shaft, below) |
+| Gear, Pulley, Bearing, Coil, Box, Cylinder, Cone, Sphere, Torus (`solid.gear`, …) | Place On (a face or a vertex; not a shaft, below) |
 
 - **On the pick.** A face, edge, vertex or body picked into one of those
   inputs of a new feature (not an edit), of a body of a component other
@@ -17511,7 +18029,7 @@ nothing:
   dropped.* The button also shows when every body pick is of one other
   component (an agent's picks, below), dropping nothing.
 - **Parts placed by a pick** (mitcad#1752; Gear, Pulley, Bearing, Coil,
-  Box, Cylinder, Sphere and Torus, [Placement by picked
+  Box, Cylinder, Cone, Sphere and Torus, [Placement by picked
   geometry](#placement-by-picked-geometry)). A part's `at` refers to its
   own component's geometry, so its Place On on a face or a vertex of
   another component's body activates that component as Hole's does, with
@@ -18932,10 +19450,50 @@ SVG at several sizes (`themeIcon`).
   Cut or New Body stays, whatever Flip, Start or a distance does to the
   tool; only the user changes Operation, Objects or Affected components.
   An edit asks the model for no automatic operation and logs `Extrude:
-  editing keeps the stored operation`. Tests: `app.unit`
-  (auto_operation_policy), `tools/ui-auto-operation-test.sh`,
-  `app.ui-windows-auto-operation`, `tools/ui-macos-edit-auto-operation-test.sh`,
+  editing keeps the stored operation`. **Preferences › General ›
+  Extrude starts with** (mitcad#2164, GitHub mitcad/Mitcad#496;
+  `framework/ExtrudeStartPreference.hpp`, the setting
+  `extrude/startOperation`: `automatic` or `new_body`, in the Preferences
+  group of Export Settings, back to `automatic` by Restore Defaults):
+  *Operation from the bodies it touches* (the default) is the automatic
+  choice above; *New Body* starts every new Extrude panel with New Body
+  and asks the model for no automatic operation, so a profile on a body's
+  face makes a new body outward and inward alike (logged `Extrude:
+  automatic operation off by preference`); Join, Cut, Intersect and New
+  Component are chosen by hand as always. Read when an Extrude starts, so
+  a change applies from the next one. Under either choice an edit keeps its
+  stored operation, Repeat the operation the last OK chose by hand, and
+  JSON and MCP commands carry their own `operation`. Tests: `app.unit`
+  (auto_operation_policy: the policy with the preference and the setting
+  read back), `tools/ui-auto-operation-test.sh`,
+  `app.ui-windows-auto-operation`, `tools/ui-macos-edit-auto-operation-test.sh`
+  (each with the preference on New Body as its last part),
   `tools/ui-wrap-test.sh`.
+- **Extrude, a direction flip whose preview fails** (mitcad#2216,
+  `AutoOperationPolicy`'s flip, `CommandSession::retryFlippedOperation`
+  in `framework/CommandSessionAuto.cpp`, `CommandDef::toolDirection`): in
+  a new extrusion whose operation no longer follows the automatic choice
+  (chosen by hand, or New Body by the preference), a change of the tool's
+  direction (one side: Flip, or the distance's sign, as the arrow dragged
+  through the start writes it; two sides and symmetric have none) asks the
+  model for its suggestion with that preview (`auto_operation`, commands.md,
+  *Extrude's automatic operation*: the app adds no geometry of its own).
+  When that preview fails with the current operation and the suggestion is
+  the other one (Join or New Body → Cut when the tool now goes into a body,
+  Cut → Join when it now comes out of one), the app tries it once (logged
+  `Extrude: flipped, Join fails, trying Cut`) with the suggested Objects:
+  when its preview works, Operation and Objects stay so (logged `Extrude:
+  flipped into the body, Operation = Cut`, `... out of the body, Operation
+  = Join`); when it fails too, the user's operation and Objects come back
+  with their failure (logged `Extrude: flipped, Cut does not work either,
+  Operation = Join kept`). A flip whose preview works keeps the user's
+  operation (New Body pointed into a body stays New Body); Intersect and
+  New Component never change; a flipped and flipped-back direction before
+  its preview counts as none; a change of Operation, Objects or Affected
+  components ends a waiting retry. Automatic mode follows the suggestion
+  anyway, and an edit never flips its stored operation (mitcad#868). Tests:
+  `app.unit` (auto_operation_policy: the flip's steps),
+  `tools/ui-flip-operation-test.sh`.
 - **Extrude, Affected components** (an assembly cut's `cut_scope`,
   mitcad#200; `framework/CutTargetsPanel`): for a new cut, the targets the
   view hides start unchecked (mitcad#475). `def.init` takes a snapshot of
@@ -18984,6 +19542,22 @@ SVG at several sizes (`themeIcon`).
   intersects`, `Cut target C2@O2 checked: explicit scope with it`, `Cut
   body F2.b0@O2 tooltip: Body1 in Root / Part B:1`. Tests: `app.unit`
   (cut_targets), `tools/ui-cut-joint-targets-test.sh`.
+  The line over the list (mitcad#2118, GitHub mitcad/Mitcad#492) says
+  `Updating affected components…` only while a preview of the inputs
+  computes (`CommandPresenter::setPreviewComputing`, from the session's
+  asynchronous preview); while the inputs change it keeps what it said,
+  the rows off. The panel hands the list the whole preview report
+  (`CutTargetsPanel::setPreviewResult`): a preview that failed before its
+  cut's scope was worked out has no `cut_targets` (an end the extrusion
+  cannot reach), and the line then gives the failure in the words the
+  panel's message gives (its notices', else its error without the
+  agents' tail, in the interface language): `Affected components could
+  not be found: the target lies where the sweep starts, which leaves it no
+  length`; inputs that make no cut yet (a pick still needed) give
+  `Affected components show once the inputs make a cut.`. Log: `Cut
+  targets status: <the line>` when it changes. Tests: `app.unit`
+  (cut_targets), `tools/ui-extrude-cut-unreached-test.sh` (also
+  `app.ui-windows-extrude-cut-unreached`, `app.ui-macos-extrude-cut-unreached`).
 - **Extrude operation conversion** (mitcad#570): editing a Join or New Body
   without a saved scope initializes Affected components when the user changes
   Operation to Cut. Visibility is sampled at that conversion, not when the
@@ -19329,7 +19903,7 @@ SVG at several sizes (`themeIcon`).
 - **Placement by picked geometry** (`PlaceInputs.hpp`, the plane geometry
   in `PlaceGeometry.hpp`, mitcad#656; commands.md, *Placement by picked
   geometry*): the inputs every part placed by a pick shares (Pulley,
-  Gear, Bearing, Coil, Box, Cylinder, Sphere, Torus, and Hole's On Face),
+  Gear, Bearing, Coil, Box, Cylinder, Cone, Sphere, Torus, and Hole's On Face),
   `placeInputs(PlacePanel)`. No typed coordinates: where the part goes
   comes from what is picked, distances are dimensions to lines in sight.
   - **Place On** (`at`, `withPlaces`, keeps a face picked again): a
@@ -19715,7 +20289,16 @@ SVG at several sizes (`themeIcon`).
     <name>" button: never overwritten), a unit of another kind when the
     name would be the field's whole expression, and what the model refuses
     (a cycle, an unknown name, a unit mismatch), all in the editor, which
-    stays open; Cancel changes nothing. Created, the reference goes in
+    stays open; Cancel changes nothing. The expression is checked while it
+    is typed (mitcad#2181, `framework/ExpressionCheck.hpp`: `formula_help`
+    with the chosen `unit`): the model's words under the field
+    (`createParameterExpressionProblem`; `parameterExpressionProblem` in
+    Edit Parameters' Add User Parameter, whose OK is `parameterAddOk`), the
+    part it is about wavy-underlined in the field, and Create (OK) disabled
+    while it is wrong. Edit Parameters' Expression cells are checked the
+    same way while they are edited, the problem in the dialog's message
+    line; a refusal there that names the parameter is shown without the
+    name before it. Created, the reference goes in
     where the name was typed and the field has the keyboard again. The
     command runs as Edit Parameters runs it (mitcad#564): in a sketch an
     undo step of the sketch (merged into an existing sketch's `Edit
@@ -20019,6 +20602,7 @@ next screenshot.
 | `Native workspaces: Drawing (shown Drawing)`, `Native workspaces: Start, Solid, Build, Make (shown Build)` | the AppKit frontend: its workspace selector's tabs or the tab shown changed (another tab chosen, a drawing opened or closed, a sketch begun or finished; mitcad#1073) |
 | `Native cards: Browser only (a drawing is open)`, `Native cards: all (the drawing closed)` | the AppKit frontend: a drawing opened or closed hides or shows the cards other than the Browser (mitcad#1073) |
 | `Start page at launch: shown`, `Start page at launch: off (Show start page at launch)`, `Start page at launch: off (a file opens)` | at start-up, whether the Start tab shows and why not (`--demo`, `--screenshot`, `--set`, `MITCAD_START_PAGE=0`, `a UI test script`; mitcad#1258, [The Start tab](#the-start-tab)) |
+| `Start page left for SOLID` (the tab that left it, before `Start page hidden`; mitcad#2031), `Toolbar panel after the Start page: shown at 12,48 1000x121 (Floating; the window exposed, platform xcb)` or `… not shown (Docked: dockedPanel hidden; the window not exposed, platform wayland)` (where the toolbar panel is once the layouts placed it after the page was left: the layout, the window's exposure and Qt's platform; `tools/ui-workspaces-test.sh`, `tools/ui-docked-workspaces-test.sh`), `View composition: platform wayland; window surface OpenGL, OpenGL 4.5 compatibility, RGBA 8/8/8/8, depth 24, stencil 8, exposed yes; view context …, drawing into surfaceless; widgets over the view: startPage, titleRow, …` (the first frame after the view attached to its GL context: how the window composes the view with the widgets over it) | what left the Start page and how the toolbar panel came back, for a session whose panel did not show |
 | `Start page shown`, `Start page hidden`, `Start page margins: top 60, bottom 68` (its content below the workspace tabs, its footer above the Floating message band, when they change), `Start page recent designs (all): a.mitcad (preview) \| b.step (no preview) \| c.mitcad (missing)`, `Start page recent designs (pinned): none`, `Start page new design units: mm` | the Start page shown or left, its list of recent designs when it changes (Recent or Pinned in brackets), New Design's units as the page shows them (mitcad#1258) |
 | `Start page projects: Shop (local) \| Team (cloud)` (`none`), `Start page place: Shop/parts/ (1 folders, 2 designs)`, `Start page search results: 2 (Team/bolts/hex-bolt.mitcad \| hex.mitcad)` (`0`) and for each `Start page search result: Team/bolts/hex-bolt.mitcad (Team / bolts)`, `Start page cards: Shop/parts/gear.mitcad (no preview) \| Shop/parts/axle.mitcad (preview)` | the Start page's project browser (mitcad#1301, [The Start tab](#the-start-tab)): the projects of its left column when they were read, a project's place shown (its key, as Open from Project's) with its counts, the search's results by their keys (a project's design `<project>/<path>`, a recent design in no listed project its file's name) with their second lines, and a project's or the search's cards once their previews were looked for; each logged when it changes and on every choice |
 | `Start page browse view: tree` (`cards`), `Start page tree: Shop \| Shop/parts/ \| Shop/parts/sub/ (current Shop/parts/)`, `Start page tree folded: Shop/parts/` (`unfolded`), `Start page keyboard: card Shop/parts/gear.mitcad` | the Start page's Tree / Cards view (mitcad#2093, [The Start tab](#the-start-tab)): the view while a project is shown (each show and each choice), the tree's project and folders with the folder shown, a folder folded or unfolded by the user, and Enter on the tree that put the keyboard on a card |
@@ -20036,6 +20620,7 @@ next screenshot.
 | `<command> <input>: d1*2 = 120 mm`, `… is invalid: <reason>` | a value was evaluated |
 | `Panel <command> <key> hint: = 120 mm`, `Panel <command> <key> hint cleared` | the line under a value field (its `= value` or its limits) came, changed or went; a signed number such as `-8 mm` brings none (mitcad#994) |
 | `Extrude: automatic Operation = Join` (with `Extrude Local bodies: 1 body [body F2.b0]`), `Extrude: operation chosen by hand` | a new Extrude's operation and objects the model chose from its preview, and the user's own choice of either, which stays (mitcad#289) |
+| `Extrude: flipped, Cut fails, trying Join`, `Extrude: flipped out of the body, Operation = Join` (`into the body, Operation = Cut`), `Extrude: flipped, Join does not work either, Operation = Cut kept` | a new Extrude's direction flip whose preview failed with the user's operation: the model's other one tried, taken, or the user's back with its failure (mitcad#2216) |
 | `Extrude: editing keeps the stored operation` | an edited Extrude follows no automatic choice: its stored operation stays until the user changes it (mitcad#868) |
 | `Sweep: the profile lies inside an open path; Distance 2 shown` (`at the start of`, `at the end of`; `a closed`; `hidden`) | a Sweep preview found the profile somewhere else on its path than the last one (mitcad#795) |
 | `<command>: <input> = <choice>` / `= on` | a choice or check changed |
@@ -20118,12 +20703,14 @@ next screenshot.
 | `Double-click on t26: sketch.edit_text`, `Edited text t26: "MIT", Droid Sans, center`, `Edited pattern k8: 4 in all`, `Edited offset k13: 3 mm` | the edit panels of texts, patterns and offsets |
 | `Edited text t1: "MIT", Liberation Sans (LiberationSans-Regular.ttf), left`, `Edit Text font file <path>`, `Preferences font folder add at x,y` (Add…, answered in Qt's own folder dialog **Font Folder**), `Preferences: font folders <folders>` (`none`) | a text in a font file, the file chosen with File..., Preferences › Fonts (mitcad#473, `tools/ui-text-fonts-test.sh`) |
 | `Edited text t3: "Two\nlines", Droid Sans, left, wrapped` (a line break as `\n`, `, wrapped` with Wrap in Frame), `Panel Edit Text: Ctrl+Enter in a text box is OK`, `TestDriver: text t3: 2 lines, from 0.31 to 38.20 in a frame 40.00 wide` (`expect-sketch-text`; `sketch-click-text` clicks a text's outline) | a text wrapped in its frame and typed in lines (mitcad#2029, `tools/ui-sketch-text-wrap-test.sh`) |
+| `Exploded text t1 in Sketch1: 4 curves` (`sketch-click-text <regex> right` opens a text's context menu; `sketch-click-curve <id> [right]` clicks the middle of a curve of the edited sketch) | Explode Text turned a text or QR code into plain curves (mitcad#2163, `tools/ui-sketch-explode-text-test.sh`) |
 | `Equal spacing k4 horizontal: p1, c2, c5 (spacing k6 = 12.00)` (`… along c9`; without the spacing when it is free), `Equal spacing k4 removed`, `Equal spacing preview: p1, c5, c2` (the panel's objects in its order), `Sketch Dimension on 3 objects: Equal Spacing Dimension`, `Double-click on k4: sketch.edit_equal_spacing`, `Equal spacing of 3 object(s), horizontal, spacing 12 mm`, `Edited equal spacing k4 of 4 object(s), vertical` | equal spacings (mitcad#221): each chain in the order the model keeps, when it changes (also during a preview), the panels |
 | `Timeline Sketch1 at x,y`, `Timeline marker at x,y`, `Timeline button back at x,y` (start, back, forward, end) | the timeline's items, when they changed, also when the timeline moves in the window (a banner or another panel makes room) |
 | `Timeline search opened` / `closed`, `Timeline search field at x,y`, `Timeline button search at x,y` (`search-previous`, `search-next`), `Timeline search "fillet in:cover": 2 matches: Fillet2 (Cover), Fillet7 (Cover)` (`no matches`, `unknown filter is:x`), `Timeline search result Fillet2 (Cover) at x,y`, `Timeline search results hidden`, `Timeline search match 1 of 2: Fillet2 (Cover)`, `Timeline search cleared` / `cleared: selected Plane1 again, scrolled to 0`, `Selection restored after the timeline search: 1 item(s)` | the timeline search (mitcad#179): its field, the matches (when they change), the listed ones in sight, a step, the end and what it restored |
 | `Timeline colours: dark, marker #c8d0da, buttons #f0f0f0, window #1f2024, handle #5aa2ff` (`light, marker #2b3a4a, buttons the style's, …`), `Asking the platform for the dark colour scheme` | the timeline's palette colors at start and when the theme changes (the marker's handle: the Docked window's accent color, orange in the Floating layout); the switch of `MITCAD_TEST_COLOR_SCHEME` |
 | `Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin, Root/Sketches/Sketch1; error #ff9c9c: Root/Sketches/Sketch1/Fillet1` (`light, hidden #4c525c: …`; `none`; groups hidden, error, warning, success, info, each its color on the rows' palette now and at most 12 paths in order, then `<n> more`; a value that is none of these last, as `unknown <n>: <paths>`, mitcad#1143) | the Browser rows whose names have a color role (a hidden, failed or warned row; mitcad#1104: the item keeps the role, the delegate paints its color in the theme of the moment), after each rebuild and when the theme changes, when it changed; the test driver's `color-scheme light\|dark` switches the scheme at a step (`tools/ui-theme-test.sh`, `tools/ui-windows-test.ps1`) |
 | `Browser colors: Root #f29e1a, Root/Bodies/Body1 #f29e1a, Root/Bolt:1 #e0892a, Root/Bolt:1/Bodies/Body2 #e0892a` (`none` for a row without a bar), `Timeline component colors: Bolt #e0892a, Plate #3aa35b` (`none` without components) | the color bars of the Browser's component, occurrence and body rows in the tree's order (mitcad#1876), after a rebuild when the line changed; the timeline's band colors of the components (the root has no band) when they changed: a row's color is its component's timeline color, the root's rows the section caps' orange (`tools/ui-browser-component-colors-test.sh`) |
+| `Timeline feature colors: Sketch1 root, Extrude1 #e0892a, Fillet1 #3aa35b` (`none` without features) | each feature's color mark in the timeline, after a rebuild when the line changed (mitcad#2185): the color of the component it makes (a new-component operation, Component from Bodies: the `timeline` query's `made_component`), else of its own component, `root` for the root's features; an extrude edited to New Component and the fillets that went with it change at once (`tools/ui-new-component-fillets-test.sh`) |
 | `Window style: dark, window #141518, panels #1f2024, accent #5aa2ff, font the platform's` (`light, …`; the family chosen in Preferences instead; the same font as the Floating layout since mitcad#2082), `Window frame: Windows 11 caption colour, Mica, rounded corners` (`skipped (Windows build 19045)`, `not applied (DWM error 0x…)`) | the Docked window's style at start and when the theme changes (mitcad#251, `framework/WindowStyle`); on Windows what the window frame got, when the window shows and at each change of theme. `panels` is the toolbar's surface, which the Classic ribbon's body and the bar's Undo, Redo, separator and Chat buttons show in both themes (the test driver's `expect-widget-background`, `TestDriver: widget background ribbonPageScroll #1f2024 (…)`; `tools/ui-docked-toolbar-colors-test.sh`, `app.ui-windows-docked-toolbar-colors`, mitcad#1245) |
 | `Windows 10 app mode: followed (Windows build 19045, the style windowsvista)` (`not followed (Windows build 26100)`, `not followed (the style <name>)`; `, MITCAD_TEST_WINDOWS10=1` when forced), `Windows 10 app mode: dark, the style <name> with a dark palette (window #1f2024)`, `Windows 10 app mode: light, the style windowsvista with its own palette` | Windows 10's dark app mode (mitcad#1282, GitHub mitcad/Mitcad#138; `platform/windows/WindowsTheme`), at start: on Windows 10 (build < 22000) over its default style (windowsvista, which keeps a light palette whatever the app mode), while the app mode is dark, Qt's own style (its class QFusionStyle) with a dark palette of the theme's neutral roles, and the default style with its own palette again when it is light, at start and at each change of the app mode; not on Windows 11, Linux and macOS, where the default style follows the app mode, nor over a style chosen with `-style` or `QT_STYLE_OVERRIDE`. It follows the scheme the Theme preference asks for as it follows the app mode (mitcad#1330), and sets its style and palette again when the preference's own palette is taken away. `MITCAD_TEST_WINDOWS10=1` takes the path on Windows 11 too, over any style (the test driver's `expect-widget-theme`, `TestDriver: widget theme startPage #141518 (…), lightness 22: dark`; `app.ui-windows-windows10-dark`) |
 | `Theme: dark (preference)` (`light`), `Theme: dark (preference; MitCad's own palette, window #1f2024 over the platform's light one)`, `Theme: system (light)` (`dark`), `Preferences: theme dark` (`light`, `system`) | Preferences › Display › Theme (mitcad#1330, `framework/AppTheme`, [above](#the-view)): at start (System at once, Light and Dark once the platform's palette has followed or 250 ms have passed) and after each change, which choice decided and whether MitCad set its own palette because the platform kept its own; `Preferences: theme …` when the choice is saved (`tools/ui-theme-preference-test.sh`, `app.ui-windows-theme-preference`) |
@@ -20147,13 +20734,13 @@ next screenshot.
 | `Warnings badge: Fillet1: <message>; Tilted: <message>` / `none`, `Warnings button at x,y` | the yellow badge's features (built with warnings; an import note is information since mitcad#1040), when they change; not those acknowledged (mitcad#1935) |
 | `Acknowledged warnings: Fillet1, Tilted` / `none`, `Acknowledged warning of Fillet1`, `Showing warning again of Fillet1`, `Acknowledge refused: <why>` | the features whose warning the user acknowledged, when they change; Acknowledge Warning and Show Again ([Acknowledged warnings](#acknowledged-warnings-mitcad1935)) |
 | `Status <level>: <text>`, `Native message band: full\|stub <level> <text>`, `Browser level <path>: <level>`, `Selection card level <feature>: <level>`, `Panel <command> message box: <level>: <text>`, `Sketch Palette solve: <level>: <text>; …` / `none`, `Sketch notice level: <level>`, `View message level: <level>`, `Rules status level: <level>`, `Configurations option marks: …` / `Configurations row marks: …`, `Annotations level <name>: <level>` | a message's level on each surface (mitcad#1040, mitcad#1051, "Messages and their levels") |
-| `Message band: <level> <text>`, `Message band full: <level> <text>`, `Message band stub: <level> <text> (faded)` (or `closed`, `next command`, `cleared`, `withdrawn`), `Message band cleared (another design)`, `Status line cleared (another design)`, `Message band source closed: <level> <text> (<source>)`, `Status error source: <source>`, `Status line cleared (<source> closed)` (mitcad#1621), `Message band placed: full x,y wxh, row <h>, timeline x,y wxh` (`stub`), `Message band close at x,y`, `Message stub at x,y`, `Message history button at x,y`, `Message history: <n> entries`, `Message history row <i>: <level> <text> at x,y`, `Message history: selected <uid>`, `Message history: closed` | the message band, its stub and the session's message history (mitcad#1042, "Messages and their levels"; `tools/ui-message-band-test.sh`) |
+| `Message band: <level> <text>`, `Message band full: <level> <text>`, `Message band stub: <level> <text> (faded)` (or `closed`, `next command`, `cleared`, `withdrawn`), `Message band cleared (another design)`, `Status line cleared (another design)`, `Message band source closed: <level> <text> (<source>)`, `Status error source: <source>`, `Status line cleared (<source> closed)` (mitcad#1621), `Message band put right: <level> <text> (<subject>)`, `Message band cleared (put right)`, `Message band stub: <level> <text> (put right)`, `Status error about <subject>` (`parameter/<name>`, `feature/<uid>`), `Status line cleared (put right): <subject>`, `Feature <name> computes again: its error is put right`, a history row's ` (put right)` (mitcad#2181), `Message band placed: full x,y wxh, row <h>, timeline x,y wxh` (`stub`), `Message band close at x,y, row middle <y>, icon dismiss <n> px in <w>x<h>` (mitcad#2182), `Message stub at x,y`, `Message history button at x,y`, `Message history: <n> entries`, `Message history row <i>: <level> <text> at x,y`, `Message history: selected <uid>`, `Message history: closed` | the message band, its stub and the session's message history (mitcad#1042, "Messages and their levels"; `tools/ui-message-band-test.sh`) |
 | `Browser sketch DOF: Sketch1 0, Sketch2 4` | the sketches' degrees of freedom the browser shows, when they change |
 | `Browser joints: Joint1 placed, AsBuiltJoint1 satisfied, DOF Root 1` | the joints' states and each component's degrees of freedom (mitcad#55), when they change |
 | `Added joint Joint1 (revolute): placed, rz 30 deg, moved O2; DOF 7` (a failure: `failed: <error>`), `Added as-built joint …`, `Added joint origin JointOrigin1: origin (5, 5, 10), normal (0, 0, 1)`, `Added rigid group RigidGroup1: Pin:1, Cap:1`, `Drove joint Joint1 (revolute): placed, rz 45 deg, …`, `Added constraint Constraint1: insert placed, moved O2; DOF 1` (each row's type, `(does not hold)` after one that does not), `Preview Joint moves O2` | the ASSEMBLE group's commands (mitcad#55, mitcad#148; the joint as the `joints` query has it after OK) and a preview that places occurrences elsewhere |
 | `Drag of Pin:1 started at (x, y, z)`, `Dragged Pin:1 to (x, y, z): Joint1 rz 63.2 deg`, `Drag of Pin:1 cancelled`, `Animating Joint1 rz: 36 frames from 45 deg to 45 deg in 1440 ms, frames by the joint solver` (`frames as previews: <why>`), `Animated Joint1: 36 frames in 1452 ms (intended 1440 ms): 36 shown, 0 previews`, `Animation of Joint1 stopped: <why> (36 frames in … ms …)` | dragging a component the joints move (points in its parent's coordinates) and Animate Joint (mitcad#1701: its frames and time) |
 | `Parameters favorites: width` / `none`, `Parameters width favorite at x,y`, `Parameter width favorite: on = 30 mm` | favorites |
-| `Parameters dialog opened`, `Parameters: d1 = width + 5 mm (35 mm); …`, `Parameters d1 expression at x,y` (name, unit, expression, comment), `Parameters add/delete/OK at x,y`, `Added parameter width = 30 mm`, `Parameter d1 expression: width + 5 mm = 35 mm`, `Parameter width expression: d2 / 2 refused: <reason>`, `Delete parameter w refused: <reason>` | Edit Parameters (places in the main window's coordinates) |
+| `Parameters dialog opened`, `Parameters: d1 = width + 5 mm (35 mm); …`, `Parameters d1 expression at x,y` (name, unit, expression, comment), `Parameters OK at x,y`, `Parameters w delete at x,y` and `Parameters new name at x,y` (unit, expression, comment) (mitcad#2202), `Created user parameter width = 30 mm (mm) in the new row`, `New user parameter width refused: <reason>`, `Deleted user parameter w by its row button`, `Parameters in use: w (d1 of the feature Extrude1)`, `Parameter d1 expression: width + 5 mm = 35 mm`, `Parameter width expression: d2 / 2 refused: <reason>`, `Delete user parameter w refused: <reason>` | Edit Parameters (places in the main window's coordinates) |
 | `Parameters d1 min\|max\|step\|strict at x,y`, `Parameters d1 slider at x,y`, `Parameters d1 slider handle at x,y`, `Parameters only limited at x,y`, `Parameter d1 max: 50 = 50 mm`, `Parameter d1 limited: <the model's limit_message>`, `Parameters: d1 = 60 mm (50 mm ▲max); …`, `Parameters limited: d1 = 60 mm → 50 mm ▲max (<the Value cell's tooltip, lines joined with "; ">)` / `none`, `Parameter d1 typed 70 mm: d1: 70 mm will be limited to 50 mm (▲max)` (`within its limits`, `will be refused: <reason>`), `Parameter d1 slider: 40 mm = 40 mm`, `Parameters only limited: on: d1` | Edit Parameters' limits (mitcad#665); `tools/ui-parameter-limits-test.sh` |
 | `Parameters during command Extrude editing Extrude1`, `Parameters closed: back to Extrude`, `Panel Extrude parameters at x,y`, `Sketch Sketch1 dimensions after the parameter change: width 50.000, d2 40.000`, `Extrude: parameter depth changed; the preview follows`, `Command Extrude: 1 parameter change(s) kept`, `Parameter d3 is held by the open panel of Extrude1` | Edit Parameters while a sketch or a feature is edited (mitcad#564, [Browser, timeline and parameters](#browser-timeline-and-parameters)) |
 | `Configurations window opened`, `Configurations page Rows`, `Configurations lead Options: <the tab's lead line>` (`Rows`, `Rules`), `Configurations empty Options: <the empty list's text>` (`Rows`, `Rules`), `Configurations options header: Option \| Unit \| Possible Values \| Value \| Comment \| By Formula \| Used By`, `Configurations options: Color (Black, White) = White; Length (300 mm … 2000 mm, step 10 mm) = 1500 mm` (the Value column; a By Formula option `Depth (free) = 375 mm, by formula Length / 4`) / `none`, `Configurations rows: open, default none, current Row1: Row1: Color = White, Length = 1500 mm`, `Configurations row issues: Row2: <the refusal>` / `none`, `Configurations tab Rows at x,y`, `Configurations add option\|remove option\|edit domain\|move up\|move down\|closed\|add row\|delete row\|set as default\|apply at x,y`, `Configurations option Length possible values\|value\|comment at x,y` (each cell by its header, mitcad#968), `Configurations row Row1 Length at x,y` (a cell: the row and the column's header), `Add Option dialog opened: Color, Length, New Parameter`, `Configurations added option Color`, `Configurations added row: Row1`, `Configurations row Row1 Length: 800`, `Configurations row Row2 Length: 1500 refused: <reason>`, `Configurations option Length value: 1200`, `Configurations applied Row1; moves: <notice>`, `Option Length domain: range 300 mm … 2000 mm, step 10 mm` (`column Screws.Size`), `Possible Values dialog opened for Size`, `Configurations generate rows at x,y`, `Generate Rows dialog opened: Screws.Size for Size`, `Configurations generated rows from Screws.Size for Size: 3 rows from Screws: added M3, M4, M5` (`; updated M4`, `all up to date`), `Configurations generate rows from Screws.Size for Size refused: <reason>`, `Configurations add column\|remove column at x,y`, `Add Column dialog opened: Extra, New Parameter`, `Configurations: column Extra added`, `Configurations add column Extra refused: <reason>`, `Configurations: column Extra removed` (mitcad#999), `Configurations import csv\|export csv at x,y`, `Generate Rows columns: dk, Length; checked: dk` (`none`), `Rows import preview of screws.csv: <summary>` (`refused: <reason>`), `Rows import column size [Text]: key option, a new parameter`, `Rows import rows: <JSON>`, `Rows import refused line 2 k: <reason>`, `Rows import problem: <problem>`, `Configurations imported rows from screws.csv: <summary>`, `Import of configuration rows from screws.csv refused: <reason>` (`cancelled`), `Configurations exported rows to <path>: 3 row(s)`, `Configurations copied 1 x 2 cells`, `Configurations pasted 1 x 2 cells at M5 d: added none` (`added Row4`), `Configurations paste of 1 x 2 cells at M5 d refused: <reason>`, `Configurations cleared 2 cells`, `Configurations rows take Color = 'Black'`, `Configurations option d moved from the parameter columns` (mitcad#1044) | the Configurations window (mitcad#807, #849, #999, #1044; places in the main window's coordinates) |
@@ -20200,7 +20787,7 @@ next screenshot.
 | `View: new design looks along -0.568,0.654,-0.5, up -0.328,0.377,0.866; the origin at 760,470, the free area's centre at 760,470` | after the framing line of a new design, seen from the default view (mitcad#1683, mitcad#1809): the view direction and up, and where the origin and the middle of the cards' free area are (window coordinates); not under `MITCAD_NEW_DESIGN_VIEW=0` |
 | `View: resized to 1920x1080, maximized, scale 233.285 mm per view height` (`, full screen`; no state for a normal window) | the view's size changed and came to rest (mitcad#1000); a resize keeps the height the view shows |
 | `View navigation: 24 frame(s), 0 repaint(s) of widgets over the view, Print Analysis overlay set 0 time(s)` (the widgets' object names in brackets after their count when there are any, `(parameterPicker, viewHome)`; the overlay's count only while a Print Analysis is drawn) | a navigation of the view ended (`OcctViewer::navigationFinished`: a drag released, a wheel burst or an animation over): the frames drawn meanwhile, how often a widget over the view was painted again (each repaint makes Qt compose the window's whole area under the view again at that frame, which costs milliseconds per million pixels of the view: mitcad#768), and how often the Print Analysis overlay was set (a camera move computes nothing again) |
-| `3D mouse: Raw Input connected (SpaceMouse Compact (HID 256f:c635))` (`spacenavd connected (/var/run/spnav.sock)`, `IOKit HID connected (…)`; also when a device comes later), `3D mouse: none` (no device or daemon at start; the backend keeps listening), `3D mouse: off` (Preferences has it off), `3D mouse: Raw Input disconnected`, `3D mouse: button 1 runs view.fit` (debug; `3D mouse: button 3 has no command`, `3D mouse: view.look_at is not available now`), `3D mouse: rotation locked` and `3D mouse: rotation unlocked` (debug, Lock Rotation; ` in the sketch` after it in a sketch, mitcad#1910), `3D mouse: button 27 runs view.space_mouse_lock_rotation by default` (a device whose rotation lock key is known, as it connects; mitcad#1910), `3D mouse motion: 42 frame(s), 0.70 s, 58.6 fps, longest frame 33.4 ms, 1 grid rebuild(s), turned 12.3 degrees, panned 0.41 view heights, zoom 1.25x, object mode` (debug; when the cap comes to rest: its frames' timing, the time from the first frame to the last, their rate, the longest interval between two of them, `longest frame 41.0 ms with a grid rebuild` when the layout grid was rebuilt in it, and how many times the grid was rebuilt in the motion (mitcad#1023: an uneven motion shows as a low rate or a long frame); what the motion did, a zoom above 1 closer, and the Navigation mode, `camera mode` or `fly mode`, then `, horizon locked` with Lock horizon; mitcad#978), just before it `3D mouse axes: tx 0.00, ty 0.00, tz 0.00, rx -0.62, ry 0.03, rz 0.00; strongest rx: in Object mode the model tilts its top away from the user` (debug, on every platform, mitcad#1720: each axis's largest deflection in the motion, sign kept, in the view's frame before Reverse, and what the strongest one does to the model in Object mode: `moves right`/`left`, `moves up`/`down`, `comes closer`/`moves away`, `tilts its top toward`/`away from the user`, `turns counter-clockwise`/`clockwise seen from above`, `rolls counter-clockwise`/`clockwise as the user sees it`; a check with a device compares it with what the cap did); on Windows (debug, mitcad#1034) `3D mouse: SpaceNavigator (HID 046d:c626): reports of 13 bytes (dwSizeHid), the longest input report 13 bytes, the rotation in report 2 of its own by its report descriptor` (at a device's first report; the rotation also `in report 1 with the translation` or `not known`), `3D mouse: SpaceNavigator (HID 046d:c626) sends report ids 1, 2, its rotation in report 2 of its own` (when a new report id comes), `3D mouse report: id 1 [01 5e 01 00 00 00 00 00 00 00 00 00 00], id 2 [02 00 00 00 00 64 00 00 00 00 00 00 00]; 12 report(s); t 350 0 0, r 0 0 100` (while the cap moves, at most one line per 100 ms and one when it comes to rest: the last report of each id with its padding, how many came, and the HID translation and rotation read from them); `3D mouse: wheel ignored during a motion (delta 0, -120)` (debug, mitcad#1981: a wheel in the 3D view while the cap is deflected or 300 ms after it, at most ten lines a second, `, 4 more not logged` after the next one) and `3D mouse: key Ctrl+Left during a motion` (debug: a key pressed in the view then, possibly the driver's emulated input) | a 3D mouse (mitcad#951, `view/SpaceMouseController.*`, `view/SpaceMouseView.cpp`); the test driver's `space-mouse` and `space-mouse-button` steps give the same input |
+| `3D mouse: Raw Input connected (SpaceMouse Compact (HID 256f:c635))` (`spacenavd connected (/var/run/spnav.sock)`, `IOKit HID connected (…)`; also when a device comes later), `3D mouse: none` (no device or daemon at start; the backend keeps listening), `3D mouse: off` (Preferences has it off), `3D mouse: Raw Input disconnected`, `3D mouse: button 1 runs view.fit` (debug; `3D mouse: button 3 has no command`, `3D mouse: view.look_at is not available now`), `3D mouse: rotation locked` and `3D mouse: rotation unlocked` (debug, Lock Rotation; ` in the sketch` after it in a sketch, mitcad#1910), `3D mouse: button 27 runs view.space_mouse_lock_rotation by default` (a device whose rotation lock key is known, as it connects; mitcad#1910), `3D mouse motion: 42 frame(s), 0.70 s, 58.6 fps, longest frame 33.4 ms, 1 grid rebuild(s), turned 12.3 degrees, panned 0.41 view heights, zoom 1.25x, object mode` (debug; when the cap comes to rest: its frames' timing, the time from the first frame to the last, their rate, the longest interval between two of them, `longest frame 41.0 ms with a grid rebuild` when the layout grid was rebuilt in it, and how many times the grid was rebuilt in the motion (mitcad#1023: an uneven motion shows as a low rate or a long frame); what the motion did, a zoom above 1 closer, and the Navigation mode, `camera mode` or `fly mode`, then `, horizon locked` with Lock horizon; mitcad#978), just before it `3D mouse axes: tx 0.00, ty 0.00, tz 0.00, rx -0.62, ry 0.03, rz 0.00; strongest rx: in Object mode the model tilts its top away from the user` (debug, on every platform, mitcad#1720: each axis's largest deflection in the motion, sign kept, in the view's frame before Reverse, and what the strongest one does to the model in Object mode: `moves right`/`left`, `moves up`/`down`, `comes closer`/`moves away`, `tilts its top toward`/`away from the user`, `turns counter-clockwise`/`clockwise seen from above`, `rolls counter-clockwise`/`clockwise as the user sees it`; a check with a device compares it with what the cap did); on Windows (debug, mitcad#1034) `3D mouse: SpaceNavigator (HID 046d:c626): reports of 13 bytes (dwSizeHid), the longest input report 13 bytes, the rotation in report 2 of its own by its report descriptor` (at a device's first report; the rotation also `in report 1 with the translation` or `not known`), `3D mouse: SpaceNavigator (HID 046d:c626) sends report ids 1, 2, its rotation in report 2 of its own` (when a new report id comes), `3D mouse report: id 1 [01 5e 01 00 00 00 00 00 00 00 00 00 00], id 2 [02 00 00 00 00 64 00 00 00 00 00 00 00]; 12 report(s); t 350 0 0, r 0 0 100` (while the cap moves, at most one line per 100 ms and one when it comes to rest: the last report of each id with its padding, how many came, and the HID translation and rotation read from them); `3D mouse: wheel ignored during a motion (delta 0, -120)` (debug, mitcad#1981: a wheel in the 3D view while the cap is deflected or 300 ms after it, at most ten lines a second, `, 4 more not logged` after the next one) and `3D mouse: key Ctrl+Left during a motion` (debug: a key pressed in the view then, possibly the driver's emulated input); on Windows with 3DxWare (mitcad#2152) `3D mouse: 3DxWare connected (SpaceMouse Compact via 3DxWare)` (also when the start is tried again once the design sits in its shown frame), `3D mouse: 3DxWare has a device, MitCad's window is not shown yet` (a start before then: Raw Input meanwhile), and with the runtime's stand-in (`MITCAD_TEST_3DXWARE=1`) `3D mouse: test 3DxWare runtime (MITCAD_TEST_3DXWARE) reports one device` and `3D mouse: test 3DxWare runtime opened its device` | a 3D mouse (mitcad#951, `view/SpaceMouseController.*`, `view/SpaceMouseView.cpp`); the test driver's `space-mouse` and `space-mouse-button` steps give the same input |
 | `Layout grid 5 mm, major 25 mm, 18.2 px apart` | the layout grid's spacing changed, logged when the camera rests, and again after a change of the spacing or the design's unit; in the design's unit (`Layout grid 0.25 in, major 1 in, 22.5 px apart`, mitcad#1210) |
 | `Orientation cube places:` then `Orientation cube front at x,y`, `Orientation cube front-top at …`, `Orientation cube front-right-top at …` | with `MITCAD_LOG_ORIENTATION_CUBE=1`, before each camera line: where a click picks each face, edge and corner of the cube in sight |
 | `Orientation cube zones: front 3624, front-top 1448, front-right-top 780, …` | with `MITCAD_LOG_ORIENTATION_CUBE=1`, after the cube's places: how many square pixels of the window pick each part in sight (mitcad#1620: the edges' and corners' zones against the faces'; `tools/ui-view-cube-zones-test.sh`) |
@@ -20214,7 +20801,7 @@ next screenshot.
 | `View turned right by 15 degrees` (`left`, `up`, `down`) | an arrow key turned the view by the step while it had the keyboard (mitcad#1211, Turn View Left, Right, Up, Down) |
 | `Orbit center set at 26.000000 -16.000000 20.000000`, `Orbit center cleared`, `Orbit about the fixed center at …`, `Orbit about the point under the cursor at …`, `Orbit about the model's middle at …: nothing under the cursor`, `View orbit center: cursor` (`model`) | the orbit's center (mitcad#1791): Set Orbit Center Here and Clear Orbit Center (and another design opened), what an orbit or a turn turns about as it starts (the middle with Orbit center Model is not logged), the Orbit center preference changed |
 | `View operation failed: cube arrow up (the fit to the free area): Standard_ConstructionError: …` (warning), `View fit left out: the shown objects' box is not finite` | a camera change (an arrow, Home, a standard or named view, Look At) threw and the camera was put back as it was, instead of the exception ending the application; a turn did not fit a box that is no number (mitcad#773; `tools/ui-sketch-cube-test.sh`, `app.ui-windows-sketch-cube` fail on the first) |
-| `Visual style Shaded with Hidden Edges`, `Camera perspective`, `Background #525761 #1f2126`, `Layout grid off`, `Snap to grid on`, `Grid spacing 10 mm` (in the design's unit, `Grid spacing 0.25 in`, mitcad#1210) | display settings |
+| `Visual style Shaded with Hidden Edges`, `Camera perspective`, `Background #525761 #1f2126`, `Layout grid off`, `Snap to grid on`, `Grid spacing 10 mm` (in the design's unit, `Grid spacing 0.25 in`, mitcad#1210) | display settings; `Background …` also when Follow System redraws for a change of theme (mitcad#2145), and the test driver's `expect-view-background dark` (`light`, `<top> <bottom>`) logs `TestDriver: view Background #3b424d #1c2027` once the view shows it |
 | `Navigation bar shown (card) at 540,688 196x34` (`(status bar)`), `Navigation bar hidden`, `Navigation bar Look At at 558,705` (`Fit`, `Visual Style`, `Layout Grid`, `Snap to Grid`), `Navigation bar tooltips: Look At: Looks straight at … \| Fit (F6) \| Visual Style: Shaded with Visible Edges Only \| …`, `Navigation bar states: Layout Grid on (View menu on), Snap to Grid off (View menu off), Visual Style Shaded`, `Navigation bar: Snap to Grid` (a button clicked), `Context menu: Shaded \| Shaded with Visible Edges Only \| …` (its drop-down opened), `Preferences: navigation bar hidden` (`shown`), `Fit: everything shown` | the navigation bar (mitcad#1086, "The view"), when they change: its place (the card's in the Floating layout, the bar's in the status bar) and its buttons' middles in the main window's coordinates, their tooltips, the toggles' checks of the bar's buttons and of the View menu's actions, and the style; `tools/ui-view-nav-bar-test.sh`, `app.ui-windows-view-nav-bar` |
 | `Navigation bar pinned: solid.parameters, inspect.measure` (`none`), `Pinned to navigation bar: Measure`, `Unpinned from navigation bar: Measure`, `Navigation bar pinned order: Measure, Edit Parameters`, `Navigation bar menu inspect.measure: Unpin from Navigation Bar \| Change Keyboard Shortcut…`, `Navigation bar menu entry Unpin from Navigation Bar at x,y`, `Navigation bar pins: dropped solid.gone: no such command` | the commands pinned to the navigation bar (mitcad#1589, [Pinned to the navigation bar](#pinned-to-the-navigation-bar)): the pinned buttons as they are made, each pin, unpin and drag, a pinned button's right-click menu and its entries' places in the main window's coordinates, an unknown id dropped from the setting; `tools/ui-nav-bar-pins-test.sh`, `app.ui-windows-nav-bar-pins` |
 | `Version watermark 'MitCad 0.42.0' at 1210,742: box 1166,734 88x16, view 0,64 1280x736`, `Version watermark hidden: preference` (`no room`), `Preferences: show the version in the view off` (`on`) | the version watermark (mitcad#1209, "The view"), when it changes and the window is visible: its center, its rectangle and the view's in the main window's coordinates, or why it is hidden; the preference saved; `tools/ui-version-watermark-test.sh`, `app.ui-windows-version-watermark` |
@@ -20227,15 +20814,16 @@ next screenshot.
 | `Section: F2.b0 clipped at attempt 2, with a fuzzy value of 1e-06 mm (plain cut: the boolean failed)` (`attempt 3, with the plane moved by 1e-06 mm along its normal (plain cut: …; fuzzy cut: …)`) | a body clipped only by a later attempt of the clip (mitcad#1230) |
 | `Section clip warning: Section1 could not cut Body1; it is shown whole.` (`… could not cut 2 bodies (Body1, Body2); they are shown whole.`), `Section clip warning cleared: <the warning>` | the warning of a shown section's failed clips posted (once per section and set of failed bodies; the message band's and status line's own lines follow) and withdrawn when the section is hidden or cuts them again (mitcad#1230) |
 | `Browser analysis note Root/Analysis/Section1: warning Section1 could not cut Body1; it is shown whole. \| Body1: <error>` (`info The plane does not cut any shown body.`; `none`) | a kept analysis' row note from the view (mitcad#1230), when it changes |
-| `Section caps: 3 colour(s) [#e0892a hatch #4b2d0b at 135 deg, 12 lines; …] in Shaded, bodies in appearance colours` | the viewer's caps (mitcad#382): per color group the cap color (the component's timeline color, the default orange for the root), the hatch's color, direction and line count; again when the visual style or Component Colors change |
+| `Section caps: 3 colour(s) [#e0892a hatch #4b2d0b at 135 deg, 12 lines, 0.000000 mm off the plane; …] in Shaded, bodies in appearance colours` | the viewer's caps (mitcad#382): per color group the cap color (the component's timeline color, the default orange for the root), the hatch's color, direction, line count and largest distance from the section plane (mitcad#2146); again when the visual style or Component Colors change |
 | `Hide Above Sketch on`/`off`, `In front of the sketch plane: F2.b0 5.0, F5.b0 10.0` | the sketch palette's option; in sketch mode (also while a sketch command's panel is open), how far each shown body reaches in front of the sketch plane (mm, when it changes; 0 or less once cut, a body cut away entirely is left out) |
 | `Exported <path>: dxf flat pattern of Body1, 5 entities (CUT_OUTER 4, BEND_DOWN 1), in mm` (the unit written, mitcad#1408), `Export Flat Pattern dialog: unit in (in \| mm \| cm \| m \| ft)`, `Export of the flat pattern of Body1 refused: <reasons>`, `Flat pattern of Body1 shown` (`folded`), `Flat pattern of Body1: valid, area 1086.39 mm2, 1 bend(s)`, `Deleted the flat pattern of Body1`, `Added sheet face of 1 profile(s), new rules, thickness 2`, `Added flange, length 15 (tangent), angle 90 deg`, `Sheet rules: thickness …` | sheet metal (mitcad#210): the Flat Pattern's export, display and item, the commands' describe lines |
 | `Export dialog: STEP AP214 (*.step) to <path>` (a mesh type adds `, refinement high`; a 3MF then `, plates one_file, slicer bambu_studio, on the bed`, mitcad#1679), `Exported <path>: step, 1 body(ies), mm` (with occurrences `…, mm, design coordinates` or `component coordinates`), `Exported <path>: usdz, 1 body(ies), 1 material(s)`, `Exported <path>: dxf, 4 entities, in mm, construction geometry left out, points included` (the unit written, mitcad#1408; `included` with Include construction geometry, mitcad#1445; `points left out` without Include points, mitcad#1963) | export |
 | `3D Print panel: 3 visible: Plate, Cube, Pin; format stl, refinement high, slicer Fake slicer (/path <files>); slicers None \| …` (`1 selected: Cube`), `3D Print Bodies: 2 bodies [body F1.b0; body F2.b0]` (the input, as every selection input logs), `3D Print: Format = 3MF`, `3D Print: left out Surface1 (a surface body)`, `3D Print: no solid or mesh bodies`, `3D Print: 3 bodies as stl (high) to <folder>: Plate.stl, Cube.stl, Pin.stl` (a body shown twice: `Pin (Pin_1).stl, Pin (Pin_2).stl`; 3MF: `parts.3mf`… per body `Plate 12 triangles, 1000.000 mm3`), `3D Print: started <program> <arguments>`, `3D Print: <slicer> did not start`, `3D Print: opened <folder>`, `Done 3D Print`, `Command 3D Print cancelled`, `Preferences: slicer <slicer>` (or `automatic`) | 3D Print (mitcad#234: the panel replaced the dialog, whose `3D Print dialog: …` and `3D Print cancelled` lines are gone) |
-| `Export dialog opened: unit mm (mm \| cm \| m \| in \| ft)` (with occurrences also `, coordinates design (design \| component)`; then `, type step-ap214, refinement medium, file <path>`: the type, refinement and file it starts with, mitcad#1164; then `, dxf unit in (in \| mm \| cm \| m \| ft)`: a DXF file's unit, the design's first, mitcad#1408; then `, dxf construction off` or `on`: Include construction geometry as it starts, mitcad#1445, and `, dxf points on` or `off`: Include points as it starts, mitcad#1963; then `, plates one_file (2), slicer bambu_studio` or `none`: the print plates and the slicer it offers a 3MF file, mitcad#1679), `Insert Mesh dialog opened: unit …`, `Insert DXF dialog opened: unit …`, `Units dialog opened: mm (…)`, `Add User Parameter dialog opened: unit mm` (the design's unit first, mitcad#1452), `Grid settings dialog opened: automatic, fixed spacing 10 mm` (the fixed spacing in the design's unit, `0.5 in`, mitcad#1210) | a dialog that offers units opened, with its default first |
+| `Export dialog opened: unit mm (mm \| cm \| m \| in \| ft)` (with occurrences also `, coordinates design (design \| component)`; then `, type step-ap214, refinement medium, file <path>`: the type, refinement and file it starts with, mitcad#1164; then `, dxf unit in (in \| mm \| cm \| m \| ft)`: a DXF file's unit, the design's first, mitcad#1408; then `, dxf construction off` or `on`: Include construction geometry as it starts, mitcad#1445, and `, dxf points on` or `off`: Include points as it starts, mitcad#1963; then `, plates one_file (2), slicer bambu_studio` or `none`: the print plates and the slicer it offers a 3MF file, mitcad#1679), `Insert Mesh dialog opened: unit …`, `Insert DXF dialog opened: unit …`, `Units dialog opened: mm (…)`, `Parameters new row: unit mm, after width` (the Parameters window's empty row in the design's unit first, mitcad#1452, mitcad#2202), `Grid settings dialog opened: automatic, fixed spacing 10 mm` (the fixed spacing in the design's unit, `0.5 in`, mitcad#1210) | a dialog that offers units opened, with its default first |
 | `Panel Hole choices: placement=face, …, standard=iso_metric, size=6, designation=M6x1, class=6H`, `Panel Hole options size: 1 \| 1.1 \| …`, `Panel Circular Pattern checks: symmetric=on`, `Panel Rectangular Pattern label distance1: Extent` | a panel's choices and check boxes when it starts; the options of a `withChoices` input when they change; a `withLabel` input's label when it changes (mitcad#545) |
 | `Imported block.step as Base1: 1 body(ies)`, `Inserted drawing.dxf into Sketch2: 4 curves, 4 points, 0 texts, 1 profiles, 0 warnings`, `Inserted component block (linked) from block.mitcad` | import |
 | `Insert SVG dialog opened: 100 x 60 mm, 2 filled, 1 stroked, 1 texts`, `Insert SVG scale at x,y` (`x`, `y`, `bands`, `OK`), `Insert SVG: scale 1, lower left at (0, 0), bands on`, `Inserted logo.svg into Sketch1: 16 curves, 17 points, 1 texts, 8 profiles, 0 warnings, 3 filled, 1 bands` | the Insert SVG dialog (places in the main window's coordinates), what it chose and what came in (mitcad#473) |
+| `Insert Points dialog opened: 200 points, airfoil NACA 2412 (selig)` (`not an airfoil`), `Insert Points chord at x,y` (`spline`, `points`, `airfoil`, `scale`, `chord`, `angle`, `close`, `x`, `y`: the visible inputs; `OK`), `Insert Points: spline, airfoil on, chord 100 mm, angle 0°, leading edge at (0, 0), trailing edge closed` (`Insert Points: points, airfoil off, scale 1, origin at (0, 0)`), `Inserted naca2412.dat into Sketch1: 2 curves, 25 points, 1 profiles, 0 warnings, fit least_squares, 24 control points, deviation 0.006 mm` | the Insert Points dialog (places in the main window's coordinates), what it chose and what came in (mitcad#2232) |
 | `Insert DXF drawing: unit mm, layers Outline (4) \| Holes (1) off`, `Insert DXF place lower_left at x,y`, `Insert DXF x at …`, `Insert DXF layer Holes at …`, `Insert DXF OK at …`, `Insert DXF: lower left corner at (10, 5), layers Outline` | the Insert DXF dialog (places in the main window's coordinates) and what it chose |
 | `Import of part.f3d started`, `Import item 3: Extrude2 parametric`, `Import of part.f3d: stop requested after 12 s`, `Import of part.f3d stopping: the remaining items take the file's bodies`, `Import of part.f3d cancelled`, `Import of part.f3d failed: …`, `Imported part.f3d: 2 bodies; items …[; stopped at Extrude3 (item 5)]`, `Import report: part.f3d: 28 items (25 parametric, …), 2 bodies, 2 of the file's 2 solids match[, stopped at Extrude3 (item 5)]`, `Import report summary: <the report's text above its list>`, `Import report kept: Pad.Length = Sheet.w * 2: <why>` | an `.f3d` or FreeCAD import (`stopped after the last item` when only the final comparison was left; `kept`: a FreeCAD expression kept as its value) |
 | `References dialog: Part version 2 of Assembly v1.f3d` (`?` without a name), `References dialog: chose Part v2.f3d`, `References dialog: skipped`, `Import references of Assembly v1.f3d: 2 found, 0 skipped`, `Imported Assembly v1.f3d: documents referred to: Part linked, Holder skipped` | an `.f3d` design's documents referred to (mitcad#196): a file dialog for one not found, the choice, the documents found before the import, how each came in |
@@ -20287,6 +20875,7 @@ next screenshot.
 | `Edit lock receipt: part.mitcad for Sam`, `Edit lock request: Sam asks to edit part.mitcad[: "<message>"] [Release, Keep 15 More Minutes, Decline...]` (`Release (Save First), Release Without Saving` with unsaved changes), `Edit lock request: also waiting Kim`, `Edit lock request: Release[ Without Saving]` (`Keep 15 More Minutes`, `Decline`), `Decline dialog: Sam`, `Edit lock request of Sam declined[: <message>]`, `Edit lock request of Sam: kept until <time>`, `Edit lock request withdrawn: part.mitcad`, `Edit lock: handing part.mitcad over to Sam (released \| idle \| no answer)`, `Edit lock handed over: part.mitcad to Sam`, `Edit lock handed over: the unsaved changes of part.mitcad stay`, `Edit lock: Sam asks while part.mitcad is idle: handing it over`, `Edit lock request of Sam not answered within 10 min: handing over` | the holder's side of a request |
 | `Edit lock idle: part.mitcad after 10 min without activity (no unsaved changes \| unsaved changes)`, `Edit lock idle: saving part.mitcad`, `Edit lock idle: part.mitcad kept, marked idle (autosave off \| waits)`, `Edit lock idle: part.mitcad kept, marked idle (sync: <class>)`, `Edit lock: part.mitcad active again`, `Edit lock refreshed: part.mitcad (idle \| active)`, `Edit lock released: part.mitcad`, `Edit lock request withdrawn: <path>`, `Edit lock release failed (<class>): <message>`, `Edit lock stays: part.mitcad (<class>)`, `Edit lock: the sync of part.mitcad needs a choice before the release: asked`, `Edit lock: Resolve Sync` (`Release Without Sending`, `Keep Lock`), `Edit lock lost: part.mitcad to Alex (<reason> \| removed)`, `Edit lock lost: the unsaved changes of part.mitcad stay`, `Edit locks off: part.mitcad`, `Edit locks off: released <paths>`, `Edit lock: the project stops syncing`, `Edit lock: part.mitcad saved as copy.mitcad`, `Save as New Version: <path> (read-only)` | holding, idle time, releasing, losing a lock |
 | `Edit lock poll failed (<class>): <message>`, `Edit locks: the remote answers again`, `Edit lock: a stale request removed: part.mitcad by Sam` (a request its MitCad no longer refreshed, removed by this poll), `Edit lock: a newer version on the remote: checking part.mitcad`, `Updated to Alex's version saved at 14:05.`, `Edit lock: bringing part.mitcad up to date (sync)`, `Edit lock: the remote has newer versions: checking part.mitcad`, `Edit lock: also open: <entries>`, `Edit locks: live updates connected: the remote is read every 120 s`, `Edit locks probe: the remote accepts MitCad's lock references` (`<message> (<reason>)`), `Project Settings: edit locks accepted by the remote`, `Project Settings: edit locks: <message>`, `Edit lock details: <lines joined by " \| ">`, `Project indicator menu chose Release Edit Lock` (`Edit Lock Details`), `Sync: files someone else holds the edit lock of: part.mitcad (Alex): asked`, `Sync: Send Anyway`, `Sync: not sent (locked files)` | polls, a read-only window following the editor's versions, the lock just taken brought up to date, live updates, the remote's probe, the details, Sync's question |
+| `Save of a new design: asked (a remote project is known)`, `Save of a new design: Save As (no remote project known)`, `Save of a new design: canceled`, `Save of a new design: on this computer (asked)` (`to a project`; `(remembered)`, `(the preference)`), `Preferences: save of a new design ask` (`computer`, `project`) | Save of a design that has no file yet ([Save of a new design](#save-of-a-new-design), mitcad#2183) |
 | `Save to Project cancelled`, `Save to Project: <path> into a new project`, `Save to Project: <path> saved in <root>`, `Save to Project: <folder> is no project with versions`, `Recorded <path> in the project <root>` (the design was in the new project's folder already), `Preferences: cloud: git 2.47.0 at <path>…`, `Preferences: versions by git's user, else Name <email>` (or `nobody`), `Preferences: git …, remote checks every 10 min, each version sent on, live updates on, default broker none` | Save to Project; Preferences' Cloud page |
 | `Project picker <title>: a place, reading the projects` (`a design`, `a project`), `Project picker project <key>: local, <root>` (`cloud`, `no versions`; one per project offered; the key is its name, or its folder when another listed project has the same name), `Project picker <title>: 2 projects: Shop (local) \| acme/gripper (cloud)` (once read), `Project picker row <key> at x,y` (rows in sight: `<key>`, `<key>/<folder>/`, `<key>/<design path>`), `Project picker name at x,y`, `Project picker button Another Folder at x,y` (each button), `Project picker selected <key>`, `Project picker target <key>/parts/bolt.mitcad: free` (`exists`, `invalid`; when it changes), `Project picker <title>: chose <path>` (`another folder`, `another file`, `new project`, `cancelled`), `Project picker button New Project at x,y`, `Project picker button New Folder at x,y`, `Project picker New Folder: enabled` (`disabled: <why>`; when it changes), `Project picker: naming a new folder in <key>: New Folder` (the editor open, the name proposed or typed; again after a refusal), `Project picker: New Folder Shop/parts` (made), `Project picker: New Folder refused (exists): parts is there already` (the core's class and message; `(name)` for a name no folder can have), `Project picker: New Folder cancelled` (`not made`: failed or canceled and told) | the project picker (mitcad#174; places in the main window's coordinates) |
 | `Project browser <title>: reading the projects`, `Project browser <title>: 2 projects: Shop (local) \| Team (cloud)` (once read, by name), `Project browser starts at Shop/parts/ (remembered)` (`(current project)`, `(first project)`), `Project browser shows Shop/parts/: sub/ \| gear.mitcad v2, changed, editing elsewhere` (`empty`; each place shown: its sub-folders, then its designs with the words of `Projects tree:`), `Project browser search "hex" in all projects: 1 found: Team/bolts/hex-bolt.mitcad` (`in <project key>`, `0 found`; as typed), `Project browser search scope: all projects` (`this project`), `Project browser read-only: on` (`off`), `Project browser selected <key>`, the places (debug, when they moved): `Project browser folder <key> at x,y` (the folders' tree, rows in sight: `Shop`, `Shop/parts/`), `Project browser item <key> at x,y` (the contents' rows in sight: `Shop/parts/sub/`, `Shop/parts/gear.mitcad`, a search's results too), `Project browser path <place key> at x,y` (the path bar), `Project browser search at x,y`, `Project browser scope at x,y`, `Project browser button <Another File\|Read-only\|Open\|Cancel> at x,y`; `Project browser <title>: chose <path>` (` (read-only)`; `another file`, `cancelled`) | File › Open from Project's project browser (mitcad#530; keys: a project's folder name, its whole path when two have the same; places in the main window's coordinates) |
@@ -20301,10 +20890,10 @@ next screenshot.
 | `Floating cards: window 1028x749, top bar bottom 21, view top 21, floating rows bottom 167; titleRow 0,21 1028x36; titleQuickAccess 8,22 330x34; titleMenu 12,24 28x30; titleTabs 344,22 150x34; ...; ribbon 12,65 1004x118; ribbonWorkspace 12,65 84x118; ribbonTabs 110,69 270x26; ribbonSearch 788,69 220x26; ribbonGroup_SOLID/CREATE 108,103 216x78; projectsDock 12,180 260x200; configurationDock 12,388 260x120; browserDock 12,516 260x172; timelineDock 12,688 1004x48; commandDock 716,370 300x200`, `Floating view between the cards at 196,126`, `Floating split configurationDock/browserDock at 142,512`, `Floating split remembered: configurationDock 98, browserDock 560` (`restored: …` at the start; `Floating split: automatic`) | the Floating layout's visible cards (main window coordinates, also for cards that are windows), the rows' cards first (mitcad#425: the title row and its controls, the toolbar panel and its parts, mitcad#1990, the groups with spaces in their names as `_`, the notice card), the bottom of the bar above the view (the menu bar, the header on macOS; in a document frame with tabs, the document window's top below the tabs), the view's top and the lowest row's bottom (the bar's bottom without rows), when it changed (mitcad#419: no card's top above the bar's bottom; mitcad#425: on Windows and Linux the view's top is the menu bar's bottom, and no other card's top is above the rows' bottom); and the middle of the gap between the first two cards of a row that takes the mouse only on its cards (none in the Floating layout of Windows and Linux since mitcad#1990: the title row is a bar and the panel one card), where a click reaches the view (`tools/ui-chrome-layout-test.sh`, `app.ui-windows-chrome-layout`); the left column's boundaries and the user's split (mitcad#1020, [The left column](#browser-timeline-and-parameters); `tools/ui-configuration-panel-test.sh`) |
 | `Export dialog: Web page (*.html) to <path>`, `Exported <path>: html, 1 body(ies), 123456 bytes` (the page's size; each texture image left out a warning, `Export: …`), `Export of <path> failed: <reason>` | Export › Web page (mitcad#423, [Web page](#web-page)) |
 | `Export dialog: glTF binary (*.glb) to <path>, refinement medium` (`glTF (*.gltf)`), `Exported <path>: glb, 2 body(ies), 24 triangles, 1 file(s), 123456 bytes` (`gltf`, `3 file(s)`: the buffer and a texture image beside it), `Export of <path> failed: <reason>` | Export's glTF types (mitcad#1826, [glTF files](#gltf-files)) |
-| `Drawing dialog opened: format pdf, sheet A4, scale fit`, `Drawing dialog file\|format\|sheet\|scale\|OK at x,y` (in the dialog's own window), `Drawing dialog: format = svg`, `Drawing dialog: sheet = A3`, `Drawing dialog: svg A3 to <path>`, `Exported <path>: drawing, 3 views, 2 bodies, A3, 1:1`, `Export drawing: <warning>` | File › Export Drawing (mitcad#471, [Drawing](#drawing)) |
+| `Drawing dialog opened: format pdf, sheet A4, scale fit`, `Drawing dialog file\|format\|sheet\|scale\|OK at x,y` (in the dialog's own window), `Drawing dialog: format = svg`, `Drawing dialog: sheet = A3`, `Drawing dialog: svg A3 to <path>`, `Exported <path>: drawing, 3 views, 2 bodies in 2 placements, A3, 1:1`, `Export drawing: <warning>` | File › Export Drawing (mitcad#471, [Drawing](#drawing)) |
 | `Dialog folder import: <folder>`, `Dialog folder import remembered: <folder>` (`open`, `export`, `import`, `texture`, `program`) | where a file dialog of the group starts, and the folder it remembers when accepted ([File dialogs' folders](#file-dialogs-folders), mitcad#498) |
 | `Typed name kept in Open: deselected <folder>` | Qt's own file dialog had other entries selected than the typed name (a folder the typed path passed through); they are deselected so that Enter or Open takes the typed name (`framework/Dialogs.cpp`) |
-| `Parameter suggestions for Extrude Distance "thi": thickness, thickness2 (A length: …); actions: create, name` (`none` when nothing matches), `Parameter suggestion thickness at x,y`, `Parameter suggestion action create at x,y` (`action name`), `Parameter suggestion highlighted: thickness2`, `Parameter suggestion inserted thickness into Extrude Distance: width / 2 + thickness` (`browser`, `created`, `existing` instead of `suggestion`), `Parameter suggestion tilt refused: <why>`, `Parameter suggestions closed for Extrude Distance (Esc)`, `Parameter fx Extrude Distance at x,y`, `Parameter browser opened for Extrude Distance`, `Parameter naming for dimension d1: width = `, `Parameter suggestion action remove-name at x,y`, `Parameter name width removed for dimension width: 20 mm` (mitcad#1577), `Parameter name width removed by Backspace for dimension width` (mitcad#1614), `Add User Parameter opened for dimension d2: name gap, unit mm`, `Add User Parameter gap refused: <why>`, `Created user parameter gap = 12 mm (mm) for dimension d2`, `Add User Parameter cancelled for dimension d2: <the field's text>` | expression fields' suggestions, fx browser, `name = …` and Add User Parameter (mitcad#567, mitcad#568, [Notes](#notes-on-particular-commands)); the field is named `<command> <input label>`, `dimension <its parameter>`, `sketch dimension` (a new one), `sketch <tool value>` or `<parameter> expression` (the table); places in the main window's coordinates |
+| `Parameter suggestions for Extrude Distance "thi": thickness, thickness2 (A length: …); actions: create, name` (`none` when nothing matches), `Parameter suggestion thickness at x,y`, `Parameter suggestion action create at x,y` (`action name`), `Parameter suggestion highlighted: thickness2`, `Parameter suggestion inserted thickness into Extrude Distance: width / 2 + thickness` (`browser`, `created`, `existing` instead of `suggestion`), `Parameter suggestion tilt refused: <why>`, `Parameter suggestions closed for Extrude Distance (Esc)`, `Parameter fx Extrude Distance at x,y`, `Parameter browser opened for Extrude Distance`, `Parameter naming for dimension d1: width = `, `Parameter suggestion action remove-name at x,y`, `Parameter name width removed for dimension width: 20 mm` (mitcad#1577), `Parameter name width removed by Backspace for dimension width` (mitcad#1614), `Add User Parameter opened for dimension d2: name gap, unit mm`, `Add User Parameter gap refused: <why>`, `Add User Parameter expression problem: <words> (marked <start>..<end>); Create disabled` (`none; Create enabled`; `OK` in Edit Parameters' Add User Parameter), `Parameter width expression problem while typed: <words> (marked <start>..<end>)` (`none`), `Parameter command set_parameter refused: <the agents' text>` (mitcad#2181), `Created user parameter gap = 12 mm (mm) for dimension d2`, `Add User Parameter cancelled for dimension d2: <the field's text>` | expression fields' suggestions, fx browser, `name = …` and Add User Parameter (mitcad#567, mitcad#568, [Notes](#notes-on-particular-commands)); the field is named `<command> <input label>`, `dimension <its parameter>`, `sketch dimension` (a new one), `sketch <tool value>` or `<parameter> expression` (the table); places in the main window's coordinates |
 | `Value field Circular Pattern Quantity: Up stepped 4 to 5` (`Shift+Up`, `Ctrl+Down`, `Alt+Down` for Option on macOS, `wheel`), `Value field Extrude Distance: Up not stepped: d1*2 is not a plain value`, `Value field Circular Pattern Quantity: Down not stepped: 1 is at its minimum` | Up, Down or the wheel stepped a value field, or left it as it was (mitcad#1254, [Notes](#notes-on-particular-commands), *Stepping a value*); the field is named as in the suggestions' lines; the stepped text then goes in as typed (`Panel field quantity: 5`, the panel's evaluation and preview) |
 | `Context menu Material: Steel \| Acme PETG \| Shop PETG \| More…`, `Context menu Material checked: Steel` (`none`), `Context menu Material recent: Shop PETG`, `Material assigned from menu: Shop PETG to 2 bodies` (`… to component Root`) | Material › of the view's and the Browser's context menus when it opens, and a pick (mitcad#1046; [Material › in the context menus](#material--in-the-context-menus)); `tools/ui-material-menu-test.sh` |
 
@@ -20323,7 +20912,12 @@ shortcut takes each key (`Shortcut check F7 to ...: active window ...`,
 the actions that have the key, `Shortcut event F7 to ...` or `Shortcut
 none for F7: ...`) and the windows' activation and state changes, on
 Windows with the native messages (`Native WM_ACTIVATE inactive: ...`;
-mitcad#1016).
+mitcad#1016), on X11 with the focus the X server gives or takes
+(`Native FocusIn: ... (detail nonlinear, mode normal)`, `Native FocusOut:
+...`; mitcad#2206). Always logged: a command run while the model computes
+waits for it (`Command file.sync waits until the model is idle`), one
+that is not available then does nothing (`Command file.sync not available
+now`; mitcad#2206).
 `MITCAD_SETTINGS_DIR` keeps the settings in an INI file of a test's own
 (on Windows they are otherwise in the registry). It is for tests; a user
 takes the settings to another computer with Preferences › Export Settings
@@ -20335,7 +20929,15 @@ mitcad#1889).
 Every message (`qDebug`, `qInfo`, `qWarning`, `qCritical`) goes through
 one handler, the log ring (`mcp/LogRing.hpp`), which `main()` installs
 for the whole run after the UI test driver's and which passes every
-message on to it (and so to stderr). It keeps the newest 5000 lines for
+message on to it (and so to stderr). A stderr that is a terminal when
+the handler is installed gets only the warning, critical and fatal
+messages (mitcad#2213: a run started from a terminal printed a line for
+nearly every action); `MITCAD_LOG_STDERR=1` passes every line to it
+too. A stderr redirected to a file or a pipe (every UI test and tool
+that reads the app's output), a run under the UI test driver
+(`MITCAD_TEST_INPUT`) and Windows, where the app has no console, get
+every line as before. The ring, live MCP's `ui_log`, the session log and
+the debug log get every line in each case. It keeps the newest 5000 lines for
 live MCP's `ui_log` and the problem reports, and passes each line to the
 debug log (`framework/DebugLog.hpp`, mitcad#269) while that writes a
 file. Preferences' Diagnostics page switches the debug log on and off at
@@ -20826,9 +21428,58 @@ part under the pointer where `formula_help` gives one, else the field's own
 tooltip (the parameter's name, expression and comment, mitcad#761).
 No builder-specific state is stored in a design.
 
+Code editor (mitcad#2179): the formula text is in the system's fixed-pitch
+font and colored by its tokens, which the model's tokenizer gives on each
+change (`formula_help` with `tokens_only`, `FormulaHighlighter`; no second
+parser in Qt): parameter names (`ColorRole::FormulaName`, also `LET`'s
+names and a table's columns), functions (`FormulaFunction`), `LET` and the
+constants `PI` and `E` (`FormulaKeyword`, bold), numbers (`FormulaNumber`),
+units (`FormulaUnit`), operators, brackets and separators
+(`FormulaOperator`) and quoted texts (`FormulaString`), each with a light
+and a dark value; a name no parameter has and what cannot stand where it is
+are the error's text with its wavy underline. The line with the caret has
+`FormulaLine` under it, the bracket at the caret and its match
+`FormulaBracket`; the error range of `formula_help` stays a wavy underline
+over the colors. `FormulaEditor::tokenKindAt` gives a position's kind for
+the test driver (`expect-formula-token <text> <kind>`, which also compares
+the color shown with `formulaTokenColor`). Completion (mitcad#667) says
+what each name is: a parameter with its value in its unit (`parameter,
+12.5 mm`), a function with its arguments (`function (value; [step])`); after
+a value (a number, a name or `)`) it offers the units (`formula_help`'s
+`units`, as written: `mm`, not `MM`). What is typed already comes first, so
+that Enter or Tab keeps it (`5 m` stays meters). Line breaks are white space
+to the parser; Ctrl+Enter is OK.
+
+Edit Parameters' Expression cells (mitcad#2179): the cell's editor grows
+with its text from the cell's width over the next columns up to the
+table's width (moving left where the table ends; `ExpressionDelegate` in
+`ParametersDialog.cpp`), so that neither the start nor the end under the
+`fx` button is hidden; a text longer than the table is wide shows whole,
+wrapped, in a strip under the editor (`parameterExpressionWhole`). The
+test driver's `expect-cell-editor-whole` checks it through the editor's
+own position mapping. The cell's `fx` opens Edit Formula
+(`ParameterFieldOptions::formula`) with the text typed in the cell so far:
+the cell's editing ends without applying it (the delegate's `closeEditor`,
+no commit), OK applies the window's formula and limits as one
+`set_parameter` (one undo step, as the **Edit Formula…** button), Cancel
+leaves the parameter as it was. Logged: `Parameter fx <label>: Edit Formula
+with <text>`, `Formula editor opened for parameter <name> with: <text>`,
+`Formula editor for parameter <name> canceled`. Typing in the cell still
+lists the parameters, and its right-click menu keeps Insert Parameter….
+Add User Parameter's Expression field (`parameterExpression`) has the same
+suggestions and `fx` (label `new parameter expression`): Edit Formula opens
+with the field's text, the chosen unit as its kind and the name as its own
+name; OK puts the formula back in the field (`Add parameter expression from
+Edit Formula: <text>`) and the dialog's own OK still adds the parameter. Its
+fields fill the dialog, the expression at least 48 average characters wide,
+and the dialog widens with a longer expression while its screen has room.
+
 The portable `formula-builder.mitcad-ui` fixture runs through both entry points,
 checks a partial signature, the real model value of a selected ratio, a template
-and saved limits, and leaves an edited command field for normal confirmation.
+and saved limits, a long expression whole in its cell's editor, the cell's `fx`
+opening Edit Formula with the typed text, token colors, an unknown name, a
+completion, OK and Cancel, Add User Parameter's `fx`, and leaves an edited
+command field for normal confirmation.
 The same fixture is registered on macOS, Windows and Linux with the existing
 platform UI infrastructure. Root runs the implementation platform's checks.
 
@@ -20909,7 +21560,7 @@ The state line's `assistantState` property and the button's
 | `assistantState` | Line | `assistantAction` (text) |
 |---|---|---|
 | `failed` | the error, saying what to do | `retry` (Try again); none when the installed CLI is missing; `install` (Get Claude Desktop) for Install Claude Desktop first, when no application takes the extension (on Windows: no `.mcpb` association, `AssocQueryStringW`, checked before opening and every second after) and Claude Desktop was not found either |
-| `install-extension` | Install the extension in Claude Desktop (mitcad#763): Claude Desktop was found but no application takes the extension, as with a Microsoft Store install, which registers only `claude://`; the result line below says In Claude Desktop: Settings › Extensions › Advanced settings › Install Extension…, then choose *path* (cleared once Claude Desktop connects) | `reveal` (Show in Explorer, Show in Finder on macOS: the saved `mitcad-desktop.mcpb` selected, its path in the tooltip), with the quiet **Open Claude Desktop** (`assistantOpenDesktop`, opens `claude://`; without Claude Desktop's application, or when the link does not open, the state becomes Install Claude Desktop first) |
+| `install-extension` | Install the extension in Claude Desktop (mitcad#763): Claude Desktop was found but no application takes the extension, as with a Microsoft Store install, which registers only `claude://`; the result line below says In Claude Desktop, open Extensions in Settings (under Desktop app in newer versions), then drag *path* onto that page or use Advanced settings › Install Extension… (the Extensions page and both routes on it, not a full menu path, which Claude Desktop's settings layouts do not share, mitcad#2139; cleared once Claude Desktop connects) | `reveal` (Show in Explorer, Show in Finder on macOS: the saved `mitcad-desktop.mcpb` selected, its path in the tooltip), with the quiet **Open Claude Desktop** (`assistantOpenDesktop`, opens `claude://`; without Claude Desktop's application, or when the link does not open, the state becomes Install Claude Desktop first) |
 | `installed-not-connected` | Installed in Claude Desktop, not connected: turn the MitCad extension off and on in Claude Desktop, or start a new chat (mitcad#1288): MitCad's extension, starting this bridge, is in Claude Desktop's settings (`claudeDesktopExtension`) and no Claude Desktop client is connected to any window; it comes before `install-extension`, `waiting` and `ready`, and clears the installation's line | none, with the quiet **Open Claude Desktop** |
 | `busy` | Connecting *assistant*… | `connect`, disabled |
 | `blocked` | Blocked in the assistant menu (mitcad#1289, mitcad#1299: a row of the assistant is unchecked under the menu's Incoming connections, or Disconnect blocked it, and none of its clients is connected; Claude Desktop and Other name the blocked rows after a colon; before every state but `busy`) | `allow` (Allow: lets it connect again, as its checkmark does, tooltip "Lets *assistant* connect to MitCad again (its checkmark in the assistant menu)"; the setup stays as it is) |
@@ -21501,7 +22152,7 @@ drawing commands; it computes no geometry of its own.
   | Edge Extension (`drawing.edge_extension`, mitcad#729) | two straight edges, or one | Edges (Two, to Their Corner; One, Both Ways) | `edge_extension` |
   | Text (`drawing.text`) | a click on the sheet | Text (empty: the annotations' Note dialog asks), Drawn (On the Sheet, In the View Clicked; mitcad#729) | `"type": "text"` with `sheet` (or `view`), `at`, `text` |
   | Note (`drawing.note`) | a pick, then a click where the text goes | Text (as Text's) | `note` |
-  | Hole Callout (`drawing.hole_callout`, mitcad#2054) | a hole: its circle seen end on or its round face seen from the side (`drawing_pick` with `"type": "hole_callout"`), then a click where the text goes | | `hole_callout`: the model writes the hole's lines (count, Ø or thread, THRU or depth, counterbore or countersink) as the model's hole callout does, worked out on every draw so that they follow the hole; refused, with the reason in words, for a pick of no hole or circle; the tool stays for the next hole |
+  | Hole Callout (`drawing.hole_callout`, mitcad#2054) | a hole: its circle seen end on or its round face seen from the side (`drawing_pick` with `"type": "hole_callout"`), then a click where the text goes | | `hole_callout`: the model writes the hole's lines (count, Ø or thread, THRU or depth, counterbore or countersink) as the model's hole callout does, worked out on every draw so that they follow the hole; refused, with the reason in words, for a pick of no hole or circle; on a circle seen end on its leader points at the center, its arrow where the line from the shoulder to the center crosses the circle, on the side of its text (mitcad#2212: placed left of the hole, the arrow is on its left; a drag of the text takes the arrow round, with the model drawing the leader during the drag and after release (mitcad#2253); the arrow is logged in sheet mm); the tool stays for the next hole |
   | Datum Label (`drawing.datum`) | a pick (an edge, a round face, or inside a planar face seen face on, mitcad#1296), then a click where the label goes | Letter (the next free of the model's and the drawings' letters), Terminator (Auto: a dot on a face, a triangle on an edge; Triangle; Dot) | `datum` (with `terminator` unless Auto) |
   | Feature Control Frame (`drawing.frame`) | a pick, then a click where the frame goes | (the annotations' frame dialog asks for its tolerance; its datums: the `drawing` query's `datum_letters`, the model's and the drawings') | `frame` |
   | Surface Finish (`drawing.finish`) | a pick | Surface (Any Process, Material Removed, No Material Removed), Requirement (`Ra 1.6`) | `finish` |
@@ -21621,10 +22272,16 @@ drawing commands; it computes no geometry of its own.
   placeholder 60.0`); a hole callout's (mitcad#2054) Text Before, Text
   After and Replace Value as boxes of a few lines (`LinesEdit`: a line
   break makes a line of its own on the sheet, leaving the box sends it,
-  Tab leaves it), Replace Value's placeholder the hole's lines as they
+  Tab leaves it; Text Before and Text After are sent whenever their text
+  changed, a line break alone included, mitcad#2212: one at the end of
+  Text Before puts its lines above the hole's, one at the start of Text
+  After below them), Replace Value's placeholder the hole's lines as they
   are now (the `drawing` query's `measured`) and, while replaced, the
-  Measured row under it; logged `Drawing panel hole callout: before TYP,
-  after 2 PLACES, replace none, measured Ø6.6 THRU / ⌴ Ø11 ↧ 6.8`; a note's Text… (`askNoteText`, opened with the note's text), a datum's
+  Measured row under it (the callout no longer follows the hole while
+  Replace Value is set); logged `Drawing panel hole callout: before TYP,
+  after 2 PLACES, replace none, measured Ø6.6 THRU / ⌴ Ø11 ↧ 6.8` (a
+  line break in Text Before or Text After logged as `\n`: `before
+  TYP\n`); a note's Text… (`askNoteText`, opened with the note's text), a datum's
   Letter, a frame's Tolerance… (`askFeatureControlFrame`, its datums the
   model's and the drawings'), a finish's Surface and Requirement; the
   Text Height of what writes (`drawingAnnotationHeight`, empty: the
@@ -21752,7 +22409,14 @@ drawing commands; it computes no geometry of its own.
   `edit_drawing_annotation` with `table` (`annotationEdit`'s `columns`,
   `sort`, `descending`, `origin`, `tags`, `levels`, `title`): Columns (a
   check box per column the table can show, `available` in the query; one
-  stays on: the status bar says so), a bill of materials's More Columns
+  stays on: the status bar says so; a bill of materials's Part Number and
+  Description boxes have the tooltip "Set Part number and Description in a
+  component's Property Sets… (its Browser menu)."), under them, while a
+  shown Part Number or Description cell is empty (the query's
+  `empty_columns`, mitcad#2138), the same text as a muted line
+  (`drawingTableIdentityHint`, `InfoText`; logged `Drawing table hint:
+  <text> (empty part_number, description)`, or `Drawing table hint: none`
+  when every shown cell is filled), a bill of materials's More Columns
   (properties of the components, names separated by commas), Sort By,
   Descending, a hole table's Origin (Lower Left Corner, Component Origin,
   and A Point of the Model when it has an origin pick; choosing one of
@@ -21891,9 +22555,12 @@ drawing commands; it computes no geometry of its own.
   `app.ui-windows-drawing-hole-callout`, macOS
   `app.ui-macos-drawing-hole-callout`, the shared steps
   `tools/ui-scripts/drawing-hole-callout.mitcad-ui`: Hole Callout on a
-  counterbored hole in a top view writes `Ø6.6 THRU / ⌴ Ø11 ↧ 6.8`, Text
-  After typed in its panel goes after the last line, the drill made 8 and
-  the callout following),
+  counterbored hole in a top view writes `Ø6.6 THRU / ⌴ Ø11 ↧ 6.8`, its
+  text placed left of the hole puts its arrow on the hole's left
+  (mitcad#2212), Text After typed in its panel goes after the last line,
+  Text Before TYP in front of the first and, a line break alone added
+  after it, on a line of its own, the drill made 8 and the callout
+  following),
   `tools/ui-windows-drawings-test.ps1` (ctest `app.ui-windows-drawings`:
   most of the same in the Windows VM, each tool's log line awaited before
   its clicks; a dimension that follows the model; a bill of materials and a
@@ -23035,7 +23702,7 @@ collapse as the toolbar panel's do).
 | 3D Print › Slice | **Send to Slicer** (`make.print3d`, once 3D Print: 3MF or STL to a slicer), a button labelled with its whole name, first on the tab |
 | 3D Print › Printers | **Printers…** (`make.printers`, once Edit Printers and Processes…), **Processes…** (`make.processes`, mitcad#1135) and **Plates…** (`make.plates`, mitcad#1050, [Plates…](#plates)), each a button |
 | 3D Print › Prepare | **Print Analysis** (`inspect.print_analysis`, its home; also in Solid › Inspect), a button |
-| Laser › Export | **Export Flat Pattern…** (`sheet.export_dxf`, its home; also in Sheet Metal › Modify) and **Export Face as DXF…** (`make.export_face_dxf`), each a button |
+| Laser › Export | **Export Flat Pattern…** (`sheet.export_dxf`), **Export Bend Table…** (`sheet.export_bend_table`), and **Export Face as DXF…** (`make.export_face_dxf`), each a button |
 | CNC › Setup | **New Setup** (`make.cam_setup`, a button), **Machines and Tools…** (`make.cam_machines`); [The CNC group](#the-cnc-group) |
 | CNC › 2D Milling | **Facing**, **Contour** (a button), **Pocket**, **Adaptive Clearing**, **Rest Machining**, **Drill** (`make.cam_facing`, `make.cam_contour`, `make.cam_pocket`, `make.cam_adaptive`, `make.cam_rest`, `make.cam_drill`) |
 | CNC › 3D Milling | **3D Roughing** (a button), **Raster Finishing**, **Waterline Finishing** (`make.cam_roughing_3d`, `make.cam_raster_finish`, `make.cam_waterline_finish`) |
@@ -23338,7 +24005,8 @@ found by the search also as `stl`, `obj`, `mesh`, `solid`, `remix` and
   reason (the panel stays: `the mesh has 3 open edges … after welding
   within 0.01 mm; …`, or the triangle count over 500000).
 - **Insert Mesh** (`MainWindow::insertMesh`, `askMeshInsert` in
-  `files/FileDialogs.cpp`): its dialog has the unit, **Convert to solid**
+  `files/FileDialogs.cpp`): its dialog has the unit (not for a 3MF file,
+  which says its unit itself, mitcad#2156), **Convert to solid**
   (remembered as `insertMesh/convertToSolid`) and, enabled with it, *Weld
   tolerance* (mm) and *Merge angle* (degrees), 0.01 and 0.5 at first.
   With it, each mesh body of the import gets a faceted `mesh_convert`
@@ -23785,9 +24453,12 @@ are applied to the receiving window, not left on the caller.
 Window › New Window (`window.new`, Ctrl+Shift+N; Cmd on macOS) always adds
 a separate window. Window also lists every document, checks the active
 one, activates it when chosen and offers Minimize. File › Close closes
-that document using its existing save and lock questions; with only one
-document it keeps the existing empty Untitled replacement behavior. Closing
-the window itself always closes its owner. Quit applies
+that document using its existing save and lock questions
+(`WindowManager::closeDesign`, as a tab's × and a tab's Close do). The
+last design (no other window holds one) closes to the Start page or quits
+MitCad, as Preferences › General › **Quit MitCad when the last design is
+closed** says (mitcad#2142, below). Closing the window itself always closes
+its owner. Quit applies
 those guards to every document, stopping if one is canceled; the last
 closed document ends the process. An active command or worker finishes
 canceling before its document is destroyed.
@@ -23808,7 +24479,7 @@ bar, so its window coordinates, its logged places and its layout are
 those of a single document window; with two or more the frame's menu bar
 follows the shown document and the tabs sit below it, and the frame's
 Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+W act on the tabs (with one document
-Ctrl+W is File › Close, which keeps an empty Untitled design). In the
+Ctrl+W is File › Close; either closes the design as its tab's × does). In the
 Floating layout of Windows and Linux (mitcad#1990,
 `DocumentFrame::tabsInTitleRow`, `showsTabs`) the same tab bar sits in
 the shown design's title row instead (`TitleBar::hostDocumentTabs`; the
@@ -23828,6 +24499,48 @@ bar. `tools/ui-document-frames-test.sh` runs the portable frame scenario
 on Linux (Floating, Docked, Close All). Test logs identify the
 stable UI window handle with `Document window created:` and
 `Document window active:`; MCP uses its existing per-document UUIDs.
+
+### Closing the last design (mitcad#2142)
+
+Preferences › General › **Quit MitCad when the last design is closed**
+(`quitOnLastClose`, the setting `documents/quitOnLastClose`, off by
+default; Restore Defaults and Export/Import Settings carry it with the
+other document preferences) decides what closing the last design does.
+Closing a design, not its window, is `WindowManager::closeDesign`: the
+design's tab × (or a middle click on the tab), the tab's Close, File ›
+Close and Ctrl+W (Cmd+W on macOS). While another window holds a design, the
+design's window or tab closes as before. For the last one:
+
+- **Off (the default):** after the usual save question
+  (`MainWindow::closeToStartPage`) the design goes and the window stays on
+  the Start page with no design open: no document tab (`DocumentFrame::
+  showsTabs`), the title `Start - MitCad <version>`, no entry in the Window
+  menu, and on macOS's Docked toolbar no tab row over the page. Logged
+  `Document closed` and `Last design closed: Start page`. An empty untitled
+  design waits under the page, so New Design, Open, Open Recent, a design
+  dropped on the window or a card of the page start from it in the same
+  window; a command of the view that leaves the page, or Save As, shows it
+  as an untitled design (`Design shown again after the last design
+  closed`). A canceled save question keeps the design open.
+- **On:** the last design quits MitCad as the window's close button does,
+  with the same questions (save, a running update download): logged
+  `Last design closed: quitting`, then `Document windows closed: empty
+  process registry`. A window left on the Start page with no design open
+  goes with it.
+
+Closing the window itself (its close button, File › Exit, the platform's
+Quit) and a tab's Close All (all of the window's designs) quit MitCad as
+before, whatever the preference. The same on
+Windows, Linux and macOS, in the Floating and Docked layouts.
+
+Tests: `tools/ui-last-design-close-test.sh` with
+`app.ui-windows-last-design-close` and `app.ui-macos-last-design-close`
+(the shared steps `tools/ui-scripts/last-design-close.mitcad-ui`,
+`last-design-close-restart.mitcad-ui` and, on Windows and Linux, where every
+design has a tab, `last-design-close-tab.mitcad-ui` in both layouts; the
+test driver's steps `document-tab-close <index>` and
+`expect-document-frame-design open|none`); `preferences-restore.mitcad-ui`
+checks Restore Defaults, `settingsTransferTests` the export group.
 
 ### Insert from an open design (mitcad#1172)
 
@@ -23915,10 +24628,10 @@ choices are, and Close keeps them. Floating and Docked alike.
 | **Plate** | The plates (`print_plates`), the chosen one drawn beside the design; "No plates yet" without any. **Add Plate** under it adds one (`add_print_plate`, `Plate <n>`) and chooses it; **Delete Plate** deletes the chosen one (`delete_print_plate`; what was on it goes on the first plate). |
 | **Add Bodies** | A body picked in the view, or a component's occurrence picked in the Browser, goes on the chosen plate at once (`place_on_plate`, one undo step, `Put Body2 on Plate 2`; one on another plate leaves it with its count, `Move Body2 from Plate 1 to Plate 2`, mitcad#1595); the row stays empty for the next pick. A surface or empty body is not taken. Without a plate, Plate 1 is added first. |
 | **Item** | What is on the plate (shown while it has items), an item that is not in the design marked so. |
-| **Count** | The item's count, 1 to 50 (a larger one the model keeps is listed too): `place_on_plate` with `count`. **Take Off Plate** under it takes the item off (`remove_from_plates`): it prints on the first plate again, as the design places it. |
+| **Count** | The item's count, 1 to 50 (a larger one the model keeps is listed too): `place_on_plate` with `count`. **Take Off Plate** under it takes the item off (`remove_from_plates`): it goes back to the first plate, in the placements the design shows (so in a design with one plate a shown body stays on Plate 1); its tooltip says so, and that hiding a body keeps it off the plates (mitcad#2222). |
 | **Spiral Vase** | The plate's own `spiral_vase` (`edit_print_plate`; off takes the value away, the design's then). |
 | **Settings** | The plate's own values in a line ("As the design's" without any); **Plate Settings…** opens them in the settings form of the profiles, the window titled "Plate 2 · Plate settings" (`OwnSettingsDialog::setPlate`): every process key from its tab, the plate's values set, what the design prints with as the placeholders; a change is `edit_print_plate`, emptying a field or ↺ takes the value away. |
-| (note) | "*n* placements on no plate print on the first." while some are. |
+| (note) | While the design has plates: "Taken off its plate, an item goes back to the first. Hiding a body keeps it off the plates unless it is an item.", after "*n* placements on no plate print on the first." while some are. Only shown placements are on no plate: a hidden body, or one hidden in every occurrence, prints on no plate unless an item puts it on one (mitcad#2222); hiding or showing a body while the panel is open updates the rows and the plate in the view. |
 
 - **The plate in the view.** While the panel is open the chosen plate is
   drawn beside the design (`plate_layout`): its bed's outline in the
@@ -24645,7 +25358,9 @@ A linked component (Insert Component, Linked) changes only with its file.
   folder…" without a project), with "Copy it into the project's parts
   folder and link the copy, or insert it as a copy that can be edited
   here.", and offers **Copy into the Project and Link** (the default,
-  Enter or Alt+L), **Insert as a Copy** (Alt+C) and **Cancel**. The copy
+  Enter or Alt+L), **Insert as a Copy** (Alt+C) and **Cancel**, with a
+  **Choose parts…** check box (Alt+P) that links chosen parts of the copy
+  (mitcad#2137, in Linked parts of a design). The copy
   runs `insert_component` with `copy_into_project`: the file, and the
   designs it links outside the project, go into the project's `parts/`
   folder (`plate_2.mitcad` when the name is taken), the copy is linked and
@@ -26177,7 +26892,11 @@ pointer moves.", which the status line repeats (`<command>: <hint>`).
   then waits for it and adds the item, and what comes meanwhile (the
   double click's further events, a move of the pointer) is not taken
   and does not cancel the preview OK waits for
-  (`CommandSession::resumePendingCommit`).
+  (`CommandSession::resumePendingCommit`). A second click that came
+  while the preview computed cancels it and waits for the model's idle
+  point; the preview the cancel asks for next waits behind it
+  (`CommandSession::runPreview` with `idleCallsWaiting`, mitcad#2189),
+  so the click is taken before another preview starts.
 - **A click on an end port** after the first node ends the item at once
   (the click is OK too). Should OK be refused then, a further click says
   in the status line that the item ends there (Enter, or Backspace for
@@ -26294,7 +27013,10 @@ window's hooks).
 - **Opening the session.** **Edit Flex1** in the context menu, a
   double-click on the item in the view (`MainWindow::flexDoubleClicked`
   from `onPicked`: two clicks on the item's body, faces, edges or vertices
-  within the system's double-click time), or a double-click on its row in
+  that the system classes as a double click by the mouse events' own
+  times, `OcctViewer::clickWasDoubleClick`, not by when their picks are
+  handled, which under load comes later than the double-click time after
+  the first click's selection card, mitcad#2189), or a double-click on its row in
   the Timeline or the Browser opens the same session (`editFeature`): the
   Flex panel edits the item and its handles are shown beside it
   (`MainWindow::updateFlexEdit`, `FlexEditController::show(uid, true)`,
@@ -27650,7 +28372,7 @@ its rows by a column when the column's header is clicked.
   `<column> descending` (the column as the log names it) or `none`; the
   dialog reads it when it is made.
 - **Selection:** the selected row stays selected after a refresh; a row
-  renamed (under its new name) or added (Add User Parameter) is selected
+  renamed (under its new name) or added (in the empty row, mitcad#2202) is selected
   where the sort puts it, and scrolled to.
 - **Logs:** `Parameters sorted by value descending`, `Parameters sorted in
   creation order`; `Parameters order: [Favorites] Width [User Parameters]
@@ -27738,8 +28460,11 @@ window's.
   update installs once it is downloaded) and **Stop and Close** (the
   download stops, the close goes on). A verified update waiting for the
   model to finish is staged then and installs once MitCad has quit; a
-  check under way is stopped. File › Close of the last design replaces
-  it with an untitled one and asks nothing (the window stays).
+  check under way is stopped. File › Close, Ctrl+W and the tab's × of the
+  last design ask nothing about the update while the window stays on the
+  Start page (the default, mitcad#2142); with Preferences › General › Quit
+  MitCad when the last design is closed on they quit as the window's close
+  button does, after the same question.
 - **The UI tests' fake offer**: the test driver's step
   `update-fake-offer <seconds>` (any build; `UpdateController::useTestFakeOffer`)
   offers MitCad 999.0.0 without a request, installable, "downloaded" in
@@ -28018,44 +28743,84 @@ workspace selector opens it there too (mitcad#2082).
   (`tools/ui-windows-boost-button-test.ps1`), `app.ui-macos-boost-button`
   (`tools/ui-macos-boost-button-test.sh`, Docked only).
 
-## Discord (mitcad#2123)
+## Discord (mitcad#2123, mitcad#2159)
 
 - **The button** (`framework/DiscordButton`, object name `discordButton`):
-  an icon button right of the Boost development button, as high as it,
-  in each place that has one: the top bar of Windows and Linux in both
-  layouts (`TitleBar::setDiscordButton`, the row's part `titleDiscord`,
-  between `titleBoost` and the indicators) and the macOS Docked toolbar's
-  tab row (`Ribbon::addTabRowEndWidget`, after `boostButton`, before the
-  search field). The icon only: `community`, MitCad's own speech bubble
-  with three dots (`app/icons/community.svg`, MIT; no third-party mark,
-  docs/ui-conventions.md 11), drawn and tinted as the bar's other icon
-  buttons (`RibbonButton`). Tooltip: "Opens MitCad's Discord server".
-- **A click** runs `help.discord`: it opens `https://mitcad.org/discord`
-  (the project's own redirect to the server's invitation, `discordUrl`)
-  in the system's browser (`openExternalUrl`), logged `Discord link
-  opened: https://mitcad.org/discord`; with `MITCAD_TEST_LOG_URLS` only
-  logged (`Open URL (test, not opened): …`), as the Boost button's link.
-- **No × and no setting:** it stays when Boost development is hidden by
-  its ×. In a row short of room it keeps its icon (it is as compact as
-  the Boost button's compact form gets): the Floating top bar's
+  a pill right of the Boost development button, in each place that has
+  one: the top bar of Windows and Linux in both layouts
+  (`TitleBar::setDiscordButton`, the row's part `titleDiscord`, between
+  `titleBoost` and the indicators) and the macOS Docked toolbar's tab row
+  (`Ribbon::addTabRowEndWidget`, after `boostButton`, before the search
+  field).
+- **The pill** (mitcad#2159, owner 21.11.2026): the Boost pill's shape,
+  height, radius and margins, filled with Discord's blurple `#5865F2`
+  (`ColorRole::DiscordFill`, the same on both themes; a shade darker
+  under the pointer and pressed, `kDiscordHoverDarker`,
+  `kDiscordPressedDarker`), holding Discord's logo mark in white
+  (`ColorRole::DiscordMark`, 4.6:1 on the blurple) and a small × at its
+  right end; no text label. The mark is Discord's official symbol,
+  unchanged and in its own proportions
+  (`third_party/brand-marks/discord-mark.svg`, the resource
+  `:/brand/discord-mark.svg`; its source and Discord's brand terms in
+  `third_party/brand-marks/README.md`), the one third-party mark the
+  chrome shows (docs/ui-conventions.md 11). Tooltip: "Opens MitCad's
+  Discord server"; over the × "Hides this button; Preferences › Display
+  shows it again".
+- **A click** on the pill runs `help.discord`: it opens
+  `https://mitcad.org/discord` (the project's own redirect to the
+  server's invitation, `discordUrl`) in the system's browser
+  (`openExternalUrl`), logged `Discord link opened:
+  https://mitcad.org/discord`; with `MITCAD_TEST_LOG_URLS` only logged
+  (`Open URL (test, not opened): …`), as the Boost button's link.
+- **The ×** hides it in every window and saves the choice
+  (`appearance/discordButton` = false, `DiscordSettings::saveVisible`,
+  `DiscordNotifier`); logged `Discord button hidden` (`Discord button
+  shown` when it shows). It hides independently of Boost development:
+  Boost's × hides only Boost, the Discord × only the Discord pill.
+- **The setting:** Preferences › Display › **Show the Discord button**
+  (object name `discordVisible`), beside Show the Boost development button
+  on its row, offered where the window has the button; saved on OK (at
+  once in the Settings window, which the × unchecks too), logged
+  `Preferences: Discord button shown|hidden`. Restore Defaults shows it
+  again; Export/Import Settings carry it with the preferences
+  (`appearance/`).
+- **Folding:** in a row short of room it keeps its mark and its × (it is
+  as compact as the Boost button's compact form): the Floating top bar's
   quick-access group folds for it as for Boost, and the macOS Docked tab
-  row counts its width before the tabs (`Ribbon::fitTabRow`), so the tabs
-  fold into their » and are never squeezed (docs/ui-conventions.md 13).
+  row counts its width before the tabs while it shows
+  (`Ribbon::fitTabRow`), so the tabs fold into their » and are never
+  squeezed (docs/ui-conventions.md 13).
 - **Help › MitCad on Discord** (`help.discord`, `MainWindow::registerCommands`,
   icon `community`, from any mode and during commands; after Send Feedback
   in the Help menu, `resources/layout/default.json`): the same link, logged
   the same way; in the command search too (keywords discord, community,
   server, forum, help, support).
-- **Place:** `Discord button at x,y` (its middle), in the window's
-  coordinates, logged when it changes.
+- **Places:** `Discord button at x,y` (the mark) and `Discord button
+  close at x,y` (the ×), in the window's coordinates, logged when they
+  change and again when the pill comes back.
 - **Tests:** the shared steps `tools/ui-scripts/boost-button.mitcad-ui`
   (a click logs the link, a click again while Boost is hidden, Help ›
-  MitCad on Discord) with the Boost button's wrappers, which also check
-  that it is right of the Boost button (`titleBoost` < `titleDiscord` <
-  `titleIndicator`; on macOS `Ribbon tab row end: …, boostButton,
-  discordButton, …`) and still in the top bar while Boost is hidden:
-  `tools/ui-boost-button-test.sh` (Linux, Floating and Docked),
-  `app.ui-windows-boost-button`, `app.ui-macos-boost-button` (Docked).
+  MitCad on Discord, its × hides it and saves `appearance/discordButton`
+  false while Boost stays, Preferences › Display shows it again) with the
+  Boost button's wrappers, which also check that it is right of the Boost
+  button (`titleBoost` < `titleDiscord` < `titleIndicator`), still in the
+  top bar while Boost is hidden, gone after its own × while Boost shows,
+  and back after Preferences: `tools/ui-boost-button-test.sh` (Linux,
+  Floating and Docked), `app.ui-windows-boost-button`,
+  `app.ui-macos-boost-button` (Docked). Both pills are pictured in each
+  theme (`boost-button-<layout>-dark.png`, `-light.png`; mitcad#2176):
+  the steps switch the scheme (`color-scheme dark`, then `light`) and
+  check that the Browser is drawn in that theme (`expect-widget-theme
+  modelBrowserTree`) before each picture, and the wrappers that the two
+  pictures differ; the Linux wrapper runs Qt's GTK platform theme
+  (`QT_QPA_PLATFORMTHEME=gtk3`), as the generic one has no dark scheme
+  and ignores the request. That theme lets Return press a focused
+  button, so the steps press Return for OK in Preferences' empty search
+  field (`preferencesSearch`), not on the check box they ticked, which
+  Return would untick (mitcad#2187). The unit test `app.unit`
+  (`app/tests/color_roles.cpp`, `discordPillTests`) checks the blurple on
+  both themes and the white mark's contrast on it and on its darker
+  shades.
 
 ## The Drawings card (mitcad#1990)
 
@@ -28167,9 +28932,9 @@ Materials' views*; `build/BuildLists.cpp`.
   `2.1`; empty for a Reference) and **Mass (kg)** after the component (of
   one, an assembly's with what it holds, References left out), show a
   Reference's quantity as `Ref`, and apply the structures as the model
-  says. Group identical parts acts on Every component only (disabled in
-  the views). A view setting for the open window: no model command, no
-  undo step.
+  says. Group identical parts acts on every view (mitcad#2215,
+  [Group identical parts in the Bill of Materials' views](#group-identical-parts-in-the-bill-of-materials-views-mitcad2215)).
+  A view setting for the open window: no model command, no undo step.
 - **BOM Structure** (`buildPartsStructure`, Alt+S: All structures, then
   each structure) lists only the rows of one structure: the `parts_list`
   query's `bom_structure`.
@@ -28384,6 +29149,17 @@ guide steps are in [docs/tutorials.md](../docs/tutorials.md).
   the web browser component's module (`webbrowser/TutorialPageView`,
   interface 3) in a dock at the left (Docked) or a card in the left
   column (Floating), the component downloaded first when it is missing.
+  Opened while the Start page is shown (mitcad#2168,
+  `openTutorialInDesign`), the tutorial starts in an empty design of its
+  own: the empty untitled design under the page (the launch's, or the one
+  a close to the page left; `MainWindow::emptyUntitledDesign`, which
+  `WindowManager::reusable` asks too) is shown, the page left (`Tutorial:
+  starts in the empty design under the Start page`); otherwise New Design
+  runs (`Tutorial: starts in a new design`) and the pane opens in the
+  window that shows the new design: a new window, or this one with Open in
+  current window after its unsaved-changes question, whose Cancel opens no
+  tutorial (`Tutorial: not opened (New Design was cancelled)`). The design
+  under the page is never changed.
   Logged: `Tutorials: listed <id> (<title>) from <source>, installed
   <version|no>`, `Tutorial: installed <id> <version> (<n> files) into
   <folder>`, `Tutorial: opened <title> (<page>)`, `Tutorial page
@@ -28416,7 +29192,12 @@ Tests: `app/tests/guide_step.cpp`, `app/tests/tutorial_sources.cpp`,
 `tools/ui-tutorials-test.py` (`app.ui-linux-tutorials`,
 `app.ui-windows-tutorials`, `app.ui-macos-tutorials` through
 `tools/ui-macos-tutorials-test.sh`, where the web browser component is
-built), and `ui_guide` in `tools/ui-mcp-live.py` and
+built), its `start-page` mode (`app.ui-linux-tutorials-start-page`,
+`app.ui-windows-tutorials-start-page`, `app.ui-macos-tutorials-start-page`
+through `tools/ui-macos-tutorials-start-page-test.sh`: the example tutorial
+opened over the Start page at launch, after the last design closed and
+over a modified design, in both layouts, and done to its end), and
+`ui_guide` in `tools/ui-mcp-live.py` and
 `tools/ui-windows-mcp-test.ps1`.
 
 ## The 3D view without graphics (mitcad#2125)
@@ -28603,8 +29384,19 @@ design](../core/model-api/src/commands.md#linked-parts-of-a-design-mitcad2130)).
   (`insertLinkDialog`, title Insert Component): **Linked** with **Whole
   design** (the default: Enter takes it, as before) or **Choose parts…**
   under it, and **Copy**. A file outside the project keeps its own
-  question (mitcad#1719) and links the whole design; a library part and a
-  link with options are not asked.
+  question (mitcad#1719); its **Choose parts…** check box (mitcad#2137,
+  below) links chosen parts of the copy; a library part and a link with
+  options are not asked.
+- **A file outside the project** (mitcad#2137): the outside-link
+  question (`insertOutsideLink`) has a **Choose parts…** check box
+  (`insertOutsideLinkParts`, Alt+P, unticked: the whole design, as
+  before). Ticked, **Copy into the Project and Link** opens **Choose
+  Parts** with the `link_parts` query of the file asked for, before
+  anything is copied: the copy is that file's text, with the same
+  occurrences and body uids, so `insert_component` (with
+  `copy_into_project` and `parts`) records the parts against the copy.
+  Cancel in the list cancels the whole insert and copies nothing.
+  **Insert as a Copy** takes the whole design whether it is ticked or not.
 - **Choose parts…** opens **Choose Parts** (`linkPartsDialog`) with the
   `link_parts` query's answer: the design's occurrences as its browser
   nests them, and its root's bodies in a Bodies folder, each row with a
@@ -28628,7 +29420,10 @@ design](../core/model-api/src/commands.md#linked-parts-of-a-design-mitcad2130)).
   chosen keeps its place with a warning in words on the timeline.
 - **Log lines:** `Insert Component asked: board.mitcad`, `Insert
   Component: linked, whole design` (`linked, chosen parts`, `copy`,
-  `canceled`); `Choose Parts opened: board.mitcad, 3 rows`, `Choose Parts:
+  `canceled`); outside the project `Insert Component outside the project:
+  choose parts on` (`off`) when the check box changes and `Insert
+  Component outside the project: copy into the project and link, chosen
+  parts`; `Choose Parts opened: board.mitcad, 3 rows`, `Choose Parts:
   ticked Bracket:1` (`unticked`), `Choose Parts: O1, F3.b0` on OK (`the
   whole design`, `canceled`); `Linked parts of board: Bracket:1` after the
   insert; `Choose Linked Parts of C1: Bracket:1, Bracket:2; 2 bodies`.
@@ -28639,4 +29434,332 @@ design](../core/model-api/src/commands.md#linked-parts-of-a-design-mitcad2130)).
   (Bracket placed twice and Board) and `link-parts-holder.json`: Insert
   Component > Linked > Choose parts… with Bracket:1 ticked holds its body
   alone; Choose Linked Parts… from the browser row adds Bracket:2 (two
-  bodies, one undo step), and Undo takes it back.
+  bodies, one undo step), and Undo takes it back. The Linux test then runs
+  `tools/ui-scripts/link-parts-outside.mitcad-ui` on a holder in a project
+  and the design outside it (mitcad#2137): Copy into the Project and Link
+  with Choose parts… ticked, Cancel in the list copies nothing, and
+  Bracket:1 ticked links the copy's Bracket:1 alone.
+
+## Boundary Fill
+
+**Boundary Fill** (`solid.boundary_fill`,
+`commands/BoundaryFillCommands.cpp`, mitcad#2149, GitHub mitcad/Mitcad#481;
+the model's `boundary_fill` of mitcad#457, `core/model-api/src/commands.md`
+"Boundary Fill") makes solids of the space that solids, surface bodies and
+planes close off together. Its home is the SOLID tab's CREATE group,
+section `patterns`, after Thicken; a second place (`"repeat": true`) is
+the SURFACE tab's MODIFY group, section `thicken`, after Thicken. Not
+pinned; the search finds it also as `fill`, `boundary`, `cell`,
+`enclosed`, `volume`, `surfaces` and `solid from surfaces`. Its icon
+`boundary-fill` is the timeline's too (`featureIcon`).
+
+- Inputs: *Tools* (`tools`: bodies and planes, one or more, no mesh
+  bodies), *Cells* (`cells`: a text of region numbers, `1, 3`, with a dot
+  in the view at each closed region), *Operation* and *Objects* as an
+  extrusion's (`operationInputs`), *Remove Tools* (`remove_tools`).
+- The closed regions: the model's `boundary_regions` query of the tools
+  picked, asked once for each set of tools (and again when an edit's
+  timeline is rolled back). Each region shows a dot at its point
+  (`Manipulator::Kind::Toggle`, element = the region's number), drawn
+  also before any preview exists (`InputDef::togglesUnpreviewed`); a click
+  on a dot adds its region to Cells or takes it out, as a pattern's
+  Suppressed dots do. A change of the tools numbers the regions anew:
+  Cells becomes `1` when the tools close off exactly one region (taken at
+  once, no click), else empty.
+- `build`: `tools` (the bodies' uids), `planes` (the planes' references:
+  `"xy"`, `"F9"`) only when there are any, `cells` (each chosen region's
+  point, then the edited definition's points that lie in no closed
+  region now, kept as they are), `operation` and `participants`
+  (`addOperation`), `remove_tools` only when checked. Without tools:
+  `Select the solids, surfaces and planes that close off the space to
+  fill.`; without cells: `Click the dots of the closed regions to fill in
+  the view.`, or `The tools close off no region: add surfaces or planes
+  until they close one off all round.` when there is none.
+- `load`: the tools (bodies and plane items) and the operation back; the
+  definition's points are placed in the regions that hold them once the
+  timeline is rolled back (`rolledBack`), so that the panel opens with
+  the cells picked. A fixed plane (an import's) is not editable
+  (`canEdit`). The hover text does not read the regions
+  (`loadForHover` off).
+- The preview: the filled cells and the operation's result, and every
+  closed region see-through orange (the feature's preview tool,
+  `extendedToolPreview`). A failure stays in the panel in words (`the
+  tools do not close off the region of a cell: it is open where the
+  surfaces end; …`), its places (the point and the gap along the
+  surfaces' free edges) painted on hover.
+- Logged: `Boundary Fill Tools: …` as any selection, `Boundary Fill
+  closed regions: 2` on each change of the tools, `Boundary Fill Cells:
+  2` on a click on a dot, `Boundary Fill cells loaded: 1 of 1 closed
+  regions, 0 points kept` when an edit opens, `Preview Boundary Fill: ok`
+  (or `failed: …`), and on OK `Added boundary fill (New Body) of 1 cells
+  from 6 tools`. MCP and scripts reach it as the other features, through
+  `add_feature` and `edit_feature`, and the regions through the
+  `boundary_regions` query.
+- Tests: `app.unit`'s `command_layout.cpp` (its two places); the shared
+  steps `tools/ui-scripts/boundary-fill.mitcad-ui` on
+  `tools/ui-scripts/boundary-fill.json`, run by
+  `tools/ui-boundary-fill-test.sh` (Linux, Xvfb),
+  `app.ui-windows-boundary-fill` (`tools/ui-windows-boundary-fill-test.ps1`)
+  and `app.ui-macos-boundary-fill` (`tools/ui-macos-boundary-fill-test.sh`):
+  four untrimmed surfaces and two construction planes picked, their one
+  closed region taken at once and filled as a new body; a block and a
+  plane across it, Cut, the far region's dot clicked, the block keeps its
+  half; Undo, and the first fill edited, its panel opened with its cell.
+
+## Draft Analysis (mitcad#2166)
+
+GitHub mitcad/Mitcad#535: a draft check before molding, kept like Print
+Analysis.
+
+- **Command** `inspect.draft_analysis` (Inspect group of the Solid tab,
+  after Print Analysis; icon `draft-analysis`; `commands/InspectCommands.cpp`,
+  `draftAnalysisCommand`): an inspection that keeps its analysis
+  (`keepsSection`, `CommandSession::keepAnalysis`), started with the
+  selection's bodies, else every shown solid and mesh body (as Print
+  Analysis, `printStartBodies`). Inputs: *Bodies* (`bodies`, a click adds
+  or removes a body), *Pull Direction* (`pull`, at most one: a plane or a
+  planar face, an axis, a straight edge or a sketch line, `givesPull`;
+  none: the design's +Z), *Flip* (`flip`) and *Angle* (`angle`, `1 deg`,
+  from 0 to less than 90). `build` writes `{"type": "draft", "bodies",
+  "pull" (the reference or null), "occurrence" (the pull's, when not the
+  root), "flip", "angle" (degrees)}` (`DraftAnalysis.cpp`,
+  `draftAnalysisDef`); `load` fills the inputs from an analysis.
+- **Result area** (`draftAnalysisText`): "Pulled along (0, 0, 1); a face
+  needs 1° of draft or more.", then per body (and in total, for several)
+  each class after a swatch of its color: *Draft 1° or more along the
+  pull*, *Needs more draft, under 1°*, *Draft 1° or more against the
+  pull*, each with its area (mm², one decimal) and share (%), and a note
+  that undercuts are not looked for. The swatches are the panel's
+  `themeColor` of the roles; the legend over the view has the view's.
+- **Query:** one `draft_analysis` with the definition's fields, as a model
+  job with the progress and its Cancel (*Measuring the draft*,
+  `printQuery`); an answer's `error` (a body or the pull reference gone)
+  in words (`userText`).
+- **View** (`view/PrintOverlay.cpp`, the Print Analysis overlay's
+  `PrintOverlay::draft`): the triangles of each class over the bodies,
+  unlit, lifted as the overhangs', in the roles `DraftPositive`,
+  `DraftUnder` and `DraftNegative` for the view's background
+  (docs/ui-conventions.md), with the legend (the analysis' name and the
+  three classes' words) in the lower left corner; recolored when the
+  background turns light or dark.
+- **Kept:** OK adds `Draft1`, `Draft2`, … in the Browser's Analysis folder
+  (icon `draft-analysis`, tooltip "Draft1: Draft Analysis" or its error);
+  its context menu *Edit Draft Analysis | Hide | Rename | Delete*, a
+  double-click edits it (`MainWindow::editAnalysis`). One analysis is
+  shown at a time; the shown one is computed again when it, its bodies or
+  the design change (`MainWindow::followPrintAnalysis`, as a model job;
+  the model keeps the result by the body's shape and the settings). The
+  Analysis folder's menu has *New Draft Analysis*.
+- **Log lines:** `Inspect Draft Analysis: pull (0, 0, 1), angle 1: Body1
+  along 1249.4 mm^2 (28.0 %), under 600.0 mm^2 (13.4 %), against 2614.8
+  mm^2 (58.6 %)` (bodies separated by "; ", then "; total …" for
+  several), the same after `Draft analysis Draft1: ` for the shown
+  analysis (`Draft analysis Draft1: failed: <reason>` when a body or the
+  pull reference is gone), and the view's `Print overlay: … no marker,
+  draft 12 along #2b8cbe, 8 under #c2185b, 14 against #7b5cc4; legend
+  Draft1: #2b8cbe Draft 1° or more along the pull | …`.
+- **Model:** `core/model/src/document/analyses.rs` (`DraftAnalysis`,
+  `Document::draft_pull`, `pull_direction`), the classification
+  `print_analysis::drafts`, the query in `core/model-api/src/print.rs`
+  (`DraftOps`); `commands.md` "Draft analysis".
+- **Tests:** `app/tests/draft_analysis.cpp` (the definition, the query,
+  the log line, the result area's words and swatches, the overlay's three
+  classes and its log), `app/tests/color_roles.cpp` (the three roles off
+  the status hues and apart from each other), `app/tests/command_layout.cpp`
+  (its place); `core/model-tests/analysis/src/draft_analysis_tests.rs`;
+  `core/model/src/print_analysis_tests.rs` (a box with drafted walls,
+  exact areas; a sphere by class); the UI tests
+  `tools/ui-draft-analysis-test.sh`, `app.ui-windows-draft-analysis` and
+  `app.ui-macos-draft-analysis` run the shared script
+  `tools/ui-scripts/draft-analysis.mitcad-ui` on `draft-analysis.json` (a
+  base with a 2° taper and a boss with square walls): the classes pulled
+  along +Z, at 3°, flipped and along Plane1 picked in the Browser, then
+  Draft1 kept, hidden, shown, edited, saved, deleted and undone; the Linux
+  test keeps pictures of the three colors in `build/ui-draft-analysis`.
+
+## Profiles of a whole sketch and the outline set (mitcad#2194)
+
+GitHub mitcad/Mitcad#545: nested closed shapes extrude as the outer
+shape less the inner ones without first removing a pre-selected region.
+The model gives each sketch's outline set (core/model-api commands.md
+"The outline set": the regions its own curves bound at an even nesting
+depth, a plate less its holes with an island in a hole added, separate
+outlines each; none when two of its closed curves cross) as `outline` and
+`curves_cross` on the rows of the `profiles` query
+(`commands/ProfilePicks.cpp`: `sketchOutline`, `OutlinePick`).
+
+- Extrude's and Revolve's `init` is `newestOutline`: of the sketch
+  `newestProfile` would take a region of (the newest with an unused one),
+  the unused members of its outline set. When none is unused (the ring
+  was extruded already) the region alone, as before, so that the next
+  Extrude takes a hole's disc, e.g. as a boss; when the sketch's closed
+  curves cross, the region alone too, and the panel says why
+  (`crossingNote` as the command's `note`, logged `Panel Extrude note:
+  The closed curves of Sketch2 cross each other, …`). A QR code's region
+  keeps its own rule (mitcad#473). The other profile commands (Sweep,
+  Helix, Emboss, the sheet and surface commands) keep `newestProfile`.
+- Their Profiles also take a whole sketch (`SelectKind::Sketch`), picked
+  on its Browser row or its timeline cell, before the command or while it
+  is open: `expandWholeSketches` (the input's `onPick`, and the first step
+  of `newestOutline` for a sketch selected before) replaces it by the
+  unused members of its outline set as ordinary profile entries, after
+  those already held and none twice; clicks then toggle regions as
+  before. Logged `Profiles: the whole sketch Sketch1 taken as 2 of its
+  outline set` (`: none, its closed curves cross`). For a sketch whose
+  closed curves cross nothing is added and the panel says so: the note
+  while Profiles hold what they held besides that sketch's regions, and,
+  when they are empty, the empty input's message (`withMissingText`). A
+  whole sketch selected before the command that gives nothing leaves
+  Profiles empty rather than taking another sketch's region.
+- Show profiles: `MainWindow::showProfiles` passes the regions whose row
+  says `"outline": false` (`unfilledProfile`: a hole's disc of a sketch
+  without crossing curves) to `OcctViewer::setProfiles`, which draws them
+  without fill (transparency 1: the outline in the sketch's color only),
+  hovered and picked as the others (the hover's and the selection's own
+  styles fill them); logged `Profiles without fill: 2 [F1 r{c9}, F1
+  r{c11}]` (`none`) when that set changes. Face-bounded regions and the
+  regions of crossing curves are shaded as before. This holds for the
+  edited sketch and the sketches shown in the design. The test step
+  `idle-pick-places` now logs the profiles' places too.
+- Tests: `app.unit` (`tests/profile_picks.cpp`: the start sets, the next
+  start after the ring is used, whole sketch picks, the note, the unfilled
+  rows); `tools/ui-outline-set-test.sh` and `app.ui-windows-outline-set`
+  (the shared script `tools/ui-scripts/outline-set.mitcad-ui`: the holes
+  unfilled, hovered and picked with no command, the start on a crossing
+  sketch with its note, the plate's start and its sketch picked on the
+  timeline and the Browser while Extrude is open and before it, a crossing
+  sketch picked with its note).
+
+## Group identical parts in the Bill of Materials' views (mitcad#2215)
+
+In the Bill of Materials window (`build.parts_list`), **Group identical
+parts** (`buildPartsGroupIdentical`) is enabled in all three views, not
+only in Every component: the `parts_list` query gets `group_identical`
+with its `view` (`parts`, `structured`; the model's rules in
+`core/model-api/src/commands.md`, section of the same name).
+
+- **Parts only** combines equal parts across the whole design (equal
+  library profiles placed as separate components, a part made by hand to
+  the same size and material with them), their quantities summed.
+- **Structured** combines equal siblings under the same parent; what a
+  combined assembly holds is listed once below it.
+- Rows of different BOM Structures stay apart (a Reference never joins a
+  counted row). The Item column, the quantities and the totals follow the
+  grouped rows; a grouped row's tooltip lists the grouped component names,
+  as in Every component.
+- The setting stays `build/groupIdenticalParts` and is shared by the
+  views; switching the view keeps it.
+- **The test**: the shared `tools/ui-scripts/bom-structure.mitcad-ui`
+  (`tools/ui-bom-structure-test.sh`, `app.ui-windows-bom-structure`)
+  checks the option enabled in Parts only and Structured, Base and the two
+  equal Rails one row `1 Base x 3` in Parts only, and the structured view
+  unchanged (Base and the Rails are no siblings).
+## The Parameters window's empty row and delete buttons (mitcad#2202)
+
+GitHub mitcad/Mitcad#512 asked to add several user parameters one after
+the other. The Parameters window (`browser/ParametersDialog.*`) no longer
+has **Add User Parameter…** and **Delete** buttons; the Add User Parameter
+dialog stays where expression fields offer it (`name = …` and the fx
+menu, `framework/ParameterField.cpp`, mitcad#567, mitcad#568).
+
+- **The empty row:** User Parameters always ends in one empty row, "New
+  parameter" in its Name in the placeholder color (`NameDelegate`; the row
+  is marked by `mac::NewParameterRowRole` in its Name cell). It stays last
+  whatever the sort (`refresh` adds it after the sorted rows) and is hidden
+  while the search field or Only limited filters the table. A click on
+  its Name, Unit, Expression or Comment (or a double-click, or F2) edits
+  the cell in place; Unit starts at the design's length unit
+  (mitcad#1452) in the same Unit list as the other rows (Number and Text,
+  mitcad#1920), and Expression has the parameter suggestions and the fx
+  button. **Tab** goes Name, Expression, Comment, Unit and round,
+  **Shift+Tab** back (`ParameterTable::closeEditor`, as a tree view's own
+  Tab would go to the row below), so that a parameter is typed as name,
+  Tab, value, Enter.
+- **Made a parameter:** **Enter**, or leaving the row for another row or
+  another control of the window when it has a name and an expression,
+  sends `add_parameter` (one undo step; a bare number gets the row's
+  unit). The row then becomes a parameter where the sort puts it (it is
+  selected) and a new empty row takes the keyboard in its Name. What the
+  model refuses (a taken name, an unknown name in the expression) stays
+  typed in the row, its Name and Expression in the error colors with the
+  reason as their tooltip and in the message line (`New parameter len:
+  <reason>`, the model's message in words); no new row then. Enter with
+  only a name or only an expression says what is missing; leaving such a
+  row keeps it as typed. Escape leaves a cell as it was.
+- **Delete buttons:** every user parameter's row ends in a flat delete
+  button (also under Favorites; model parameters have none), the column
+  `kDelete` after Slider, which sorts nothing. It is disabled for a
+  parameter something uses, its tooltip the model's refusal in words
+  (`parameter used is used by d1 of the feature First block`) from the
+  `parameters` query's `used_by` (`DocState::parameter_users`: features,
+  bindings, CAM, rules, the configurations and other parameters), and for
+  the open panel's own parameter (mitcad#564). A click sends
+  `delete_parameter`, one undo step, without a question. In a window
+  narrower than the columns want (a small screen clamps its 1200 px),
+  `fitColumns` narrows Name, Expression, Value, the limits and Slider
+  towards their minimums, so that the buttons stay in view; once the
+  user drags a header's edge, the widths are theirs.
+- **Bottom row:** one row on the window's margins: Import…, Export… and
+  Edit Formula… on the left, OK on the right. On the Tables tab, which
+  has its own Import CSV… and Export CSV…, the three are hidden. The
+  message line under the table takes no room while it is empty
+  (`ParametersDialog::setMessage`).
+- **Sliders:** while a Slider cell's handle is dragged, the row's
+  Expression and Value and a tooltip at the handle show the value at the
+  handle (`QSlider::sliderMoved`); the model gets it at the release, as
+  before.
+- **Log lines:** `Parameters new row: unit mm, after a3` (with `, typed
+  spare = 3, refused: <reason>` while a refused row is kept), `Parameters
+  new name at x,y` (also `unit`, `expression`, `comment`), `Editing new
+  parameter expression`, `New parameter name: a1` for a cell typed,
+  `Created user parameter a1 = 11 mm (mm) in the new row`, `New user
+  parameter spare refused: <reason>`, `Parameters new row hidden by the
+  filter` and `Parameters new row shown`, `Parameters spare delete at
+  x,y`, `Parameters in use: used (d1 of the feature First block)`,
+  `Deleted user parameter spare by its row button`, `Delete user
+  parameter spare refused: <reason>`, `Parameter slide slider held at
+  37 mm: expression 37 mm, value 37 mm, tooltip 37 mm`, `Parameters
+  bottom row: OK` (on the Tables tab; `Import, Export, Edit Formula, OK`
+  on the Parameters tab).
+- **Tests:** `core/model-tests/api/src/parameter_users_2202_tests.rs`
+  (`used_by`, and `delete_parameter` refusing what it names); the UI tests
+  `tools/ui-parameters-new-row-test.sh`, `app.ui-windows-parameters-new-row`
+  and `app.ui-macos-parameters-new-row` run the shared script
+  `tools/ui-scripts/parameters-new-row.mitcad-ui` on
+  `parameters-new-row.json`: three parameters typed one after the other, a
+  taken name refused and kept, an unused parameter deleted by its button
+  and a used one's button disabled, the empty row under a sort and the
+  search, a slider's value during the drag, and pictures of the bottom row
+  on both tabs (`build/ui-parameters-new-row-shots` on Linux, the output
+  folder on Windows and macOS). `parameters-sort`, `sketch-inch-entry`,
+  `macos-dialogs`, `native-macos-secondary`, `tools/ui-parameters-test.sh`
+  and `tools/ui-units-test.sh` add their parameters in the empty row.
+
+## Cone (mitcad#2239)
+
+**Cone** (`solid.cone`, icon `cone`; Solid › Create, after Cylinder; the
+model's `cone`, `core/model-api/src/commands.md`, *box, cylinder, cone,
+sphere, torus*) makes a cone or a frustum, placed and operated as
+Cylinder is (`commands/PrimitiveCommands.cpp`): Place On and the place
+inputs of every part placed by a pick ([Placement by picked
+geometry](#placement-by-picked-geometry)), then **Radius** (`radius`,
+10 mm, its arrow along the place's x axis), **Top Radius**
+(`top_radius`, 0 mm: a cone ending in an apex), **Height** (`height`,
+30 mm, its arrow along the axis; negative: the other way, the base still
+where it is placed), **Direction** (One Side, Symmetric) and the
+operation (New Body, Join, Cut, Intersect, New Component). The panel
+always writes `top_radius`; an edit loads the three values, and a cone
+without `top_radius` (an agent's, an import's) as Top Radius 0. The
+timeline shows the `cone` icon. Equal radii, both radii 0, a negative
+radius and a zero height are the model's refusals in words in the
+preview (*that is a cylinder, use Cylinder*). Place On on another
+component's face activates it, and a shaft of another component links
+the cone in, as for the other primitives (`ActivateOnPick.cpp`).
+
+- **The test**: the shared `tools/ui-scripts/primitive-cone.mitcad-ui`
+  (the Linux script `ui-primitive-cone-test.sh` in `tools/`,
+  `app.ui-windows-primitive-cone`, `app.ui-macos-primitive-cone`) places
+  a cone on the XY plane by its row in the browser with the defaults (one
+  body of 1000 pi mm3, two faces, one flat), edits it into a frustum with
+  Top Radius 4 mm (1560 pi mm3, three faces, two flat), and checks Undo
+  and Redo between the two.

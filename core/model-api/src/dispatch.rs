@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 36];
+    fn command_families() -> [CommandFamily<K>; 38];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 36] {
+    fn command_families() -> [CommandFamily<K>; 38] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -424,6 +424,23 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
                     super::sketch_blocks::run(doc, parse(value, "command")?)
                         .map(super::sketch::with_shown_texts)
+                },
+            },
+            // Groups of user parameters (mitcad#2180, `parameter_groups.rs`).
+            CommandFamily {
+                names: super::parameter_groups::GroupCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::parameter_groups::run(doc, parse(value, "command")?)
+                },
+            },
+            // Selection sets of the design (mitcad#2192,
+            // `selection_sets.rs`).
+            CommandFamily {
+                names: super::selection_sets::SelectionSetCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::selection_sets::run(doc, parse(value, "command")?)
                 },
             },
         ]

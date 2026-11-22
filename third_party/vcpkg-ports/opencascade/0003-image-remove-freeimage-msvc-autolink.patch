@@ -1,8 +1,5 @@
-Test: none, because this is one of vcpkg's own build changes of the port
-(patches 0001 to 0005 come from vcpkg's opencascade port, otherwise
-unchanged): it changes only which library MSVC links OCCT's image code
-with, not what OCCT computes, so no geometry test can fail without it; the
-port's build is its check (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0003.
 
 diff --git a/src/Visualization/TKService/Image/Image_AlienPixMap.cxx b/src/Visualization/TKService/Image/Image_AlienPixMap.cxx
 index 238efdcc42..94017e63aa 100644

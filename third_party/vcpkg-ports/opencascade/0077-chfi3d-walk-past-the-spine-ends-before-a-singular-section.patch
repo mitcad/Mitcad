@@ -34,15 +34,8 @@ end, at up to 28 times the speed, kept 17 mm, eight times its width; its
 whole line made its faces degree 12 surfaces of 101 poles instead of
 degree 9 of 18, and a rounding along the chamfer's edges then failed.
 
-Test: geometry/tests/test_fillet_rolling_ball.cpp (ctest
-geometry.suite.fillet_rolling_ball),
-test_rounding_between_a_plate_and_a_tilted_rod_is_a_rolling_ball,
-test_rounding_of_a_tilted_rods_top_is_a_rolling_ball,
-test_rounding_between_a_plate_and_a_tilted_cone_is_a_rolling_ball: the
-tests written with 0075 to 0077. Its failure without the patch is still to
-be shown: with it and the 10 later patches that change the same lines
-reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0077.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 index 2a4d6f1a..b5089130 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx

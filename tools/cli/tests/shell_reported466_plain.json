@@ -1,0 +1,16 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. GitHub #466 without its roundings (mitcad#2050; opened with --open, never committed; tools/cli/shell-reported-test.cmake): the reporter's design (shell_reported466.json) with Fillet1 (F8) and Fillet2 (F9) suppressed, so that the merged face of the cylinder and the corner's side has its seam where the cylinder meets the plate's side, at one end of the cylinder's concave foot. The same Shell, Inside 2 mm with the cylinder's top and the plate's bottom removed: one solid, the walls 2 mm, of the volume the rounded rectangles and circles give (geometry.shell_boss_on_corner)."},
+  {"cmd":"suppress_feature","uid":"F9"},
+  {"cmd":"suppress_feature","uid":"F8"},
+  {"cmd":"add_feature","def":{"type":"shell","body":"F2.b0","faces":["F4:end(r{c1[b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c1[c11,c15])}},b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c4[c23,c11])}}],c1[b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c4[c23,c11])}},b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c1[c11,c15])}}]})","F2:start(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})"],"inside":2}},
+  {"expect":{"feature":"Shell1","status":"ok"}},
+  {"expect":{"bodies":1}},
+  {"comment":"The plate's top and its side at x = 37.5 each with its inside 2 mm in."},
+  {"expect":{"body":"Body1","has_face":"F10:offset(F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]}))"}},
+  {"expect":{"query":{"query":"measure","a":"Body1/F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})","b":"Body1/F10:offset(F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]}))"},"result":{"between":{"offset":2}}}},
+  {"expect":{"query":{"query":"measure","a":"Body1/F2:side(c2[c15,c19])","b":"Body1/F10:offset(F2:side(c2[c15,c19]))"},"result":{"between":{"offset":2}}}},
+  {"comment":"Both removed faces open: what is left of them is the wall's end."},
+  {"expect":{"body":"Body1","has_face":"F10:offset_cap(F2:start(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]}))"}},
+  {"expect":{"body":"Body1","has_face":"F10:offset_cap(F4:end(r{c1[b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c1[c11,c15])}},b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c4[c23,c11])}}],c1[b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c4[c23,c11])}},b{E{F2:end(r{c1[c11,c15],c2[c15,c19],c3[c19,c23],c4[c23,c11],c11[c4,c1],c15[c1,c2],c19[c2,c3],c23[c3,c4]})|F2:side(c1[c11,c15])}}]}))"}},
+  {"expect":{"body":"Body1","volume":11298.583772,"tolerance":0.000001}}
+]

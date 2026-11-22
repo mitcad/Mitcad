@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: MIT
+# Groups of user parameters in Edit Parameters (mitcad#2180) on
+# parameter-groups.json: the user parameters width, depth and height,
+# ungrouped, in this creation order.
+#   1. New Group… makes the group Cabinet: its row is under User
+#      Parameters, before the ungrouped parameters, and selected.
+#   2. width and depth selected (a click, Shift+Down) and moved into
+#      Cabinet by the context menu (Shift+F10) › Move to Group › Cabinet.
+#   3. The group's row renamed in place (F2) to Table: its parameters go
+#      along.
+#   4. Collapsed (Left), kept when Edit Parameters opens again.
+#   5. Deleted from its row's context menu (Shift+F10) › Delete: asked, as
+#      it holds parameters, and its parameters are back
+#      directly under User Parameters.
+# Run by tools/ui-parameter-groups-test.sh (Linux),
+# tools/ui-windows-parameter-groups-test.ps1 (Windows) and
+# tools/ui-macos-parameter-groups-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+set-setting parameters/sort none
+
+# The parameters, ungrouped.
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters order: [[]User Parameters[]] width, depth, height [[]Model Parameters[]]$'
+wait-idle
+
+# 1. New Group…: Cabinet.
+mark
+button '^New Group$' parametersNewGroup
+focus-dialog '^New Group$'
+wait-log '^New Group dialog opened$'
+focus-widget parameterGroupName
+type Cabinet
+key Return
+wait-log '^Parameter group added: Cabinet$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters order: [[]User Parameters[]] [[]Cabinet[]] [[]User Parameters[]] width, depth, height [[]Model Parameters[]]; selected group Cabinet$'
+wait-log '^Parameters group Cabinet at '
+wait-idle
+
+# 2. width and depth into Cabinet by the context menu.
+mark
+click-parameter width 0
+focus-widget parametersTable
+key shift+down
+key shift+F10
+popup 'Move to Group/Cabinet'
+wait-log '^Parameters moved to group Cabinet: width, depth$'
+wait-log '^Parameters order: [[]User Parameters[]] [[]Cabinet[]] width, depth [[]User Parameters[]] height [[]Model Parameters[]]; selected width$'
+wait-idle
+
+# 3. The group renamed in place: Table.
+mark
+dialog-click-logged '^Parameters group Cabinet at '
+focus-widget parametersTable
+key F2
+wait-log '^Editing parameter group Cabinet$'
+key ctrl+a
+type Table
+key Return
+wait-log '^Parameter group Cabinet renamed to Table$'
+wait-log '^Parameters order: [[]User Parameters[]] [[]Table[]] width, depth [[]User Parameters[]] height [[]Model Parameters[]]; selected group Table$'
+wait-idle
+
+# 4. Collapsed, and kept when the dialog opens again.
+mark
+focus-widget parametersTable
+key left
+wait-log '^Parameters group Table collapsed$'
+wait-log '^Parameters order: [^;]+; collapsed Table; selected group Table$'
+wait-idle
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters order: [[]User Parameters[]] [[]Table[]] width, depth [[]User Parameters[]] height [[]Model Parameters[]]; collapsed Table'
+wait-log '^Parameters group Table at '
+wait-idle
+
+# 5. Deleted: asked, the parameters back under User Parameters.
+mark
+dialog-click-logged '^Parameters group Table at '
+focus-widget parametersTable
+key shift+F10
+popup 'Delete'
+focus-dialog '^Delete Group$'
+wait-log '^Delete parameter group Table asked: 2 parameter[(]s[)]$'
+button '^Delete Group$'
+wait-log '^Parameter group Table deleted: width, depth moved to User Parameters$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters order: [[]User Parameters[]] width, depth, height [[]Model Parameters[]]; selected width$'
+wait-idle
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+expect-never 'TestDriver: FAIL'

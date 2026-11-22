@@ -7,6 +7,7 @@
 #include "../MainWindow.hpp"
 #include "../WindowManager.hpp"
 
+#include <optional>
 #include <utility>
 
 #include <QDir>
@@ -23,9 +24,11 @@
 #include "../framework/Json.hpp"
 #include "../projects/ProjectBrowser.hpp"
 #include "../projects/ProjectsPanel.hpp"
+#include "../projects/ProjectsTree.hpp"
 #include "Autosave.hpp"
 #include "LiveController.hpp"
 #include "LockController.hpp"
+#include "NewDesignSave.hpp"
 #include "ProjectDialogs.hpp"
 #include "ProjectIndicator.hpp"
 #include "ProjectSettings.hpp"
@@ -572,10 +575,10 @@ void MainWindow::showProjectSettings() {
 // ---------------------------------------------------------------------------
 // Save to Project (mitcad#503; Move to a Project before)
 
-void MainWindow::saveToProject() {
+bool MainWindow::saveToProject() {
   if (m_nativeUi && m_session) {
     showHint(tr("Finish the current command before saving."));
-    return;
+    return false;
   }
   const QString path = m_filePath;
   // The project picker, as Save As has it (mitcad#176): the design's own
@@ -606,18 +609,17 @@ void MainWindow::saveToProject() {
   const std::optional<ProjectPickerResult> picked = pickInProjects(this, options);
   if (!picked) {
     qInfo().noquote() << QStringLiteral("Save to Project cancelled");
-    return;
+    return false;
   }
   if (!picked->newProject && !picked->other) {
-    saveIntoProject(picked->root, picked->path);
-    return;
+    return saveIntoProject(picked->root, picked->path);
   }
   if (picked->other) {
     // Another Folder...: a project the list does not have.
     const QString folder = dialogDirectory(this, tr("Choose a Project Folder"), projectsDirectory());
     if (folder.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Save to Project cancelled");
-      return;
+      return false;
     }
     const ProjectState project = projectOfInspection(inspectFolder(folder));
     if (!project.hasHistory()) {
@@ -625,12 +627,11 @@ void MainWindow::saveToProject() {
       sheetWarning(this, tr("Save to Project"),
                    tr("%1 is not a project that keeps versions: choose a project's folder, or a new project.")
                        .arg(QDir::toNativeSeparators(folder)));
-      return;
+      return false;
     }
     // One of the known projects from now on.
     ProjectsSettings::remember(project.root);
-    saveIntoProject(project.root);
-    return;
+    return saveIntoProject(project.root);
   }
   // A new project: by default the design's own folder (it becomes the
   // project, its designs in the first version), unless that is inside a
@@ -649,7 +650,53 @@ void MainWindow::saveToProject() {
   }
   qInfo().noquote() << QStringLiteral("Save to Project: %1 into a new project").arg(path.isEmpty() ? documentName()
                                                                                                   : path);
-  handleNewProject(askNewProject(this, project), path.isEmpty() ? documentName() : path);
+  return handleNewProject(askNewProject(this, project), path.isEmpty() ? documentName() : path);
+}
+
+bool MainWindow::remoteProjectKnown() const {
+  if (m_project.kind == ProjectState::Kind::Cloud) {
+    return true;
+  }
+  // MitCad Cloud projects (mitcad#1957) count too once they exist.
+  const ProjectsSettings settings = ProjectsSettings::load();
+  return anyRemoteProject(settings.known, projectsDirectory(), settings.hidden);
+}
+
+bool MainWindow::saveNewDesign() {
+  const NewDesignSave preference =
+      newDesignSaveFromId(GeneralSettings::load().newDesignSave).value_or(NewDesignSave::Ask);
+  NewDesignSave choice = preference;
+  QString how = QStringLiteral("the preference");
+  if (preference == NewDesignSave::Ask) {
+    // Without a remote project, Save As as before: the project picker when
+    // a project is current, else the file dialog.
+    if (!remoteProjectKnown()) {
+      qInfo().noquote() << QStringLiteral("Save of a new design: Save As (no remote project known)");
+      return saveAs();
+    }
+    qInfo().noquote() << QStringLiteral("Save of a new design: asked (a remote project is known)");
+    const std::optional<NewDesignSaveAnswer> answer = askNewDesignSave(this, documentName());
+    if (!answer) {
+      qInfo().noquote() << QStringLiteral("Save of a new design: canceled");
+      showHint(tr("Save canceled."));
+      return false;
+    }
+    choice = answer->choice;
+    how = QStringLiteral("asked");
+    if (answer->remember) {
+      // The default from now on; Preferences › General puts the question
+      // back.
+      GeneralSettings general = GeneralSettings::load();
+      general.newDesignSave = newDesignSaveId(choice);
+      general.save();
+      how = QStringLiteral("remembered");
+    }
+  }
+  qInfo().noquote() << QStringLiteral("Save of a new design: %1 (%2)")
+                           .arg(choice == NewDesignSave::Project ? QStringLiteral("to a project")
+                                                                 : QStringLiteral("on this computer"),
+                                how);
+  return choice == NewDesignSave::Project ? saveToProject() : saveAsFile();
 }
 
 bool MainWindow::saveIntoProject(const QString& root, const QString& chosen) {

@@ -6,6 +6,7 @@
 
 #include <QPoint>
 #include <QPointF>
+#include <QPointer>
 #include <QPolygonF>
 #include <QRectF>
 #include <QString>
@@ -55,7 +56,10 @@ public:
 
   void setHandles(std::vector<Handle> handles);
   // A line over the top of the view (Inspection::viewHint, mitcad#394);
-  // none when empty. Logged as "View hint <command>: <text>".
+  // none when empty. Logged as "View hint <command>: <text>". Drawn as a
+  // pill below the cards floating over the view's top and below the view's
+  // banner (viewHintRect, mitcad#2190); its place is logged when it changes
+  // as "View hint at x,y WxH" (in the window).
   void setHint(const QString& text);
   // Lines of the command's own drawn over the view (mitcad#656: a belt's
   // pitch line), in design coordinates; none when empty.
@@ -153,9 +157,19 @@ private:
   bool seenEdgeOn(const Manipulator& m) const;
   void logPlaces();
   void logDragFeedback() const;
+  // The hint's pill in the view's coordinates (viewHintRect; empty without
+  // a hint) and its text elided to fit it.
+  QRectF hintRect() const;
+  // The hint's place logged when it changed ("View hint at x,y WxH" in the
+  // window), and the overlay drawn again.
+  void placeHint();
 
   OcctViewer& m_viewer;
   EventFilterGuard m_viewerFilter{this}; // its input; the view may go first (mitcad#226)
+  // The view's banner (ModeBanner, a child of the view named "modeBanner"),
+  // watched for showing, hiding and moving: the hint keeps below it.
+  EventFilterGuard m_bannerFilter{this};
+  QPointer<QWidget> m_banner;
   QString m_command;
   std::vector<Handle> m_handles;
   int m_hover = -1;
@@ -178,6 +192,7 @@ private:
   unsigned m_dragPaints = 0;
   QString m_logged;
   QString m_hint;
+  QString m_hintLogged; // "View hint at x,y WxH", last logged
 };
 
 } // namespace mitcad

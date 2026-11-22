@@ -98,4 +98,22 @@ void TestDriver::testMacToolButtons() {
 #endif
 }
 
+// This file's steps (mitcad#2173): their specs and their chain.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    {"expect-macos-tool-buttons", 0, 0, TestDriver::kIdle},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kMacControlSteps{
+    kStepSpecs, std::size(kStepSpecs), &TestDriver::runMacControlStep};
+
+void TestDriver::runMacControlStep(const QString& name, const QStringList&, int) {
+  if (name == QLatin1String("expect-macos-tool-buttons")) {
+    testMacToolButtons();
+  }
+}
+
 } // namespace mitcad

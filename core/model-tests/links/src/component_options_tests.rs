@@ -122,6 +122,7 @@ impl LinkResolver for Library {
             supplier_url: None,
             build: None,
             rows: Default::default(),
+            non_printable: false,
         })
     }
 }

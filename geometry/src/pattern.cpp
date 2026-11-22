@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -157,7 +158,9 @@ TopAbs_Orientation orientation_in(const TopoDS_Shape& face, const TopoDS_Shape& 
 // vertices of the carriage's thread, split a face of the carriage with
 // edges left over and came out empty: its result checks as valid (it has
 // nothing to check). The volumes are measured only for a union OCCT warned
-// about (lost).
+// about (lost). And whether a union holds each of the shapes, warned or not
+// (missing, mitcad#2053): a union that held more than the largest of them
+// dropped 24 of 31 bodies.
 class MaterialCheck {
 public:
   explicit MaterialCheck(const std::vector<const Shape*>& shapes) : m_shapes(shapes) {
@@ -189,10 +192,24 @@ public:
     return held < m_largest - 1.0e-6 * std::max(1.0, m_largest);
   }
 
+  // The shapes (indices, in order) of which a solid lies outside the
+  // result (detail::missing_inputs), within `tolerance`; the points inside
+  // them found once, when first asked.
+  std::vector<std::size_t> missing(const TopoDS_Shape& result, double tolerance) const {
+    if (!m_solids) {
+      return {};
+    }
+    if (!m_points) {
+      m_points = detail::points_inside(m_shapes);
+    }
+    return detail::missing_inputs(result, *m_points, tolerance);
+  }
+
 private:
   const std::vector<const Shape*>& m_shapes;
   bool m_solids = false;
   mutable double m_largest = -1.0;
+  mutable std::optional<std::vector<detail::InsidePoints>> m_points;
 };
 
 // The shape, marked as found valid by OCCT's checker (Shape::checked_valid):
@@ -332,8 +349,12 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within, Start st
   // whether it has no solid where the shapes have some. `merged` is the
   // union with its faces merged, `plain` as OCCT's union left them (the
   // merge works on copies of what it changes, SetSafeInputMode, so the
-  // union it starts from stays as it was). Without `whole`, a union OCCT
-  // left pieces of unused, or an empty one, is not named (it is not used).
+  // union it starts from stays as it was). `missing`: the shapes (indices)
+  // of which a solid lies outside OCCT's union (MaterialCheck::missing,
+  // mitcad#2053), looked for in every union that is not empty or, without
+  // `whole`, left pieces unused. Without `whole`, a union OCCT left pieces
+  // of unused, an empty one, or one that misses a shape, is not named (it
+  // is not used).
   struct Fused {
     std::optional<detail::FaceNamer> merged;
     std::optional<detail::FaceNamer> plain;
@@ -341,6 +362,8 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within, Start st
     bool empty = false;
     bool warned = false; // any warning of OCCT's
     std::vector<Bnd_Box> unused;
+    std::vector<std::size_t> missing;
+    double tolerance = kTolerance; // of the checks of what it holds
   };
   const MaterialCheck material(shapes);
   const auto fused = [&](double fuzzy, bool whole) {
@@ -403,6 +426,15 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within, Start st
     if (!whole && (out.dropped || out.empty)) {
       return out;
     }
+    // Every shape in the union, warned or not (mitcad#2053); a fuzzy union
+    // may move faces by its fuzzy value.
+    out.tolerance = std::max(kTolerance, fuzzy);
+    if (!out.empty) {
+      out.missing = material.missing(fuse.Shape(), out.tolerance);
+    }
+    if (!whole && !out.missing.empty()) {
+      return out;
+    }
     const auto named = [&] {
       detail::FaceNamer namer(fuse.Shape());
       for (const Shape* shape : shapes) {
@@ -416,16 +448,21 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within, Start st
     out.merged.emplace(named());
     return out;
   };
+  // Whether the union with its faces merged still holds every shape
+  // (mitcad#2053): the merge rebuilds faces and solids.
+  const auto merged_holds = [&](const Fused& candidate) {
+    return material.missing(candidate.merged->result(), candidate.tolerance).empty();
+  };
   // The union to take of a candidate: nothing left unused, a solid where
-  // the shapes have one, and valid; its faces merged, else as OCCT's union
-  // left them where the merge breaks it (as a boolean operation's,
-  // boolean.cpp).
+  // the shapes have one, every shape in it, and valid; its faces merged,
+  // else as OCCT's union left them where the merge breaks it (as a boolean
+  // operation's, boolean.cpp).
   const auto sound = [&](const Fused& candidate) -> const detail::FaceNamer* {
-    if (candidate.dropped || candidate.empty || !candidate.merged) {
+    if (candidate.dropped || candidate.empty || !candidate.missing.empty() || !candidate.merged) {
       return nullptr;
     }
     const detail::FaceNamer* taken = &*candidate.merged;
-    if (!detail::is_valid(taken->result())) {
+    if (!detail::is_valid(taken->result()) || !merged_holds(candidate)) {
       taken = &*candidate.plain;
       if (!detail::is_valid(taken->result())) {
         return nullptr;
@@ -434,7 +471,7 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within, Start st
     return taken;
   };
   const auto lost_in = [&](const Fused& candidate) {
-    return candidate.empty ||
+    return candidate.empty || !candidate.missing.empty() ||
            (candidate.warned && candidate.plain && material.lost(candidate.plain->result()));
   };
   Fused exact = fused(0.0, false);
@@ -495,60 +532,142 @@ ShapePtr united(const std::vector<const Shape*>& shapes, double within, Start st
       }
     }
   }
-  // (mitcad#397) Within the caller's tolerance: the smallest fuzzy value
-  // that gives a sound union (faces that lie on each other only within an
-  // importer's geometric tolerance); a wrong union tries fuzzy values from
-  // kUnusedStart up to kUnusedReach also without one.
-  if (wrong || within > 0.0) {
-    const double lowest = wrong ? detail::kUnusedStart : kFuzzyStart;
-    const double reach = std::max(within, wrong ? detail::kUnusedReach : kFuzzyStart);
-    std::vector<double> steps;
-    for (double decade = lowest; decade < reach; decade *= 10.0) {
-      steps.push_back(decade);
-      if (3.0 * decade < reach) {
-        steps.push_back(3.0 * decade);
-      }
+  // (mitcad#2053) An exact union that misses shapes (a hub with 30 blades,
+  // triangles, rods and a ring kept the hub and the six blades on it,
+  // without a warning): the shapes it holds and the shapes it misses are
+  // united each on their own, beside each other, each such union checked
+  // and mended as this one, and the two unions then together, exactly.
+  // Null where that does not apply: a union of two that misses one goes on
+  // to the fuzzy values (below), and fails where none holds both.
+  const auto split = [&](const Fused& candidate) -> ShapePtr {
+    if (candidate.missing.empty() || candidate.missing.size() >= shapes.size() || shapes.size() <= 2) {
+      return nullptr;
     }
-    steps.push_back(reach);
-    // An exact union that is only invalid takes, as before, the first
-    // valid one where no fuzzy value gives a sound one.
-    ShapePtr valid;
-    for (const double step : steps) {
+    std::vector<std::vector<const Shape*>> parts(2);
+    std::size_t next_missing = 0;
+    for (std::size_t i = 0; i < shapes.size(); ++i) {
+      const bool missed = next_missing < candidate.missing.size() && candidate.missing[next_missing] == i;
+      if (missed) {
+        ++next_missing;
+      }
+      parts[missed ? 1 : 0].push_back(shapes[i]);
+    }
+    std::vector<ShapePtr> halves(parts.size());
+    detail::parallel_jobs(parts.size(), [&](std::size_t k) { halves[k] = united(parts[k], within); });
+    return united({halves[0].get(), halves[1].get()}, within, Start::exact);
+  };
+  // (mitcad#2053) A wrong union of shapes some of which lie wholly inside
+  // others (detail::contained_inputs) is made again of the others,
+  // exactly: their union is the union of all. A rod lying inside a body of
+  // the same rod with thin fins, two of them touching at their tips (an
+  // edge on four faces), gave OCCT's exact union nothing of either and of
+  // all they touch, without a warning (a reported design's 24 of 31
+  // bodies). Taken only where it holds every shape, those left out too.
+  // Where it fails, that is why the union fails (mitcad#2170): it is the
+  // union of all, and the mends below are tried on the union OCCT got
+  // wrong. Without it, the union of the 24 bodies the exact union of a
+  // reported design missed, five rods each lying wholly inside a finned
+  // rod of the others, failed as empty and was reported so, though the
+  // union of the 26 others was not empty but invalid.
+  std::exception_ptr without_inside;
+  if (wrong && shapes.size() > 1) {
+    const std::vector<std::size_t> inside = detail::contained_inputs(shapes);
+    if (!inside.empty() && inside.size() < shapes.size()) {
+      std::vector<const Shape*> outside;
+      std::size_t next_inside = 0;
+      for (std::size_t i = 0; i < shapes.size(); ++i) {
+        if (next_inside < inside.size() && inside[next_inside] == i) {
+          ++next_inside;
+        } else {
+          outside.push_back(shapes[i]);
+        }
+      }
       try {
-        const Fused fuzzy = fused(step, !wrong);
-        if (const detail::FaceNamer* taken = sound(fuzzy)) {
-          return checked(taken->shape());
+        ShapePtr result = united(outside, within, Start::exact);
+        if (material.missing(result->occt(), std::max(kTolerance, within)).empty()) {
+          return result;
         }
-        if (!wrong && !valid && fuzzy.merged) {
-          if (detail::is_valid(fuzzy.merged->result())) {
-            valid = checked(fuzzy.merged->shape());
-          } else if (detail::is_valid(fuzzy.plain->result())) {
-            valid = checked(fuzzy.plain->shape());
-          }
-        }
+        without_inside = std::make_exception_ptr(std::runtime_error("the union lost material of the shapes it joins"));
       } catch (const Cancelled&) {
         throw;
       } catch (...) {
         throw_if_cancelled();
+        without_inside = std::current_exception();
       }
     }
-    if (valid) {
-      return valid;
+  }
+  try {
+    if (ShapePtr mended = split(exact)) {
+      return mended;
     }
+    // (mitcad#397) Within the caller's tolerance: the smallest fuzzy value
+    // that gives a sound union (faces that lie on each other only within an
+    // importer's geometric tolerance); a wrong union tries fuzzy values from
+    // kUnusedStart up to kUnusedReach also without one.
+    if (wrong || within > 0.0) {
+      const double lowest = wrong ? detail::kUnusedStart : kFuzzyStart;
+      const double reach = std::max(within, wrong ? detail::kUnusedReach : kFuzzyStart);
+      std::vector<double> steps;
+      for (double decade = lowest; decade < reach; decade *= 10.0) {
+        steps.push_back(decade);
+        if (3.0 * decade < reach) {
+          steps.push_back(3.0 * decade);
+        }
+      }
+      steps.push_back(reach);
+      // An exact union that is only invalid takes, as before, the first
+      // valid one where no fuzzy value gives a sound one.
+      ShapePtr valid;
+      for (const double step : steps) {
+        try {
+          const Fused fuzzy = fused(step, !wrong);
+          if (const detail::FaceNamer* taken = sound(fuzzy)) {
+            return checked(taken->shape());
+          }
+          if (!wrong && !valid && fuzzy.merged && fuzzy.missing.empty()) {
+            if (detail::is_valid(fuzzy.merged->result()) && merged_holds(fuzzy)) {
+              valid = checked(fuzzy.merged->shape());
+            } else if (detail::is_valid(fuzzy.plain->result())) {
+              valid = checked(fuzzy.plain->shape());
+            }
+          }
+        } catch (const Cancelled&) {
+          throw;
+        } catch (...) {
+          throw_if_cancelled();
+        }
+      }
+      if (valid) {
+        return valid;
+      }
+    }
+    // A union OCCT left pieces of unused that no fuzzy value mends stands
+    // as it was when it is valid and holds the shapes' material, as before;
+    // one that misses a shape is split as above (when OCCT also left pieces
+    // unused, what it misses is known only now), else fails (mitcad#2053).
+    if (!exact.plain && !lost_in(exact)) {
+      exact = fused(0.0, true);
+      if (ShapePtr mended = split(exact)) {
+        return mended;
+      }
+    }
+    if (lost_in(exact)) {
+      throw std::runtime_error(exact.empty ? "the union of the shapes gave an empty result"
+                                           : "the union lost material of the shapes it joins");
+    }
+    const detail::FaceNamer& taken =
+        detail::is_valid(exact.merged->result()) && merged_holds(exact) ? *exact.merged : *exact.plain;
+    detail::require_valid(taken.result(), "the union");
+    return checked(taken.shape());
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    if (!without_inside) {
+      throw;
+    }
+    throw_if_cancelled();
+    std::rethrow_exception(without_inside);
   }
-  // A union OCCT left pieces of unused that no fuzzy value mends stands
-  // as it was when it is valid and holds the shapes' material, as before.
-  if (!exact.plain) {
-    exact = fused(0.0, true);
-  }
-  if (lost_in(exact)) {
-    throw std::runtime_error(exact.empty ? "the union of the shapes gave an empty result"
-                                         : "the union lost material of the shapes it joins");
-  }
-  const detail::FaceNamer& taken =
-      detail::is_valid(exact.merged->result()) ? *exact.merged : *exact.plain;
-  detail::require_valid(taken.result(), "the union");
-  return checked(taken.shape());
 }
 
 } // namespace

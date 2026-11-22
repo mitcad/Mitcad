@@ -37,17 +37,8 @@ are valid single solids, the inner walls the thickness from the outer ones
 within 1e-6 mm, of the volume of the same loft with the seam on a corner
 (no side split) within 3e-5 of it.
 
-Test: geometry/tests/test_offset_loft_circle_seam.cpp,
-test_square_to_a_circle_seam_on_a_side and
-test_octagon_to_a_circle_seam_on_a_side (ctest
-geometry.offset_loft_circle_seam): a square to a circle of radius 15
-offset 0.5 to 3 mm and of radius 14.142 offset 2 mm, the octagon to a
-circle of radius 21.7 offset 0.5 to 3 mm, the seam on a side, closed
-inward offsets with OCCT alone: valid single solids, the walls the
-thickness within 1e-6 mm, the volume within bounds from the areas. The
-port's notes record every case but radius 15 at 0.5 mm failing without the
-patch (that one is the boundary case). It fails without the patch (shown
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1160.
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
 index 5f79e3a8..e1e74f8b 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx

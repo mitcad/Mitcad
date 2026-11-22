@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# 3MF import through the real UI (mitcad#2156), the shared input script of
+# tools/ui-3mf-import-test.sh (Linux) and tools/ui-windows-3mf-import-test.ps1,
+# on plate.3mf written by tools/ui-scripts/3mf-import.json (Plate placed
+# once, red; Pin placed twice, blue):
+#   1. the application started with --open of plate.3mf: a new document of
+#      its meshes, nothing asked: Plate a mesh body, Pin a component with
+#      two occurrences;
+#   2. File > Import of plate.3mf into a new, empty design: Insert Mesh asks
+#      whether to convert the meshes, not their unit (the file says it), and
+#      the same bodies and component come in.
+wait-log 'Imported plate\.3mf as .*: 2 body\(ies\), 1 component\(s\), 2 occurrence\(s\)$' 30
+wait-idle
+expect-no-log 'Insert Mesh dialog opened'
+
+# 2. File > Import into a new, empty design.
+key ctrl+n
+wait-log 'New document'
+mark
+command file.import
+focus-dialog '^Import$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/plate.3mf"
+sleep 300
+key Return
+wait-log 'Insert Mesh dialog opened: unit of the file$'
+wait-log 'Insert Mesh OK at'
+focus-dialog '^Insert Mesh$'
+key Return
+focus-main
+wait-log 'Insert Mesh: unit of the file, convert to solid '
+wait-log 'Imported plate\.3mf as .*: 2 body\(ies\), 1 component\(s\), 2 occurrence\(s\)$'
+expect-never 'TestDriver: FAIL|Could not import'

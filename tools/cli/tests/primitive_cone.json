@@ -1,0 +1,41 @@
+[
+  {"comment": "Cone (mitcad#2239) with OCCT: a cone of radius 10 and height 30 on XY (Cone1, F1: d1 radius, d2 top radius, d3 height), V = pi r^2 h / 3, its centre of mass a quarter of the height up; no top face."},
+  {"cmd": "add_feature", "def": {"type": "cone", "plane": {"type": "origin", "plane": "xy"},
+    "center": [0, 0], "radius": 10, "top_radius": 0, "height": 30, "operation": "new_body"}},
+  {"expect": {"feature": "Cone1", "status": "ok", "body": "Body1", "volume": 3141.592653589793,
+    "faces": 2, "has_face": "F1:bottom", "no_face": "F1:top", "center": [0, 0, 7.5]}},
+  {"expect": {"body": "Body1", "has_face": "F1:side0", "has_edge": "E{F1:bottom|F1:side0}"}},
+
+  {"comment": "A frustum: top radius 4, V = pi h (R^2 + R r + r^2) / 3 = 1560 pi, its centre h (R^2 + 2 R r + 3 r^2) / (4 (R^2 + R r + r^2)) up."},
+  {"cmd": "set_parameter", "name": "d2", "value": 4},
+  {"expect": {"feature": "Cone1", "status": "ok", "body": "Body1", "volume": 4900.884539600077,
+    "faces": 3, "has_face": "F1:top", "center": [0, 0, 10.961538461538462]}},
+
+  {"comment": "Height -30: against the normal, the base still on the plane (the centre as far below as it was above), the base still the face bottom."},
+  {"cmd": "set_parameter", "name": "d3", "value": -30},
+  {"expect": {"feature": "Cone1", "status": "ok", "body": "Body1", "volume": 4900.884539600077,
+    "faces": 3, "has_face": "F1:bottom", "center": [0, 0, -10.961538461538462]}},
+  {"cmd": "set_parameter", "name": "d3", "value": 30},
+
+  {"comment": "A 2 mm fillet on the base edge (Fillet1, F2) holds through a larger radius (12)."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F1.b0", "edges": ["E{F1:bottom|F1:side0}"], "radius": 2}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "faces": 4,
+    "has_face": "F2:fillet(E{F1:bottom|F1:side0})"}},
+  {"cmd": "set_parameter", "name": "d1", "value": 12},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "faces": 4,
+    "has_face": "F2:fillet(E{F1:bottom|F1:side0})"}},
+
+  {"comment": "Equal radii are a cylinder: refused in words; back to a frustum."},
+  {"cmd": "set_parameter", "name": "d2", "value": 12},
+  {"expect": {"feature": "Cone1", "status": "error", "error_contains": "that is a cylinder, use Cylinder"}},
+  {"cmd": "set_parameter", "name": "d2", "value": 4},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+
+  {"comment": "A cone cut into a 40 x 40 x 20 box (Box1, F3) from its top face, apex down (Cone2, F4: height -10): the box less pi 5^2 10 / 3; its top face holed, the cone's side a face of the box."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [100, 0], "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "cone", "plane": {"body": "F3.b0", "face": "F3:top"},
+    "center": [120, 20], "radius": 5, "height": -10, "operation": "cut", "participants": ["F3.b0"]}},
+  {"expect": {"feature": "Cone2", "status": "ok", "bodies": 2, "body": "Body2", "volume": 31738.20061220085,
+    "faces": 7, "has_face": "F4:side0", "no_face": "F4:bottom"}}
+]

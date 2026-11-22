@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: MIT
+# mitcad#2183: Save of a design that has no file yet asks On this computer
+# or To a project when a remote project is known. The runner
+# (tools/ui-new-design-save-test.sh, the Windows
+# tools/ui-windows-new-design-save-test.ps1, the macOS
+# tools/ui-macos-new-design-save-test.sh) made the Cloud project Team
+# (${MITCAD_TEST_TEAM}) of the projects folder, a local git repository
+# following a local bare repository as its remote, and started MitCad on a
+# new, untitled design. All designs are synthetic.
+#   0. Without a remote project (Team hidden from the list): no question,
+#      Save As as before.
+#   1. With it: Ctrl+S asks; Esc saves nothing.
+#   2. Save on This Computer…: the file dialog; the design saved there.
+#   3. A new design, Remember my choice and Save to Project…: the project
+#      picker; the design saved in Team; the preference is To a project.
+#   4. The next new design: the picker at once, no question.
+#   5. Preferences › General › Save of a new design back to Ask: the
+#      question again.
+wait-idle
+
+# 0. No remote project known: Save As as before (no project is current:
+# the file dialog).
+set-setting projects/hidden '${MITCAD_TEST_TEAM}'
+mark
+key ctrl+s
+wait-log '^Save of a new design: Save As \(no remote project known\)$' 30
+focus-dialog '^Save As$'
+key Escape
+focus-main
+expect-no-log '^Save of a new design: asked'
+expect-no-log '^Saved '
+set-setting projects/hidden '${MITCAD_TEST_WORK}/no-such-project'
+
+# 1. The question; Esc cancels the save.
+mark
+key ctrl+s
+wait-log '^Save of a new design: asked \(a remote project is known\)$' 30
+focus-dialog 'on this computer or to a project\?$'
+expect-widget-property newDesignSaveRemember checked false
+key Escape
+focus-main
+wait-log '^Save of a new design: canceled$'
+expect-no-log '^Saved '
+expect-no-log '^Save of a new design: (on this computer|to a project)'
+
+# 2. Save on This Computer…: the file dialog, as Save As without a project.
+mark
+key ctrl+s
+focus-dialog 'on this computer or to a project\?$' 30
+button '^Save on This Computer$'
+wait-log '^Save of a new design: on this computer \(asked\)$'
+focus-dialog '^Save As$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/local.mitcad"
+sleep 300
+key Return
+focus-main
+wait-log '^Saved ${MITCAD_TEST_WORK:re}/local\.mitcad$' 20
+expect-file "${MITCAD_TEST_WORK}/local.mitcad"
+# Without Remember my choice nothing is stored: the preference stays Ask
+# (the setting is not written until something saves it).
+expect-no-log '^Save of a new design: .* \(remembered\)$'
+
+# 3. A new design; Remember my choice and Save to Project…: the project
+# picker of Save to Project, the design saved in Team.
+mark
+key ctrl+n
+wait-log '^New document$'
+wait-idle
+mark
+key ctrl+s
+focus-dialog 'on this computer or to a project\?$' 30
+button '^Remember my choice$' newDesignSaveRemember
+expect-widget-property newDesignSaveRemember checked true
+button '^Save to Project$'
+wait-log '^Save of a new design: to a project \(remembered\)$'
+expect-setting documents/newDesignSave project
+focus-dialog '^Save to Project$' 30
+wait-log '^Project picker Save to Project: 1 projects: .*team\.git \(cloud\)$' 30
+wait-log '^Project picker row .*team\.git at ' 10
+dialog-click-logged '^Project picker row .*team\.git at '
+wait-log '^Project picker selected .*team\.git$' 10
+wait-log '^Project picker target .*team\.git/Untitled\.mitcad: free$' 10
+button '^Save$'
+wait-log '^Project picker Save to Project: chose ${MITCAD_TEST_TEAM:re}/Untitled\.mitcad$' 10
+focus-main
+wait-log '^Save to Project: ${MITCAD_TEST_TEAM:re}/Untitled\.mitcad saved in ' 30
+expect-file "${MITCAD_TEST_TEAM}/Untitled.mitcad"
+
+# 4. The choice remembered: the next new design goes to the picker without
+# the question; Esc there saves nothing. The design saved in Team made Team
+# its window's current project, where Ctrl+N is New Design in the project
+# (named in the Projects panel): the new untitled design comes from the
+# document saved on this computer, which is in no project.
+focus-document-path "${MITCAD_TEST_WORK}/local.mitcad"
+mark
+key ctrl+n
+wait-log '^New Design: no project, an untitled design$'
+wait-log '^New document$'
+wait-idle
+mark
+key ctrl+s
+wait-log '^Save of a new design: to a project \(the preference\)$' 30
+focus-dialog '^Save to Project$' 30
+expect-no-log '^Save of a new design: asked'
+key Escape
+wait-log '^Save to Project cancelled$' 10
+focus-main
+expect-no-log '^Save to Project: .* saved in '
+
+# 5. Preferences › General › Save of a new design: To a project as
+# remembered; Ask puts the question back.
+mark
+command tools.preferences.general
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property newDesignSave currentText 'To a project'
+qt-choice newDesignSave Ask
+key Return
+wait-log '^Preferences: save of a new design ask$' 10
+focus-main
+wait-idle
+expect-setting documents/newDesignSave ask
+mark
+key ctrl+s
+wait-log '^Save of a new design: asked \(a remote project is known\)$' 30
+focus-dialog 'on this computer or to a project\?$'
+key Escape
+focus-main
+wait-log '^Save of a new design: canceled$'
+expect-never 'TestDriver: FAIL'

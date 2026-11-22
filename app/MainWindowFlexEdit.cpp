@@ -114,16 +114,19 @@ bool MainWindow::flexDoubleClicked(const Selection& items, Qt::KeyboardModifiers
     return false;
   }
   const QString uid = items.size() == 1 && modifiers == Qt::NoModifier ? flexItemOf(items.front()) : QString();
-  const bool second = !uid.isEmpty() && uid == m_flexClickUid && m_flexClickTime.isValid() &&
-                      m_flexClickTime.elapsed() <= QApplication::doubleClickInterval();
+  // The second click of a double click as the system classed the mouse
+  // events, by their own times (OcctViewer::clickWasDoubleClick), not by
+  // when the picks are handled here: the first click's selection may take
+  // longer than the double-click interval under load (mitcad#2189: half a
+  // second for its card), and the second click's pick then came too late
+  // by the clock and took the selection away instead.
+  const bool second = !uid.isEmpty() && uid == m_flexClickUid && m_viewer->clickWasDoubleClick();
   m_flexClickNumber = click;
   if (!second) {
     m_flexClickUid = uid;
-    m_flexClickTime.start();
     return false;
   }
   m_flexClickUid.clear();
-  m_flexClickTime.invalidate();
   qDebug().noquote() << QStringLiteral("Flex: double-click on %1 opens its edit session").arg(uid);
   editFeature(uid);
   return true;

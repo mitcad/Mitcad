@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# Offset Plane takes a sketch (mitcad#2167), on construct-offset-sketch.json
+# (Sketch1 on the XY plane, a closed circle of diameter 40 at the origin
+# shown as its profile):
+#   1. Offset Plane, the sketch picked in the Browser: the Plane input takes
+#      the sketch's plane, and the preview lies 10 mm above it.
+#   2. Cancel; Offset Plane again, the profile clicked in the view: the
+#      Plane input takes the sketch's plane.
+#   3. Distance 15 mm and OK: the plane lies 15 mm above the sketch.
+# Run by tools/ui-construct-offset-sketch-test.sh (Linux),
+# tools/ui-windows-construct-offset-sketch-test.ps1 (Windows) and
+# tools/ui-macos-construct-offset-sketch-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The sketch in the Browser.
+mark
+command construct.offset_plane
+wait-log '^Command Offset Plane started' 30
+wait-idle
+click-logged '^Browser Root/Sketches/Sketch1 at '
+wait-log '^Construction plane: the sketch of F1 taken as its sketch.s plane: ' 30
+wait-log '^Offset Plane Plane: 1 ' 30
+wait-log '^Preview Offset Plane: ok' 30
+wait-log '^Preview datum in the design: origin [(][-0-9.e]+, [-0-9.e]+, 10[)], normal [(]0, 0, 1[)]$' 30
+wait-idle
+mark
+key Escape
+wait-log '^Command Offset Plane cancelled' 30
+wait-idle
+
+# 2. The profile in the view.
+mark
+command construct.offset_plane
+wait-log '^Command Offset Plane started' 30
+wait-idle
+click-view-point 6,5,0
+wait-log '^Construction plane: a profile of F1 taken as its sketch.s plane: ' 30
+wait-log '^Offset Plane Plane: 1 ' 30
+wait-log '^Preview Offset Plane: ok' 30
+wait-log '^Preview datum in the design: origin [(][-0-9.e]+, [-0-9.e]+, 10[)], normal [(]0, 0, 1[)]$' 30
+wait-idle
+
+# 3. Distance 15 mm and OK.
+mark
+type-in '^Panel Offset Plane input distance at ' '15'
+wait-log '^Preview datum in the design: origin [(][-0-9.e]+, [-0-9.e]+, 15[)], normal [(]0, 0, 1[)]$' 30
+wait-log '^Preview Offset Plane: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added plane Plane[0-9]+: origin [(][-0-9.e]+, [-0-9.e]+, 15[)], normal [(]0, 0, 1[)]' 30
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

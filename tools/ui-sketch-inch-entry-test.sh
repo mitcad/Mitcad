@@ -43,7 +43,7 @@ for _ in $(seq 1 600); do
 done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'sketch values in inches driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
-ui_expect_log 'Add User Parameter dialog opened: unit in' 'a new parameter starts in inches'
+ui_expect_log 'Parameters new row: unit in' 'a new parameter starts in inches'
 ui_expect_log 'Added rectangle 22.22' 'the rectangle typed 0.875 by 12.125 in'
 ui_expect_log 'Added circle, diameter 5.0' 'the circle typed 0.2 in'
 ui_expect_log 'Added circle, diameter 22.22' 'the circle typed .875" in a design in mm'

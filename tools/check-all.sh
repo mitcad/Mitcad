@@ -25,7 +25,7 @@
 # measures itself; the steps' output is in build/dev/check-logs/. The exit
 # status is 0 only if every step passed.
 #
-# Usage: tools/check-all.sh [--full] [--ui-jobs N] [--ui auto|all]
+# Usage: tools/check-all.sh [--full] [--ui-jobs N] [--ui-retry-jobs N] [--ui auto|all]
 #          [--ctest auto|all] [--ctest-jobs N] [--testrun auto|off]
 #          [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N]
 #          [--memory SIZE|auto] [--overlap auto|off] [--fresh] [--only STEP,...]
@@ -43,6 +43,13 @@
 #                   once more under gdb (UI_GDB=1) for gdb's backtrace, as
 #                   ui-<name>.gdb.log, and stays failed whatever that run
 #                   gives.
+#   --ui-retry-jobs N
+#                   the UI tests that failed among the others run again
+#                   after them (and after ui-compute), N at once (default
+#                   $MITCAD_UI_RETRY_JOBS, else 3; 1: one at a time),
+#                   longest first, each with fewer other UI tests beside
+#                   it than its failure had (none when that had none) and
+#                   within its room (mitcad#2177).
 #   --ui MODE       "all", or "auto" (default): a UI test runs only when the
 #                   files it depends on differ from every run in which it
 #                   passed on this machine (kept in
@@ -50,9 +57,21 @@
 #                   declares in header lines "# check-all sources:
 #                   <path>..." (several such lines add up: the parts of
 #                   app/ and core/ it exercises, tools/cli when it makes
-#                   designs with mitcad-cli, ...), the build files and
-#                   options (UI_BASE), its script and the test library
-#                   (UI_LIBRARY), and the main window's layout as the
+#                   designs with mitcad-cli, ...; a declared tools/cli
+#                   counts only the program's own files and build lines
+#                   and the fixtures of tools/cli/tests/ that UI material
+#                   names, not the ctests' scripts and fixtures; a declared
+#                   app/framework/TestDriver.cpp counts TestDriver.cpp and
+#                   the driver's area files whose steps the test's scripts
+#                   use, mitcad#2173), the build
+#                   files and options (UI_BASE, without the Windows and
+#                   macOS UI tests' registrations in cmake/ui-tests/ and
+#                   the OCCT port's patches that change only its modelling,
+#                   which count for the smoke set and the tests that
+#                   declare geometry, mitcad#2136), its script and the test library
+#                   (UI_LIBRARY: the top-level code of tools/ui-test-lib.sh
+#                   and the functions the test calls, tools/ui-test-deps.py,
+#                   mitcad#2173), and the main window's layout as the
 #                   built application lays it out (tools/ui-layout.sh:
 #                   the window's size, where its bars, docks and view
 #                   are), so that a change of the window reruns every UI
@@ -82,7 +101,10 @@
 #                   scope of its own, as many at once as the memory budget
 #                   (85 % of the check's limit, or of what a slice above it
 #                   allows) and a CPU gate allow, the longest first,
-#                   chronic failures early; its report, results and each
+#                   chronic failures early, the test at the head of the
+#                   longest chain (the cargo test build) with the first
+#                   claim on the memory that comes free (mitcad#2177);
+#                   its report, results and each
 #                   test's log in build/dev/testrun/<step>/, its profiles in
 #                   ~/.mitcad/test-profiles.json. "off", or when it is not
 #                   built or does not finish: ctest -j in a test slot.
@@ -161,8 +183,14 @@
 #                   each group in the background with its output printed
 #                   when it ends (check-logs/<group>.out), when the test
 #                   runner runs the tests; "off": one step after another.
-#   --fresh         configure from scratch (cmake --fresh), as after
-#                   changes of CMake files.
+#   --fresh         configure from scratch (cmake --fresh: a new CMake
+#                   cache; the objects, cargo's builds and vcpkg_installed
+#                   stay), when a cached value has to be found again: an
+#                   option's or cache variable's default, a find_* result,
+#                   the compiler or toolchain. Not for a changed vcpkg port
+#                   (OCCT's patches): every configure runs vcpkg's install,
+#                   which rebuilds a changed port, and a change in a port's
+#                   folder makes the build configure again (mitcad#2134).
 #   --only STEPS    only these steps: configure, build, fmt, clippy, deps,
 #                   guide, root-compile, ctest, corpus, ui, fuzz (with
 #                   --full), or single UI
@@ -202,10 +230,14 @@
 # (CMAKE_BUILD_PARALLEL_LEVEL, CARGO_BUILD_JOBS). tools/ui-compute-test.sh
 # runs alone after the other UI tests: it fails intermittently under load
 # (mitcad#8). A UI test that fails among the others without crashing runs
-# once more alone after them; a pass then shows as "ok-again" and counts
-# (mitcad#657: tests that count events in a wall-clock window miss under
-# load), a second failure fails the check.
+# once more after them, with fewer UI tests beside it (--ui-retry-jobs); a
+# pass then shows as "ok-again" and counts (mitcad#657: tests that count
+# events in a wall-clock window miss under load), a second failure fails
+# the check.
 set -uo pipefail
+# Never a test on the desktop: since mitcad#2031 the app picks Wayland when
+# WAYLAND_DISPLAY is set, ahead of the Xvfb display a test gives it.
+unset WAYLAND_DISPLAY
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SELF=$ROOT/tools/check-all.sh
@@ -268,6 +300,23 @@ UI_COMMON=(app geometry core)
 UI_SMOKE=(smoke workflow command file)
 UI_LIBRARY=(tools/ui-test-lib.sh tools/ui-image-stats.py tools/xwd2png.py tools/ui-visible-text-allow.txt)
 UI_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/ui-passed
+# Narrower UI fingerprints (mitcad#2136). What under UI_BASE no Linux UI
+# test depends on: the Windows and macOS UI tests' registrations, which
+# cmake/MesaRuntime.cmake includes only on Windows and cmake/MacUiTests.cmake
+# only on macOS. The OCCT port, whose patches that change only OCCT's
+# modelling (ui_occt_modelling) count like geometry/ rather than as the base.
+# A declared tools/cli is narrowed to what the UI tests use of it
+# (ui_cli_fingerprint).
+UI_BASE_OTHER_PLATFORMS=cmake/ui-tests
+UI_OCCT_PORT=third_party/vcpkg-ports/opencascade
+# What a test uses of the test library and of the UI test driver
+# (mitcad#2173, tools/ui-test-deps.py): the library's top-level code and the
+# functions the test calls, and for a declared UI_DRIVER the driver's core
+# and the area files whose steps its scripts use. When the helper fails, the
+# whole library and every file of the driver count (UI_DRIVER_ALL).
+UI_DRIVER=app/framework/TestDriver.cpp
+UI_DRIVER_ALL=(app/framework/TestDriver.cpp app/framework/TestDriver.hpp app/framework/TestDriverSupport.hpp
+  app/framework/TestDriver?*.cpp)
 CTEST_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/ctest-passed
 # The memory a corpus test's child may commit, and its time.
 CORPUS_MEMORY=${MITCAD_CORPUS_MEMORY:-1536M}
@@ -275,6 +324,9 @@ CORPUS_TIMEOUT=${MITCAD_CORPUS_TIMEOUT:-300}
 
 UI_JOBS=${MITCAD_UI_JOBS:-4}
 UI_JOBS_GIVEN=0
+# The UI tests run again after failing among the others, at once
+# (mitcad#2177).
+UI_RETRY_JOBS=${MITCAD_UI_RETRY_JOBS:-3}
 UI=auto
 CTEST=auto
 CTEST_JOBS=$(($(nproc) / 4))
@@ -301,6 +353,7 @@ ARGS=("$@")
 while [ $# -gt 0 ]; do
   case $1 in
     --ui-jobs) UI_JOBS=$2; UI_JOBS_GIVEN=1; shift 2 ;;
+    --ui-retry-jobs) UI_RETRY_JOBS=$2; shift 2 ;;
     --ui) UI=$2; shift 2 ;;
     --full | --release) FULL=1; shift ;;
     --ctest) CTEST=$2; shift 2 ;;
@@ -326,6 +379,7 @@ case $UI in auto | all) ;; *) echo "--ui auto or all" >&2; exit 2 ;; esac
 case $CTEST in auto | all) ;; *) echo "--ctest auto or all" >&2; exit 2 ;; esac
 case $TESTRUN in auto | off) ;; *) echo "--testrun auto or off" >&2; exit 2 ;; esac
 case $OVERLAP in auto | off) ;; *) echo "--overlap auto or off" >&2; exit 2 ;; esac
+[[ $UI_RETRY_JOBS =~ ^[1-9][0-9]*$ ]] || { echo "--ui-retry-jobs a number of at least 1" >&2; exit 2; }
 if [ "$FULL" = 1 ]; then
   CTEST=all
   CORPUS=always
@@ -674,13 +728,126 @@ corpus_fingerprint() {
 # on ("# check-all sources: <path>..." lines).
 ui_declared() { sed -n 's/^# check-all sources: *//p' "tools/ui-$1-test.sh" | tr '\n' ' '; }
 
+# ui_occt_modelling: the OCCT port's patches whose every changed file lies
+# in OCCT's modelling toolkits, one path a line: src/ModelingData/ and
+# src/ModelingAlgorithms/ but for the meshing (TKMesh) and the hidden lines
+# (TKHLR), which the view and the drawings show (mitcad#2136). Such a patch
+# changes what the geometry computes, as a change in geometry/ does, so it
+# counts like geometry/ (for the smoke set and the tests that declare
+# geometry) rather than as the base of every UI test. A patch with any
+# other file (the OpenGL driver, TKernel's memory and signals, the data
+# exchange) or with none found stays in the base, as do the port's other
+# files and the rest of its portfile.
+ui_occt_modelling() {
+  local patches=("$UI_OCCT_PORT"/*.patch)
+  [ -f "${patches[0]}" ] || return 0
+  awk '
+    function verdict() { if (file != "" && seen && !other) print file }
+    FNR == 1 { verdict(); file = FILENAME; seen = 0; other = 0 }
+    /^(\+\+\+ b|--- a)\// {
+      path = substr($2, 3)
+      seen = 1
+      if (path !~ /^src\/(ModelingAlgorithms|ModelingData)\// || path ~ /^src\/ModelingAlgorithms\/(TKMesh|TKHLR)\//)
+        other = 1
+    }
+    END { verdict() }' "${patches[@]}"
+}
+
+# ui_occt_portfile in|out: the port's portfile, only the lines that name
+# a modelling patch (in) or all the others (out); UI_OCCT_MODELLING holds
+# the patches.
+ui_occt_portfile() {
+  [ -f "$UI_OCCT_PORT/portfile.cmake" ] || return 0
+  awk -v want="$1" '
+    NR == FNR { sub(/.*\//, ""); if ($0 != "") modelling[$0] = 1; next }
+    { line = $0; gsub(/^[ \t]+|[ \t]+$/, "", line) }
+    (line in modelling) == (want == "in")' <(printf '%s\n' "$UI_OCCT_MODELLING") "$UI_OCCT_PORT/portfile.cmake"
+}
+
+# ui_occt_fingerprint: the digest of the modelling patches and of their
+# lines in the portfile (their order).
+ui_occt_fingerprint() {
+  {
+    printf '%s\n' "$UI_OCCT_MODELLING" | sed '/^$/d' | xargs -r -d '\n' md5sum
+    ui_occt_portfile in
+  } | md5sum | cut -d' ' -f1
+}
+
+# ui_base_files: from md5sum lines of UI_BASE's files, those of the base:
+# not the other platforms' UI test registrations, the modelling patches or
+# the portfile (whose other lines ui_base_fingerprint takes).
+ui_base_files() {
+  awk -v other="$UI_BASE_OTHER_PLATFORMS/" -v portfile="$UI_OCCT_PORT/portfile.cmake" '
+    NR == FNR { if ($0 != "") modelling[$0] = 1; next }
+    { path = substr($0, 35) }
+    index(path, other) == 1 || path == portfile || (path in modelling) { next }
+    { print }' <(printf '%s\n' "$UI_OCCT_MODELLING") -
+}
+
 # ui_base_fingerprint: the digest of the build files every UI test depends
-# on (UI_BASE) and of the build's options (MITCAD_* switches, build type).
+# on (UI_BASE but for what ui_base_files leaves out, the portfile without
+# the modelling patches' lines) and of the build's options (MITCAD_*
+# switches, build type).
 ui_base_fingerprint() {
   {
-    files_digest "${UI_BASE[@]}"
+    files_digest "${UI_BASE[@]}" | ui_base_files
+    ui_occt_portfile out | md5sum
     grep -sE '^(MITCAD_[A-Z0-9_]+:BOOL|CMAKE_BUILD_TYPE:STRING)=' "$BUILD/CMakeCache.txt" | sort
   } | md5sum | cut -d' ' -f1
+}
+
+# ui_cli_build: tools/cli/CMakeLists.txt without its test registrations
+# (the if(BUILD_TESTING ...) blocks) and its comments: the lines that make
+# mitcad-cli.
+ui_cli_build() {
+  awk '
+    skip == 0 && /^if\(BUILD_TESTING/ { skip = 1; next }
+    skip > 0 && /^[ \t]*if\(/ { skip++; next }
+    skip > 0 && /^[ \t]*endif\(/ { skip--; next }
+    skip == 0 && !/^[ \t]*(#|$)/' tools/cli/CMakeLists.txt
+}
+
+# ui_cli_fingerprint: the digest of mitcad-cli as the UI tests use it, which
+# a declared tools/cli stands for (mitcad#2136): the program's own files
+# (tools/cli/ but for the ctests' scripts, *.cmake and *.py, which its
+# CMakeLists.txt runs with -P or Python and never builds; all of them when
+# the build lines include a file), the build lines (ui_cli_build), and the
+# fixtures of tools/cli/tests/ that UI material names: "cli/tests/<name>"
+# in tools/ui-* (the tests, their helpers and tools/ui-scripts/), a
+# $variable in the name standing for any text and every name taken as a
+# prefix. The other fixtures are the ctests' (cli.*), which a new CLI test
+# adds; a reference to the folder itself counts all of it.
+ui_cli_fingerprint() {
+  local files=() refs=() ref path
+  mapfile -t files < <(find tools/cli -maxdepth 1 -type f -not -name '*.cmake' -not -name '*.py' | sort)
+  if ui_cli_build | grep -q 'include('; then
+    files+=(tools/cli/*.cmake)
+  fi
+  if grep -rqsE 'cli/tests/?([^/A-Za-z0-9_.${}-]|$)' tools/ui-*; then
+    files+=(tools/cli/tests)
+  else
+    mapfile -t refs < <(grep -rhosE 'cli/tests/[A-Za-z0-9_.${}/-]+' tools/ui-* |
+      sed -E 's#^cli/tests/##; s/\.+$//; s/\$\{?[A-Za-z0-9_]+\}?/*/g' | sort -u)
+    for ref in ${refs[@]+"${refs[@]}"}; do
+      for path in tools/cli/tests/$ref*; do
+        [ -e "$path" ] && files+=("$path")
+      done
+    done
+  fi
+  {
+    files_digest ${files[@]+"${files[@]}"}
+    ui_cli_build
+  } | md5sum | cut -d' ' -f1
+}
+
+# ui_declares_geometry name: the test declares geometry/ or a part of it.
+ui_declares_geometry() {
+  local source sources=()
+  read -ra sources <<< "$(ui_declared "$1")"
+  for source in ${sources[@]+"${sources[@]}"}; do
+    case $source in geometry | geometry/*) return 0 ;; esac
+  done
+  return 1
 }
 
 # ui_layout_fingerprint: the digest of the main window's layout as the
@@ -701,18 +868,63 @@ ui_layout_fingerprint() {
 # ui_smoke name: the UI test is in the smoke set.
 ui_smoke() { [[ " ${UI_SMOKE[*]} " == *" $1 "* ]]; }
 
+# ui_test_deps: what each UI test uses of the test library and of the UI test
+# driver (mitcad#2173), once, from tools/ui-test-deps.py into
+# UI_LIBRARY_DIGEST (the digest of the library's top-level code, the
+# functions the test calls and the library files they name) and
+# UI_DRIVER_FILES (the driver's core and the area files whose steps the
+# test's scripts use); its table is kept as check-logs/ui-test-deps.tsv.
+# When the helper fails, both stay empty and the whole library and driver
+# count.
+declare -A UI_LIBRARY_DIGEST UI_DRIVER_FILES
+ui_test_deps() {
+  local name digest files
+  if python3 tools/ui-test-deps.py plan --root . > "$LOGS/ui-test-deps.tsv" 2> "$LOGS/ui-test-deps.log"; then
+    while IFS=$'\t' read -r name digest files; do
+      UI_LIBRARY_DIGEST[$name]=$digest
+      UI_DRIVER_FILES[$name]=$files
+    done < "$LOGS/ui-test-deps.tsv"
+  else
+    echo "== tools/ui-test-deps.py failed (check-logs/ui-test-deps.log): the whole test library and UI test driver count"
+  fi
+}
+
 # ui_fingerprint name base common layout: the digest of what the UI test
 # depends on: the base's digest, the window's layout, the areas it
-# declares, its script and the test library, and for the smoke set the
-# digest of what the application is built from (common).
+# declares (a declared tools/cli as UI_CLI_FINGERPRINT, a declared
+# UI_DRIVER as the driver files it uses), its script and what it uses of
+# the test library, for the smoke set the digest of what the application is
+# built from (common), and for the smoke set and the tests that declare
+# geometry the OCCT port's modelling patches (UI_OCCT_FINGERPRINT).
 ui_fingerprint() {
-  local sources=()
-  read -ra sources <<< "$(ui_declared "$1")"
+  local source sources=() declared=() driver=() cli=0
+  read -ra declared <<< "$(ui_declared "$1")"
+  for source in ${declared[@]+"${declared[@]}"}; do
+    if [ "$source" = tools/cli ]; then
+      cli=1
+    elif [ "$source" = "$UI_DRIVER" ]; then
+      if [ -n "${UI_DRIVER_FILES[$1]:-}" ]; then
+        read -ra driver <<< "${UI_DRIVER_FILES[$1]}"
+      else
+        driver=("${UI_DRIVER_ALL[@]}")
+      fi
+      sources+=("${driver[@]}")
+    else
+      sources+=("$source")
+    fi
+  done
   {
     echo "$2"
     echo "layout $4"
     if ui_smoke "$1"; then echo "smoke $3"; fi
-    files_digest "tools/ui-$1-test.sh" "${UI_LIBRARY[@]}" ${sources[@]+"${sources[@]}"}
+    if ui_smoke "$1" || ui_declares_geometry "$1"; then echo "occt $UI_OCCT_FINGERPRINT"; fi
+    if [ "$cli" = 1 ]; then echo "cli $UI_CLI_FINGERPRINT"; fi
+    if [ -n "${UI_LIBRARY_DIGEST[$1]:-}" ]; then
+      echo "library ${UI_LIBRARY_DIGEST[$1]}"
+      files_digest "tools/ui-$1-test.sh" ${sources[@]+"${sources[@]}"}
+    else
+      files_digest "tools/ui-$1-test.sh" "${UI_LIBRARY[@]}" ${sources[@]+"${sources[@]}"}
+    fi
   } | md5sum | cut -d' ' -f1
 }
 
@@ -1115,10 +1327,13 @@ declare -A UI_PIDS
 declare -A UI_FINGERPRINTS
 UI_RUNNING=0
 # The UI tests that failed without crashing among the others, run again
-# alone after them (mitcad#657): tests that count events in a wall-clock
+# after them (mitcad#657): tests that count events in a wall-clock
 # window (ui-drag-proxy, ui-pick, ui-render, ui-sweep) miss under load.
+# They run UI_RETRY_JOBS at once (mitcad#2177), each with fewer other UI
+# tests beside it than its failure had (UI_FIRST_BESIDE).
 UI_AGAIN=()
-UI_ALONE=0
+declare -A UI_FIRST_BESIDE
+UI_RETRYING=0
 # How many other UI tests ran beside each one (its most), handed to the test
 # runner afterwards so that it learns each test's room (mitcad#790 step 5,
 # mitcad#872): a test that fails beside others and passes alone lowers its
@@ -1153,8 +1368,9 @@ ui_run_line() {
 }
 # reap_ui: waits for a UI test to end and records it; a pass in a run that
 # built is kept for the test's fingerprint. A failure among the others
-# that is not a crash is not recorded yet: the test runs again alone
-# (UI_AGAIN), and its second result counts, "ok-again" for a pass.
+# that is not a crash is not recorded yet: the test runs again after them
+# with fewer beside it (UI_AGAIN), and its second result counts,
+# "ok-again" for a pass.
 reap_ui() {
   local pid="" name status seconds result=ok crashed=0
   wait -n -p pid
@@ -1175,13 +1391,15 @@ reap_ui() {
     crashed=1
   fi
   ui_run_line "$name" "$status" "$seconds"
-  if [ "$result" != ok ] && [ "$crashed" = 0 ] && [ "$UI_ALONE" = 0 ]; then
-    echo "   $result ui-$name ($seconds s): again, alone after the others"
+  if [ "$result" != ok ] && [ "$crashed" = 0 ] && [ "$UI_RETRYING" = 0 ]; then
+    echo "   $result ui-$name ($seconds s, ${UI_BESIDE[$name]:-0} beside it): again after the others," \
+      "with fewer beside it"
     tail -n 40 "$LOGS/ui-$name.log"
     UI_AGAIN+=("$name")
+    UI_FIRST_BESIDE[$name]=${UI_BESIDE[$name]:-0}
     return
   fi
-  [ "$result" = ok ] && [ "$UI_ALONE" = 1 ] && result=ok-again
+  [ "$result" = ok ] && [ "$UI_RETRYING" = 1 ] && result=ok-again
   echo "   $result ui-$name ($seconds s)"
   [ "$result" = ok ] || [ "$result" = ok-again ] || tail -n 40 "$LOGS/ui-$name.log"
   record "ui-$name" "$seconds" "$result"
@@ -1199,11 +1417,49 @@ reap_ui() {
   fi
 }
 
+# ui_round cap name...: runs the UI tests in the order given, at most cap
+# at once: the first waiting test that the cap and the rooms (ui_admits)
+# admit starts; while none does, the next to end makes room. Returns when
+# all have ended.
+ui_round() {
+  local cap=$1 picked i name
+  shift
+  local pending=("$@")
+  while [ ${#pending[@]} -gt 0 ]; do
+    picked=""
+    if [ "$UI_RUNNING" -lt "$cap" ]; then
+      for i in "${!pending[@]}"; do
+        if ui_admits "${pending[$i]}"; then
+          picked=$i
+          break
+        fi
+      done
+    fi
+    if [ -z "$picked" ]; then
+      reap_ui
+      continue
+    fi
+    name=${pending[$picked]}
+    unset "pending[$picked]"
+    pending=(${pending[@]+"${pending[@]}"})
+    run_ui "$name" &
+    UI_PIDS[$!]=$name
+    UI_RUNNING=$((UI_RUNNING + 1))
+    ui_started "$name"
+  done
+  while [ "$UI_RUNNING" -gt 0 ]; do reap_ui; done
+}
+
 UI_TESTS=()
 UI_SKIPPED=()
 UI_BASE_FINGERPRINT=""
 UI_COMMON_FINGERPRINT=""
 UI_LAYOUT_FINGERPRINT=""
+# The OCCT port's modelling patches and the CLI as the UI tests use it, once
+# (mitcad#2136); UI_OCCT_MODELLING is read by the base's fingerprint too.
+UI_OCCT_MODELLING=""
+UI_OCCT_FINGERPRINT=""
+UI_CLI_FINGERPRINT=""
 for test in tools/ui-*-test.sh; do
   name=${test#tools/ui-}
   name=${name%-test.sh}
@@ -1219,7 +1475,13 @@ for test in tools/ui-*-test.sh; do
       record "ui-$name sources" - "FAIL($source)"
     fi
   done
-  [ -n "$UI_BASE_FINGERPRINT" ] || UI_BASE_FINGERPRINT=$(ui_base_fingerprint)
+  if [ -z "$UI_BASE_FINGERPRINT" ]; then
+    ui_test_deps
+    UI_OCCT_MODELLING=$(ui_occt_modelling)
+    UI_OCCT_FINGERPRINT=$(ui_occt_fingerprint)
+    UI_CLI_FINGERPRINT=$(ui_cli_fingerprint)
+    UI_BASE_FINGERPRINT=$(ui_base_fingerprint)
+  fi
   if ui_smoke "$name" && [ -z "$UI_COMMON_FINGERPRINT" ]; then
     UI_COMMON_FINGERPRINT=$(files_digest "${UI_COMMON[@]}" | md5sum | cut -d' ' -f1)
   fi
@@ -1274,51 +1536,34 @@ elif [ ${#UI_TESTS[@]} -gt 0 ]; then
   mapfile -t PENDING < <(for name in "${UI_TESTS[@]}"; do
     [ "$name" = compute ] || echo "${LAST[ui-$name]:-9999} $name"
   done | sort -rn | cut -d' ' -f2)
-  # The first waiting test that the cap and the rooms admit starts; while
-  # none does, the next to end makes room.
-  while [ ${#PENDING[@]} -gt 0 ]; do
-    picked=""
-    if [ "$UI_RUNNING" -lt "$UI_JOBS" ]; then
-      for i in "${!PENDING[@]}"; do
-        if ui_admits "${PENDING[$i]}"; then
-          picked=$i
-          break
-        fi
-      done
-    fi
-    if [ -z "$picked" ]; then
-      reap_ui
-      continue
-    fi
-    name=${PENDING[$picked]}
-    unset "PENDING[$picked]"
-    PENDING=(${PENDING[@]+"${PENDING[@]}"})
-    run_ui "$name" &
-    UI_PIDS[$!]=$name
-    UI_RUNNING=$((UI_RUNNING + 1))
-    ui_started "$name"
-  done
-  while [ "$UI_RUNNING" -gt 0 ]; do reap_ui; done
+  ui_round "$UI_JOBS" ${PENDING[@]+"${PENDING[@]}"}
   # Alone means alone: the corpus group ends first.
   bg_join corpus
   if [[ " ${UI_TESTS[*]} " == *" compute "* ]]; then
     echo "== ui-compute alone (mitcad#8)"
-    run_ui compute &
-    UI_PIDS[$!]=compute
-    UI_RUNNING=1
-    UI_BESIDE[compute]=0
-    while [ "$UI_RUNNING" -gt 0 ]; do reap_ui; done
+    ui_round 1 compute
   fi
   if [ ${#UI_AGAIN[@]} -gt 0 ]; then
-    echo "== UI tests failed among the others, again, alone: ${UI_AGAIN[*]} (mitcad#657)"
-    UI_ALONE=1
+    # Again after the others, UI_RETRY_JOBS at once (mitcad#2177; 1 is the
+    # earlier one at a time), each with fewer UI tests beside it than its
+    # failure had (0 when that had none): its room for this round, so that
+    # a pass still tells the test runner that the failure came from the
+    # load (mitcad#657).
     for name in "${UI_AGAIN[@]}"; do
-      run_ui "$name" &
-      UI_PIDS[$!]=$name
-      UI_RUNNING=1
-      UI_BESIDE[$name]=0
-      while [ "$UI_RUNNING" -gt 0 ]; do reap_ui; done
+      first=${UI_FIRST_BESIDE[$name]:-0}
+      limit=$((first > 0 ? first - 1 : 0))
+      room=${UI_ROOM[$name]:-}
+      if [ -z "$room" ] || [ "$room" -gt "$limit" ]; then
+        UI_ROOM[$name]=$limit
+      fi
     done
+    mapfile -t again < <(for name in "${UI_AGAIN[@]}"; do
+      echo "${LAST[ui-$name]:-9999} $name"
+    done | sort -rn | cut -d' ' -f2)
+    echo "== UI tests failed among the others, again, $UI_RETRY_JOBS at once, each with fewer beside it:" \
+      "${again[*]} (mitcad#657, mitcad#2177)"
+    UI_RETRYING=1
+    ui_round "$UI_RETRY_JOBS" "${again[@]}"
   fi
   record "ui (all)" "$(seconds_since "$start")" -
   if [ "$TESTRUN" != off ] && [ -x "$TESTRUN_BIN" ] && [ -s "$LOGS/ui-runs.tsv" ]; then

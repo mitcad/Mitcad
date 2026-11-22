@@ -480,7 +480,7 @@ fn folded_endpoint_clearance_and_depth_are_explicit_parameters() {
     let sketch: FeatureUid = serde_json::from_value(face["profiles"][0]["sketch"].clone()).unwrap();
     let mut flange = flange_definition(body, sketch);
     flange["offsets"] = json!({"start":3,"end":4});
-    flange["relief"] = json!({"type":"tear","width":0,"depth":3});
+    flange["relief"] = json!({"type":"rectangular","width":0,"depth":3});
     let failed = doc.add_feature(&def(flange.clone()), None).unwrap().uid;
     assert!(
         matches!(doc.status(failed),Some(FeatureStatus::Failed(message)) if message.contains("positive"))
@@ -515,6 +515,119 @@ fn folded_endpoint_clearance_and_depth_are_explicit_parameters() {
     assert!(slots.iter().any(|(slot, _)| slot == "relief.width"));
     assert!(slots.iter().any(|(slot, _)| slot == "relief.depth"));
     assert!(slots.iter().any(|(slot, _)| slot == "offsets.start"));
+}
+
+#[test]
+fn saved_tear_bend_reliefs_load_and_edit_but_cannot_be_authored() {
+    let (mut doc, rules_id, body, face) = fixture();
+    let sketch: FeatureUid = serde_json::from_value(face["profiles"][0]["sketch"].clone()).unwrap();
+    let mut flange = flange_definition(body, sketch);
+    flange["offsets"] = json!({"start":3,"end":4});
+    flange["relief"] = json!({"type":"rectangular","width":2,"depth":3});
+    let flange_id = doc.add_feature(&def(flange.clone()), None).unwrap().uid;
+    // The mock has no cylindrical chart construction. Keep the flange
+    // suppressed while checking file compatibility and authoring.
+    doc.set_suppressed(flange_id, true).unwrap();
+    let original = doc.body_shape(body).unwrap().clone();
+
+    let mut saved: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    for feature in saved["features"].as_array_mut().unwrap() {
+        match feature["type"].as_str() {
+            Some("sheet_rules") => feature["bend_relief"]["type"] = json!("tear"),
+            Some("sheet_flange") => feature["relief"]["type"] = json!("tear"),
+            _ => {}
+        }
+    }
+    let mut opened = Document::from_json(&saved.to_string(), MockKernel::default()).unwrap();
+    opened.recompute();
+    assert_eq!(opened.status(rules_id), Some(&FeatureStatus::Ok));
+    assert_eq!(opened.status(flange_id), Some(&FeatureStatus::Suppressed));
+    assert_eq!(opened.body_shape(body), Some(&original));
+    assert!(
+        opened
+            .warnings(rules_id)
+            .iter()
+            .any(|warning| warning.contains("saved Tear bend relief"))
+    );
+
+    let mut legacy_rules = rules();
+    legacy_rules["bend_relief"]["type"] = json!("tear");
+    legacy_rules["thickness"] = json!(2);
+    flange["relief"]["type"] = json!("tear");
+    assert!(
+        doc.add_feature(&def(legacy_rules.clone()), None)
+            .unwrap_err()
+            .to_string()
+            .contains("Tear is no longer available")
+    );
+    assert!(
+        doc.edit_feature(rules_id, &def(legacy_rules.clone()))
+            .is_err()
+    );
+    assert!(doc.add_feature(&def(flange.clone()), None).is_err());
+    assert!(doc.edit_feature(flange_id, &def(flange.clone())).is_err());
+    opened.edit_feature(rules_id, &def(legacy_rules)).unwrap();
+    opened
+        .edit_feature(flange_id, &def(flange.clone()))
+        .unwrap();
+    assert_eq!(opened.status(rules_id), Some(&FeatureStatus::Ok));
+    assert_eq!(opened.status(flange_id), Some(&FeatureStatus::Suppressed));
+
+    flange["relief"]["type"] = json!("round");
+    opened
+        .edit_feature(flange_id, &def(flange.clone()))
+        .unwrap();
+    assert_eq!(opened.status(flange_id), Some(&FeatureStatus::Suppressed));
+    flange["relief"]["type"] = json!("tear");
+    assert!(opened.edit_feature(flange_id, &def(flange)).is_err());
+
+    let mut corner_tear = rules();
+    corner_tear["corner_relief"]["type"] = json!("tear");
+    assert!(doc.add_feature(&def(corner_tear), None).is_ok());
+}
+
+#[test]
+fn perforation_outline_requires_closed_profiles_on_the_sheet() {
+    let (mut doc, _, body, _) = fixture();
+    let mut perforation = json!({"type":"sheet_perforate","body":body,
+        "diameter":5,"pitch":10,"outline":{"profiles":[]}});
+    assert!(
+        doc.add_feature(&def(perforation.clone()), None)
+            .unwrap_err()
+            .to_string()
+            .contains("closed sketch profiles")
+    );
+
+    // An open sketch's curve does not enclose an outline region.
+    let sketch = doc.add_sketch(SketchPlane::Xz).unwrap().uid;
+    doc.command(
+        &json!({"cmd":"sketch.add_line","sketch":sketch,"start":[1,1],"end":[5,5]}).to_string(),
+    )
+    .unwrap();
+    perforation["outline"]["profiles"] = json!([{"sketch":sketch,"region":"r{c1}"}]);
+    let open_outline = doc
+        .add_feature(&def(perforation.clone()), None)
+        .unwrap()
+        .uid;
+    let status = doc.status(open_outline);
+    assert!(
+        matches!(status, Some(FeatureStatus::Failed(error))
+            if error.contains("closed sketch profiles")),
+        "unexpected result for an open outline: {status:?}"
+    );
+    doc.set_suppressed(open_outline, true).unwrap();
+
+    // A closed profile on a perpendicular plane is not on this plate.
+    let region = doc
+        .add_rectangle(sketch, [1.0, 1.0], &num(10.0), &num(8.0))
+        .unwrap()
+        .region;
+    perforation["outline"]["profiles"] = json!([{"sketch":sketch,"region":region}]);
+    let feature = doc.add_feature(&def(perforation), None).unwrap().uid;
+    assert!(
+        matches!(doc.status(feature), Some(FeatureStatus::Failed(error))
+            if error.contains("must overlap a flat face of the sheet"))
+    );
 }
 
 #[test]

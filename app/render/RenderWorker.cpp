@@ -1545,13 +1545,15 @@ int benchOnce(const Bench& bench, const QString& choice, const std::vector<rende
   renderer->setView(view);
   render::SceneUpdate scene = render::testScene();
   if (!bench.texture.isEmpty()) {
-    // --texture image[,size[,box|planar]] on the block (mitcad#53).
+    // --texture image[,size[,box|planar|grain]] on the block (mitcad#53,
+    // grain mitcad#2186).
     const QStringList fields = bench.texture.split(QLatin1Char(','));
     render::MaterialData& material = scene.bodies.front().material;
     material.texture = QFileInfo(fields.value(0)).absoluteFilePath().toStdString();
     const float repeat = fields.size() > 1 ? fields.at(1).toFloat() : 20.0f;
     material.textureSize = {repeat, repeat};
     material.texturePlanar = fields.value(2) == QLatin1String("planar");
+    material.textureGrain = fields.value(2) == QLatin1String("grain");
     scene.bodies.front().materialKey =
         QJsonDocument(render::materialJson(material)).toJson(QJsonDocument::Compact).toStdString();
   }

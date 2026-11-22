@@ -1076,3 +1076,59 @@ fn credentials_never_reach_what_is_shown() {
     );
     assert!(error.contains("holds credentials"), "{error}");
 }
+
+/// A cancelled git and the programs it started end on SIGTERM first, as
+/// git removes the lock files it holds on that signal: the
+/// `git-receive-pack` of a remote in a folder, killed while it wrote an
+/// edit lock's ref, left the ref's lock file and every later push of the
+/// ref failed (mitcad#2189). A fake git (a script) starts a child that
+/// tidies up on SIGTERM, as git's lock files are removed.
+#[cfg(unix)]
+#[test]
+fn a_cancelled_git_and_its_children_end_on_sigterm_first() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("cancel-term");
+    let child = scratch.join("child.sh");
+    fs::write(
+        &child,
+        "trap 'echo tidied > \"$FAKE_TIDIED\"; exit 143' TERM\n\
+         echo ready > \"$FAKE_READY\"\n\
+         while :; do sleep 0.05; done\n",
+    )
+    .unwrap();
+    let program = scratch.join("fake-git");
+    fs::write(&program, "#!/bin/sh\nsh \"$FAKE_CHILD\" &\nwait\n").unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    let ready = scratch.join("ready");
+    let tidied = scratch.join("tidied");
+    let cli = GitCli::at(&program)
+        .with_env("FAKE_CHILD", &child)
+        .with_env("FAKE_READY", &ready)
+        .with_env("FAKE_TIDIED", &tidied);
+    let control = Control::new();
+    let start = Instant::now();
+    let result = thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !ready.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            control.cancel();
+        });
+        cli.run(Some(&scratch.0), &["status"], Some(&control))
+    });
+    match result {
+        Err(error) => assert_eq!(error.class, ErrorClass::Cancelled, "{error:?}"),
+        Ok(output) => panic!("not cancelled: {:?}", output.stderr),
+    }
+    assert!(ready.exists(), "the fake git's child never started");
+    assert!(
+        tidied.exists(),
+        "the child was not given SIGTERM before it was ended"
+    );
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+}

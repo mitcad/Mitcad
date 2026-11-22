@@ -66,9 +66,8 @@ derived: the 0.01 radian floor (well above a crease that is tangent within
 the approximation), the point tolerance max(100 tolapp3d, 1e-4) and T's
 run-on of four blend widths.
 
-Test: geometry/tests/test_fillet_fin_top_creases.cpp,
-test_transitions_cut_by_their_pieces, on the case `fin-top-chamfer-rounding`
-of MITCAD_GEOMETRY_CASES (with 1351 and 1352).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1350.
 
 Failures (mitcad#1986): the approximation of a p-curve, the intersection
 of the face beyond with the crease's face (GeomInt_IntSS) and the cut's

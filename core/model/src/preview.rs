@@ -470,19 +470,18 @@ impl<K: Kernel> Document<K> {
     }
 
     /// Each face's surface for the picture's edges (mitcad#1773), in the
-    /// order [`Kernel::faces`] lists the faces: pieces of one face that a
-    /// split left share a number ([`surfaces_by_name`]), so that the
-    /// raster draws the side between them only where the surface creases,
-    /// as the 3D view does. Empty when the faces cannot be listed (each
-    /// face its own).
+    /// order [`Kernel::faces`] lists the faces: the faces the 3D view takes
+    /// as one smooth surface share a number ([`Kernel::face_surface_groups`],
+    /// mitcad#2148: the geometry's own rule, not the faces' names, so that
+    /// a sweep's cylinder and the torus it runs into stay apart while two
+    /// pieces of one cylinder do not), and the raster draws the side
+    /// between them only where the surface creases, as the 3D view does.
+    /// Empty when the kernel cannot tell (each face its own).
     fn face_surfaces(&self, uid: BodyUid) -> Vec<u32> {
         let Some(shape) = self.body_shape(uid) else {
             return Vec::new();
         };
-        let Ok(faces) = self.kernel().faces(shape) else {
-            return Vec::new();
-        };
-        surfaces_by_name(faces.iter().map(|face| face.names.as_slice()))
+        self.kernel().face_surface_groups(shape).unwrap_or_default()
     }
 
     /// A body's display mesh and each face's colour; None (with a
@@ -675,43 +674,6 @@ fn elapsed(start: Instant) -> f64 {
 /// A body's faces placed by `transform`, into `mesh` (its colours and
 /// flags set): normals turned with the placement, the triangles' turn
 /// kept counter-clockwise from outside where the placement mirrors.
-/// A face name without its trailing "#k" piece numbers (`F5:fillet(..)#0#1`
-/// -> `F5:fillet(..)`): what the pieces of one split face share (the
-/// geometry's `unsplit_face_name`, smooth_seams.hpp).
-fn unsplit_face_name(name: &str) -> &str {
-    let mut whole = name;
-    loop {
-        let digits = whole.trim_end_matches(|c: char| c.is_ascii_digit());
-        match digits.strip_suffix('#') {
-            Some(rest) if digits.len() < whole.len() => whole = rest,
-            _ => return whole,
-        }
-    }
-}
-
-/// A surface number for each face by its names (mitcad#1773): faces whose
-/// names are equal but for their piece numbers share one; an unnamed face
-/// has one of its own.
-fn surfaces_by_name<'a>(faces: impl Iterator<Item = &'a [String]>) -> Vec<u32> {
-    let mut by_name: BTreeMap<&'a str, u32> = BTreeMap::new();
-    let mut surfaces = Vec::new();
-    let mut next = 0u32;
-    for names in faces {
-        let known = names
-            .iter()
-            .find_map(|name| by_name.get(unsplit_face_name(name)).copied());
-        let surface = known.unwrap_or_else(|| {
-            next += 1;
-            next - 1
-        });
-        for name in names {
-            by_name.entry(unsplit_face_name(name)).or_insert(surface);
-        }
-        surfaces.push(surface);
-    }
-    surfaces
-}
-
 fn placed_mesh(faces: &FaceMeshes, transform: &Transform, mut mesh: Mesh) -> Mesh {
     let m = transform.linear;
     let determinant = transform.determinant();
@@ -747,44 +709,4 @@ fn placed_mesh(faces: &FaceMeshes, transform: &Transform, mut mesh: Mesh) -> Mes
     };
     mesh.face_triangles = faces.face_triangles.clone();
     mesh
-}
-
-#[cfg(test)]
-mod surface_tests {
-    use super::{surfaces_by_name, unsplit_face_name};
-
-    #[test]
-    fn piece_numbers_are_dropped_from_the_end_only() {
-        assert_eq!(
-            unsplit_face_name("F5:fillet(E{F2:a|F2:b})#0"),
-            "F5:fillet(E{F2:a|F2:b})"
-        );
-        assert_eq!(unsplit_face_name("F3:side0#0#1"), "F3:side0");
-        assert_eq!(unsplit_face_name("F3:side0"), "F3:side0");
-        assert_eq!(
-            unsplit_face_name("F3:side(c1[c4,c2])"),
-            "F3:side(c1[c4,c2])"
-        );
-        assert_eq!(
-            unsplit_face_name("F4:inst1(F2:top#1)"),
-            "F4:inst1(F2:top#1)"
-        );
-    }
-
-    #[test]
-    fn pieces_of_one_face_share_a_surface() {
-        let names: Vec<Vec<String>> = [
-            vec!["F5:fillet(x)#0"],
-            vec!["F2:top"],
-            vec![],
-            vec!["F5:fillet(x)#1"],
-            vec![],
-            vec!["F2:bottom#0"],
-        ]
-        .iter()
-        .map(|n| n.iter().map(|s| s.to_string()).collect())
-        .collect();
-        let surfaces = surfaces_by_name(names.iter().map(Vec::as_slice));
-        assert_eq!(surfaces, vec![0, 1, 2, 0, 3, 4]);
-    }
 }

@@ -9,8 +9,8 @@
 # tools/ui-windows-extrude-from-sketch-test.ps1) on a design that mitcad-cli
 # makes (tools/ui-scripts/extrude-from-sketch.json): the sketch and the box
 # come back inside the view's free area, not under the ribbon, the cards
-# or the cube, and the automatic profile is a drawn circle, not the face's
-# leftover region.
+# or the cube, and the automatic profiles are the drawn circles (the
+# outline set, mitcad#2194), not the face's leftover region.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-extrude-from-sketch-test.sh

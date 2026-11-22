@@ -107,8 +107,9 @@ std::shared_ptr<geometry::Shape> sweep_sheet(rust::Str feature, rust::Slice<cons
 }
 
 std::shared_ptr<geometry::Shape> loft_sheet(rust::Str feature, rust::Slice<const SweepCurve> curves,
-                                            rust::Slice<const std::size_t> chains, bool ruled, bool closed) {
-  return geometry::loft_sheet(std::string(feature), chains_of(curves, chains), ruled, closed);
+                                            rust::Slice<const std::size_t> chains, bool ruled, bool closed,
+                                            bool merge_tangent) {
+  return geometry::loft_sheet(std::string(feature), chains_of(curves, chains), ruled, closed, merge_tangent);
 }
 
 std::shared_ptr<geometry::Shape> helix_sheet(rust::Str feature, rust::Slice<const SweepCurve> curves,

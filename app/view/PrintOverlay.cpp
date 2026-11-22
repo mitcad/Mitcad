@@ -112,15 +112,16 @@ class PrintTriangles : public AIS_InteractiveObject {
 public:
   explicit PrintTriangles(const PrintOverlay& overlay)
       : m_overhangs(overlay.overhangs), m_thin(overlay.thin), m_overhangColor(overlay.overhangColor),
-        m_thinColor(overlay.thinColor) {}
+        m_thinColor(overlay.thinColor), m_draft(overlay.draft), m_draftColors(overlay.draftColors) {}
 
   bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
 
   // The categories' colours for another background (mitcad#1041); the
   // caller has the presentation computed again.
-  void setColors(const QColor& overhang, const QColor& thin) {
+  void setColors(const QColor& overhang, const QColor& thin, const std::array<QColor, 3>& draft) {
     m_overhangColor = overhang;
     m_thinColor = thin;
+    m_draftColors = draft;
   }
 
 protected:
@@ -131,6 +132,10 @@ protected:
     }
     addTriangles(presentation, m_overhangs, m_overhangColor, kOverhangLift, -1.0f);
     addTriangles(presentation, m_thin, m_thinColor, kThinLift, -2.0f);
+    // Draft Analysis' classes (mitcad#2166): each triangle in one class.
+    for (std::size_t c = 0; c < m_draft.size(); ++c) {
+      addTriangles(presentation, m_draft[c], m_draftColors[c], kOverhangLift, -1.0f);
+    }
   }
   void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
 
@@ -139,6 +144,8 @@ private:
   std::vector<float> m_thin;
   QColor m_overhangColor;
   QColor m_thinColor;
+  std::array<std::vector<float>, 3> m_draft;
+  std::array<QColor, 3> m_draftColors;
 };
 
 // The narrow gaps between bodies (mitcad#1519): a line between each gap's
@@ -354,7 +361,8 @@ void OcctViewer::setPrintOverlay(const PrintOverlay& overlay) {
     m_context->Remove(m_printTriangles, false);
     m_printTriangles.Nullify();
   }
-  if (!overlay.overhangs.empty() || !overlay.thin.empty()) {
+  const bool drafts = !overlay.draft[0].empty() || !overlay.draft[1].empty() || !overlay.draft[2].empty();
+  if (!overlay.overhangs.empty() || !overlay.thin.empty() || drafts) {
     m_printTriangles = new PrintTriangles(overlay);
     m_context->Display(m_printTriangles, 0, -1, false);
   }
@@ -414,6 +422,7 @@ void PrintOverlayLabels::setOverlay(const PrintOverlay& overlay) {
   }
   m_gapLabel = overlay.narrowestLabel;
   m_gapColor = overlay.gapColor;
+  m_draftColors = overlay.draftColors;
   m_title = overlay.title;
   m_entries = overlay.legend;
   m_markerColor = overlay.thinColor;
@@ -421,15 +430,22 @@ void PrintOverlayLabels::setOverlay(const PrintOverlay& overlay) {
   paintCards();
 }
 
-void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin, const QColor& gap) {
-  // The legend's categories: the thin walls' entry has the marker's
-  // colour, the narrow gaps' the gap marker's, the other is the
-  // overhangs'.
+void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin, const QColor& gap,
+                                   const std::array<QColor, 3>& draft) {
+  // The legend's categories: a Draft Analysis' classes have their colours
+  // (mitcad#2166), the thin walls' entry has the marker's colour, the
+  // narrow gaps' the gap marker's, the other is the overhangs'.
   for (auto& entry : m_entries) {
+    const auto known = std::find(m_draftColors.cbegin(), m_draftColors.cend(), entry.first);
+    if (entry.first.isValid() && known != m_draftColors.cend()) {
+      entry.first = draft[static_cast<std::size_t>(known - m_draftColors.cbegin())];
+      continue;
+    }
     entry.first = entry.first == m_markerColor ? thin : entry.first == m_gapColor ? gap : overhang;
   }
   m_markerColor = thin;
   m_gapColor = gap;
+  m_draftColors = draft;
   if (m_shown) {
     paintCards();
     m_changed();
@@ -440,8 +456,11 @@ void OcctViewer::recolorPrintOverlay() {
   const QColor overhang = viewColor(ColorRole::PrintOverhang, m_backgroundDark);
   const QColor thin = viewColor(ColorRole::PrintThin, m_backgroundDark);
   const QColor gap = viewColor(ColorRole::PrintGap, m_backgroundDark);
+  const std::array<QColor, 3> draft = {viewColor(ColorRole::DraftPositive, m_backgroundDark),
+                                       viewColor(ColorRole::DraftUnder, m_backgroundDark),
+                                       viewColor(ColorRole::DraftNegative, m_backgroundDark)};
   if (auto* triangles = dynamic_cast<PrintTriangles*>(m_printTriangles.get())) {
-    triangles->setColors(overhang, thin);
+    triangles->setColors(overhang, thin, draft);
     m_context->Redisplay(m_printTriangles, false);
   }
   if (auto* gaps = dynamic_cast<PrintGaps*>(m_printGaps.get())) {
@@ -449,7 +468,7 @@ void OcctViewer::recolorPrintOverlay() {
     m_context->Redisplay(m_printGaps, false);
   }
   if (m_printLabels != nullptr) {
-    m_printLabels->setColors(overhang, thin, gap);
+    m_printLabels->setColors(overhang, thin, gap, draft);
   }
 }
 

@@ -493,6 +493,20 @@ int drawingToolsTests() {
     command = annotationEdit(QStringLiteral("D1"), 4, QStringLiteral("after"), QStringLiteral(" DEBURR\nBOTH SIDES "));
     CHECK(command.value(QStringLiteral("format")).toObject().value(QStringLiteral("after")).toString() ==
           QStringLiteral("DEBURR\nBOTH SIDES"));
+    // A line break at the end of Text Before or the start of Text After
+    // kept (mitcad#2212), the spaces round it trimmed; alone, nothing.
+    const auto sent = [](const QString& field, const QString& value) {
+      return annotationEdit(QStringLiteral("D1"), 4, field, value)
+          .value(QStringLiteral("format"))
+          .toObject()
+          .value(field)
+          .toString();
+    };
+    CHECK(sent(QStringLiteral("before"), QStringLiteral(" TYP \n\n ")) == QStringLiteral("TYP\n"));
+    CHECK(sent(QStringLiteral("after"), QStringLiteral(" \r\n2 PLACES ")) == QStringLiteral("\n2 PLACES"));
+    CHECK(sent(QStringLiteral("before"), QStringLiteral("\nTYP")) == QStringLiteral("TYP"));
+    CHECK(sent(QStringLiteral("after"), QStringLiteral("2 PLACES\n")) == QStringLiteral("2 PLACES"));
+    CHECK(sent(QStringLiteral("before"), QStringLiteral("\n")).isEmpty());
   }
   // A frame takes its tolerance from its dialog, as the model's JSON.
   CHECK(frame->command(QStringLiteral("D1"), 0, annotationPicks(1, {QPointF(5, 6)}), none).isEmpty());

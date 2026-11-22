@@ -168,8 +168,9 @@ function(refused json what)
 endfunction()
 
 import(at45 --save "${WORK}/bend-45.mitcad")
-# (At 45 mm the Fillet warns of a corner patch 0.02 mm out of the body.)
-rebuilt("${at45}" "the bend radius 45 mm" FALSE)
+# (At 45 mm, before OCCT port patch 1805, the Fillet warned of a corner
+# plate 0.02 mm out of the body, mitcad#2038.)
+rebuilt("${at45}" "the bend radius 45 mm" TRUE)
 
 import(above --set "BendRadius=16.8 mm")
 rebuilt("${above}" "the import at 16.8 mm" TRUE)

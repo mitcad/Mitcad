@@ -355,6 +355,8 @@ pub use mesh_tools::{
     FitKind, MeshDecimateDef, MeshFitSurfaceDef, MeshLasso, MeshRemoveDef, MeshRepairDef,
     MeshSegmentDef,
 };
+// Cone: a cone or a frustum beside the other primitives (mitcad#2239).
+pub use primitive::ConeDef;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -552,6 +554,8 @@ feature_types! {
     // Mesh tools for reverse engineering (mitcad#1871).
     MeshDecimate(MeshDecimateDef), MeshRepair(MeshRepairDef), MeshRemove(MeshRemoveDef),
     MeshSegment(MeshSegmentDef), MeshFitSurface(MeshFitSurfaceDef),
+    // Cone (mitcad#2239).
+    Cone(ConeDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is

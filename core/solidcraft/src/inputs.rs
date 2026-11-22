@@ -181,6 +181,10 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             for k in 0..w.count("/setbacks") {
                 w.expr(&format!("/setbacks/{k}/distance"), "Setback", Length);
             }
+            // Each picked edge's own radius (format 60).
+            for k in 0..w.count("/edge_radii") {
+                w.expr(&format!("/edge_radii/{k}"), "Edge radius", Length);
+            }
         }
         "chamfer" => {
             w.expr("/distance", "Distance", Length);
@@ -293,6 +297,20 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
                     expr: "0".to_owned(),
                     kind: Length,
                 });
+            }
+            // A margin for each side (format 58).
+            for (k, label) in [
+                "-X margin",
+                "+X margin",
+                "-Y margin",
+                "+Y margin",
+                "-Z margin",
+                "+Z margin",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                w.expr(&format!("/margins/{k}"), label, Length);
             }
         }
         "pipe" => {
@@ -412,6 +430,8 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             w.expr("/translate/0", "X distance", Length);
             w.expr("/translate/1", "Y distance", Length);
             w.expr("/translate/2", "Z distance", Length);
+            // The edge or round face the turn was picked on (format 58).
+            w.geo("/rotate_about");
             w.expr("/angle", "Angle", Angle);
         }
         "mesh_convert" => w.expr("/tolerance", "Tolerance", Length),
@@ -680,6 +700,47 @@ mod tests {
             labels(json!({"type": "revolve", "sketch": 1,
                 "axis": {"type": "line", "origin": ["w / 2", 0, "g"], "dir": [0, 0, 1]}, "angle": "a"})),
             ["Angle"]
+        );
+    }
+
+    /// The inputs formats 58 to 63 add, in the golden record's order of
+    /// SolidCraft 0.45.0 (mitcad#2153): a fillet's edge radii after its
+    /// setbacks, a bounding solid's side margins after its margin, a plane
+    /// at an angle's axis origin a placement (no input), a move's edge it
+    /// turns about before its angle.
+    #[test]
+    fn formats_58_to_63_inputs_follow_the_feature_walk() {
+        let o = [0, 0, 0];
+        assert_eq!(
+            labels(json!({"type": "fillet", "edges": [o, o], "radius": "r",
+                "edge_radii": ["r", "s"], "tangent_chain": false})),
+            ["Radius", "Edge radius", "Edge radius"]
+        );
+        assert_eq!(
+            labels(json!({"type": "bounding_solid", "bodies": [],
+                "margins": ["a", "b", "c", "d", "e", "f"]})),
+            [
+                "Margin",
+                "-X margin",
+                "+X margin",
+                "-Y margin",
+                "+Y margin",
+                "-Z margin",
+                "+Z margin"
+            ]
+        );
+        let plane = json!({"type": "at_angle", "angle": "a", "axis_origin": ["w", 0, 0],
+            "axis_dir": [1, 0, 0], "base": {"type": "origin", "name": "XY"}});
+        assert_eq!(
+            labels(json!({"type": "construction_plane", "plane": plane})),
+            ["Angle"]
+        );
+        assert_eq!(
+            labels(
+                json!({"type": "move", "bodies": ["B"], "translate": [0, 0, 0],
+                "rotate_axis": [0, 0, 1], "rotate_about": {"type": "edge", "at": o}, "angle": "t"})
+            ),
+            ["X distance", "Y distance", "Z distance", "Angle"]
         );
     }
 }

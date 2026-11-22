@@ -354,7 +354,11 @@ pseudo-language and that no group caption of the ribbon is cut.
 visible lists (`walk-context-menus`), every command opened as its button
 would and closed again, its dialogs and windows closed and its panel
 cancelled (`walk-commands`), then the sketch's commands in a sketch and a
-drawing's in a drawing. It fails on each `Untranslated:` or `Fallback:`
+drawing's in a drawing. A command that leaves the sketch (Finish Sketch,
+Cancel Sketch) is left out of the sketch's walk: once the sketch is gone,
+every later command would wait for it until its time runs out, so
+`walk-commands` fails at the first command that leaves the sketch and
+names it (mitcad#2261). It fails on each `Untranslated:` or `Fallback:`
 line of a text of MitCad's, naming the step that showed it; Qt's own texts
 that Qt's catalogue lacks (its key names) are left out, but not the labels of
 Qt's file dialog (Look in, Files of type, File name), which Qt's Finnish
@@ -593,3 +597,4 @@ päätä", never "napsauta keskipiste".
 | die line | stanssikuva | Export Die Line…: Vie stanssikuva…; cut and crease lines: leikkaus- ja nuuttausviivat; engrave: kaiverrus; score: urotus; nest (parts on a sheet): sijoitella |
 | block (sketch) | lohko | block instance: lohkon ilmentymä (not esiintymä, an occurrence; not kopio, a pattern instance); base point: peruspiste; Create Block: Luo lohko; Insert Block: Lisää lohko; Explode Block: Pura lohko; Edit Block: Muokkaa lohkoa; Finish Block: Lopeta lohko; Cancel Block: Peruuta lohko; Sketch Blocks: Luonnoslohkot |
 | Break, Split at Point, Blend Curve (sketch) | Pilko, Jaa pisteessä, Liitoskäyrä | Trim stays Katkaise; break (the drawing view's) stays katkaisu |
+| Extend to Meet (sketch) | Jatka kohtaamaan | Extend stays Jatka; not Liitä, which is the body Join (mitcad#2178) |

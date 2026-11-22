@@ -30,6 +30,7 @@ wait-idle
 expect-no-log '^Panel Flange [a-z_]+: remembered '
 expect-choice-text length_mode '^Tangent Length$'
 expect-choice-text position '^Bend Line$'
+expect-ever '^Panel Flange options relief_type: Rectangular [|] Round$' 30
 mark
 # Face the free x = 5 side directly: its thin strip is not an edge pick.
 command view.right

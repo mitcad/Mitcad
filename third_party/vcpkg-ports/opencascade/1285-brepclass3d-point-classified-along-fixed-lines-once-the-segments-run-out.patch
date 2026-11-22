@@ -29,17 +29,8 @@ an edge met there counted a point outside the shell inside it. A cut by
 such a tool came out empty (OCCT's TKBO GTests BCutSimpleTest1 K1, K5, K7
 and L1, mitcad#1881); it is the object unchanged, as without the patch.
 
-Test: geometry/tests/test_classifier_far_plane.cpp,
-test_point_in_the_plane_of_a_far_face and test_block_with_the_two_cavities
-(ctest geometry.classifier_far_plane): a thin pointed cavity whose bottom
-face, last in its shell, lies in the plane of a box-shaped cavity's bottom
-beyond its point: points of that bottom classify IN the pointed cavity's
-solid (OUT without the patch), points inside it OUT, and the checker
-accepts the block (BRepCheck_SubshapeNotInShape without the patch); and
-test_point_in_the_plane_of_a_flat_shell and test_cut_by_a_flat_shell, the
-boundary of the fixed-line rule: points in a flat shell's plane outside it
-classify OUT, and a pocketed block cut by it keeps its volume. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1285.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx

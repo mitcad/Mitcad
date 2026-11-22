@@ -35,6 +35,10 @@
 //!   contact, and the narrowest other pair whose faces face each other
 //!   across air ([`faces_across_a_gap`]) is a narrow gap beside the
 //!   contact (a peg in its hole beside a face both lie on).
+//! - **Draft** (mitcad#2166, [`drafts`]): each triangle's normal against a
+//!   mould's pull direction, in three classes: enough draft towards the
+//!   pull, too little either way, enough the other way. Draft Analysis
+//!   (`document/analyses.rs`) and `model_render`'s draft overlay use it.
 //!
 //! The functions take a [`TriangleMesh`] and the settings, so they are
 //! tested without a kernel (`print_analysis_tests.rs`); the queries that
@@ -220,6 +224,86 @@ pub fn overhangs(
         }
         result.overhang_area += area;
         result.triangles.push(t);
+    }
+    result
+}
+
+/// A triangle's draft from a pull direction (mitcad#2166).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftClass {
+    /// At least the angle towards the pull: it releases when pulled along
+    /// it.
+    Positive,
+    /// Less than the angle either way: it needs more draft.
+    Under,
+    /// At least the angle the other way: it releases only when pulled the
+    /// opposite way (the other mould half).
+    Negative,
+}
+
+/// A body's triangles by their draft.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Drafts {
+    /// Of all triangles, mm².
+    pub area: f64,
+    /// Of each class, mm².
+    pub positive_area: f64,
+    pub under_area: f64,
+    pub negative_area: f64,
+    /// The triangles of each class, indices into the mesh's.
+    pub positive: Vec<usize>,
+    pub under: Vec<usize>,
+    pub negative: Vec<usize>,
+}
+
+impl Drafts {
+    /// A class' part of the area, 0 to 1.
+    pub fn share(&self, class: DraftClass) -> f64 {
+        let part = match class {
+            DraftClass::Positive => self.positive_area,
+            DraftClass::Under => self.under_area,
+            DraftClass::Negative => self.negative_area,
+        };
+        if self.area > 0.0 {
+            part / self.area
+        } else {
+            0.0
+        }
+    }
+}
+
+/// The triangles of `mesh` (counter-clockwise seen from outside) by their
+/// draft for a mould pulled along `pull` (a unit vector) with `angle`
+/// degrees the least draft a face needs. A triangle's draft is the angle
+/// between its outward normal `n` and the plane square to the pull, signed
+/// by `n · pull`: `asin(n · pull)`. At least `angle` is [`DraftClass::Positive`],
+/// at most `−angle` [`DraftClass::Negative`], between them
+/// [`DraftClass::Under`]; a face exactly at the angle has enough. With
+/// `angle` 0 nothing is under and a face square to the pull is positive.
+/// Curved faces are classed triangle by triangle, where they are steep.
+pub fn drafts(mesh: &TriangleMesh, pull: Vec3, angle: f64) -> Drafts {
+    let mut result = Drafts::default();
+    let limit = angle.to_radians().sin() - 1e-9;
+    for t in 0..mesh.triangles.len() {
+        let p = corners(mesh, t);
+        let n = area_normal(&p);
+        let double = norm(n);
+        if double.is_nan() || double <= 0.0 {
+            continue;
+        }
+        let area = double / 2.0;
+        result.area += area;
+        let sine = dot(n, pull) / double;
+        if sine.abs() < limit {
+            result.under_area += area;
+            result.under.push(t);
+        } else if sine >= 0.0 {
+            result.positive_area += area;
+            result.positive.push(t);
+        } else {
+            result.negative_area += area;
+            result.negative.push(t);
+        }
     }
     result
 }

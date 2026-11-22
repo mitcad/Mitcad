@@ -1213,6 +1213,67 @@ fn table_reports_unknown_names() {
 }
 
 #[test]
+fn refusals_in_words_have_no_offsets_and_offer_a_near_miss() {
+    // mitcad#2181: what a person reads; Display stays the agents' text.
+    let mut t = sample_table();
+    let error = t.add(spec("x", "width + depth", Unit::MM)).unwrap_err();
+    assert_eq!(
+        t.refusal_message(&error).unwrap(),
+        "The expression of x uses depth, which is not a parameter."
+    );
+    let error = t.add(spec("x", "widht + 1 mm", Unit::MM)).unwrap_err();
+    assert_eq!(
+        t.refusal_message(&error).unwrap(),
+        "The expression of x uses widht, which is not a parameter. Did you mean width?"
+    );
+    assert_eq!(
+        error.to_string(),
+        "parameter x: unknown parameter widht at byte 0"
+    );
+    // Its own name is no near miss of a name it uses.
+    let id = t.find("height").unwrap();
+    let error = t.update(id, "heigth * 2", Unit::MM).unwrap_err();
+    assert_eq!(
+        t.refusal_message(&error).unwrap(),
+        "The expression of height uses heigth, which is not a parameter."
+    );
+    let error = t.add(spec("x", "width *", Unit::MM)).unwrap_err();
+    let shown = t.refusal_message(&error).unwrap();
+    assert!(
+        shown.starts_with("The expression of x cannot be read: expected "),
+        "{shown}"
+    );
+    assert!(!shown.contains("byte"), "{shown}");
+    assert!(error.to_string().contains(" at byte "), "{error}");
+    // Not about an expression: no words of its own.
+    let error = t.add(spec("width", "1 mm", Unit::MM)).unwrap_err();
+    assert_eq!(t.refusal_message(&error), None);
+    // The errors' own words.
+    let parse = Expr::parse("2 +* 3").unwrap_err();
+    assert!(!parse.message().contains("byte"), "{}", parse.message());
+    assert!(
+        parse
+            .to_string()
+            .ends_with(&format!(" at byte {}", parse.span.start))
+    );
+    let eval = EvalError::UnknownReference {
+        name: "depth".into(),
+        span: Span::new(3, 8),
+    };
+    assert_eq!(eval.message(), "depth is not a parameter");
+    assert_eq!(eval.to_string(), "unknown parameter depth at byte 3");
+    assert_eq!(t.eval_message(&eval, ""), "depth is not a parameter");
+    let near = EvalError::UnknownReference {
+        name: "heigt".into(),
+        span: Span::new(0, 5),
+    };
+    assert_eq!(
+        t.eval_message(&near, ""),
+        "heigt is not a parameter. Did you mean height?"
+    );
+}
+
+#[test]
 fn table_change_re_evaluates_dependents() {
     let mut t = sample_table();
     let width = t.find("width").unwrap();

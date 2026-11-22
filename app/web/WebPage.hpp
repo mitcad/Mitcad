@@ -68,7 +68,8 @@ struct PageResult {
 // their faces' (texture images found as the view finds them, relative ones
 // in options.designFolder). What is not as in the design (a body that
 // cannot be meshed, a texture image missing) goes to `warnings`. The page
-// and the glTF export (web/GltfExport.hpp) write these.
+// and the glTF export (web/GltfExport.hpp) write these; web/WebBodies.cpp,
+// which `mitcad-cli export` builds without the page (mitcad#2210).
 std::vector<PageBody> pageBodies(const CommandContext& context, const PageOptions& options, QStringList& warnings);
 
 // The design open in `context`, as one self-contained HTML page at `path`:

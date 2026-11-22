@@ -38,13 +38,8 @@ surface's periods in u and v (within the parametric tolerance). Any face
 periodic along the line qualifies (a cylinder, a cone, a torus), with a seam
 of any shape; nothing depends on the boss, the step or the two parts.
 
-Test: geometry/tests/test_fillet_kernel.cpp,
-test_boss_rim_rounded_across_a_stepped_seam (ctest
-geometry.suite.fillet_kernel): the end circle of a cylinder built as two
-bosses whose seams lie at an angle, merged into one face whose seam runs in
-steps: one contour, valid, the volume removed as on a reference body whose
-seam does not run in steps, within 1e-6. It fails without the patch (shown
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0420.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 index b875eb0..691d31e 100644

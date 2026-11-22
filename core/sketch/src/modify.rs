@@ -26,6 +26,10 @@ use crate::values::ValueInput;
 mod breaks;
 pub use breaks::{BreakAt, BreakMode};
 
+// Extend to Meet (mitcad#2178).
+mod meet;
+pub use meet::{MeetEnd, MeetResult, Met, NoMeet, meet_results};
+
 /// Something of a sketch a command names: `p3`, `c4`, `t5` or `k6`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Item {
@@ -1611,11 +1615,21 @@ impl SketchEdit<'_> {
     /// it holds nothing, and its value is what it asks for when activated
     /// (an imported one's value is the file's).
     fn remeasure_dimensions_on(&mut self, point: EntityUid, after: &Solved) {
+        self.remeasure_dimensions(&[Ref::Point(point)], after);
+    }
+
+    /// As [`SketchEdit::remeasure_dimensions_on`], for the dimensions on
+    /// any of `refs` (Extend to Meet, mitcad#2178: the corner and the two
+    /// curves, whose length or arc length takes the new value). A value
+    /// that is the same as before is left as it is.
+    fn remeasure_dimensions(&mut self, refs: &[Ref], after: &Solved) {
         let ids: Vec<ConstraintUid> = self
             .def
             .dimensions
             .iter()
-            .filter(|d| d.kind.refs().contains(&Ref::Point(point)) && self.def.dimension_applied(d))
+            .filter(|d| {
+                d.kind.refs().iter().any(|r| refs.contains(r)) && self.def.dimension_applied(d)
+            })
             .map(|d| d.id)
             .collect();
         for id in ids {
@@ -1647,6 +1661,13 @@ impl SketchEdit<'_> {
             let Some(value) = measure_in(&d.kind, after, &self.def.constraints) else {
                 continue;
             };
+            let unchanged = self
+                .params
+                .value(param)
+                .is_some_and(|old| (old - value).abs() <= 1e-12 * old.abs().max(1.0));
+            if unchanged {
+                continue;
+            }
             // A value the parameter cannot take leaves the dimension as it is.
             let _ = self.set_dimension(id, &ValueInput::Number(value));
         }

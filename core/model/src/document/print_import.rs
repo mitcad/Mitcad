@@ -76,6 +76,70 @@ fn inherits_another(name: &str, data: &[u8]) -> bool {
 }
 
 impl<K: Kernel> Document<K> {
+    /// Looks printer presets up for the 3MF export in `folders` instead of
+    /// the installed slicers' data folders (mitcad#2207; None: the
+    /// installed ones again). Runtime context: not part of the design, not
+    /// undone.
+    pub fn set_slicer_folders(&mut self, folders: Option<Vec<installed::SlicerFolder>>) {
+        self.slicer_folders = folders;
+    }
+
+    /// The slicers' data folders the export looks printer presets up in:
+    /// those set ([`Document::set_slicer_folders`]), else the installed
+    /// slicers'.
+    pub fn slicer_folders(&self) -> Vec<installed::SlicerFolder> {
+        match &self.slicer_folders {
+            Some(folders) => folders.clone(),
+            None => installed::slicer_folders(&PresetEnv::current()),
+        }
+    }
+
+    /// The extruders of the design's printer (`printer`, the settings of
+    /// the export's first part) as the Bambu-family slicer `dialect` loads
+    /// it (mitcad#2207): from the slicer's own preset of the printer, found
+    /// by the name the project gives it (`printer_settings_id`, else the
+    /// profile's name), the preset its kept block inherits from, or its
+    /// `printer_model` ([`installed::printer_extruders`]). A printer named
+    /// only by a system preset keeps one nozzle diameter, while the slicer
+    /// loads the preset's extruders. None for another slicer, or when no
+    /// preset is found.
+    pub(crate) fn printer_extruders(
+        &self,
+        dialect: Dialect,
+        printer: Option<&crate::document::EffectivePrint>,
+    ) -> Option<usize> {
+        if !dialect.bambu_family() {
+            return None;
+        }
+        let printer = printer?;
+        let raw = printer.raw.get(dialect.id());
+        let raw_text = |key: &str| {
+            raw.and_then(|r| r.get(key))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        let names: Vec<String> = [
+            printer
+                .dialect_text("printer_settings_id", dialect)
+                .or_else(|| printer.printer_name.clone()),
+            raw_text("printer_settings_id"),
+            raw_text("@inherits"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|n| !n.trim().is_empty())
+        .collect();
+        let model = printer
+            .dialect_text("printer_model", dialect)
+            .or_else(|| raw_text("printer_model"))
+            .filter(|m| !m.trim().is_empty());
+        if names.is_empty() && model.is_none() {
+            return None;
+        }
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        installed::printer_extruders(&self.slicer_folders(), dialect, &names, model.as_deref())
+    }
+
     /// Imports a slicer's print settings from `path`: into the design (one
     /// undo step; `choose`: the root chooses the printer and the process
     /// read), or into the user's or the project's library (`into`; the

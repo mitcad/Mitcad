@@ -46,18 +46,8 @@ equal_dist_sequence B5 B7 gave no result).
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_corners.cpp,
-test_rounding_rolls_on_the_far_edge_of_a_floor_narrowing_before_the_end
-(ctest geometry.suite.fillet_corners): a wall on a floor that narrows before
-the end, its foot rounded with 1: the volume added against the full
-rounding's section and the rolling ball's. Another caller:
-geometry/tests/test_fillet_occt_cases.cpp,
-test_cone_edge_rounded_from_its_apex_on_a_partial_revolve (ctest
-geometry.fillet_occt_cases), a contact on a cone's rim not taken for an edge
-the ball rolls on. Its failure without the patch is still to be shown: the
-patch does not revert at the port's tip without the more than 40 later
-patches that change the same lines (tried 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0620.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 4c26d653..12e03057 100644

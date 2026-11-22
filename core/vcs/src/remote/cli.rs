@@ -52,6 +52,10 @@ const POLL: Duration = Duration::from_millis(20);
 /// How long the output of a finished or stopped git is still read: a child
 /// it started (ssh) may hold the pipes a little longer.
 const DRAIN: Duration = Duration::from_secs(2);
+/// How long a stopped git and its children have to end on SIGTERM, removing
+/// their lock files, before SIGKILL (`stop`).
+#[cfg(unix)]
+const TERM_GRACE: Duration = Duration::from_secs(2);
 /// The configuration every run has, before git's command: files are
 /// checked out as recorded, without line endings converted unless the
 /// project's `.gitattributes` asks for it (Mitcad records the bytes it
@@ -363,13 +367,42 @@ fn cancelled() -> RemoteError {
 /// Ends git. On Windows the `git.exe` of Git for Windows' `cmd` folder
 /// starts the real git as a child, so the whole tree is ended; elsewhere
 /// git leads a process group of its own (a session, `run`), which is ended
-/// with the children git started (ssh, a remote helper).
+/// with the children git started (ssh, a remote helper, the
+/// `git-receive-pack` of a remote in a folder): SIGTERM first, on which git
+/// removes the lock files it holds (a ref's `<ref>.lock`, `index.lock`),
+/// and SIGKILL only for what is left after [`TERM_GRACE`]. SIGKILL alone
+/// left the lock file of a ref that a folder remote's `git-receive-pack`
+/// was writing when an edit lock's refresh was cancelled, and every later
+/// push of that ref failed ("reference already exists") until someone
+/// removed the file by hand (mitcad#2189).
 fn stop(child: &mut std::process::Child) {
     #[cfg(unix)]
     if let Ok(group) = libc::pid_t::try_from(child.id()) {
         // SAFETY: kill() with the negative id of the group git leads.
         unsafe {
-            libc::kill(-group, libc::SIGKILL);
+            libc::kill(-group, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + TERM_GRACE;
+        let mut leader_ended = false;
+        let mut group_ended = false;
+        while Instant::now() < deadline {
+            leader_ended = leader_ended || matches!(child.try_wait(), Ok(Some(_)));
+            // The group is empty once its leader is reaped and no other
+            // process of it is left (kill() with signal 0 only checks; the
+            // id names no group while the leader is unreaped or a member
+            // lives, so it cannot be another's here).
+            // SAFETY: as above, with no signal sent.
+            if leader_ended && unsafe { libc::kill(-group, 0) } != 0 {
+                group_ended = true;
+                break;
+            }
+            std::thread::sleep(POLL);
+        }
+        if !group_ended {
+            // SAFETY: as above: what did not end on SIGTERM.
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
         }
     }
     #[cfg(windows)]

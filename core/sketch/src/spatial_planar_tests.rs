@@ -419,6 +419,7 @@ fn a_projected_arc_bounding_a_profile_converts_back_as_profile_geometry() {
         chain: Vec::new(),
         after: None,
         outline: false,
+        automatic: false,
     });
     let params = Parameters::default();
     let before = planar.regions_of(&solve_planar(&planar, &params), &[]);

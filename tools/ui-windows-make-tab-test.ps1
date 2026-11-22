@@ -241,7 +241,7 @@ Ui-ExpectNew 'Ribbon tab shown: MAKE_LASER' 'the Laser tab shown'
 foreach ($group in 'EXPORT', 'MATERIALS', 'ANNOTATE', 'INSPECT') {
   Ui-ExpectNew "Ribbon MAKE_LASER/$group at" "its $group group"
 }
-Group-Menu 'MAKE_LASER/EXPORT' 'Export Flat Pattern... | Export Face as DXF...'
+Group-Menu 'MAKE_LASER/EXPORT' 'Export Flat Pattern... | Export Bend Table... | Export Face as DXF...'
 Group-Menu 'MAKE_LASER/ANNOTATE' $annotate
 Ui-Mark
 Ui-Step 'the CNC tab'                      { Ui-ClickTab 'MAKE_CNC' }

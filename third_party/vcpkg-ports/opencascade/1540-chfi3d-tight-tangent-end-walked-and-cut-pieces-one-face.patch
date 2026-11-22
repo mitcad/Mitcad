@@ -23,8 +23,8 @@ are one face (ChFi3d_FilDS makes no section between pieces on one
 surface). Where that walk does not pass through the crossing, the blend is
 walked from P's end section as before.
 
-Test: geometry/tests/test_fillet_tight_tangent_end.cpp: each end's face
-has the stored body's area, and the result the stored body's faces.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1540.
 
 Upstream: new.
 

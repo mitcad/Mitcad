@@ -9,6 +9,7 @@
 // guide's events back. No file access and no model edits through it.
 #include "../MainWindow.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <utility>
 
@@ -121,7 +122,39 @@ void MainWindow::openListedTutorial(const QString& url, const QJsonObject& tutor
                            .arg(id, tutorial.value(QStringLiteral("version")).toString())
                            .arg(answer.value(QStringLiteral("files")).toInt())
                            .arg(QDir::toNativeSeparators(folder));
-  openTutorialPane(folder, answer.value(QStringLiteral("start")).toString(), title);
+  openTutorialInDesign(folder, answer.value(QStringLiteral("start")).toString(), title);
+}
+
+void MainWindow::openTutorialInDesign(const QString& folder, const QString& page, const QString& title) {
+  if (!startPageShown()) {
+    openTutorialPane(folder, page, title);
+    return;
+  }
+  // Over the Start page (mitcad#2168) the tutorial starts in an empty
+  // design of its own, never in the design under the page: its first
+  // step's target is on the design's toolbar, and the page's own controls
+  // are no part of any step.
+  if (modelBusy()) {
+    whenIdle(this, [this, folder, page, title] { openTutorialInDesign(folder, page, title); });
+    return;
+  }
+  if (m_noDesign || emptyUntitledDesign()) {
+    // The empty untitled design that waits under the page (the launch's,
+    // or the one a close to the page installed): the page is left for it.
+    qInfo().noquote() << QStringLiteral("Tutorial: starts in the empty design under the Start page");
+    leaveStartPage();
+    openTutorialPane(folder, page, title);
+    return;
+  }
+  // The user's design: New Design, in a new window or (Open in current
+  // window) in this one after its unsaved-changes question.
+  qInfo().noquote() << QStringLiteral("Tutorial: starts in a new design");
+  QPointer<MainWindow> target = newDocument();
+  if (target.isNull()) {
+    qInfo().noquote() << QStringLiteral("Tutorial: not opened (New Design was cancelled)");
+    return;
+  }
+  target->openTutorialPane(folder, page, title);
 }
 
 bool MainWindow::tutorialOpen() const { return !m_tutorialPageWidget.isNull(); }
@@ -171,7 +204,7 @@ bool MainWindow::showTutorialPane(const BrowserComponentInfo& component, const Q
   m_tutorialTitle->setText(title);
   static_cast<QVBoxLayout*>(m_tutorialPane->layout())->addWidget(widget, 1);
   // The guide's events to the page while it lives.
-  connect(guide(), &TutorialGuide::event, widget, [this](const QJsonObject& event) {
+  connect(guide(), &TutorialGuide::guideEvent, widget, [this](const QJsonObject& event) {
     if (m_tutorialPage != nullptr && !m_tutorialPageWidget.isNull()) {
       m_tutorialPage->sendEvent(QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact)));
     }
@@ -227,7 +260,19 @@ void MainWindow::ensureTutorialPane() {
     addDockWidget(Qt::LeftDockWidgetArea, dock, Qt::Horizontal);
     dock->hide();
     m_tutorialContainer = dock;
-    QTimer::singleShot(0, this, [this, dock] { resizeDocks({dock}, {360}, Qt::Horizontal); });
+    // 360 px wide, but never at the cost of the 3D view between the docks:
+    // in a 1024 px window the Browser, the tutorial and the command panel
+    // left it 100 px, the XY plane under the command panel (mitcad#2248).
+    QTimer::singleShot(0, this, [this, dock] {
+      constexpr int kWidth = 360;
+      constexpr int kViewRoom = 320;
+      int width = kWidth;
+      if (const QWidget* central = centralWidget(); central != nullptr && dock->isVisible()) {
+        width = std::min(width, dock->width() + central->width() - kViewRoom);
+      }
+      width = std::max(width, dock->minimumSizeHint().width());
+      resizeDocks({dock}, {width}, Qt::Horizontal);
+    });
   }
 }
 

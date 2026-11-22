@@ -19,13 +19,8 @@ face's edge the section crosses, within the rounding's size, as such a side
 does further on: the ball touches the notch and the cylinder, the strip
 consumed, as at the corner without the strip.
 
-Test: geometry/tests/test_fillet_strip_start.cpp,
-test_rounding_along_a_strip_the_ball_cannot_touch (ctest
-geometry.fillet_strip_start): a ring's notch with a strip 5 micrometres wide
-at one corner, the strip's edge rounded with the notch: valid, the strip
-gone, the rounding's face as large as the sharp corner's within 1e-6 and the
-material removed as there within 1e-4, both corners at once as each alone.
-It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0880.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 54ea22c1..10c86ee2 100644

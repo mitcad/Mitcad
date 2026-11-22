@@ -5,11 +5,15 @@
 #include <array>
 #include <cmath>
 #include <iterator>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QObject>
 #include <QSaveFile>
 #include <QTemporaryDir>
@@ -208,6 +212,7 @@ Appearance appearanceOf(const QJsonObject& value) {
     a.texture.rotation = texture.value(QStringLiteral("rotation")).toDouble();
     a.texture.planar = texture.value(QStringLiteral("projection")).toString() == QLatin1String("planar");
     a.texture.uv = texture.value(QStringLiteral("projection")).toString() == QLatin1String("uv");
+    a.texture.grain = texture.value(QStringLiteral("projection")).toString() == QLatin1String("grain");
     a.texture.embedded = texture.value(QStringLiteral("embedded")).toBool();
     a.texture.imageSha256 = texture.value(QStringLiteral("image_sha256")).toString();
     // The other maps of the set (mitcad#313).
@@ -286,16 +291,100 @@ QHash<QString, Appearance> appearancesById(const QVector<Appearance>& appearance
   return byId;
 }
 
+namespace {
+
+struct ImageSourceSlot {
+  const void* owner = nullptr;
+  EmbeddedImageSource source;
+};
+
+ImageSourceSlot& imageSource() {
+  static ImageSourceSlot slot;
+  return slot;
+}
+
+// The swatch textures made so far: a texture's base colour image scaled so
+// that one repeat is as many pixels as a swatch of that size shows of it
+// (no aliasing of a fine grain), by image and pixel width. Small; the
+// full-size images are not kept.
+QImage swatchTexture(const QString& file, int width, int height) {
+  static QMutex mutex;
+  static QHash<QString, QImage> made;
+  const QString key = file + QLatin1Char('|') + QString::number(width) + QLatin1Char('x') + QString::number(height);
+  const QMutexLocker lock(&mutex);
+  const auto found = made.constFind(key);
+  if (found != made.cend()) {
+    return found.value();
+  }
+  QImage image(file);
+  if (!image.isNull()) {
+    image = image.scaled(width, height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                .convertToFormat(QImage::Format_RGB32);
+  }
+  made.insert(key, image);
+  return image;
+}
+
+} // namespace
+
+void setEmbeddedImageSource(const void* owner, EmbeddedImageSource source) {
+  imageSource() = ImageSourceSlot{owner, std::move(source)};
+}
+
+void clearEmbeddedImageSource(const void* owner) {
+  if (imageSource().owner == owner) {
+    imageSource() = ImageSourceSlot{};
+  }
+}
+
+QString textureImageFile(const Appearance& a) {
+  if (!a.hasTexture) {
+    return QString();
+  }
+  if (!a.texture.file.isEmpty()) {
+    return a.texture.file;
+  }
+  AppearanceTexture texture = a.texture;
+  const EmbeddedImageSource source = imageSource().source;
+  const QString id = a.id;
+  resolveTexture(texture, QString(),
+                 source ? std::function<QByteArray()>([source, id] { return source(id, QStringLiteral("base_color")); })
+                        : std::function<QByteArray()>());
+  return texture.file;
+}
+
 QImage appearanceSwatch(const Appearance& a, int size, qreal devicePixelRatio) {
   const int n = std::max(1, static_cast<int>(std::lround(size * devicePixelRatio)));
   QImage image(n, n, QImage::Format_ARGB32);
   image.setDevicePixelRatio(devicePixelRatio);
-  const Rgb base = linearOf(a.baseColor);
+  const Rgb baseColor = linearOf(a.baseColor);
+  // The texture's base colour image (mitcad#2186), one repeat scaled to
+  // the pixels the sphere shows of it: kSwatchSpan mm over its diameter.
+  QImage wood;
+  const double radius = 0.9;
+  if (a.hasTexture && !a.texture.uv && a.texture.width > 0.0 && a.texture.height > 0.0) {
+    const QString file = textureImageFile(a);
+    if (!file.isEmpty()) {
+      const double pixelsPerMm = radius * n / kSwatchSpan;
+      wood = swatchTexture(file, std::clamp(static_cast<int>(std::lround(a.texture.width * pixelsPerMm)), 1, 4096),
+                           std::clamp(static_cast<int>(std::lround(a.texture.height * pixelsPerMm)), 1, 4096));
+    }
+  }
+  // The texture's colour at a point of the sphere's disc (u, v in -1..1,
+  // the disc radius * n pixels across): its sRGB pixel as linear light,
+  // one image pixel a swatch pixel, the image repeating.
+  const double discPixels = radius * n / 2.0;
+  const auto woodAt = [&wood, discPixels](double u, double v) {
+    const int w = wood.width();
+    const int h = wood.height();
+    const int x = ((static_cast<int>(std::floor(u * discPixels)) % w) + w) % w;
+    const int y = ((static_cast<int>(std::floor(-v * discPixels)) % h) + h) % h;
+    return linearOf(QColor(wood.pixel(x, y)));
+  };
   const Rgb glow = linearOf(a.emissionColor) * a.emission;
   const Vec light = normalized({-0.55, 0.65, 0.55});
   const Vec view{0.0, 0.0, 1.0};
   const Vec half = normalized({light.x + view.x, light.y + view.y, light.z + view.z});
-  const double radius = 0.9;
   const double dielectric = std::pow((a.ior - 1.0) / (a.ior + 1.0), 2.0) * a.specular;
   for (int py = 0; py < n; ++py) {
     QRgb* row = reinterpret_cast<QRgb*>(image.scanLine(py));
@@ -315,6 +404,9 @@ QImage appearanceSwatch(const Appearance& a, int size, qreal devicePixelRatio) {
         const double lit = std::max(0.0, dot(normal, light));
         const double facing = std::max(0.0, z);
         const Vec mirrored{2.0 * facing * normal.x, 2.0 * facing * normal.y, 2.0 * facing * normal.z - 1.0};
+        // The texture's colour replaces the base colour, as in the
+        // rendered view.
+        const Rgb base = wood.isNull() ? baseColor : woodAt(u, v);
         const Rgb world = environment(mirrored, a.roughness);
         const double spot = highlight(normal, half, a.roughness, lit);
         // Metal: a coloured reflection of the world and the light.

@@ -155,6 +155,11 @@ void shippedDefaultTests() {
   };
   CHECK(home("solid.new_component") == QStringLiteral("SOLID/ASSEMBLE"));
   CHECK(home("surface.thicken") == QStringLiteral("SURFACE/MODIFY"));
+  // Boundary Fill (mitcad#2149): at home in Solid › Create, again in
+  // Surface › Modify after Thicken.
+  CHECK(home("solid.boundary_fill") == QStringLiteral("SOLID/CREATE"));
+  CHECK(layout.placesOf(QStringLiteral("solid.boundary_fill")) ==
+        (QStringList{QStringLiteral("SOLID/CREATE"), QStringLiteral("SURFACE/MODIFY")}));
   // Material and Appearance are tools (the owner, 17.11.2026): at home in
   // Solid › Modify, Material also in Make; Manage holds the managers.
   CHECK(home("solid.material") == QStringLiteral("SOLID/MODIFY"));
@@ -185,6 +190,8 @@ void shippedDefaultTests() {
   CHECK(home("sheet.edit_rules") == QStringLiteral("MANAGE/RULES"));
   CHECK(home("sheet.export_dxf") == QStringLiteral("MAKE_LASER/EXPORT"));
   CHECK(home("inspect.print_analysis") == QStringLiteral("MAKE_PRINT/PREPARE"));
+  // Draft Analysis in the Inspect group after Print Analysis (mitcad#2166).
+  CHECK(home("inspect.draft_analysis") == QStringLiteral("SOLID/INSPECT"));
   // The Make workspace's tabs (the owner, 18.11.2026): each method's
   // commands at home on its own tab, every command of 3D Print's own groups
   // and of Laser's Export a button of its own; Materials, Annotate and
@@ -232,7 +239,7 @@ void shippedDefaultTests() {
   CHECK(home("file.design_properties") == QStringLiteral("MANAGE/DESIGN"));
   // Off the toolbar (mitcad#1975): acted on through their objects' menus.
   for (const char* id : {"inspect.remove_section", "inspect.flip_section", "insert.calibrate_image_reference",
-                         "sketch.edit_text", "sketch.edit_equal_spacing"}) {
+                         "sketch.edit_text", "sketch.edit_equal_spacing", "sketch.explode_text"}) {
     CHECK(layout.unplaced.contains(QString::fromLatin1(id)));
   }
   // The menus of mitcad#1975 (P4, P7): the sketch's Cut, Copy, Paste and

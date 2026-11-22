@@ -199,7 +199,7 @@ CommandSession::CommandSession(const CommandDef& def, CommandHost& host, const Q
     : QObject(parent), m_def(def), m_host(host), m_editUid(editUid) {
   m_previewTimer.setSingleShot(true);
   m_previewTimer.setInterval(kPreviewDelayMs);
-  connect(&m_previewTimer, &QTimer::timeout, this, &CommandSession::runPreview);
+  connect(&m_previewTimer, &QTimer::timeout, this, [this] { runPreview(true); });
   TestSync::watch(&m_previewTimer);
   m_refineTimer.setSingleShot(true);
   m_refineTimer.setInterval(kRefineDelayMs);
@@ -2285,7 +2285,7 @@ void CommandSession::updateManipulators() {
     if (!isShown(slot) && !slot.def->handleWhenHidden) {
       continue;
     }
-    if (slot.def->toggles && !m_shownReport.isEmpty()) {
+    if (slot.def->toggles && (!m_shownReport.isEmpty() || slot.def->togglesUnpreviewed)) {
       try {
         for (const Manipulator& toggle : slot.def->toggles(scopeOf(slot), m_host, m_shownReport)) {
           handles.push_back({slot.key, slot.def->label, toggle, 0.0});
@@ -2598,10 +2598,20 @@ bool CommandSession::previewReady(const CommandState& state, QString& message, b
   for (const Slot& slot : slotsOf(state, true)) {
     const InputDef& input = *slot.def;
     if (input.type == InputDef::Type::Selection && state.items(slot.key).size() < input.min) {
+      // The input's own words (InputDef::missingText, mitcad#2194).
+      QString own;
+      if (input.missingText) {
+        try {
+          own = input.missingText(state, m_host);
+        } catch (const std::exception&) {
+          own.clear();
+        }
+      }
       message = m_missingProfiles > 0 && input.id == QStringLiteral("profiles")
                     ? tr("%n profile(s) deleted from %1: select a new one.", nullptr, m_missingProfiles)
                           .arg(m_missingSketches)
-                    : tr("Select %1.").arg(input.label.toLower());
+                : !own.isEmpty() ? own
+                                 : tr("Select %1.").arg(input.label.toLower());
       error = false;
       return false;
     }
@@ -2846,7 +2856,33 @@ void CommandSession::measureInspection(const Inspection& result) {
   });
 }
 
-void CommandSession::runPreview() {
+// The panel's preview, or an input it comes from, waits for the model to
+// finish a job that is not the panel's own preview (mitcad#2118: a
+// refinement, a visibility change): the busy mark beside OK and Cancel
+// shows meanwhile, as while a preview computes (mitcad#1907), with what it
+// waits for as its text. Its own preview computing already shows it.
+void CommandSession::showWaitingMark() {
+  if (!m_presenter || m_asyncPending || m_waitingMark) {
+    return;
+  }
+  m_waitingMark = true;
+  m_presenter->setBusy(tr("Waiting for the design to finish computing…"));
+  qDebug().noquote() << QStringLiteral("Preview %1: waits for the model").arg(m_def.name);
+}
+
+// The wait has ended: the preview it held starts next (its own mark then,
+// kept shown through BusyMark's grace).
+void CommandSession::endWaitingMark() {
+  if (!m_waitingMark) {
+    return;
+  }
+  m_waitingMark = false;
+  if (m_presenter && !m_asyncPending) {
+    m_presenter->setBusy(QString());
+  }
+}
+
+void CommandSession::runPreview(bool timed) {
   m_previewTimer.stop();
   if (m_done || !m_presenter || m_suspended) {
     return;
@@ -2859,11 +2895,21 @@ void CommandSession::runPreview() {
   // waits for the job (commit).
   const bool readyWhileBusy = m_def.okWhileBusy && m_def.accept && !m_def.acceptPreview && !m_def.modelCommand &&
                               !m_def.inspect && !m_def.sketchCommand;
-  if (m_host.modelBusy() && !readyWhileBusy) {
+  // The timer's preview also leaves the model to the calls that wait for
+  // its idle point (inputAction: a click while the last preview computed):
+  // a preview started ahead of them is of inputs about to change, and
+  // while it computes they wait again (mitcad#2189: a double click's
+  // second click, which cancelled the preview it came during, waited
+  // behind the preview that cancel's completion scheduled next). Not when
+  // called directly, as by OK (commitAsync), which needs it now.
+  if ((m_host.modelBusy() || (timed && m_host.idleCallsWaiting())) && !readyWhileBusy) {
     if (!m_previewWaiting) {
       m_previewWaiting = true;
+      // Busy meanwhile, as while a preview computes (mitcad#2118).
+      showWaitingMark();
       m_host.whenIdle(this, [this] {
         m_previewWaiting = false;
+        endWaitingMark();
         schedulePreview(0);
       });
     }
@@ -2927,6 +2973,14 @@ void CommandSession::runPreview() {
       m_host.showHint(selectionHint(tr("%1: %2").arg(m_def.name, message)));
     }
     m_presenter->setOkEnabled(false);
+    // No preview of these inputs: the Affected components list says why
+    // in words, not that it is updating (mitcad#2118). An input still
+    // needed is said by the message; a refusal of the inputs is the list's
+    // failure too.
+    m_presenter->setPreviewReport(
+        error ? QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
+                            {QStringLiteral("error"), message}}
+              : QJsonObject{{QStringLiteral("status"), QStringLiteral("incomplete")}});
     if (m_def.modelCommand) {
       // A model command's rows read the model, not a preview (mitcad#1059:
       // what the Material tool's bodies are made of, before a material is
@@ -2990,6 +3044,8 @@ void CommandSession::runPreview() {
     // As OK sends it (mitcad#1632).
     m_def.addOptions(command, m_state);
   }
+  // A direction flip asks for the model's suggestion too (mitcad#2216).
+  observeToolDirection();
   addAutoOperation(command);
   const QByteArray key = compactJson(command);
   const auto cached = m_cache.constFind(key);
@@ -3060,7 +3116,11 @@ void CommandSession::runPreview() {
     // each preview (mitcad#1907, GitHub mitcad/Mitcad#361); the message
     // shown stays until the result replaces it. The log keeps its
     // "Computing preview started" line (the host's job).
+    m_waitingMark = false; // the mark now says what computes
     m_presenter->setBusy(tr("Computing preview…"));
+    // The Affected components list says it is updating only now
+    // (mitcad#2118).
+    m_presenter->setPreviewComputing(true);
     m_presenter->setOkEnabled(false);
     const bool started = m_host.modelPreviewAsync(key, m_def.name, this,
         [this, generation, structure, key, built, computedFrom, leftOut,
@@ -3071,6 +3131,7 @@ void CommandSession::runPreview() {
           // A newer preview that starts at once keeps the mark shown
           // (BusyMark's grace).
           m_presenter->setBusy(QString());
+          m_presenter->setPreviewComputing(false);
           if (m_cancelRequested) {
             if (m_host.asynchronousCommands()) { finishAsyncCancel(); }
             else { cancel(); }
@@ -3082,12 +3143,25 @@ void CommandSession::runPreview() {
             // values or commit identity. Structural changes discard it.
             if (structure == m_structureGeneration && result.succeeded() &&
                 result.answer.value(QStringLiteral("status")) == QStringLiteral("ok")) {
-              const QString operation = result.answer.value(QStringLiteral("auto_operation")).toObject()
-                  .value(QStringLiteral("operation")).toString(built.def.value(QStringLiteral("operation")).toString());
+              // The model's suggestion only while it is followed (a flip's,
+              // mitcad#2216, is not taken before its own preview).
+              const QString asked = built.def.value(QStringLiteral("operation")).toString();
+              const QString operation = m_autoOperation.active()
+                  ? result.answer.value(QStringLiteral("auto_operation")).toObject()
+                        .value(QStringLiteral("operation")).toString(asked)
+                  : asked;
               showPreview(computedFrom(previewFromReport(result.answer)), operation);
               qDebug().noquote() << QStringLiteral("Preview %1: intermediate numeric result").arg(m_def.name);
             }
-            schedulePreview(0);
+            // A value that waits for the model (numericInputAction) is
+            // taken first: its drain, queued for the idle model, previews
+            // at once after it. A preview started here instead raced it
+            // and, when the job ended first, computed the inputs before
+            // the value again and kept the model busy, so the value waited
+            // behind the very preview it dropped (mitcad#2189).
+            if (m_pendingNumbers.isEmpty()) {
+              schedulePreview(0);
+            }
             return;
           }
           if (result.cancelled) {
@@ -3104,6 +3178,7 @@ void CommandSession::runPreview() {
       m_asyncPending = false;
       m_previewClock.invalidate();
       m_presenter->setBusy(QString());
+      m_presenter->setPreviewComputing(false);
       schedulePreview();
     }
     return;
@@ -3624,6 +3699,11 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
       m_presenter->refresh(m_state);
     }
     runPreview();
+    return;
+  }
+  if (retryFlippedOperation(preview.report)) {
+    // A flip failed with the user's operation: the model's other one is
+    // tried, or theirs comes back when that fails too (mitcad#2216).
     return;
   }
   m_shownKey = key;
@@ -4351,7 +4431,12 @@ void CommandSession::inputAction(std::function<void()> action, bool invalidatesP
     if (invalidatesPreview && m_host.asynchronousPreviews() && (m_asyncPending || m_refining)) {
       m_host.cancelModelJob();
     }
+    // Busy until the model is idle (mitcad#2118).
+    if (invalidatesPreview) {
+      showWaitingMark();
+    }
     m_host.whenIdle(this, [this, action = std::move(action), rejected = std::move(rejected)] {
+      endWaitingMark();
       if (!m_done && !m_cancelRequested && !m_committing) {
         action();
       } else if (rejected) {
@@ -4384,7 +4469,8 @@ void CommandSession::numericInputAction(const QString& key, std::function<void()
     // (mitcad#1788) A slow preview of the value before: dropped, so that
     // the typed one is previewed without waiting for it (a Pipe along a
     // helix computed minutes with the default size after the path was
-    // picked). Its completion sees the newer generation and previews again.
+    // picked). Its completion sees the newer generation; the typed value's
+    // drain below previews it (mitcad#2189).
     qDebug().noquote() << QStringLiteral("Preview %1: dropped after %2 ms for a typed value")
                               .arg(m_def.name)
                               .arg(m_previewClock.elapsed());
@@ -4400,7 +4486,10 @@ void CommandSession::numericInputAction(const QString& key, std::function<void()
   m_pendingNumbers.insert(key, pending);
   m_scheduledNumbers[key].push_back(pending);
   if (timingLogged()) { qDebug() << "Preview numeric queued:" << key << "pending=" << m_pendingNumbers.size(); }
+  // Busy until the model is idle and the value previews (mitcad#2118).
+  showWaitingMark();
   m_host.whenIdle(this, [this, key, pending] {
+    endWaitingMark();
     if (m_pendingNumbers.value(key) == pending) { m_pendingNumbers.remove(key); }
     auto& scheduled = m_scheduledNumbers[key];
     scheduled.erase(std::remove(scheduled.begin(), scheduled.end(), pending), scheduled.end());

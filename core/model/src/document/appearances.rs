@@ -42,7 +42,17 @@ impl<K: Kernel> Document<K> {
             library
                 .chain(custom)
                 .map(|(a, library)| {
-                    let mut value = serde_json::to_value(a).expect("appearances serialize");
+                    // Without the embedded images' data, which is listed
+                    // as `embedded` below: the built-in woods' images
+                    // (mitcad#2186) are megabytes, and this query is asked
+                    // often.
+                    let mut listed = a.clone();
+                    if let Some(texture) = listed.texture.as_mut() {
+                        for slot in texture.slots_mut() {
+                            *slot.data = None;
+                        }
+                    }
+                    let mut value = serde_json::to_value(&listed).expect("appearances serialize");
                     if let (Some(texture), Some(t)) = (value.get_mut("texture"), &a.texture) {
                         appearance::each_image_json(texture, |map, image| {
                             if let Some(data) = t.image_data(map) {

@@ -18,14 +18,8 @@ test and the projection's success criteria are unchanged.
 
 Upstream: new.
 
-Test: geometry/tests/test_projection_boundary.cpp,
-projection_crossing_plane_bounds (ctest geometry.projection_boundary): a
-segment's normal projection onto a bounded plane, its parameters offset by
-1 and by 1e6 so that no representable parameter lies at either crossing of
-the plane's edges: the bracket ends at adjacent parameters and the
-projected points lie on the plane. Without the patch the projection's
-constructor does not return (DichExactBound). It fails without the patch
-(shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0960.
 diff --git a/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx b/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx
 --- a/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx
 +++ b/src/ModelingData/TKGeomBase/ProjLib/ProjLib_CompProjectedCurve.cxx

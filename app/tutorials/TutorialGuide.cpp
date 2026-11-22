@@ -248,7 +248,7 @@ void TutorialGuide::emitEvent(QJsonObject event) {
   event.insert(QStringLiteral("step"), m_step.id);
   event.insert(QStringLiteral("sequence"), m_sequence);
   m_lastEvent = event;
-  emit this->event(event);
+  emit guideEvent(event);
   emit changed();
 }
 

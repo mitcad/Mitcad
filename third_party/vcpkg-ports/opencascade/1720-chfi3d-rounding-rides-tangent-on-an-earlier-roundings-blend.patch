@@ -64,15 +64,8 @@ with another stripe) and part rides (the face between narrower along a
 part of the edges only, the contacts crossing part of the way) are not
 made so: the roundings are computed as before.
 
-Test: geometry/tests/test_fillet_tangent_ride.cpp (ctest
-geometry.fillet_tangent_ride): test_wall (2.9, 2.5 and 2.127 wide),
-test_tower_foot (2.9, 2.5 and 2.2) and test_step (1.45 and 1.3 high), each
-in both orders: valid, the volume of the section within a millionth;
-without the patch the wall's result has more material and the other two
-fail. It fails with this patch and 9 later patches that change the same
-lines reverted together, so the test does not single this patch out (shown
-2026-11-20 by tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1720.
 
 Failures (mitcad#1986): the two stripes' computations again for the ride
 fail with OCCT's reports of a computation it cannot make

@@ -2,7 +2,7 @@
 //! Editable folded sheet operations; geometry is shared with material trimming.
 
 use super::mapping::map_params;
-use super::sheet::{Allowance, Relief};
+use super::sheet::{Allowance, Relief, warn_legacy_bend_relief};
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput, References,
 };
@@ -267,6 +267,21 @@ pub struct SheetFlangeDef<P = ParamId> {
     /// rows picks the rules' rows in its direction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowance: Option<Allowance<P>>,
+    /// The boundary goes on along its panel's straight boundaries that
+    /// continue it in a line and are joined to no other domain
+    /// (mitcad#2117): one bend and one wall along the whole run, as on a
+    /// body whose edge there is one (an imported design's base flange over
+    /// collinear sketch lines). One edge only, no profile, not at position
+    /// `edge`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run: bool,
+    /// An end of the whole boundary where the panel goes on along the bend
+    /// line (its outline turns away from the material there: a concave
+    /// corner) takes the bend relief inside the flange's span, as an offset
+    /// end of the relief's width does (mitcad#2117: the `.f3d` edge
+    /// flange's bend relief). Only without offsets, a width or a profile.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relieve_ends: bool,
 }
 
 impl<P> SheetFlangeDef<P> {
@@ -493,6 +508,8 @@ impl<P> SheetFlangeDef<P> {
             miter: self.miter,
             corner_miters: self.corner_miters.clone(),
             allowance: map_allowance(&self.allowance, f)?,
+            run: self.run,
+            relieve_ends: self.relieve_ends,
         })
     }
 }
@@ -767,6 +784,7 @@ impl FeatureInfo for SheetCornerChamferDef {
 impl<K: Kernel> Evaluate<K> for SheetFlangeDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
+        warn_legacy_bend_relief(d.relief.as_ref(), ctx);
         // A profile sketch left where an earlier angle or position put the
         // wall says so (mitcad#1648); the wall follows its outline anyway.
         crate::sheet::folded::warn_moved_profile(&d, ctx)
@@ -777,12 +795,14 @@ impl<K: Kernel> Evaluate<K> for SheetFlangeDef {
 impl<K: Kernel> Evaluate<K> for SheetBendDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
+        warn_legacy_bend_relief(d.relief.as_ref(), ctx);
         crate::sheet::folded::bend(&d, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }
 impl<K: Kernel> Evaluate<K> for SheetFoldDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
+        warn_legacy_bend_relief(d.relief.as_ref(), ctx);
         crate::sheet::folded::fold(&d, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }

@@ -69,6 +69,7 @@ struct AppearanceTexture {
   double rotation = 0.0; // radians
   bool planar = false;   // else box
   bool uv = false;       // by the body's own texture coordinates (mitcad#1862)
+  bool grain = false;    // along each face's grain (mitcad#2186, render/GrainProjection.hpp)
   bool embedded = false; // the image is in the design file
   QString imageSha256;   // of an embedded image
   // The image file the renderer reads (resolveTexture): absolute; empty
@@ -80,7 +81,8 @@ struct AppearanceTexture {
 
   bool operator==(const AppearanceTexture& o) const {
     return path == o.path && width == o.width && height == o.height && rotation == o.rotation &&
-           planar == o.planar && uv == o.uv && embedded == o.embedded && imageSha256 == o.imageSha256 &&
+           planar == o.planar && uv == o.uv && grain == o.grain && embedded == o.embedded &&
+           imageSha256 == o.imageSha256 &&
            file == o.file &&
            maps == o.maps;
   }
@@ -133,8 +135,27 @@ QHash<QString, Appearance> appearancesById(const QVector<Appearance>& appearance
 
 // A preview swatch: a sphere lit by a soft sky and a light from the upper
 // left, over a checkerboard that shows transmission and opacity; `size`
-// device-independent pixels at the device pixel ratio.
+// device-independent pixels at the device pixel ratio. A texture's base
+// colour image (mitcad#2186: the built-in woods' grain) covers the sphere
+// at its real size, kSwatchSpan mm across, its width (the grain) to the
+// right; without a readable image the base colour.
 QImage appearanceSwatch(const Appearance& appearance, int size, qreal devicePixelRatio = 1.0);
+// How much of a texture a swatch's sphere shows across (mm).
+constexpr double kSwatchSpan = 250.0;
+
+// Where swatches and the view get the bytes of an embedded texture image
+// they have no file of yet (mitcad#2186: the built-in woods' and panels'
+// images are the model's): appearance `id`'s image of `map` ("base_color"
+// or a map's name; the `appearance_image` query). A main window sets it
+// for itself (`owner`) and clears it when it goes; without one such a
+// swatch shows the base colour.
+using EmbeddedImageSource = std::function<QByteArray(const QString& id, const QString& map)>;
+void setEmbeddedImageSource(const void* owner, EmbeddedImageSource source);
+void clearEmbeddedImageSource(const void* owner);
+// The base colour image file of an appearance's texture: its resolved
+// `file`, else found as resolveTexture finds it (an embedded image through
+// the source above); empty when there is none.
+QString textureImageFile(const Appearance& appearance);
 
 // Finds the image file of a texture for the renderer (mitcad#53): its path
 // made absolute against the design's folder (empty for an unsaved design:

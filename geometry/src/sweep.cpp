@@ -2564,25 +2564,26 @@ bool is_planar_target(const Target& target) {
   return reference_plane(target_faces(target).front()).has_value();
 }
 
-} // namespace
-
-double reach(const Target& target, const gp_Dir& along, const Bnd_Box& start) {
+// How far the target lies ahead of the start (whose bounds are `start`)
+// along `along`: a plane (or an extended planar face), its farthest
+// distance along the sweep from the start's corners; a face or a body, its
+// far side past the start's nearest corner. Not more than zero when the
+// target lies behind the start; none when the sweep runs parallel to a
+// target plane.
+std::optional<double> ahead_of(const Target& target, const gp_Dir& along, const Bnd_Box& start) {
   const std::array<gp_Pnt, 8> starts = corners(start);
   if (is_planar_target(target)) {
     const gp_Pln plane = target_plane(target, along);
     const gp_Dir normal = plane.Axis().Direction();
     const double slope = normal.Dot(along);
     if (slope < 1.0e-9) {
-      throw std::invalid_argument("the sweep runs parallel to the target plane");
+      return std::nullopt;
     }
     double farthest = -std::numeric_limits<double>::infinity();
     for (const gp_Pnt& corner : starts) {
       farthest = std::max(farthest, gp_Vec(corner, plane.Location()).Dot(gp_Vec(normal)) / slope);
     }
-    if (farthest <= Precision::Confusion()) {
-      throw std::invalid_argument("the target lies behind the start of the sweep");
-    }
-    return farthest * 1.05 + 1.0;
+    return farthest;
   }
   Bnd_Box box;
   if (target.kind == Target::Kind::Face) {
@@ -2598,15 +2599,44 @@ double reach(const Target& target, const gp_Dir& along, const Bnd_Box& start) {
   }
   target_far += std::max(0.0, target.offset);
   double start_near = std::numeric_limits<double>::infinity();
-  double start_far = -std::numeric_limits<double>::infinity();
   for (const gp_Pnt& corner : starts) {
     start_near = std::min(start_near, along_of(corner, along));
-    start_far = std::max(start_far, along_of(corner, along));
   }
-  if (target_far <= start_near + Precision::Confusion()) {
+  return target_far - start_near;
+}
+
+// How far ahead a target must lie to be reached (mm): the boxes are
+// enlarged by their shapes' tolerances (1e-7 each), so a target in the
+// start's own plane comes out a few 1e-7 mm ahead either way (mitcad#2118).
+constexpr double kAhead = 1.0e-6;
+
+} // namespace
+
+bool lies_behind(const Target& target, const gp_Dir& along, const Bnd_Box& start) {
+  if (target.kind != Target::Kind::Plane && !target.body) {
+    return false;
+  }
+  const std::optional<double> ahead = ahead_of(target, along, start);
+  return ahead && *ahead <= kAhead;
+}
+
+double reach(const Target& target, const gp_Dir& along, const Bnd_Box& start) {
+  const std::optional<double> ahead = ahead_of(target, along, start);
+  if (!ahead) {
+    throw std::invalid_argument("the sweep runs parallel to the target plane");
+  }
+  if (*ahead <= kAhead) {
+    // Reached neither way: in the plane the sweep starts from (mitcad#2118).
+    const std::optional<double> back = ahead_of(target, along.Reversed(), start);
+    if (back && *back <= kAhead) {
+      throw std::invalid_argument("the target lies where the sweep starts, which leaves it no length");
+    }
     throw std::invalid_argument("the target lies behind the start of the sweep");
   }
-  return (target_far - start_near) + diagonal(start) + 1.0;
+  if (is_planar_target(target)) {
+    return *ahead * 1.05 + 1.0;
+  }
+  return *ahead + diagonal(start) + 1.0;
 }
 
 TopoDS_Face plane_tool(const gp_Pln& plane, const Bnd_Box& around) {

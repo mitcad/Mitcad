@@ -568,6 +568,8 @@ fn components_json(
 /// extension trait (mitcad#777): the api can then live in a crate above
 /// the model.
 pub(super) trait ExchangeOps<K: Kernel> {
+    fn export_bend_table_command(&self, command: ExportBendTableCommand)
+    -> Result<Value, ApiError>;
     fn import_file_command(&mut self, command: ImportFileCommand) -> Result<Value, ApiError>;
 
     /// `&mut`: an animation from a motion study evaluates its steps with
@@ -1121,6 +1123,38 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             "bounds": bounds,
         }))
     }
+
+    fn export_bend_table_command(
+        &self,
+        command: ExportBendTableCommand,
+    ) -> Result<Value, ApiError> {
+        use mitcad_model::sheet::bend_table::BendTableFormat;
+
+        let path = std::path::Path::new(&command.path);
+        let format = command.format.unwrap_or_else(|| {
+            match path.extension().and_then(|extension| extension.to_str()) {
+                Some(extension) if extension.eq_ignore_ascii_case("json") => BendTableFormat::Json,
+                _ => BendTableFormat::Csv,
+            }
+        });
+        let body = self.body_by_uid_or_name(&command.body)?;
+        let (def, table) = self.bend_table(body, command.reference_side)?;
+        let text = match format {
+            BendTableFormat::Csv => table.csv(),
+            BendTableFormat::Json => serde_json::to_string_pretty(&table)
+                .map_err(|error| ApiError(format!("cannot encode the bend table: {error}")))?,
+        };
+        mitcad_model::file::write_atomically(path, text.as_bytes())
+            .map_err(|error| ApiError(format!("cannot write {}: {error}", command.path)))?;
+        Ok(json!({
+            "path": command.path,
+            "body": body,
+            "format": format,
+            "reference_side": def.reference_side,
+            "bends": table.bends,
+            "rows": table.rows.len(),
+        }))
+    }
 }
 
 /// The document's methods used only in this module, as an
@@ -1238,6 +1272,19 @@ pub(super) struct ExportFlatPatternCommand {
     #[serde(default)]
     tangents: bool,
     /// The side the drawing looks at; the Flat Pattern's when left out.
+    #[serde(default)]
+    reference_side: Option<mitcad_model::sheet::SheetReferenceSide>,
+}
+
+/// `export_bend_table` (mitcad#2241): manufacturing data for the same
+/// developed sheet as a Flat Pattern drawing.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ExportBendTableCommand {
+    body: String,
+    path: String,
+    #[serde(default)]
+    format: Option<mitcad_model::sheet::bend_table::BendTableFormat>,
     #[serde(default)]
     reference_side: Option<mitcad_model::sheet::SheetReferenceSide>,
 }

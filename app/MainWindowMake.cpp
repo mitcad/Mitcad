@@ -33,6 +33,7 @@
 #include <utility>
 
 #include <QAction>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
 #include <QHash>
@@ -72,6 +73,27 @@ const QString kMake = QStringLiteral("MAKE");
 bool makeTabShown(const Ribbon* ribbon) { return Ribbon::workspaceOfTab(ribbon->currentTab()) == kMake; }
 
 QString text(const QJsonObject& object, const char* key) { return object.value(QLatin1String(key)).toString(); }
+
+// The Make card's places, logged once its rows are laid out (UI tests),
+// then `then`. Rows made again are shown by a call Qt queues and laid out
+// by an event after it; under a full check's load the timer came first,
+// every row was logged at the card's corner, and a test clicked there
+// (mitcad#2189). Looked at again every 50 ms (up to 2 s more) until the
+// rows are shown; the layouts waiting are applied before the places are
+// read.
+void logMakeCardPlaces(MakeBodyCard* card, int delay, const std::function<void()>& then, int tries = 40) {
+  TestSync::singleShot(delay, card, [card, then, tries] {
+    if (!card->rowsShown() && tries > 0) {
+      logMakeCardPlaces(card, 50, then, tries - 1);
+      return;
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    for (const QString& line : card->places()) {
+      qDebug().noquote() << line;
+    }
+    then();
+  });
+}
 
 // The body a selection stands for on the Make tab: one body, or one face,
 // edge or vertex of it; its occurrence path with it.
@@ -698,12 +720,7 @@ void MainWindow::addMakeCardValue() {
       }
       // Where its fields are now (UI tests): the pending row changes no
       // summary, which logs them otherwise.
-      TestSync::singleShot(300, m_makeCard, [this] {
-        for (const QString& line : m_makeCard->places()) {
-          qDebug().noquote() << line;
-        }
-        logSelectionCardSections();
-      });
+      logMakeCardPlaces(m_makeCard, 300, [this] { logSelectionCardSections(); });
     });
   });
   // A sheet on the window, the AppKit frontend's too (mitcad#1353).
@@ -847,12 +864,7 @@ void MainWindow::updateMakeCard() {
     qDebug().noquote() << QStringLiteral("Make card printers: %1").arg(makeCardChoiceList(card.printers));
     qDebug().noquote() << QStringLiteral("Make card processes: %1").arg(makeCardChoiceList(card.processes));
     // Where its fields are, once laid out (UI tests).
-    TestSync::singleShot(300, m_makeCard, [this] {
-      for (const QString& line : m_makeCard->places()) {
-        qDebug().noquote() << line;
-      }
-      logSelectionCardSections();
-    });
+    logMakeCardPlaces(m_makeCard, 300, [this] { logSelectionCardSections(); });
   }
 }
 

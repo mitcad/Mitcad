@@ -9,6 +9,24 @@
 #     tangent boundaries too; nothing left out.
 #   - The teardrop (F9.b0): its two splines and the crease at its tip;
 #     nothing left out.
+# Sweeps whose side face comes in pieces (mitcad#2148): the edge between
+# two pieces is drawn where they are different analytic surfaces.
+#   - Along a line and a tangent arc (F12.b0): the caps' circles and the
+#     circle between the cylinder and the torus; the cylinder's and the
+#     torus's seams left out.
+#   - Along a line, an arc and a line (F15.b0): the caps' circles and both
+#     circles between the pieces; the three seams left out.
+#   - Along two arcs of one circle (F18.b0): the caps' circles only; the
+#     circle between the torus's two pieces and their seams left out.
+#   - The line-and-arc sweep mirrored and joined (F21.b0, GitHub issue
+#     516): the caps' circles and the circle between the cylinder and each
+#     torus, on the original and on the copy; the seams left out.
+# Faces split into pieces on one surface: no line between the pieces.
+#   - The ball (F23.b0): its two poles (degenerated edges, drawn as
+#     before); its seam and the circle between its pieces left out.
+#   - The torus (F25.b0): nothing; its seams (the one round the tube
+#     whole, the one round the axis cut in two by the split) and the two
+#     circles between its pieces left out.
 # Run by tools/ui-seam-edges-test.sh.
 expect-ever 'View area'
 wait-idle
@@ -17,3 +35,9 @@ expect-view-seams F1.b0 14 1
 expect-view-seams F5.b0 2 1
 expect-view-seams F6.b0 24 0
 expect-view-seams F9.b0 3 0
+expect-view-seams F12.b0 3 2
+expect-view-seams F15.b0 4 3
+expect-view-seams F18.b0 2 3
+expect-view-seams F21.b0 4 3
+expect-view-seams F23.b0 2 2
+expect-view-seams F25.b0 0 5

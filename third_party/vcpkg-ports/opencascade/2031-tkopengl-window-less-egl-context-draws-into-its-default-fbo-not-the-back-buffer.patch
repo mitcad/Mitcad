@@ -1,0 +1,74 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+A window-less EGL context: OpenGl_Window::init() selects the colour
+buffer of the default FBO it has just made, not GL_BACK (mitcad#2031).
+
+Expected: a view attached to an EGL context that is current without a
+surface (EGL_KHR_surfaceless_context, as Qt's offscreen surface on
+Wayland is) draws into the offscreen default FBO OpenGl_Window::init()
+makes for it, and leaves no GL error behind.
+Actual: init() makes and binds that FBO, then calls
+SetDrawBuffer(GL_BACK), which binds framebuffer 0 again and calls
+glDrawBuffer(GL_BACK). A window-less context has no window framebuffer,
+so the driver raises GL_INVALID_OPERATION (NVIDIA 580 on Wayland). The
+error stays pending until the next glGetError(): the first frame's
+OpenGl_Texture::Init2DMultisample reads it after a successful
+glTexStorage2DMultisample and reports "MSAA texture ... cannot be
+created with error GL_INVALID_OPERATION" and "Main FBO initialization
+has failed", so the frame is drawn without its scene FBO. Every resize
+runs init() again, so every resize repeats it.
+Reproducer: an EGL display, a desktop OpenGL 4.5 compatibility context
+made current with EGL_NO_SURFACE, an OpenGl_GraphicDriver that names
+that display and context (no EGL config), a V3d_View with
+NbMsaaSamples 4 and a virtual Aspect_NeutralWindow whose native handle
+is EGL_NO_SURFACE: after SetWindow, glGetError() gives
+GL_INVALID_OPERATION and framebuffer 0 is bound; a KHR_debug callback
+places it in glDrawBuffer from OpenGl_Context::SetDrawBuffer from
+OpenGl_Window::init. The same calls give no error and the MSAA texture
+is made when that error is not pending.
+
+- OpenGl_Window::init() selects GL_COLOR_ATTACHMENT0 when it made the
+  offscreen default FBO (the window-less EGL branch), which keeps that
+  FBO bound; otherwise GL_BACK as before. GLX, WGL, EGL with a surface
+  and OpenGL ES (where SetDrawBuffer does nothing) are unchanged.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2031.
+
+Upstream: new; changes only the window-less EGL branch, whose comment
+says it is never called upstream (a pbuffer is made there when OCCT has
+an EGL config).
+
+diff --git a/src/Visualization/TKOpenGl/OpenGl/OpenGl_Window.cxx b/src/Visualization/TKOpenGl/OpenGl/OpenGl_Window.cxx
+index 4c7caf381..2a11da18d 100644
+--- a/src/Visualization/TKOpenGl/OpenGl/OpenGl_Window.cxx
++++ b/src/Visualization/TKOpenGl/OpenGl/OpenGl_Window.cxx
+@@ -860,6 +860,8 @@ void OpenGl_Window::init()
+     return;
+   }
+ 
++  // a window-less context has no back buffer: it draws into the default FBO's colour buffer
++  bool toDrawIntoDefaultFbo = false;
+   #if defined(HAVE_EGL)
+   if ((EGLSurface)myGlContext->myWindow == EGL_NO_SURFACE)
+   {
+@@ -886,6 +888,7 @@ void OpenGl_Window::init()
+     }
+     myGlContext->SetDefaultFrameBuffer(aDefFbo);
+     aDefFbo->BindBuffer(myGlContext);
++    toDrawIntoDefaultFbo = true;
+   }
+   else if (!myPlatformWindow->IsVirtual() && mySizeWindow == myPlatformWindow)
+   {
+@@ -906,7 +909,9 @@ void OpenGl_Window::init()
+   myGlContext->core11fwd->glDisable(GL_SCISSOR_TEST);
+   const int aViewport[4] = {0, 0, mySize.x(), mySize.y()};
+   myGlContext->ResizeViewport(aViewport);
+-  myGlContext->SetDrawBuffer(GL_BACK);
++  // GL_BACK would bind the window's framebuffer again, which a window-less context does not
++  // have (GL_INVALID_OPERATION, left for the next glGetError() to find)
++  myGlContext->SetDrawBuffer(toDrawIntoDefaultFbo ? GL_COLOR_ATTACHMENT0 : GL_BACK);
+   if (myGlContext->core11ffp != nullptr)
+   {
+     myGlContext->core11ffp->glMatrixMode(GL_MODELVIEW);

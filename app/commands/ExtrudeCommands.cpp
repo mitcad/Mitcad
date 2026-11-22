@@ -265,6 +265,25 @@ CommandDef extrudeCommand(const CommandContext& context) {
       initializeCutScope(state, model);
     }
   };
+  // One side's direction (mitcad#2216): Flip, and a negative distance (the
+  // arrow dragged through the start), each turn it. Two sides and a
+  // symmetric extrusion have none to flip.
+  def.toolDirection = [](const CommandState& state) {
+    if (state.choice(QStringLiteral("direction")) != kOneSide) {
+      return 0;
+    }
+    int direction = state.checked(QStringLiteral("flip")) ? -1 : 1;
+    if (state.choice(QStringLiteral("extent")) == kDistance) {
+      const double distance = state.value(QStringLiteral("distance"));
+      if (!std::isfinite(distance) || distance == 0.0) {
+        return 0;
+      }
+      if (distance < 0.0) {
+        direction = -direction;
+      }
+    }
+    return direction;
+  };
   const auto always = [](const CommandState&) { return true; };
   const auto thin = choiceIs(QStringLiteral("type"), QStringLiteral("thin"));
   const auto twoSides = choiceIs(QStringLiteral("direction"), kTwoSides);
@@ -277,15 +296,21 @@ CommandDef extrudeCommand(const CommandContext& context) {
       // A thin extrusion also takes sketch curves, open chains as well as
       // closed loops, instead of profiles (mitcad#463); a solid one a
       // planar face of a body instead (mitcad#535).
+      // A whole sketch picked on its Browser row or timeline cell is its
+      // outline set's unused regions (mitcad#2194, ProfilePicks).
       selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"),
-                     SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Face, 1, 0)
+                     SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Face | SelectKind::Sketch, 1, 0)
           .withTooltip(QObject::tr("Profiles or one planar face; for a thin extrusion, sketch curves instead"))
           .withAccepts([](const SelectionItem& item) { return item.kind != SelectKind::Face || isPlanar(item); })
           .withoutMeshes()
+          .withOnPick([](const SelectionItem&, CommandState& state,
+                         const CommandContext& model) { expandWholeSketches(state, model); },
+                      false)
+          .withMissingText(crossingNote)
           .withPickRule(
               [thin](const CommandState& state) -> SelectFilter {
-                return thin(state) ? SelectKind::Profile | SelectKind::SketchCurve
-                                   : SelectKind::Profile | SelectKind::Face;
+                return thin(state) ? SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Sketch
+                                   : SelectKind::Profile | SelectKind::Face | SelectKind::Sketch;
               },
               // A face alone, or sketch items (mitcad#868, ProfilePicks); a
               // 3D sketch's curves in its sketch plane (mitcad#1550).
@@ -436,8 +461,11 @@ CommandDef extrudeCommand(const CommandContext& context) {
       }
     }
   };
+  // The outline set of the newest sketch: a plate less its holes, every
+  // separate outline (mitcad#2194); why not, when its closed curves cross.
+  def.note = crossingNote;
   def.init = [](CommandState& state, const CommandContext& model) {
-    newestProfile(state, model);
+    newestOutline(state, model);
     // What the view hides now (mitcad#475): targets hidden there start
     // unchecked when the previews find them. Editing a cut keeps its stored
     // scope (no snapshot there), and the model's discovery never depends on
@@ -1009,13 +1037,21 @@ CommandDef revolveCommand(const CommandContext& context) {
   def.inputs = {
       // A planar body face is a profile too (mitcad#543, as Extrude's
       // since mitcad#535).
-      selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"), SelectKind::Profile | SelectKind::Face, 1,
-                     0)
+      // A whole sketch picked on its Browser row or timeline cell is its
+      // outline set's unused regions (mitcad#2194, ProfilePicks).
+      selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"),
+                     SelectKind::Profile | SelectKind::Face | SelectKind::Sketch, 1, 0)
           .withTooltip(QObject::tr("Profiles of one sketch, or one planar face"))
           .withAccepts([](const SelectionItem& item) { return item.kind != SelectKind::Face || isPlanar(item); })
           .withoutMeshes()
+          .withOnPick([](const SelectionItem&, CommandState& state,
+                         const CommandContext& model) { expandWholeSketches(state, model); },
+                      false)
+          .withMissingText(crossingNote)
           // A face alone, or profiles (mitcad#868, ProfilePicks).
-          .withPickRule([](const CommandState&) -> SelectFilter { return SelectKind::Profile | SelectKind::Face; },
+          .withPickRule([](const CommandState&) -> SelectFilter {
+                          return SelectKind::Profile | SelectKind::Face | SelectKind::Sketch;
+                        },
                         [](const SelectionItem& item, const CommandState& state) {
                           return profilesTake(item, state.items(QStringLiteral("profiles")));
                         })
@@ -1052,7 +1088,9 @@ CommandDef revolveCommand(const CommandContext& context) {
   def.inputs.append(checkInput(QStringLiteral("project_axis"), QObject::tr("Project Axis"), false)
                         .withTooltip(QObject::tr("Revolve about the axis projected into the sketch plane")));
   def.inputs += operationInputs();
-  def.init = newestProfile;
+  // The newest sketch's outline set, as Extrude's (mitcad#2194).
+  def.init = newestOutline;
+  def.note = crossingNote;
   def.enabled = [&context] { return hasProfiles(context) || hasBodies(context); };
 
   def.build = [](const CommandState& state, const CommandContext& model) {

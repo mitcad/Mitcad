@@ -33,9 +33,10 @@ std::shared_ptr<geometry::Shape> sweep_sheet(rust::Str feature, rust::Slice<cons
                                              rust::Slice<const std::size_t> chains,
                                              rust::Slice<const SweepCurve> path, rust::Slice<const double> plane,
                                              rust::Slice<const double> extents, bool parallel);
-// geometry::loft_sheet.
+// geometry::loft_sheet; `merge_tangent`: Tangent Edges Merge (mitcad#2162).
 std::shared_ptr<geometry::Shape> loft_sheet(rust::Str feature, rust::Slice<const SweepCurve> curves,
-                                            rust::Slice<const std::size_t> chains, bool ruled, bool closed);
+                                            rust::Slice<const std::size_t> chains, bool ruled, bool closed,
+                                            bool merge_tangent);
 // geometry::helix_sheet (mitcad#1777): the axis as x, y, z, dx, dy, dz;
 // the ends (mitcad#1797) as start flat, start transition, end transition,
 // end flat.

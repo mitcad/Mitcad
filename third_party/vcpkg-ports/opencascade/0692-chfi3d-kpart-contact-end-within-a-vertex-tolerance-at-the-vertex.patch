@@ -23,8 +23,8 @@ the exact body's).
   vertices is put at that vertex (SnapToVertex, until now used only for a
   contact along the face's boundary, with the vertices' tolerance).
 
-Test: the rib's edges with the cone carried 2e-5 past their vertices
-(geometry test_fillet_results); the result is the exact body's.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0692.
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx

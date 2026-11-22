@@ -1,0 +1,10 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A large body's sections, whose hatch lies in the plane (mitcad#2146, tools/ui-section-caps-test.sh, tools/ui-windows-section-caps-test.ps1): Body1 (F2.b0) 2000 x 1000 x 500 mm from the origin; Section Analysis Turned at the YZ plane turned 30 degrees about the Z axis, moved 700 and flipped, and Across at the YZ plane moved 1300 (a 1000 x 500 mm cut), Across shown."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":2000,"height":1000},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":500},"operation":"new_body"}},
+  {"cmd":"add_analysis","name":"Turned","def":{"type":"section","plane":"yz","offset":700,"flip":true,"axis":"z","angle":0.5235987755982988}},
+  {"cmd":"add_analysis","name":"Across","def":{"type":"section","plane":"yz","offset":1300}}
+]

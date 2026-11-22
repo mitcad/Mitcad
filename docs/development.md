@@ -767,9 +767,12 @@ icons, licences incl. `packaging/linux/THIRD-PARTY-NOTICES.txt`), then:
 
 - linuxdeploy copies needed libraries into `usr/lib` and gives every
   executable in `usr/bin` and every library an `$ORIGIN` RUNPATH, so
-  none of them loads a system's Qt; its Qt plugin adds the X11/GLX platform, image formats, SVG
-  icons and TLS backends. glibc, libstdc++, X11/xcb, OpenGL, fontconfig
-  and FreeType stay the system's, and so do GLib, libcups and the GPU
+  none of them loads a system's Qt; its Qt plugin adds the X11 platform (GLX and EGL
+  integrations), the Wayland platform with its shell, EGL and decoration plugins
+  (`EXTRA_PLATFORM_PLUGINS`, mitcad#2031; `make-appimage.sh` copies the Wayland folders
+  from Qt when the plugin leaves them out), image formats, SVG
+  icons and TLS backends. glibc, libstdc++, X11/xcb, OpenGL and EGL, fontconfig
+  and FreeType stay the system's, and so do GLib, libcups, Wayland's client libraries and the GPU
   drivers (`make-appimage.sh` excludes them for the Qt plugin too, through
   `LINUXDEPLOY_EXCLUDED_LIBRARIES`, and fails when one is in `usr/lib`).
   GLib (mitcad#1654): Insert › Component from Web's web browser component,
@@ -1357,6 +1360,8 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_TEST_PRINT_PDF=<file>` | File › Print (mitcad#1089) shows no system print dialog: it prints to this PDF file through `QPrinter` (`printing::askPrinter`, logged `Print dialog skipped (test): printing to <file>`): `tools/ui-paper-print-test.sh`, `app.ui-windows-paper-print`, the print steps of `tools/ui-drawings-test.sh` and `tools/ui-build-test.sh`. |
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
 | `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). |
+| `MITCAD_SHELL_TRACE=1` | Shell prints `shell trace:` lines on standard error (mitcad#2050, `geometry/src/shell_cavity.cpp`): why the geometry kernel's offset failed, what the cavity it falls back on found (the plates, thin faces and faces under removed ones), each step of it that failed (an inward offset with its `BRepOffset_Error` code, a thin part or rounding that could not be taken away, a kept face the cavity cut into) and a refused result, for a design whose Shell fails. |
+| `MITCAD_TEST_3DXWARE=1` | Windows: the 3DxWare runtime's stand-in (mitcad#2152, `app/platform/windows/SpaceMouse3DxWare.cpp`) loads in place of the installed `siappdll.dll` and reports one device, `Test 3D mouse`, so the 3D mouse's backend asks for MitCad's window at the moment a real driver start does; it opens the device only for a window and sends no events (`app.ui-windows-space-mouse-3dxware`). |
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
 `--no-recovery`, `--no-native-dialogs` (Qt's file dialogs, so paths can
@@ -1406,7 +1411,10 @@ visibly on a desktop in use.
   `ui-update-test.sh` uses its own local HTTPS server.
 - Xvfb runs with `-noreset` so a restarted app finds the display at once.
   The screen is 1600 x 1000 logical pixels; a test of a tall dialog sets
-  `UI_SCREEN_HEIGHT` before `ui_start_display`.
+  `UI_SCREEN_HEIGHT` before `ui_start_display`, a test of two screens
+  `UI_SCREEN_WIDTH` and splits the display with `xrandr --setmonitor`
+  (`ui-orbit-screens-test.sh`; where xrandr is not installed it prints
+  `skipped: xrandr missing` and passes).
 - The app runs without gdb: gdb loads the debug build's symbols (about
   1 GB) at every start, and the app's crash handler logs a crash's signal
   and stack itself. `UI_GDB=1` starts it under gdb for gdb's backtrace.
@@ -1466,6 +1474,10 @@ permission is needed, but a window server is: without one the test exits
 with 77 and is skipped (`MITCAD_UI_REQUIRE_GUI=1` fails instead). Settings,
 recovery, projects and thumbnails go to a temp folder, and
 `QT_FORCE_STDERR_LOGGING=1` brings Qt's log to the test's logs.
+Every UI test redirects the app's stderr to a file or a pipe: a stderr
+that is a terminal gets only warnings and worse (mitcad#2213;
+`MITCAD_LOG_STDERR=1` brings every line to a terminal too, and the test
+driver's runs, `MITCAD_TEST_INPUT`, always get every line).
 `MITCAD_UI_LLDB=1` runs the app under `lldb --batch` for a crash's stack.
 `app.ui-macos-workflow` runs step scripts (`tools/ui-scripts/*.mitcad-ui`)
 through the in-process test driver (`MITCAD_TEST_INPUT`), so it works over
@@ -1800,6 +1812,24 @@ in the distro only:
   two back plates against their union, also by sampled points
   (mitcad#1278); a synthetic row of blocks with a near miss runs without
   the file.
+  `geometry/tests/test_join_holds_inputs.cpp` (ctest
+  `geometry.join_holds_inputs`) unpacks the STEP file of the archive in
+  `github-463/` into its build folder, joins its 31 bodies as the
+  reported Combine did (the hub first) and checks that OCCT's exact union
+  misses bodies, that the five rods lying inside finned rods are found and
+  that without them OCCT's union holds every body, and that the union
+  operation never returns a result without some of the bodies: a valid
+  union holding each of them (by the classifier and points sampled in
+  each body's box), or a failure in words (mitcad#2053). With OCCT port
+  patch 2170 the design joins into one valid body (mitcad#2170), and
+  every one of the 31 bodies, the five bare rods too, has its own volume
+  in common with the union, at most 1e-6 relative short and at most 1e-4
+  over (an excess above 1e-6 is printed with what the common is made of,
+  mitcad#2217); skipped with a message without it. Its synthetic tests of
+  the check that a union holds every body, of bodies inside others and
+  of a bare rod's common with finned rods holding it (fins beside and
+  over its seam, faces merged or not, joined with a plate) run without
+  the file.
   ctest `cli.drawing_tangent_edges_reported`
   (`tools/cli/drawing-tangent-edges-test.cmake`) writes the drawing of
   `github-177-…` and its body as a `.brep` file, which
@@ -1840,6 +1870,27 @@ in the distro only:
   a message without it. The mock kernel's model tests
   (`joint_motion_cut_tests`, `inserted_cut_scope_tests`) cover the rule and
   inserted cuts without the file.
+  ctest `cli.extend_slanted_plane_reported`
+  (`tools/cli/extend-slanted-plane-reported-test.cmake`) finds the archive
+  in `github-462/` by its content id, unpacks it into the build folder and
+  runs `extend_slanted_plane_reported.json` on the design in it: its
+  planar surface body's slanted edge extended by 26 is one face of four
+  edges, its two long edges continued as one straight edge each and its
+  new end edge parallel to the picked one (mitcad#2056); skipped with a
+  message without it. `geometry.surface_modelling` covers the same
+  outlines on synthetic faces without the file.
+  ctest `core.bridge` (`core/tests/test_bridge.cpp`,
+  `test_reported_screw_joint_keeps_earlier_joint`; alone:
+  `test_bridge screw-joint-530`) opens the design in `github-530/`
+  (found by its size and its occurrences) and previews, then adds, a
+  Rigid joint from an unjoined screw's mount frame to holes of the sled
+  an earlier rigid joint holds a board on: the sled stays in the box,
+  the board on the sled (to 1e-6 mm), and Joint1, Joint2 and the new
+  joint hold at the marker (mitcad#2221); on a failure it prints the
+  two earlier joints' frames before and after and the preview's
+  `placements`. Skipped with a message without it. The mock kernel's
+  `earlier_joint_kept` tests (`core/model-tests/joints`) cover the rule
+  without the file.
 
 ### SolidCraft designs
 
@@ -1888,8 +1939,11 @@ and `process` (their names) and `problems` (the values not read as the
 import's summary lists them, separated by ` | `; empty or `none` for
 none), then exports a body of each material in the same dialect and
 reads the export back: every value read into MitCad's keys must come
-back alike (numbers within 1e-6). Other columns are notes. Skipped
-without the variable. Example:
+back alike (numbers within 1e-6). Each project's meshes are imported
+too, as File › Import imports a 3MF file (mitcad#2156, `import_file`):
+mesh bodies must come in, and when the package has a slicer's settings
+file, none named `Object <id>` (the names are the settings file's). Other
+columns are notes. Skipped without the variable. Example:
 `MITCAD_3MF_CORPUS=~/3mf-corpus ctest --preset dev -R 3mf.corpus`.
 
 ### USDZ files
@@ -1963,7 +2017,9 @@ For development and merges into `dev`, `features` or `main` the check is
 scoped and fast; an occasional miss is accepted:
 
 1. On Linux: `tools/check-all.sh` in its default mode (add `--fresh`
-   when CMake files changed), e.g. in the distro after `sync-to-wsl.sh`:
+   when a cached CMake value has to be found again, see
+   [a fresh configure](#a-fresh-configure); not for a changed OCCT port),
+   e.g. in the distro after `sync-to-wsl.sh`:
    `wsl -d mitcad-dev --cd "~/src/mitcad" -- bash -lc tools/check-all.sh`.
    It runs only the ctests, UI tests and corpus the change affects.
 2. Windows or macOS only when the change touches that platform's own
@@ -1979,7 +2035,7 @@ no AppKit, every ctest, the package;
 
 ### The check script
 
-`tools/check-all.sh [--full] [--ui-jobs N] [--ui auto|all] [--ctest auto|all] [--ctest-jobs N] [--testrun auto|off] [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N] [--memory SIZE|auto] [--overlap auto|off] [--fresh] [--only STEP,...] [--release-passed DIR --release-tag X.Y.Z-rcN [--all-geometry]]`
+`tools/check-all.sh [--full] [--ui-jobs N] [--ui-retry-jobs N] [--ui auto|all] [--ctest auto|all] [--ctest-jobs N] [--testrun auto|off] [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N] [--memory SIZE|auto] [--overlap auto|off] [--fresh] [--only STEP,...] [--release-passed DIR --release-tag X.Y.Z-rcN [--all-geometry]]`
 
 It checks at two depths:
 
@@ -2008,7 +2064,7 @@ It checks at two depths:
 | root-compile | On a host whose GCC is newer than the Linux release's [build root](#linux-on-a-newer-host)'s, the C and C++ files the change touches compiled with the root's GCC, `-fsyntax-only` (`tools/check-root-compile.py`, mitcad#1551), so that code the host's compiler accepts and the release's refuses fails here rather than in the release (0.53.0-rc1 and 0.54.0-rc1 failed on an OCCT handle of a derived class copy-initialized or returned as a handle of its base, which GCC 15 accepts and GCC 13 refuses). The files: those that differ from the merge base with the nearest of `origin/dev`, `origin/features` and `origin/main` (committed or not) and have compile commands, and for a changed header the sources whose dependencies name it (`ninja -t deps`); with `--full` every source file of `geometry/`, `core/cpp/` and `app/`. Each runs in the root (`build-root.sh run`) with the dev build's `compile_commands.json` flags, so the tree, its generated headers and the build's packages are the same and only the compiler and its system headers are the root's; include folders outside `/usr`, `/etc` and `/var` (a Qt installation, the render prefix) are bound in at their real paths. An error or a warning fails the row (the release's build fails on warnings too) and its log, `check-logs/root-compile.log`, shows the compiler's output per file. The root is `MITCAD_LINUX_BUILD_ROOT`, the variable the release reads: export it in the login profile of a machine that has a root. The row is `skipped`, with the reason as its line, without that variable or root, when the build's compiler is not GCC or not newer than the root's (inside the root itself, as in the release's own check), or without `bwrap`. Beside the ctest step with fmt, clippy, deps and guide. `tools/check-root-compile.py --list` names the files without compiling; `--base REF` measures the change from another ref. |
 | ctest | The tests whose sources changed (below), without the corpus group, through the test runner (below); `cli.perf_*` run serially. The Linux UI ctests (`app.ui-linux-*`, each on a hidden X server of its own) run beside the others, within the runner's UI entries at once (mitcad#832). The geometry suite runs as one ctest per part (`geometry.suite.<part>`). |
 | corpus | `f3d.corpus*`, `f3d.models_loft`, `freecad.corpus*`, `ipt.corpus`, several at once (`--corpus-tests`), each importing several files at once (`--corpus-jobs`, `MITCAD_CORPUS_JOBS`). By default the test runner gives each corpus test its files at once from its profile (`mitcad-testrun --corpus-children`, mitcad#832; [tools/testrun/README.md](../tools/testrun/README.md#corpus-tests)): every run records each file's time and peak, and the next starts the longest files first and shares the machine's cores and the run's memory budget among the corpus tests by their work, a long test more children and a short one fewer, each child's memory limit twice its test's largest file's peak, never below `MITCAD_CORPUS_MEMORY` (1536M). A test without that history yet, every test with `--corpus-jobs`, and ctest -j without the runner take the fixed plan: all their children together fit the run's memory limit less 1G at `MITCAD_CORPUS_MEMORY` each, and the cores of a test slot; about the square root of that many tests run at once (12G, 32 cores and three slots: two tests, three files each). Each child runs within 300 s (`MITCAD_CORPUS_TIMEOUT`); `f3d.corpus_designs` checks its designs one after another in one process since 0.32.0 (at once, under the full check's load in the Linux release's build root, an item ran out of its item time), and a debug build's imports try an item from its own start, the route tried first, three times as long (`--own-start-time-scale`, mitcad#847); the runner then plans it by its own history, not by children (mitcad#872). With the budget from the free memory (`--memory auto` on bare metal, below) a child beside others starts only while the memory available exceeds the reserve by the child's file's last peak (`MITCAD_CORPUS_RESERVE`). The corpus step runs beside the UI tests (`--overlap auto`). Every corpus test is a row of the table. `auto` runs them only when `CORPUS_SOURCES` or the corpus files differ from every passing run on the machine (`~/.cache/mitcad/corpus-passed`). `CORPUS_SOURCES`: the readers and the import, the bridge's kernel and import files (`core/ffi/src/kernel`, `*_import.rs`, `ipt_history.rs`, `exchange.rs`, `memory.rs`, `core/cpp`; not `lib.rs` or other families' files), the geometry, `mitcad-cli`'s imports (`tools/cli/import.cpp`, not `main.cpp`), the build files, the OCCT port, and the resolved dependencies of the import's crates (`cargo tree` of `CORPUS_CRATES`, instead of `Cargo.toml` and `Cargo.lock`, so a crate added for something else does not count). Changes in `core/model` alone don't trigger it: use `--corpus always` when they may affect imports. |
-| `ui-<name>` | The `tools/ui-*-test.sh` whose sources changed (below), `--ui-jobs` at a time (below), longest first, 30 min limit each (`UI_TIMEOUT`); with the test runner `MITCAD_UI_JOBS` (the machine's cap, which contention failures never lower, mitcad#2124), and each test's learnt room (`mitcad-testrun --ui-rooms`: the most other UI tests it may have beside it after it failed beside more and passed alone) is kept: such a test waits until few enough run, while the others go on (mitcad#872). The tests' waits for a log line (`ui_expect_log`, `ui_expect_new`) do not count the time the application computes (a job logged `Computing ... started` and not its end), up to 60 s more, so that a preview that takes longer under load is not a failure. `ui-compute` runs alone at the end (flaky under load), after the corpus step that ran beside the others. A test that fails among the others without crashing runs once more alone after them: a pass shows as `ok-again` and counts, so load flakiness stays visible without failing the check; a second failure, or a crash, fails it (mitcad#657). |
+| `ui-<name>` | The `tools/ui-*-test.sh` whose sources changed (below), `--ui-jobs` at a time (below), longest first, 30 min limit each (`UI_TIMEOUT`); with the test runner `MITCAD_UI_JOBS` (the machine's cap, which contention failures never lower, mitcad#2124), and each test's learnt room (`mitcad-testrun --ui-rooms`: the most other UI tests it may have beside it after it failed beside more and passed with fewer) is kept: such a test waits until few enough run, while the others go on (mitcad#872). The tests' waits for a log line (`ui_expect_log`, `ui_expect_new`) do not count the time the application computes (a job logged `Computing ... started` and not its end), up to 60 s more, so that a preview that takes longer under load is not a failure. `ui-compute` runs alone at the end (flaky under load), after the corpus step that ran beside the others. A test that fails among the others without crashing runs once more after them (and after `ui-compute`), with fewer UI tests beside it: the retries run `--ui-retry-jobs` at once (`MITCAD_UI_RETRY_JOBS`, else 3; 1 runs them one at a time as before mitcad#2177), longest first, each with fewer other UI tests beside it than its failure had (alone when that had none) and within its room, so that a pass still tells the test runner the failure came from the load; a pass shows as `ok-again` and counts, so load flakiness stays visible without failing the check; a second failure, or a crash, fails it (mitcad#657). The step's log names the round (`== UI tests failed among the others, again, 3 at once, ...`). |
 
 ctests by what changed (`--ctest auto`, the default; mitcad#134): each
 ctest has a fingerprint of what it depends on, and is skipped (an
@@ -2095,13 +2151,63 @@ or corpus test reads them):
   lines add up), which must exist: the parts of `app/` it drives
   (`app/sketch`, `app/commands`, `app/files`, `app/render`, ...), the
   crates and bridge files of its family (`core/vcs`, the import's crates),
-  `tools/cli` when it makes its designs with `mitcad-cli`;
+  `tools/cli` when it makes its designs with `mitcad-cli`. A declared
+  `tools/cli` stands for the program as the UI tests use it (mitcad#2136):
+  its own files and the lines of its `CMakeLists.txt` outside the
+  `if(BUILD_TESTING ...)` blocks, and the fixtures of `tools/cli/tests/`
+  that UI material names (`cli/tests/<name>` anywhere in `tools/ui-*`,
+  the scripts, their helpers and `tools/ui-scripts/`; a `$variable` in the
+  name stands for any text, and a reference to the folder itself counts
+  all of it), not the ctests' `*.cmake` and `*.py` scripts and their
+  fixtures, which nearly every geometry change adds to. A declared
+  `app/framework/TestDriver.cpp` (the in-process UI test driver) stands
+  for the driver as the test uses it (mitcad#2173): `TestDriver.cpp` (the
+  script's parser, the input, the common steps: keys, clicks, menus,
+  buttons, the log, `capture`, `wait-idle`, screenshots), its shared
+  helpers' `TestDriverSupport.hpp`, and the area files
+  (`app/framework/TestDriver<Area>.cpp`: the model and its jobs, the
+  view's shapes, pixels and camera, sketches, picks, the pointer, widgets,
+  the design windows, ...) whose steps the test's material names. A
+  step belongs to the file whose spec table lists it (`{"step-name", min,
+  max, TestDriver::k...}`); the material is the test's script and the
+  files it names, followed through them (the scripts and fixtures of
+  `tools/ui-scripts/`, a `$variable` in a name standing for any text and
+  a reference to the folder itself counting all of it, and the files of
+  `tools/` named by their name, such as a helper library or a Python
+  test), together with the test library's code the test runs; a step name
+  written with a variable (`expect-view-$kind`) counts every step it can
+  stand for. A new step goes into the area file of its kind with its
+  spec, its name with a hyphen (a plain word such as `workspace` is in
+  most scripts' text: such a step stays in `TestDriver.cpp`;
+  `repo.ui-test-deps` checks it); a step a test uses then counts for it
+  without a change to its declaration. `TestDriver.hpp` counts only where
+  a test declares it, as before;
 - the build files (`UI_BASE`: `third_party/`, the top-level CMake files
   and `cmake/`, `triplets/`, `rust-toolchain.toml`, `vcpkg.json`) and the
   build's options (`MITCAD_*` switches such as `MITCAD_COMPILER_CACHE`,
-  the build type);
-- its script and the test library (`UI_LIBRARY`: `tools/ui-test-lib.sh`,
-  `ui-image-stats.py`, `xwd2png.py`);
+  the build type), but for two parts (mitcad#2136): the Windows and macOS
+  UI tests' registrations (`cmake/ui-tests/`, which only those platforms'
+  builds include) count for no Linux UI test, and the OCCT port's patches
+  whose every file lies in OCCT's modelling toolkits
+  (`src/ModelingData/`, `src/ModelingAlgorithms/` but for `TKMesh` and
+  `TKHLR`), with their lines of the portfile, count like `geometry/`: for
+  the smoke set and the tests that declare `geometry`. The port's other
+  patches (the OpenGL driver, `TKernel`) and the rest of its portfile stay
+  in the base;
+- its script and what it uses of the test library (`UI_LIBRARY`:
+  `tools/ui-test-lib.sh`, `ui-image-stats.py`, `xwd2png.py`,
+  `ui-visible-text-allow.txt`; mitcad#2173): the library's top-level code
+  (which every test runs), the functions the test calls, directly or
+  through other functions, and the library's other files that this code
+  names. A function counts when its name is a word of the test's material
+  (above), of the top-level code or of a function that counts, so one
+  passed by name (`ui_step "..." ui_key l`) counts too; a comment right
+  above a function is the function's. A function the library would call
+  through a name it builds at run time would be missed, so the library
+  calls its functions by their names. `tools/ui-test-deps.py` works out
+  both narrowings once per check (`check-logs/ui-test-deps.tsv`: a line
+  per test with its library digest and its driver files); when it fails,
+  the whole library and every file of the driver count;
 - the main window's layout as the built application lays it out:
   `tools/ui-layout.sh` starts MitCad with the demo design on a hidden Xvfb
   display once per check (also in a dry run, with the last build) and
@@ -2119,8 +2225,10 @@ or corpus test reads them):
   `app/`, `geometry/`, `core/`).
 
 So a change in `app/sketch` reruns the sketch tests and the smoke set, one
-in `app/MainWindow.cpp`, `geometry/` or `core/model` only the smoke set
-(the full check runs the rest), and one only in `core/vcs` the tests that
+in `app/MainWindow.cpp`, `geometry/` or `core/model` the smoke set and
+the tests that declare it (the full check runs the rest), an OCCT patch
+to its fillets or Booleans the smoke set and the tests that declare
+`geometry`, and one only in `core/vcs` the tests that
 declare it and the smoke set; a change anywhere that alters the window's
 layout reruns them all. A test that comes to exercise another area
 must declare it, else changes there skip it until the full check. The
@@ -2128,7 +2236,15 @@ rule for what to declare: the areas whose behaviour the test checks (the
 dialogs, panels and commands it drives, the crates behind them, the tools
 that make its designs); what every test shares, the window and its
 layout, is covered by the layout line, so a test does not declare
-`app/MainWindow.cpp` only because it runs in the window. A panel or page
+`app/MainWindow.cpp` only because it runs in the window. It does declare
+it when it checks what that file does: the commands' start, finish and
+repeat, the model commands and their recompute, the bodies shown, the
+selection, sketch mode, undo and saving (`MainWindow::writeFile`), as
+nearly every test that runs a command does; likewise `app/OcctViewer.cpp`
+when it picks, drags or checks what the view draws (mitcad#2173 checked
+the declarations against this: 155 of the 174 Linux tests that declare
+`app/MainWindow.cpp` wait for or check lines that file writes, and the
+others but one drive its commands, selection or saving). A panel or page
 that is longer than its dock scrolls (command panels, the docked sketch
 palette) rather than raising the window's minimum size, so adding rows to
 it leaves the layout, and the other tests, as they were.
@@ -2144,13 +2260,23 @@ Results: `build/dev/check-timings.tsv` (plus ctest tests ≥ 10 s as
 test that fails keeps the application's whole log there too
 (`ui-<name>.app.log`, `MITCAD_UI_LOG_DIR`), and a rerun of a failed UI
 test first renames its logs to `ui-<name>.failed.log` and
-`ui-<name>.failed.app.log`, so the failure's logs stay for a look. A
+`ui-<name>.failed.app.log`, so the failure's logs stay for a look.
+This is also where a test that failed among the others and passed on
+its retry (`ok-again`) keeps its first failure: `ui-<name>.failed.log`
+has the failing step (the TestDriver's `FAIL line N` or the wrapper's
+`FAIL:` check, above the application log's tail that the step's log
+shows), `ui-<name>[.<instance>].failed.app.log` the application's
+log, and `check-logs/ui-runs.tsv` both runs with how many UI tests ran
+beside each. The next failure of the same test replaces them; across
+runs only the step's line `FAIL ui-<name> (N s, M beside it): again
+after the others` stays, in the check's own output (mitcad#2189). A
 UI test that crashed runs once more under gdb (`UI_GDB=1`), its log
 `ui-<name>.gdb.log` and the app's in `ui-<name>.gdb/`; the test stays
 failed whatever that run gives. UI tests run `--ui-jobs` at once, by
 default `MITCAD_UI_JOBS`, else 4 (each takes about 0.5 G without gdb),
 each within its learnt room; a test that fails beside others and passes
-alone lowers only its own room, never that number (mitcad#2124).
+with fewer beside it lowers only its own room, never that number
+(mitcad#2124).
 
 The ctest and corpus steps run through the test runner
 ([mitcad-testrun](#the-test-runner-mitcad-testrun), `--schedule`) when it
@@ -2158,7 +2284,17 @@ is built (`build/dev/core/mitcad-testrun`; `--testrun off` or
 `MITCAD_TESTRUN=off` turns it off): each test in a systemd scope of its
 own, as many at once as the memory budget and the CPU gate allow (the
 corpus group at most `--corpus-tests` at once), the longest first and the
-tests that failed lately early. Its output is the step's log, followed by
+tests that failed lately early. The test at the head of the longest chain
+has the first claim on the memory that comes free (mitcad#2177): of the
+tests that may start or that only memory keeps waiting, the one ranked
+highest (in the ctest step `core.cargo_build`, which the Rust tests wait
+for) holds the tests ranked below it to what leaves it room, unless they
+are in the priority lane and it is not. Before, smaller tests took the
+memory as it came free, and in bundle checks the cargo build (predicted at
+22 to 26 GiB of a 28 GiB budget) waited 9 to 12 minutes and then ran
+nearly alone for 14 to 20 minutes at the end of the step; the report names
+the claim (`First claim on memory ...: core.cargo_build from 0:05, started
+0:40 ...`). Its output is the step's log, followed by
 the output of each test that did not pass (lines marked `| `) and its
 results in ctest's form (result lines, the summary, `The following tests
 FAILED:`), which the table's `ctest:<name>` rows, the passes kept for
@@ -2218,6 +2354,38 @@ at once, 18 % of the CPU) and the UI tests (10.5 min) ran one after the
 other; beside each other they take the longer of the two. `--overlap off`
 runs one step after another. Build and lint use half the cores unless
 `CMAKE_BUILD_PARALLEL_LEVEL` / `CARGO_BUILD_JOBS` are set.
+
+### A fresh configure
+
+`--fresh` passes `--fresh` to the configure step (`cmake --preset dev
+--fresh`): CMake drops `CMakeCache.txt` and the top-level `CMakeFiles/` and
+configures again from scratch. The rest of the build folder stays: the
+objects and Ninja's logs, cargo's builds (`<build>/cargo`,
+`<build>/core/cargo-test`), `vcpkg_installed`. What it changes is the
+cache: the compiler is detected again and every `find_*`, `check_*` and
+`try_compile` result found again. Use it when such a value has to be found
+again: the default of an `option()` or cache variable changed (an ordinary
+configure keeps the cached value), a find module or a library's location
+changed, or the compiler or toolchain did. An ordinary edit of a
+`CMakeLists.txt` or `cmake/*.cmake` file needs no `--fresh`: the build
+configures again by itself.
+
+A changed vcpkg port (OCCT's patches, its `portfile.cmake`, the triplets)
+needs no `--fresh` either (mitcad#2134). Every configure runs vcpkg's
+install (manifest mode): vcpkg hashes every file in the port's folder, so
+a changed patch is a new package, which the install builds (through
+[the compiler cache](#the-compiler-cache-of-the-vcpkg-ports)) or restores
+from the binary cache and puts in place of the old one in
+`vcpkg_installed`. The new headers and libraries then rebuild and relink
+what uses them; the cached `OpenCASCADE_DIR` names the same folder, and
+`find_package(OpenCASCADE)` reads its targets again in every configure.
+The check script configures in every run, and `cmake/VcpkgPortDepends.cmake`
+makes the overlay ports' files and the overlay triplets configure
+dependencies, so that `cmake --build` alone, or `--only build`, configures
+again after a port change too. The tests follow the port without it as
+well: the test runner's fingerprints of the C++ tests include
+`third_party` and `triplets` (`BUILD_FILES` in
+`tools/testrun/src/fingerprint.rs`).
 
 ### Faster builds
 
@@ -2511,7 +2679,11 @@ mitcad#1986:
   improvement that falls back to the old result is guarded by the exact
   condition under which it is valid, not tried and ignored. The header says
   which of these each handler is.
-- **A regression test per patch.** Each patch's header has a `Test:` line
+- **A regression test per patch.** Each patch has a `Test:` paragraph, in
+  its section of
+  [opencascade-patch-tests.md](../third_party/vcpkg-ports/docs/opencascade-patch-tests.md)
+  (not in its header, which only points there: a header change rebuilds
+  OCCT on every machine, mitcad#2133),
   naming a MitCad test (`geometry/tests/port/p<number>-<topic>.cpp`, ctest
   `geometry.port.<number>`, or an older test of `geometry/tests`) on a small
   synthetic body, not a stored model, that fails for the patch's reason
@@ -2537,16 +2709,22 @@ new test is one run of it against the port with and without the patch.
 `tools/occt-port-proof.py <number>...` makes that run on Linux: it
 reverts each patch at the port's tip in a scratch OCCT tree, rebuilds the
 changed libraries (and the MitCad tests that include a changed OCCT
-header), runs the ctests the header's `Test:` paragraph names against
+header), runs the ctests the patch's `Test:` paragraph names against
 them, and writes the table
 [opencascade-before-after.md](../third_party/vcpkg-ports/docs/opencascade-before-after.md);
-`--update-headers` then records each verdict in the patch's header.
+`--update-tests` (formerly `--update-headers`) then records each verdict
+in the paragraph's proof sentence in
+[opencascade-patch-tests.md](../third_party/vcpkg-ports/docs/opencascade-patch-tests.md).
 A patch that does not revert at the tip (later patches change the same
 lines) is shown at its own place in the chain with `--in-chain`: OCCT with
 the patches before it and with the patches up to it, the MitCad tests
 built against each state's headers, a later patch carried onto both only
 where the MitCad code needs the API it adds (`--jobs` workers, resumable;
 `--table-verdict` takes the patches by their verdict at the tip).
+The tool reads and writes only that document, never a `.patch` file, so a
+proof run or a test note leaves the port and its hash as they are (no OCCT
+rebuild); a patch header that has a `Test:` paragraph again is reported.
+`--list` shows the ctests each patch names.
 
 ## Licence policy
 
@@ -2561,6 +2739,12 @@ where the MitCad code needs the API it adds (`--jobs` workers, resumable;
   unchanged except for its cleared update information;
   `packaging/linux/THIRD-PARTY-NOTICES.txt` names it with the sources.
 - Copied or adapted code keeps its licence and headers in `third_party/`.
+- Third-party marks (another organisation's logo, mitcad#2159: Discord's
+  mark on the top bar's Discord pill) are trademarks, not code under a
+  licence: kept unchanged in `third_party/brand-marks`, whose README gives
+  each one's source, owner and the owner's terms and how MitCad keeps to
+  them, used only where docs/ui-conventions.md section 11 names an
+  exception, and named in the third-party notices.
   OCCT is built with patches of MitCad's (under OCCT's licence, as
   `SPDX-License-Identifier` lines in them say) through the vcpkg overlay
   port `third_party/vcpkg-ports/opencascade`, which `vcpkg.json` names, so

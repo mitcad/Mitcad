@@ -12,10 +12,9 @@ and an edge a list does not hold, are searched as before. The statuses are
 unchanged. The lists are OCCT's own containers: a map per face, shared
 through NCollection_Shared, holding each edge's first two orientations
 (the only occurrences the check reads) and its count.
-Test: geometry/tests/port/p0121-shell-orientation-many-edges.cpp (ctest
-geometry.port.0121): the orientation of a plate with 81 holes is right and
-a reversed face is still found, as below the threshold; a plate of 19 881
-holes is checked within 2 s (the search of each face, quadratic, about 7 s).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0121.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Shell.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Shell.cxx
 index f20626f9..8e335bec 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Shell.cxx

@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# An extrude edited from Join to New Component takes its fillet along
+# (mitcad#2185), on the design of tools/ui-scripts/new-component-fillets.json:
+# in Base:1, a block (Extrude1) with a joined boss (Extrude2) whose edge
+# Fillet1 rounds. Edited to New Component, nothing fails and the timeline
+# marks Extrude2 and Fillet1 in the new component's colour at once; undo
+# brings Base's colour back, and so does the edit back to Join.
+wait-idle
+
+# Every feature in Base's colour.
+capture base '^Timeline component colors: Base (#[0-9a-f]{6})$'
+expect-log '^Timeline feature colors: Sketch1 ${base}, Extrude1 ${base}, Sketch2 ${base}, Extrude2 ${base}, Fillet1 ${base}$'
+
+# New Component: the new component gets a colour of its own, which marks
+# Extrude2 and the fillet that went with it.
+mark
+model-command '{"cmd":"edit_feature","uid":"F4","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":20},"operation":"new_component"}}'
+capture made '^Timeline component colors: Base ${base}, [^,]+ (#[0-9a-f]{6})$'
+expect-no-log '^Timeline component colors: Base ${base}, [^,]+ ${base}$'
+wait-log '^Timeline feature colors: Sketch1 ${base}, Extrude1 ${base}, Sketch2 ${base}, Extrude2 ${made}, Fillet1 ${made}$'
+wait-idle
+screenshot-widget timelineStrip '${MITCAD_TEST_WORK}/new-component-fillets.png'
+
+# Undo: one step back to Base's colour, the new component gone.
+mark
+command edit.undo
+wait-log '^Timeline component colors: Base ${base}$'
+wait-log '^Timeline feature colors: Sketch1 ${base}, Extrude1 ${base}, Sketch2 ${base}, Extrude2 ${base}, Fillet1 ${base}$'
+
+# Redo, then the edit back to Join: the same.
+mark
+command edit.redo
+wait-log '^Timeline feature colors: Sketch1 ${base}, Extrude1 ${base}, Sketch2 ${base}, Extrude2 ${made}, Fillet1 ${made}$'
+mark
+model-command '{"cmd":"edit_feature","uid":"F4","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":20},"operation":"join","participants":["F2.b0"]}}'
+wait-log '^Timeline component colors: Base ${base}$'
+wait-log '^Timeline feature colors: Sketch1 ${base}, Extrude1 ${base}, Sketch2 ${base}, Extrude2 ${base}, Fillet1 ${base}$'
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

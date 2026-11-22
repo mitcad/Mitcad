@@ -67,7 +67,9 @@ void nameTests() {
 void nameFilterTests() {
   using mitcad::WebFileKind;
   using mitcad::checkWebFileName;
-  for (const char* name : {"a.step", "a.STP", "a.iges", "a.igs", "a.brep", "a.stl", "a.obj", "a.mitcad", "a.serp"}) {
+  // 3MF files (mitcad#2156) as STL files.
+  for (const char* name :
+       {"a.step", "a.STP", "a.iges", "a.igs", "a.brep", "a.stl", "a.obj", "a.mitcad", "a.serp", "a.3mf", "a.3MF"}) {
     CHECK(checkWebFileName(text(name)).kind == WebFileKind::Component);
     CHECK(checkWebFileName(text(name)).note.isEmpty());
   }
@@ -84,8 +86,6 @@ void nameFilterTests() {
   CHECK(exe.kind == WebFileKind::Refused && exe.note.contains(text(".exe")));
   const mitcad::WebFileCheck dxf = checkWebFileName(text("outline.dxf"));
   CHECK(dxf.kind == WebFileKind::Refused && dxf.note.contains(text(".dxf")));
-  const mitcad::WebFileCheck printed = checkWebFileName(text("plate.3mf"));
-  CHECK(printed.kind == WebFileKind::Refused && printed.note.contains(text(".3mf")));
   const mitcad::WebFileCheck bare = checkWebFileName(text("README"));
   CHECK(bare.kind == WebFileKind::Refused && !bare.note.isEmpty());
 }
@@ -114,6 +114,11 @@ void contentFilterTests() {
   CHECK(checkWebFileContent(text("parts.zip"), QByteArray("PK\x05\x06\x00\x00", 6)).kind == WebFileKind::Zip);
   CHECK(checkWebFileContent(text("parts.zip"), page).kind == WebFileKind::Refused);
   CHECK(checkWebFileContent(text("parts.zip"), QByteArray("not a zip")).kind == WebFileKind::Refused);
+  // A 3MF file is a zip package (mitcad#2156).
+  CHECK(checkWebFileContent(text("plate.3mf"), QByteArray("PK\x03\x04\x14\x00", 6)).kind == WebFileKind::Component);
+  const mitcad::WebFileCheck notZip = checkWebFileContent(text("plate.3mf"), QByteArray("solid plate\n"));
+  CHECK(notZip.kind == WebFileKind::Refused && notZip.note.contains(text("3MF")) &&
+        notZip.note.contains(text("plate.3mf")));
   // The name's refusal comes first.
   CHECK(checkWebFileContent(text("datasheet.pdf"), QByteArray("%PDF-1.7\n")).note ==
         mitcad::checkWebFileName(text("datasheet.pdf")).note);

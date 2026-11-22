@@ -14,6 +14,11 @@
 // without the planar `sketch` query that refuses a 3D sketch (Helix threw
 // out of its start after Convert to 3D Sketch); a QR code's region still
 // brings the code's other dark regions (mitcad#473).
+// Extrude's and Revolve's start and whole sketch picks (mitcad#2194,
+// GitHub mitcad/Mitcad#545): the unused members of the sketch's outline
+// set (a plate's ring and an island in a hole, not the holes), the region
+// alone once they are used or when the sketch's closed curves cross, which
+// the panel then says; Show profiles leaves the holes unfilled.
 #include "UnitTests.hpp"
 #include "commands/ProfilePicks.hpp"
 
@@ -296,6 +301,159 @@ void startTests() {
   }
 }
 
+// A row of the `profiles` query with the outline set's marks (mitcad#2194):
+// `outline` true or false for a sketch whose closed curves do not cross,
+// `curves_cross` for one whose do.
+enum class Mark { Member, Hole, Crossing, None };
+
+QJsonObject marked(const char* sketch, const char* region, Mark mark, bool consumed = false) {
+  QJsonObject row = profile(sketch, region, consumed);
+  if (mark == Mark::Crossing) {
+    row.insert(QStringLiteral("curves_cross"), true);
+  } else if (mark != Mark::None) {
+    row.insert(QStringLiteral("outline"), mark == Mark::Member);
+  }
+  return row;
+}
+
+// Profiles as newestOutline (Extrude's and Revolve's start) leaves them,
+// with the state for its note.
+CommandState outlineStart(const CommandContext& model, const Selection& before = Selection()) {
+  CommandState state;
+  state.setItems(QStringLiteral("profiles"), before);
+  try {
+    mitcad::cmd::newestOutline(state, model);
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "profile_picks.cpp: newestOutline threw: %s\n", e.what());
+    ++failures;
+  }
+  return state;
+}
+
+// The rows of a plate (F1) with two holes, one with an island in it, the
+// regions as the model sorts them: the plate's ring, the first hole's
+// ring about the island, the second hole's disc, the island.
+QJsonArray plate(bool ringUsed = false) {
+  return QJsonArray{marked("F1", "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}", Mark::Member, ringUsed),
+                    marked("F1", "r{c9}", Mark::Hole), marked("F1", "r{c11}", Mark::Hole),
+                    marked("F1", "r{c12[c15,c13],c13[c12,c14],c14[c13,c15],c15[c14,c12]}", Mark::Member, ringUsed)};
+}
+
+void outlineTests() {
+  using mitcad::cmd::crossingNote;
+  using mitcad::cmd::sketchOutline;
+  using mitcad::cmd::unfilledProfile;
+  const char* ring = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
+  const char* island = "r{c12[c15,c13],c13[c12,c14],c14[c13,c15],c15[c14,c12]}";
+  // A plate with two holes and an island in one: the ring and the island.
+  {
+    const mitcad::cmd::OutlinePick pick = sketchOutline(plate(), QStringLiteral("F1"));
+    CHECK(!pick.crossing);
+    CHECK(pick.items.size() == 2);
+    CHECK(holds(pick.items, "F1", ring));
+    CHECK(holds(pick.items, "F1", island));
+    CHECK(!holds(pick.items, "F1", "r{c9}") && !holds(pick.items, "F1", "r{c11}"));
+  }
+  // Two separate rectangles, and a rectangle split by a line: all of them.
+  {
+    const QJsonArray rows{marked("F2", "r{c1[c4,c2]}", Mark::Member), marked("F2", "r{c5[c8,c6]}", Mark::Member),
+                          marked("F3", "r{c1[c5,c2]}", Mark::Member), marked("F3", "r{c3[c5,c4]}", Mark::Member)};
+    CHECK(sketchOutline(rows, QStringLiteral("F2")).items.size() == 2);
+    CHECK(sketchOutline(rows, QStringLiteral("F3")).items.size() == 2);
+  }
+  // Two overlapping circles: none, the curves cross.
+  {
+    const QJsonArray rows{marked("F4", "r{c1[c2,c2]}", Mark::Crossing),
+                          marked("F4", "r{c1[c2,c2],c2[c1,c1]}", Mark::Crossing),
+                          marked("F4", "r{c2[c1,c1]}", Mark::Crossing)};
+    const mitcad::cmd::OutlinePick pick = sketchOutline(rows, QStringLiteral("F4"));
+    CHECK(pick.crossing);
+    CHECK(pick.items.isEmpty());
+  }
+  // Show profiles: a hole's disc unfilled; members, face-bounded regions
+  // (no mark) and regions of crossing curves filled.
+  CHECK(unfilledProfile(marked("F1", "r{c9}", Mark::Hole)));
+  CHECK(!unfilledProfile(marked("F1", ring, Mark::Member)));
+  CHECK(!unfilledProfile(marked("F1", "r{b{c1},c1}", Mark::None)));
+  CHECK(!unfilledProfile(marked("F4", "r{c2[c1,c1]}", Mark::Crossing)));
+
+  // Extrude's start: the plate's ring and its island, not a hole.
+  {
+    const ProfileModel model(plate(), QJsonObject(), QStringList());
+    const CommandState state = outlineStart(model);
+    const Selection& profiles = state.items(QStringLiteral("profiles"));
+    CHECK(profiles.size() == 2);
+    CHECK(holds(profiles, "F1", ring) && holds(profiles, "F1", island));
+    CHECK(crossingNote(state, model).isEmpty());
+  }
+  // The ring and the island used: the next start is a hole's disc alone
+  // (a boss in it), as before.
+  {
+    const ProfileModel model(plate(true), QJsonObject(), QStringList());
+    const Selection profiles = outlineStart(model).items(QStringLiteral("profiles"));
+    CHECK(profiles.size() == 1);
+    CHECK(holds(profiles, "F1", "r{c11}"));
+  }
+  // The other profile commands keep their start: one region.
+  CHECK(started(ProfileModel(plate(), QJsonObject(), QStringList())).size() == 1);
+  // A newest sketch whose closed curves cross: one region, as before, and
+  // the panel says why no more.
+  {
+    const QJsonArray rows{marked("F1", ring, Mark::Member), marked("F4", "r{c1[c2,c2]}", Mark::Crossing),
+                          marked("F4", "r{c2[c1,c1]}", Mark::Crossing)};
+    const ProfileModel model(rows, QJsonObject(), QStringList());
+    const CommandState state = outlineStart(model);
+    const Selection& profiles = state.items(QStringLiteral("profiles"));
+    CHECK(profiles.size() == 1);
+    CHECK(holds(profiles, "F4", "r{c2[c1,c1]}"));
+    CHECK(crossingNote(state, model).contains(QStringLiteral("cross")));
+  }
+  // A whole sketch selected before the command: its outline set, not the
+  // newest sketch's region; one whose curves cross gives nothing, and the
+  // panel says why.
+  {
+    QJsonArray rows = plate();
+    rows.append(marked("F4", "r{c1[c2,c2]}", Mark::Crossing));
+    const ProfileModel model(rows, QJsonObject(), QStringList());
+    const SelectionItem plateSketch{SelectKind::Sketch, QStringLiteral("F1"), QString(), QString()};
+    const SelectionItem circlesSketch{SelectKind::Sketch, QStringLiteral("F4"), QString(), QString()};
+    const Selection whole = outlineStart(model, {plateSketch}).items(QStringLiteral("profiles"));
+    CHECK(whole.size() == 2);
+    CHECK(holds(whole, "F1", ring) && holds(whole, "F1", island));
+    const CommandState crossing = outlineStart(model, {circlesSketch});
+    CHECK(crossing.items(QStringLiteral("profiles")).isEmpty());
+    CHECK(crossingNote(crossing, model).contains(QStringLiteral("cross")));
+  }
+  // A whole sketch picked while the command is open (Profiles' onPick):
+  // its unused members after the entries there, none twice; a crossing
+  // one adds nothing, and the note stays while Profiles hold what they
+  // held then, not after another sketch's region is clicked.
+  {
+    QJsonArray rows = plate();
+    rows.append(marked("F4", "r{c1[c2,c2]}", Mark::Crossing));
+    const ProfileModel model(rows, QJsonObject(), QStringList());
+    CommandState state;
+    Selection& profiles = state.items(QStringLiteral("profiles"));
+    profiles.append({SelectKind::Profile, QStringLiteral("F1"), QString::fromLatin1(ring), QStringLiteral("plane")});
+    profiles.append({SelectKind::Sketch, QStringLiteral("F1"), QString(), QString()});
+    mitcad::cmd::expandWholeSketches(state, model);
+    CHECK(state.items(QStringLiteral("profiles")).size() == 2);
+    CHECK(holds(state.items(QStringLiteral("profiles")), "F1", island));
+    state.items(QStringLiteral("profiles")).append({SelectKind::Sketch, QStringLiteral("F4"), QString(), QString()});
+    mitcad::cmd::expandWholeSketches(state, model);
+    CHECK(state.items(QStringLiteral("profiles")).size() == 2);
+    CHECK(mitcad::cmd::crossingSketch(state) == QStringLiteral("F4"));
+    CHECK(!crossingNote(state, model).isEmpty());
+    state.items(QStringLiteral("profiles"))
+        .append({SelectKind::Profile, QStringLiteral("F1"), QStringLiteral("r{c9}"), QStringLiteral("plane")});
+    CHECK(crossingNote(state, model).isEmpty());
+    // The plate's sketch picked again: the note goes.
+    state.items(QStringLiteral("profiles")).append({SelectKind::Sketch, QStringLiteral("F1"), QString(), QString()});
+    mitcad::cmd::expandWholeSketches(state, model);
+    CHECK(mitcad::cmd::crossingSketch(state).isEmpty());
+  }
+}
+
 } // namespace
 
 int profilePicksTests() {
@@ -304,6 +462,7 @@ int profilePicksTests() {
   hintTests();
   automaticTests();
   startTests();
+  outlineTests();
   if (failures == 0) {
     std::printf("profile picks tests passed\n");
   }

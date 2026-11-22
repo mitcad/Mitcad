@@ -1,8 +1,5 @@
-Test: none, because this is one of vcpkg's own build changes of the port
-(patches 0001 to 0005 come from vcpkg's opencascade port, otherwise
-unchanged): it changes only where OCCT's installed CMake package finds its
-install prefix, not what OCCT computes, so no geometry test can fail
-without it; the port's build is its check (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0004.
 
 diff --git a/adm/templates/OpenCASCADEConfig.cmake.in b/adm/templates/OpenCASCADEConfig.cmake.in
 index 678e44c7d1..b2fdc9dc27 100644

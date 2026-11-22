@@ -5,6 +5,7 @@
 // is placed) and the geometric constraints.
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <tuple>
@@ -1418,6 +1419,37 @@ QJsonObject build(const QString& type, const QStringList& picks, const SketchMod
   return obj(type, {{"a", picks[0]}, {"b", picks[1]}});
 }
 
+// Whether the sketch would add `constraint` as it is now, asked without
+// changing anything (`sketch.add_constraint` with `check`, mitcad#2184).
+// A refusal, or a model that cannot answer now (busy, a read-only
+// window), is no.
+bool sketchTakes(SketchController& c, const QJsonObject& constraint) {
+  try {
+    c.runModel({{QStringLiteral("cmd"), QStringLiteral("sketch.add_constraint")},
+                {QStringLiteral("sketch"), c.uid()},
+                {QStringLiteral("constraint"), constraint},
+                {QStringLiteral("check"), true}});
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+// Horizontal/Vertical's constraint as build made it, in its nearer
+// direction, turned to the other direction when the sketch takes only that
+// (mitcad#2184, horizontalVerticalDirection): the nearer one already
+// implied or in conflict. Its picks must be the sketch's own entities.
+QJsonObject inDirectionAdded(SketchController& c, QJsonObject constraint) {
+  const QString nearer = constraint.value(QStringLiteral("type")).toString();
+  const QString chosen = horizontalVerticalDirection(nearer, [&c, &constraint](const QString& type) {
+    QJsonObject asked = constraint;
+    asked.insert(QStringLiteral("type"), type);
+    return sketchTakes(c, asked);
+  });
+  constraint.insert(QStringLiteral("type"), chosen);
+  return constraint;
+}
+
 void replaceConstraint(SketchController& c, const QString& type, QStringList picks, const std::vector<V2>& clicks,
                        const QString& blocker, RefusedBy by);
 
@@ -1523,7 +1555,18 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
       refused = ConflictText();
       continue;
     }
-    const QJsonObject constraint = build(type, picks, op.model(), clicks);
+    QJsonObject constraint = build(type, picks, op.model(), clicks);
+    if (type == QStringLiteral("horizontal_vertical")) {
+      // The other direction when the nearer one cannot be added and it
+      // can (mitcad#2184); the picks' axes and body items are made by now.
+      const QString nearer = constraint.value(QStringLiteral("type")).toString();
+      constraint = inDirectionAdded(c, constraint);
+      const QString chosen = constraint.value(QStringLiteral("type")).toString();
+      if (chosen != nearer) {
+        qDebug().noquote() << QStringLiteral("Horizontal/Vertical: %1 on %2 cannot be added; %3 instead")
+                                  .arg(nearer, picks.join(QStringLiteral(", ")), chosen);
+      }
+    }
     QJsonObject cmd = op.command(QStringLiteral("sketch.add_constraint"));
     cmd.insert(QStringLiteral("constraint"), constraint);
     QJsonObject result;
@@ -1754,6 +1797,7 @@ public:
     const bool fits = acceptable(m_type, m_picks, entity, view());
     m_c.setHover(fits ? entity : QString());
     showEnd(fits ? entity : QString(), snap.at);
+    showDirection(fits ? entity : QString());
   }
 
   void press(const Snap& snap) override {
@@ -1797,6 +1841,7 @@ public:
     m_c.setPicked(m_picks);
     m_c.setHover(QString());
     showEnd(QString(), snap.at);
+    showDirection(QString());
     // A refused constraint keeps its reason on the status line instead of
     // the prompt (mitcad#865).
     if (!refused) {
@@ -1805,8 +1850,13 @@ public:
   }
 
   // Tangent and Curvature: the constraint's glyph at the end it would use
-  // (mitcad#783).
+  // (mitcad#783). Horizontal/Vertical: the glyph of the direction it would
+  // add, by the cursor (mitcad#2184).
   void paint(ToolPreview& preview) const override {
+    if (!m_direction.isEmpty()) {
+      preview.glyph = m_direction;
+      return;
+    }
     if (m_end.isEmpty()) {
       return;
     }
@@ -1823,6 +1873,7 @@ public:
     m_picks.clear();
     m_clicks.clear();
     m_end.clear();
+    showDirection(QString());
     m_c.setPicked({});
     prompt();
     return true;
@@ -1848,6 +1899,49 @@ private:
       m_end = end;
       if (!end.isEmpty()) {
         qDebug().noquote() << QStringLiteral("%1 would apply at %2").arg(name(), end);
+      }
+    }
+  }
+
+  // Horizontal/Vertical: the direction it would add with `hover` (a
+  // fitting pick, or none) as its last pick (mitcad#2184), whose glyph
+  // paint() shows by the cursor: the nearer one, or the other one when the
+  // sketch takes only that (inDirectionAdded, as the click decides), asked
+  // once per picks and sketch revision. With a pick of an axis or a body
+  // item not in the sketch yet (made or projected only when the constraint
+  // is added) the sketch cannot be asked: the nearer one. Logged when it
+  // changes, for the UI tests.
+  void showDirection(const QString& hover) {
+    QString direction;
+    QStringList picks;
+    if (m_type == QStringLiteral("horizontal_vertical") && !hover.isEmpty()) {
+      picks = QStringList(m_picks) << hover;
+      if (static_cast<int>(picks.size()) >= needed(m_type, picks, view())) {
+        const QString key =
+            QStringLiteral("%1 %2").arg(picks.join(QLatin1Char(','))).arg(m_c.modelRevision());
+        if (key == m_directionKey) {
+          direction = m_direction;
+        } else {
+          QJsonObject constraint = build(m_type, picks, view(), {});
+          const SketchModel& own = m_c.model();
+          if (std::all_of(picks.begin(), picks.end(), [&own](const QString& id) {
+                return own.point(id) != nullptr || own.curve(id) != nullptr;
+              })) {
+            constraint = inDirectionAdded(m_c, constraint);
+          }
+          direction = constraint.value(QStringLiteral("type")).toString();
+          m_directionKey = key;
+        }
+      }
+    }
+    if (direction.isEmpty()) {
+      m_directionKey.clear();
+    }
+    if (direction != m_direction) {
+      m_direction = direction;
+      if (!direction.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("%1 would add %2 on %3")
+                                  .arg(name(), direction, picks.join(QStringLiteral(", ")));
       }
     }
   }
@@ -1948,6 +2042,10 @@ private:
   std::vector<V2> m_clicks;
   // The end the constraint would use, shown while picking (mitcad#783).
   QString m_end;
+  // Horizontal/Vertical's direction with the hovered pick (mitcad#2184),
+  // and the picks and sketch revision it was asked for.
+  QString m_direction;
+  QString m_directionKey;
   mutable SketchModel m_view;
   mutable std::pair<int, int> m_viewKey{-1, -1};
 };

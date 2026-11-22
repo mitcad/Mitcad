@@ -27,13 +27,8 @@ side at both sides.
   edge beyond the inner ends stayed with Fv's boundary, or (reversed) the
   part along the blend came twice into Fv's wire.
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow),
-test_rounding_at_a_groove_end_consumes_the_wall: It fails with this patch
-and 6 later patches that change the same lines reverted together, so the
-test does not single this patch out (shown 2026-11-20 by
-tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0070.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index cfc980b..ed0026c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

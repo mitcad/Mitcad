@@ -48,14 +48,8 @@ projection about 4 s.
 - No catch is added; an exception in a block reaches the caller as the
   pool passes it on.
 
-Test: geometry.port.1810 (geometry/tests/port/p1810-polygonal-hiding-in-
-parallel.cpp): a frame of 970 bodies seen almost along its rows, every
-kind of visible and hidden line, of all the bodies and of each, equal to
-the last bit and in the same order to the walk over every shell written
-out with the algorithm's public parts (stock OCCT's Hide), and the pass
-in less than half the walk's time (0.04 s against 0.45 s; stock OCCT's
-pass takes the walk's time and fails that bound); one body, and a view of
-none.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1810.
 
 Upstream: new; changes no result, the lines of every view are the same.
 

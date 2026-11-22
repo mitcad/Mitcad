@@ -42,6 +42,7 @@
 #include <gp_Vec2d.hxx>
 
 #include "history.hpp"
+#include "loft_merge.hpp"
 #include "spine.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -344,7 +345,8 @@ ShapePtr sweep_sheet(const std::string& feature, const std::vector<Path>& chains
   });
 }
 
-ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& sections, bool ruled, bool closed) {
+ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& sections, bool ruled, bool closed,
+                    bool merge_tangent) {
   if (sections.size() < 2) {
     throw std::invalid_argument("surface loft: two or more sections are needed");
   }
@@ -359,7 +361,26 @@ ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& section
         throw std::invalid_argument("surface loft: the sections must be all open or all closed");
       }
     }
+    // Tangent Edges: Merge (mitcad#2162): each chain's runs of tangent
+    // curves joined; chains that each became one smooth closed edge start
+    // at corresponding points and loft as they are.
+    bool aligned = false;
+    if (merge_tangent) {
+      std::vector<detail::MergeSection> merging;
+      for (const ChainWire& wire : wires) {
+        detail::MergeSection one;
+        one.named.wire = wire.wire;
+        one.named.edges = wire.edges;
+        merging.push_back(std::move(one));
+      }
+      aligned = detail::merge_tangent_edges(merging);
+      for (std::size_t i = 0; i < wires.size(); ++i) {
+        wires[i].wire = merging[i].named.wire;
+        wires[i].edges = merging[i].named.edges;
+      }
+    }
     BRepOffsetAPI_ThruSections loft(false, ruled, 1.0e-6);
+    loft.CheckCompatibility(!aligned);
     for (const ChainWire& wire : wires) {
       loft.AddWire(wire.wire);
     }

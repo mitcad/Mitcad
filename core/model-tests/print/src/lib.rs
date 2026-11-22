@@ -42,3 +42,6 @@ mod plate_moves_tests;
 // A Bambu-family project in the form its loader reads: preset metadata,
 // included templates, extruders and nozzle variants (mitcad#2008).
 mod slicer_project_form_tests;
+// The G92 E0 reset of relative extrusion and the M600 filament change
+// G-code left to a printer's own system preset (mitcad#2211, mitcad#2235).
+mod layer_reset_preset_tests;

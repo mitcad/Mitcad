@@ -15,6 +15,53 @@ expect-model-parameter result 10
 expect-parameter-cell result 6 '^2$' visible
 expect-parameter-cell result 7 '^10$' visible
 expect-parameter-cell result 8 '^1$' visible
+# mitcad#2179: a long expression shows whole in its cell's editor; the
+# cell's fx opens Edit Formula with what is typed so far, which colours it
+# by its tokens, completes a name and applies it (within the limits above).
+click-parameter result 2
+key F2
+expect-log '^Editing parameter result expression$'
+key ctrl+a
+type '(length / pitch - 0.5) / (length / pitch - 0.5) * 4 + (length - pitch * 5) / (pitch * 7.5)'
+expect-cell-editor-whole
+mark
+dialog-click-logged '^Parameter fx result expression at '
+expect-log '^Formula editor opened for parameter result with: \(length / pitch - 0\.5\) / \(length / pitch - 0\.5\) \* 4 \+ \(length - pitch \* 5\) / \(pitch \* 7\.5\)$'
+focus-dialog '^Formula Editor$'
+expect-formula-token length name
+expect-formula-token 0.5 number
+expect-formula-token '*' operator
+focus-widget formulaText
+key ctrl+End
+type ' + spacing'
+expect-formula-token spacing unknown
+key Backspace Backspace Backspace Backspace Backspace Backspace Backspace
+type 'pit'
+expect-log '^Formula completions for "pit": pitch$'
+key Tab
+expect-log '^Formula completion inserted pitch: '
+type ' / pitch'
+expect-formula-token 'pitch / pitch' name
+screenshot-dialog '${MITCAD_TEST_SHOTS}/formula-editor-colors.png'
+button '^OK$'
+focus-dialog '^Parameters$'
+wait-idle
+expect-model-parameter result 6
+expect-parameter-cell result 2 '^\(length / pitch - 0\.5\) / \(length / pitch - 0\.5\) \* 4 \+ \(length - pitch \* 5\) / \(pitch \* 7\.5\) \+ pitch / pitch$' visible
+# Cancel leaves the parameter as it was.
+click-parameter result 2
+key F2
+key ctrl+a
+type '99'
+mark
+dialog-click-logged '^Parameter fx result expression at '
+expect-log '^Formula editor opened for parameter result with: 99$'
+focus-dialog '^Formula Editor$'
+button '^Cancel$'
+focus-dialog '^Parameters$'
+wait-idle
+expect-model-parameter result 6
+expect-parameter-cell result 2 '\+ pitch / pitch$' visible
 button '^OK$'
 focus-main
 # A real command's field keeps its inline signature and opens the same editor.
@@ -36,4 +83,4 @@ focus-main
 expect-input-text length '^25 mm$'
 key Escape
 wait-idle
-expect-model-parameter result 10
+expect-model-parameter result 6

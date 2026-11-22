@@ -152,6 +152,14 @@ fi
 if [ -e "$contents/Resources/translations/mitcad_xx.qm" ]; then
   fail "$contents/Resources/translations/mitcad_xx.qm" "the tests' pseudo-language is in the bundle"
 fi
+# The built-in woods' and panels' textures (mitcad#2186), once, as files in
+# Resources/textures, which mitcad and mitcad-cli read at run time
+# (mitcad#2218): each image of core/model-base/textures.
+for image in "$SCRIPT_DIR"/../core/model-base/textures/*.jpg; do
+  if [ ! -s "$contents/Resources/textures/$(basename "$image")" ]; then
+    fail "$contents/Resources/textures/$(basename "$image")" "the built-in texture image is missing"
+  fi
+done
 # QtKeychain is linked statically (cmake/Keychain.cmake): its licence text.
 if [ ! -f "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" ]; then
   fail "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" "QtKeychain's licence text is missing"

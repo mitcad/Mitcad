@@ -34,8 +34,8 @@ happened to land inside the face, and the next step found the restriction.
   runs into) and geometry.fillet_still_ball_corners failed or hung.
 - No catch is added.
 
-Test: geometry.fillet_corner_walk_over_vertex (the case's second body) and
-cli.fcstd_bend_reported (the bend radius set to 24).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1802.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
 index edd8f305..094125f3 100644

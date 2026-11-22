@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# Preferences > General > Extrude starts with: New Body (mitcad#2164): a
+# square on a block's top face extruded inward and, undone, outward stays
+# New Body; the model chooses no Join or Cut, and the block is unchanged.
+# tools/ui-macos-edit-auto-operation-test.sh writes the preference
+# (extrude/startOperation=new_body) into the run's settings.
+wait-idle
+window-resize 1400 990
+command view.fit
+expect-model-bodies 1 24000
+mark
+command solid.extrude
+expect-log 'Extrude Profiles: 1 profile '
+expect-log 'Extrude: automatic operation off by preference'
+expect-log 'Preview Extrude: ok' 30
+wait-idle
+expect-no-log 'Extrude: automatic Operation'
+mark
+focus-widget input_distance
+key ctrl+a
+type -5
+expect-log 'Extrude Distance: -5 = -5 mm'
+expect-log 'Preview Extrude: ok' 30
+wait-idle
+expect-no-log 'Extrude: automatic Operation'
+expect-no-log 'Extrude: Operation = '
+button '^OK$'
+expect-log 'Added extrude \(New Body\), distance -5' 30
+expect-model-bodies 2 24500
+mark
+command edit.undo
+expect-log 'Undo: ' 30
+expect-model-bodies 1 24000
+mark
+command solid.extrude
+expect-log 'Extrude Profiles: 1 profile '
+expect-log 'Extrude: automatic operation off by preference'
+expect-log 'Preview Extrude: ok' 30
+mark
+focus-widget input_distance
+key ctrl+a
+type 5
+expect-log 'Extrude Distance: 5 = 5 mm'
+expect-log 'Preview Extrude: ok' 30
+wait-idle
+expect-no-log 'Extrude: automatic Operation'
+button '^OK$'
+expect-log 'Added extrude \(New Body\), distance 5' 30
+expect-model-bodies 2 24500
+expect-never 'The document was read while a job computes it|OCCT view event failed|Recompute failed'

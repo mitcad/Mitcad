@@ -339,8 +339,16 @@ public:
   // its name in `device`.
   virtual bool start(QString& device) = 0;
   virtual QString unavailableStatus() const { return {}; }
+  // The design's window is shown in its frame now (mitcad#2152): a native
+  // window that `nativeWindow` gave as 0 at start may be there now. A
+  // backend whose driver needs it (Windows' 3DxWare) tries again.
+  virtual void windowPlaced() {}
 
   // The active view and native window used by application-aware drivers.
+  // `nativeWindow` gives an existing window only, never makes one (0 until
+  // there is one): a design's window made native before it sits in its
+  // frame paints the Floating cards' translucent margins black
+  // (mitcad#2059, mitcad#2152).
   std::function<bool()> acceptsInput;
   std::function<std::uintptr_t()> nativeWindow;
 

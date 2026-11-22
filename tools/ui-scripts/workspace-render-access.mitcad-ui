@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# Enter and leave Render through the toolbar's workspace selector in the
+# Floating and Docked layouts of macOS shared Qt (mitcad#2080).
+expect-ever 'View area' 30
+wait-idle
+expect-ever '^Ribbon workspace at ' 30
+expect-widget-property ribbonWorkspace visible true
+
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+key Down
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: RENDER$'
+wait-log '^Render workspace opened$'
+wait-idle
+
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [|] Render [(]current[)] [|] Drawing$'
+key Up
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Render workspace closed$'
+wait-log '^Ribbon tab SOLID at '

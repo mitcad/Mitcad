@@ -1896,17 +1896,15 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
         id: u32,
     ) -> Result<(ViewAnnotation, Vec<Seen>), ApiError>;
 
-    /// What an annotation placed on a view of a sheet writes (mitcad#1691:
-    /// a dimension's placing preview shows its value): its value, when it
-    /// measures one, and its words as the sheet writes them; None when it
-    /// would be broken.
-    fn placed_label(
+    /// An annotation's preview as the sheet will draw it, with its value
+    /// when it measures one and its words; None when it would be broken.
+    fn placed_layout(
         &self,
         drawing: &Drawing,
         si: usize,
         view: &ViewAt<'_>,
         annotation: &ViewAnnotation,
-    ) -> Option<(Option<f64>, String)>;
+    ) -> Option<(annotate::Laid, Option<f64>, String)>;
 
     /// How its view sees an annotation's picks now; why not, when one is
     /// gone.
@@ -2287,6 +2285,9 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         template.text = c.text.clone();
         template.frame = c.frame.clone();
         template.terminator = c.terminator;
+        // A new hole callout keeps its text from its hole's centre
+        // (mitcad#2212).
+        template.text_from_center = kind == AnnotationType::HoleCallout;
         template.finish = match kind {
             AnnotationType::Finish => Some(c.finish.clone().unwrap_or_default()),
             _ => c.finish.clone(),
@@ -2624,6 +2625,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         }
         if let Some(offset) = c.text_offset {
             annotation.text_offset = offset;
+            // A hole callout's given from its hole's centre (mitcad#2212).
+            annotation.text_from_center |= kind == AnnotationType::HoleCallout;
         }
         if let Some(height) = c.height {
             // Its own letters' height; `null`: the drawing's (mitcad#729).
@@ -3127,6 +3130,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                                         false,
                                         list.data.rows.len(),
                                     );
+                                    entry["empty_columns"] =
+                                        json!(empty_identity_columns(annotation, &list.data.rows));
                                     let place =
                                         annotation.table.as_ref().map_or([0.0; 2], |t| t.place);
                                     let laid = lay_out_table(
@@ -3369,13 +3374,13 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         Ok((annotation, seen))
     }
 
-    fn placed_label(
+    fn placed_layout(
         &self,
         drawing: &Drawing,
         si: usize,
         view: &ViewAt<'_>,
         annotation: &ViewAnnotation,
-    ) -> Option<(Option<f64>, String)> {
+    ) -> Option<(annotate::Laid, Option<f64>, String)> {
         let units = match &drawing.sheets.get(si)?.units {
             Some(symbol) => Units::by_symbol(symbol)?,
             None => Units::of(self.parameters().context().default_length_unit),
@@ -3384,7 +3389,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let words_units = WordUnits::of_sheet(units);
         let letters = self.all_datum_letters();
         let datums: Vec<&str> = letters.iter().map(String::as_str).collect();
-        let (_, value, text, _) = self
+        let (laid, value, text, _) = self
             .lay_out_annotation(
                 annotation,
                 view,
@@ -3394,7 +3399,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 &drawing.defaults,
             )
             .ok()?;
-        Some((value, text))
+        Some((laid, value, text))
     }
 
     fn annotation_seen(
@@ -6166,6 +6171,24 @@ fn table_entry(entry: &mut Value, annotation: &ViewAnnotation, holes: bool, rows
     );
     entry["sort"] = json!(table.sort_column(holes));
     entry["rows"] = json!(rows);
+}
+
+/// A parts list's shown Part Number and Description columns with an empty
+/// cell (mitcad#2138): the table's panel then says where they are set.
+fn empty_identity_columns(annotation: &ViewAnnotation, rows: &[Vec<String>]) -> Vec<&'static str> {
+    let Some(table) = &annotation.table else {
+        return Vec::new();
+    };
+    let shown = table.shown_columns(false);
+    ["part_number", "description"]
+        .into_iter()
+        .filter(|column| {
+            shown.iter().position(|c| c == column).is_some_and(|i| {
+                rows.iter()
+                    .any(|cells| cells.get(i).is_none_or(|cell| cell.trim().is_empty()))
+            })
+        })
+        .collect()
 }
 
 /// A pick as an annotation of a pictorial view takes it: its point, so

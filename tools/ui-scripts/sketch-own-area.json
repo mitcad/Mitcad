@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-own-area.mitcad-ui (mitcad#2197): a 60 x 40 x 20 block (F1.b0) and on its top face Sketch1 (F2): a circle of diameter 16 about the middle of the face's right edge (c1), half on the face; a 50 x 60 rectangle from (-10, -10) reaching past the face's left, bottom and top edges (c3 to c6) with two circles of diameter 8 inside it, one across the face's left edge about (0, 20) (c11) and one on the face about (20, 20) (c13)."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 60, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "sketch.create", "plane": {"face": "F1:top", "body": "F1.b0"}},
+  {"cmd": "sketch.add_circle", "sketch": "F2", "center": [60, 20], "diameter": 16},
+  {"cmd": "sketch.add_rectangle", "sketch": "F2", "corner": [-10, -10], "width": 50, "height": 60},
+  {"cmd": "sketch.add_circle", "sketch": "F2", "center": [0, 20], "diameter": 8},
+  {"cmd": "sketch.add_circle", "sketch": "F2", "center": [20, 20], "diameter": 8},
+  {"expect": {"feature": "F2", "status": "ok"}}
+]

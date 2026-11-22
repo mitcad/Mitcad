@@ -267,6 +267,10 @@ private:
   // Keep a synchronous feature edit alive until the driver presses its
   // actual progress Cancel, independently of window-server/paint speed.
   std::shared_ptr<std::atomic<bool>> m_testHoldEdit = std::make_shared<std::atomic<bool>>(false);
+  // Hold an asynchronous display meshing (a preview's refinement) until the
+  // driver lets it go, also through a cancel: another job a command panel's
+  // next preview waits for (mitcad#2118).
+  std::shared_ptr<std::atomic<bool>> m_testHoldDisplay = std::make_shared<std::atomic<bool>>(false);
   struct IdleCall {
     QPointer<QObject> context;
     std::function<void()> call;

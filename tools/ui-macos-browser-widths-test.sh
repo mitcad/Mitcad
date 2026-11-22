@@ -7,7 +7,8 @@
 # The Browser's width in the Floating layout (mitcad#1932) on macOS, through
 # the test driver (tools/ui-scripts/browser-widths.mitcad-ui and
 # browser-widths-restart.mitcad-ui, the same scripts as the Linux and
-# Windows tests'): with Rows a long component name widens the rows and the
+# Windows tests'): Rows at the start without a saved choice (mitcad#2144);
+# with Rows a long component name widens the rows and the
 # card, a longer one stops at a third of the view and is elided, a limit
 # changed in Settings takes effect, the card shrinks back and a click beside
 # the rows reaches the view; with Card the dragged width grip widens the

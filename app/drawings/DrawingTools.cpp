@@ -23,6 +23,29 @@ QJsonArray point(const QPointF& p) { return QJsonArray{p.x(), p.y()}; }
 
 bool yes(const QString& value) { return value == QStringLiteral("true"); }
 
+// A text before or after a value, trimmed, with a line break kept at its
+// end next to the value (`atEnd`: a text before; else one after,
+// mitcad#2212): a hole callout's own lines then stand above or below the
+// hole's. Spaces around that line break are trimmed; a line break alone is
+// nothing. The model keeps it so (`FormatEdit`).
+QString trimmedKeepingBreak(const QString& value, bool atEnd) {
+  const QString trimmed = value.trimmed();
+  if (trimmed.isEmpty()) {
+    return trimmed;
+  }
+  const auto isSpace = [](QChar c) { return c.isSpace() && c != QLatin1Char('\n') && c != QLatin1Char('\r'); };
+  qsizetype i = atEnd ? value.size() - 1 : 0;
+  while (i >= 0 && i < value.size() && isSpace(value.at(i))) {
+    i += atEnd ? -1 : 1;
+  }
+  const bool breaks =
+      i >= 0 && i < value.size() && (value.at(i) == QLatin1Char('\n') || value.at(i) == QLatin1Char('\r'));
+  if (!breaks) {
+    return trimmed;
+  }
+  return atEnd ? QString(trimmed + QStringLiteral("\n")) : QString(QStringLiteral("\n") + trimmed);
+}
+
 // A scale option: "auto" and "fit" leave it to the model (a base view's
 // fits the sheet, another's follows its parent's).
 void addScale(QJsonObject& command, const QString& scale) {
@@ -1095,7 +1118,8 @@ QJsonObject annotationEdit(const QString& drawing, int annotation, const QString
     command.insert(QStringLiteral("format"),
                    QJsonObject{{field, value == QStringLiteral("auto") ? QJsonValue(QJsonValue::Null) : QJsonValue(value)}});
   } else if (field == QStringLiteral("before") || field == QStringLiteral("after")) {
-    command.insert(QStringLiteral("format"), QJsonObject{{field, value.trimmed()}});
+    command.insert(QStringLiteral("format"),
+                   QJsonObject{{field, trimmedKeepingBreak(value, field == QStringLiteral("before"))}});
   } else if (field == QStringLiteral("replace")) {
     // A text in place of the value and its tolerance; empty: the measured
     // value again (mitcad#1292).

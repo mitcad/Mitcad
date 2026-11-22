@@ -250,7 +250,9 @@ fn commands_build_a_part_and_queries_describe_it() {
     );
     assert_eq!(
         query(&doc, json!({"query": "profiles"})),
-        json!([{"sketch": "F1", "sketch_name": "Sketch1", "region": REGION, "consumed": true}])
+        // In the sketch's outline set (mitcad#2194).
+        json!([{"sketch": "F1", "sketch_name": "Sketch1", "region": REGION, "consumed": true,
+                "outline": true}])
     );
     assert_eq!(
         query(&doc, json!({"query": "feature", "uid": "F2"}))["def"],
@@ -365,7 +367,7 @@ fn parameters_take_expressions_and_units() {
         params[3],
         json!({"name": "wall", "expression": "d1 / 20", "unit": "mm", "value": 4.0, "text": "4 mm",
                "comment": "rim", "kind": "user", "owner": null, "dependencies": ["d1"], "table_dependencies": [],
-               "favorite": false})
+               "favorite": false, "used_by": ["d3 of the feature Extrude1"]})
     );
     assert_eq!(params[2]["value"], 17.5);
     assert_eq!(params[4]["text"], "15 deg");

@@ -202,7 +202,7 @@ fn part_name<S>(part: &ImportPart<S>, index: usize) -> String {
 }
 
 impl<K: Kernel> Document<K> {
-    /// Imports a STEP, IGES, BRep, STL, OBJ or glTF file: with
+    /// Imports a STEP, IGES, BRep, STL, OBJ, glTF or 3MF file: with
     /// [`ImportStructure::Components`] a STEP file whose assembly places
     /// parts comes in as components and occurrences (one component per
     /// distinct part with its bodies once, an occurrence per instance,
@@ -297,6 +297,12 @@ impl<K: Kernel> Document<K> {
         // components whatever `structure` says.
         if super::serp_import::is_serp_path(path) {
             return self.import_serp(path, name, wrap);
+        }
+        // 3MF files (mitcad#2156): read by the model, a part placed more
+        // than once as a component whatever `structure` says (their unit is
+        // the file's).
+        if super::threemf_import::is_3mf_path(path) {
+            return self.import_3mf(path, name, wrap);
         }
         let keep = structure == ImportStructure::Components;
         // Stopped inside by the command's monitor (mitcad#2032): a STEP

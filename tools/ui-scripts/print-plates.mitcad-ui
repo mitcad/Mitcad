@@ -2,7 +2,11 @@
 # Plates… (mitcad#1050), the shared input script of
 # tools/ui-print-plates-test.sh (Linux), tools/ui-windows-print-plates-test.ps1
 # and tools/ui-macos-print-plates-test.sh, on tools/ui-scripts/print-plates.json
-# (Body1 and Body2, no plates): Plates… adds Plate 1 and Plate 2, Body2
+# (Body1 and Body2, no plates): Plates… adds Plate 1; with that one plate
+# (mitcad#2222) the note and Take Off Plate's tooltip say that an item
+# taken off goes back to the first plate and that hiding a body keeps it
+# off the plates, and Body1 hidden leaves the plate (back when an item,
+# off again when taken off, back when shown). Then Plate 2, Body2
 # picked (its Browser row, the Add Bodies row taking it) goes on Plate 2,
 # Spiral Vase is set for Plate 2, and the plate is drawn beside the design
 # (the picture for the ticket, ${MITCAD_TEST_COLOR_SCHEME}); Close keeps it
@@ -26,6 +30,32 @@ mark
 click-logged '^Panel Plates.* action plate_actions\.0 at '
 wait-log 'Plates: added Plate 1'
 wait-log 'Plates: Plate 1 chosen: nothing of its own; 2 pieces'
+
+# One plate (mitcad#2222): the note says that an item taken off goes back
+# to the first plate and that hiding a body keeps it off the plates.
+wait-log '^Panel Plates.* note unplaced: 2 placements on no plate print on the first\. Taken off its plate, an item goes back to the first\. Hiding a body keeps it off the plates unless it is an item\.$'
+# Body1 hidden: it leaves the plate and the panel's count.
+mark
+model-command '{"cmd":"set_body_visible","uid":"F1.b0","visible":false}'
+wait-log 'Plates: Plate 1 chosen: nothing of its own; 1 pieces'
+wait-log '^Panel Plates.* note unplaced: 1 placement on no plate prints on the first\. Taken off its plate'
+wait-log 'Plate view: Plate 1: 1 pieces: Body2 x1'
+# Put on the plate as an item, the hidden body prints there; Take Off
+# Plate's tooltip says where the item goes and what keeps a body off.
+mark
+model-command '{"cmd":"place_on_plate","plate":"plate1","items":[{"body":"F1.b0"}]}'
+wait-log 'Plates: Plate 1 chosen: Body1; 2 pieces'
+expect-ever '^Panel Plates.* tooltip item_actions: Puts the item back on the first plate; hiding a body keeps it off the plates$'
+# Taken off, the hidden body is on no plate again.
+mark
+click-logged '^Panel Plates.* action item_actions\.0 at '
+wait-log 'Plates: body:F1\.b0 taken off'
+wait-log 'Plates: Plate 1 chosen: nothing of its own; 1 pieces'
+# Shown again, it is back on the first plate.
+mark
+model-command '{"cmd":"set_body_visible","uid":"F1.b0","visible":true}'
+wait-log 'Plates: Plate 1 chosen: nothing of its own; 2 pieces'
+
 mark
 click-logged '^Panel Plates.* action plate_actions\.0 at '
 wait-log 'Plates: added Plate 2'

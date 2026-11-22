@@ -5,6 +5,7 @@
 #include <utility>
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonValue>
@@ -45,6 +46,26 @@ QJsonObject readOne(const QString& root, bool known, const QByteArray& treeJson)
   return entry;
 }
 
+// Whether the repository at `root` may follow a remote: false only when
+// its own configuration file (.git/config) is there and names no remote;
+// a worktree's or another layout's (.git a file) is not read here.
+bool mayHaveRemote(const QString& root) {
+  QFile config(QDir(root).filePath(QStringLiteral(".git/config")));
+  if (!config.open(QIODevice::ReadOnly)) {
+    return true;
+  }
+  return config.readAll().contains("[remote ");
+}
+
+// Whether the project at `root` (its own folder) follows a remote.
+bool isRemoteProject(const QString& root) {
+  if (!mayHaveRemote(root)) {
+    return false;
+  }
+  const ProjectState state = projectOfInspection(inspectFolder(root));
+  return state.kind == ProjectState::Kind::Cloud && sameRoot(state.root, root);
+}
+
 } // namespace
 
 bool sameRoot(const QString& a, const QString& b) {
@@ -80,6 +101,54 @@ bool anyProjectConfigured(const QStringList& known, const QString& projectsFolde
       isHidden = isHidden || sameRoot(other, root);
     }
     if (!isHidden) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool anyRemoteProject(const QStringList& known, const QString& projectsFolder, const QStringList& hidden) {
+  QStringList seen;
+  const auto isSeen = [&seen](const QString& root) {
+    for (const QString& other : std::as_const(seen)) {
+      if (sameRoot(other, root)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const QString& given : known) {
+    const QString root = clean(given);
+    if (root.isEmpty() || isSeen(root) || !isProjectFolder(root)) {
+      continue;
+    }
+    seen << root;
+    if (isRemoteProject(root)) {
+      return true;
+    }
+  }
+  if (projectsFolder.isEmpty()) {
+    return false;
+  }
+  const QDir folder(projectsFolder);
+  int count = 0;
+  for (const QString& name : folder.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::IgnoreCase)) {
+    const QString root = clean(folder.filePath(name));
+    if (!isProjectFolder(root) || isSeen(root)) {
+      continue;
+    }
+    bool isHidden = false;
+    for (const QString& other : hidden) {
+      isHidden = isHidden || sameRoot(other, root);
+    }
+    if (isHidden) {
+      continue;
+    }
+    if (++count > kMaxFolderProjects) {
+      break;
+    }
+    seen << root;
+    if (isRemoteProject(root)) {
       return true;
     }
   }

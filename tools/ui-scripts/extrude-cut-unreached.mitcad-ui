@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# An Extrude Cut whose preview fails before its cut's targets are found
+# (mitcad#2118, GitHub mitcad/Mitcad#492), on extrude-cut-unreached.json (a
+# 20 mm cube, Extrude1 F2; Extrude2 F4 a circle cut up to the cube's bottom
+# face, which lies in the circle's own plane: no length either way), in a
+# window of 1280 x 600 and the layout the runner chose (Docked, Floating):
+#   Extrude2 edited: its preview fails with no cut targets. The Affected
+#   components line gives the failure in words ("Cut targets status:
+#   Affected components could not be found: …"), not "Updating affected
+#   components…", which shows only while a preview computes.
+#   Operation New Body and then Cut again, the keyboard on the Operation
+#   choice: the Affected components list comes back above the message,
+#   which is the same error again, and the panel brings the message into
+#   view again ("Panel Extrude message revealed: in view"). (0.67.0 left
+#   it below the page's view with "Updating affected components…" for
+#   good and OK off.) The runner checks the places logged last: the
+#   message within the page's view ("Panel Extrude view y A to B").
+# Run by tools/ui-extrude-cut-unreached-test.sh (Linux),
+# tools/ui-windows-extrude-cut-unreached-test.ps1 (Windows) and
+# tools/ui-macos-extrude-cut-unreached-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1280 600
+command view.fit
+wait-idle
+
+# Extrude2 edited: its preview fails before its cut's targets are found.
+mark
+dblclick-logged '^Timeline Extrude2 at '
+wait-log '^Editing F4 with Extrude' 20
+wait-log '^Preview Extrude: failed: .*where the sweep starts' 30
+wait-log '^Panel Extrude message box: error: ' 10
+wait-log '^Cut targets status: Affected components could not be found: ' 10
+wait-idle 30
+expect-no-log '^Cut targets status: Affected components could not be found: .*([A-Z][0-9]+[.:]|r[{])'
+
+# New Body: no list; the same error.
+mark
+qt-choice input_operation 'New Body'
+wait-log '^Preview Extrude: failed: .*where the sweep starts' 30
+wait-idle 30
+
+# Cut again: the list comes back above the message, which is brought into
+# view again, also past the Offset field that has had the keyboard since
+# the panel opened (nothing was typed in it). The list's line keeps saying
+# why there are no affected components (the preview may come from the
+# panel's cache, which logs no new line: the runner checks the last one).
+mark
+qt-choice input_operation 'Cut'
+wait-log '^Preview Extrude: failed: .*where the sweep starts' 30
+wait-log '^Panel Extrude message revealed: in view' 10
+wait-idle 30
+expect-no-log '^Panel Extrude message revealed: partly'
+
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle

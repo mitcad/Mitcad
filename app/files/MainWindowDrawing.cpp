@@ -191,10 +191,14 @@ void MainWindow::exportDrawing() {
   const QString scale = result.value(QStringLiteral("scale")).toString();
   // A DXF file's length unit (mitcad#1408).
   const QString fileUnits = result.value(QStringLiteral("file_units")).toString();
-  qInfo().noquote() << QStringLiteral("Exported %1: drawing, %2 views, %3 bodies, %4, %5%6")
+  // The placements drawn too (mitcad#2147): a body of a component placed
+  // several times is drawn at each.
+  const int placements = result.value(QStringLiteral("placements")).toInt();
+  qInfo().noquote() << QStringLiteral("Exported %1: drawing, %2 views, %3 bodies in %4 placements, %5, %6%7")
                            .arg(choice->path)
                            .arg(views)
                            .arg(bodies)
+                           .arg(placements)
                            .arg(sheet, scale, fileUnits.isEmpty() ? QString() : QStringLiteral(", in %1").arg(fileUnits));
   const int sheets = result.value(QStringLiteral("sheets")).toInt();
   // Each count in a text of its own (mitcad#1758): "%n view(s) of %1" with

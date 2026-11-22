@@ -49,6 +49,7 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("export", FileIo),
     ("export_sketch", FileIo),
     ("export_flat_pattern_dxf", FileIo),
+    ("export_bend_table", FileIo),
     ("mark_saved", FileIo),
     ("insert_component", FileIo),
     ("update_links", FileIo),
@@ -534,6 +535,23 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("reorder_occurrence", Model),
     // Linked parts of a design (mitcad#2130): reads the linked file.
     ("set_link_parts", FileIo),
+    // Explode Text of a sketch text (mitcad#2163).
+    ("sketch.explode_text", Model),
+    // Groups of user parameters (mitcad#2180).
+    ("add_parameter_group", Model),
+    ("rename_parameter_group", Model),
+    ("delete_parameter_group", Model),
+    ("set_parameter_group", Model),
+    // Selection sets (mitcad#2192).
+    ("add_selection_set", Model),
+    ("set_selection_set_members", Model),
+    ("rename_selection_set", Model),
+    ("delete_selection_set", Model),
+    // Extend to Meet of two sketch curves (mitcad#2178).
+    ("sketch.extend_to_meet", Model),
+    // Insert Points (mitcad#2232): the model's own with the points' text
+    // instead of a path ([`command_class_with`]).
+    ("sketch.import_points", FileIo),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -823,6 +841,18 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("print_job", Model),
     // A design's parts to link (mitcad#2130): reads the design file.
     ("link_parts", FileIo),
+    // Boundary Fill's closed regions of surfaces and planes (mitcad#2149).
+    ("boundary_regions", Model),
+    // The user parameters' groups (mitcad#2180).
+    ("parameter_groups", Model),
+    // Draft Analysis (mitcad#2166).
+    ("draft_analysis", Model),
+    // Selection sets (mitcad#2192).
+    ("selection_sets", Model),
+    // Which bodies a print service may take (mitcad#2214).
+    ("print_service_check", Model),
+    // A point file for Insert Points (mitcad#2232).
+    ("points_info", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {
@@ -888,6 +918,9 @@ pub fn file_path_read(request: &serde_json::Value) -> Option<String> {
         "insert_image_reference" | "edit_image_reference" => {
             request.get("path")?.as_str().map(str::to_owned)
         }
+        // A point file read for Insert Points (mitcad#2232); its text
+        // reads nothing.
+        "sketch.import_points" => request.get("path")?.as_str().map(str::to_owned),
         _ => None,
     }
 }
@@ -911,6 +944,7 @@ pub fn command_class_with(request: &serde_json::Value) -> Option<ApiClass> {
             | "sketch.edit_text"
             | "insert_image_reference"
             | "edit_image_reference"
+            | "sketch.import_points"
     ) {
         return Some(if file_path_read(request).is_some() {
             FileIo
@@ -1155,6 +1189,8 @@ const MODEL_FORMS: &[&str] = &[
     "build_connect",
     "build_panel",
     "build_swap_fasteners",
+    // With the points' text, not a path (mitcad#2232).
+    "sketch.import_points",
 ];
 
 /// The commands an external client may run, in some form (mitcad#714:
@@ -1357,6 +1393,20 @@ mod tests {
         }
     }
 
+    /// Insert Points (mitcad#2232): a file read is file IO, the points'
+    /// text the model's own; the info query reads a file.
+    #[test]
+    fn a_point_file_read_is_file_io_and_its_text_is_not() {
+        let file =
+            json!({"cmd": "sketch.import_points", "sketch": "F1", "path": "/data/naca2412.dat"});
+        assert_eq!(class_of(file.clone()), Some(FileIo));
+        assert_eq!(file_path_read(&file).as_deref(), Some("/data/naca2412.dat"));
+        let text = json!({"cmd": "sketch.import_points", "sketch": "F1", "text": "0 0\n1 1"});
+        assert_eq!(class_of(text), Some(Model));
+        assert_eq!(query_class("points_info"), Some(FileIo));
+        assert!(external_commands().contains(&"sketch.import_points"));
+    }
+
     #[test]
     fn a_flex_type_of_a_named_library_is_file_io() {
         let built_in = json!({"cmd": "flex.set_item", "flex": "F2", "type": "hose-10"});
@@ -1467,6 +1517,7 @@ mod tests {
             "export",
             "export_sketch",
             "export_flat_pattern_dxf",
+            "export_bend_table",
             "insert_component",
             "update_links",
             "sketch.import_dxf",
@@ -1522,13 +1573,14 @@ mod tests {
             json!({"cmd": "build_connect", "part": {"source": "S1"}}),
             json!({"cmd": "build_panel", "part": {"source": "S1"}}),
             json!({"cmd": "build_swap_fasteners", "part": {"source": "S1"}}),
+            json!({"cmd": "sketch.import_points", "sketch": "F1", "text": "0 0\n1 1"}),
         ] {
             let name = request["cmd"].as_str().unwrap();
             assert!(MODEL_FORMS.contains(&name), "{name}");
             assert!(commands.contains(&name), "{name}");
             assert_eq!(command_class_with(&request), Some(Model), "{name}");
         }
-        assert_eq!(MODEL_FORMS.len(), 7);
+        assert_eq!(MODEL_FORMS.len(), 8);
         assert!(commands.contains(&"add_feature"));
         assert!(commands.contains(&"sketch.add_line"));
         for name in [

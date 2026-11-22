@@ -46,3 +46,9 @@ mod occurrence_order_tests;
 // Assembly cuts: linked and multiply placed components machined in an
 // assembly only (mitcad#2131).
 mod assembly_cut_tests;
+// Selection sets: named links to bodies, occurrences and features
+// (mitcad#2192).
+mod selection_set_tests;
+// An extrude whose operation an edit changes takes the features on its
+// geometry along (mitcad#2185).
+mod operation_follow_tests;

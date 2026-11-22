@@ -1048,4 +1048,40 @@ void TestDriver::testDeviceScroll() {
   });
 }
 
+// This file's steps (mitcad#2173): their specs and their chain.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    {"expect-navigation-runtime", 0, 0, TestDriver::kIdle},
+    {"expect-navigation-release", 0, 0, TestDriver::kIdle},
+    {"expect-navigation-gesture-state", 0, 0, TestDriver::kIdle},
+    {"expect-drag-zoom", 0, 0, TestDriver::kIdle},
+    {"expect-device-scroll", 0, 0, TestDriver::kIdle},
+    {"view-navigation", 1, 1, TestDriver::kIdle},
+    {"expect-navigation-controls", 1, 1, TestDriver::kIdle},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kNavigationSteps{
+    kStepSpecs, std::size(kStepSpecs), &TestDriver::runNavigationStep};
+
+void TestDriver::runNavigationStep(const QString& name, const QStringList& a, int) {
+  if (name == QLatin1String("expect-navigation-runtime")) {
+    testNavigationRuntime();
+  } else if (name == QLatin1String("expect-navigation-release")) {
+    testNavigationRelease();
+  } else if (name == QLatin1String("expect-drag-zoom")) {
+    testDragZoom();
+  } else if (name == QLatin1String("expect-device-scroll")) {
+    testDeviceScroll();
+  } else if (name == QLatin1String("expect-navigation-gesture-state")) {
+    testNavigationGestureState();
+  } else if (name == QLatin1String("view-navigation")) {
+    setViewNavigation(a.at(0));
+  } else if (name == QLatin1String("expect-navigation-controls")) {
+    testNavigationControls(a.at(0));
+  }
+}
+
 } // namespace mitcad

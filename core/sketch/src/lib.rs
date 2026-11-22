@@ -146,6 +146,17 @@ pub mod auto_constrain;
 pub mod blend;
 // Sketch blocks: named geometry and its instances (mitcad#2110).
 pub mod block;
+// Explode Text and the outlines of a sketch's DXF export (mitcad#2163).
+pub mod text_explode;
+// The outline set: the areas Extrude and Revolve start with, a plate less
+// its holes (mitcad#2194).
+pub mod outlines;
+// Insert Points (mitcad#2232): point files into sketches, their
+// least-squares spline fit, and the cubic B-spline helpers the fit shares
+// with the mesh tools' surface fit.
+pub mod bspline;
+pub mod point_file;
+pub mod point_fit;
 
 /// A refusal or note of a sketch edit that names the sketch's ids
 /// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`
@@ -186,6 +197,19 @@ mod break_tests;
 // Sketch blocks (mitcad#2110).
 #[cfg(test)]
 mod block_tests;
+// The outline set of nested and crossing loops (mitcad#2194).
+#[cfg(test)]
+mod outlines_tests;
+// Extend to Meet (mitcad#2178).
+#[cfg(test)]
+mod extend_meet_tests;
+// The face's edges and automatic outline do not split an own area
+// (mitcad#2197).
+#[cfg(test)]
+mod own_area_2197_tests;
+// Insert Points' reader, airfoils and fit (mitcad#2232).
+#[cfg(test)]
+mod point_file_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -1724,6 +1748,17 @@ pub struct Projection {
     /// ([`mitcad_model_base::Kernel::curves_of`]), as before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outline: bool,
+    /// The outline of the sketch's face that the sketch got when it was
+    /// made (`sketch.create` with `project_face`, mitcad#2051), not one the
+    /// user projected (mitcad#2197): like the face's own edges, its curves
+    /// do not split an area the sketch's other curves close
+    /// ([`crate::regions::own_area_regions`]). Project Again keeps it;
+    /// Convert to Sketch Geometry, which takes the projection away, drops
+    /// it. Designs saved before the flag have none: their face outline
+    /// counts as the user's (a Project of the face as the first step of an
+    /// empty sketch looks the same in the file).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automatic: bool,
 }
 
 /// A sketch text whose text is a text parameter's value (mitcad#664):

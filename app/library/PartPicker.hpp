@@ -97,7 +97,8 @@ struct PickerPart {
   // Supplier filter hides a part none of whose rows the chosen one sells.
   QList<PartSupplier> suppliers;
   QString license;      // SPDX id, empty for none
-  QString sizes;        // the main sizes under the name ("30x30", "M5x16")
+  bool nonPrintable = false; // its library says: not for print services (mitcad#2214)
+  QString sizes;       // the main sizes under the name ("30x30", "M5x16")
   QString system;       // the slot system(s) of a BUILD part ("B8 30")
   bool preview = true;  // the library has a picture of it
   bool rowPreview = false; // `config` has a picture of its own (library_preview with it, mitcad#484)

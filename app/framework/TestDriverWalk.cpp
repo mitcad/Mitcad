@@ -149,7 +149,7 @@ bool TestDriver::runWalkStep(const QString& name, const QStringList& a, int line
           QContextMenuEvent event(QContextMenuEvent::Mouse, local, guard->viewport()->mapToGlobal(local));
           QCoreApplication::sendEvent(guard->viewport(), &event);
         });
-        queue([this] { walkClose(m_clock.elapsed() + kWalkSettleMs, m_clock.elapsed() + kWalkCloseMs); });
+        queue([this, line] { walkClose(m_clock.elapsed() + kWalkSettleMs, m_clock.elapsed() + kWalkCloseMs, line); });
       }
     }
     qDebug().noquote() << QStringLiteral("Walk: %1 rows").arg(count);
@@ -195,7 +195,7 @@ bool TestDriver::runWalkStep(const QString& name, const QStringList& a, int line
       qDebug().noquote() << QStringLiteral("Walk: command %1").arg(id);
       guard->trigger();
     });
-    queue([this] { walkClose(m_clock.elapsed() + kWalkSettleMs, m_clock.elapsed() + kWalkCloseMs); });
+    queue([this, line] { walkClose(m_clock.elapsed() + kWalkSettleMs, m_clock.elapsed() + kWalkCloseMs, line); });
   }
   qDebug().noquote() << QStringLiteral("Walk: %1 commands").arg(actions.size());
   return true;
@@ -204,12 +204,22 @@ bool TestDriver::runWalkStep(const QString& name, const QStringList& a, int line
 // One step of closing what the walk opened, queued again in front of the
 // rest until nothing is left: a popup, a modal dialog, a window opened since
 // the walk began, the command's panel (Esc); waits while the model computes,
-// and from the start until notBefore.
-void TestDriver::walkClose(qint64 notBefore, qint64 until) {
-  const auto again = [this, notBefore, until] {
-    m_micro.push_front([this, notBefore, until] { walkClose(notBefore, until); });
+// and from the start until notBefore. The walk's step (line) fails when the
+// command open before the walk (a sketch) has ended: Esc cannot bring it
+// back, and every command after it would wait until its own time is out
+// (mitcad#2261).
+void TestDriver::walkClose(qint64 notBefore, qint64 until, int line) {
+  const auto again = [this, notBefore, until, line] {
+    m_micro.push_front([this, notBefore, until, line] { walkClose(notBefore, until, line); });
   };
   if (m_clock.elapsed() > until) {
+    const auto* window = qobject_cast<MainWindow*>(m_main.data());
+    if (window != nullptr && !m_walkCommand.isEmpty() && window->activeCommandName().isEmpty()) {
+      fail(line, QStringLiteral("walk: '%1', open before the walk, was left by the last command walked; "
+                                "exclude that command")
+                     .arg(m_walkCommand));
+      return;
+    }
     const QWidget* modal = QApplication::activeModalWidget();
     qWarning().noquote() << QStringLiteral("TestDriver: walk: not closed in time (%1)")
                                 .arg(modal != nullptr ? modal->windowTitle() : QStringLiteral("no dialog"));
@@ -249,5 +259,20 @@ void TestDriver::walkClose(qint64 notBefore, qint64 until) {
     again();
   }
 }
+
+// This file's steps (mitcad#2173): their specs, run by its run function before the others.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    // The interface walked (mitcad#1473, TestDriverWalk.cpp).
+    {"walk-commands", 1, 2, TestDriver::kInputOfMain},
+    {"walk-menus", 0, 0, TestDriver::kInputOfMain},
+    {"walk-context-menus", 0, 0, TestDriver::kInputOfMain},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kWalkSteps{
+    kStepSpecs, std::size(kStepSpecs), nullptr};
 
 } // namespace mitcad

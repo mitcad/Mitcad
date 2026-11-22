@@ -150,6 +150,42 @@ bool TestDriver::runDocumentFrameStep(const QString& name, const QStringList& a,
         QCoreApplication::sendEvent(tabs, &event);
       });
     }
+  } else if (name == QLatin1String("document-tab-close")) {
+    // The tab's × (mitcad#2142): a press and a release on its close button.
+    int index = -1;
+    if (!indexOf(a.at(0), index)) return true;
+    QPointer<QWidget> button = tabs->tabButton(index, QTabBar::RightSide);
+    if (!button || !button->isVisible()) {
+      fail(line, QStringLiteral("document tab %1 has no visible close button").arg(index)); return true;
+    }
+    const QPoint point = button->rect().center();
+    for (const bool press : {true, false}) queue([this, button, point, press, line] {
+      if (!button || !button->isVisible()) { fail(line, QStringLiteral("the tab's close button disappeared during its click")); return; }
+      QMouseEvent event(press ? QEvent::MouseButtonPress : QEvent::MouseButtonRelease,
+                        QPointF(point), QPointF(button->mapToGlobal(point)), Qt::LeftButton,
+                        press ? Qt::MouseButtons(Qt::LeftButton) : Qt::NoButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(button, &event);
+    });
+  } else if (name == QLatin1String("expect-document-frame-design")) {
+    // "open": the window shows a design; "none": the Start page with no
+    // design open and no document tab (mitcad#2142).
+    const QString wanted = a.at(0);
+    if (wanted != QLatin1String("open") && wanted != QLatin1String("none")) {
+      fail(line, QStringLiteral("expect-document-frame-design open|none")); return true;
+    }
+    const bool none = wanted == QLatin1String("none");
+    whenReady([this, none] {
+      auto* document = qobject_cast<MainWindow*>(m_main.data());
+      auto* host = DocumentFrame::containing(document);
+      auto* bar = tabsOf(host);
+      const bool open = document != nullptr && document->hasDesign();
+      m_waitDetail = QStringLiteral("actual design %1, tab bar %2")
+                         .arg(open ? QStringLiteral("open") : QStringLiteral("none"),
+                              bar != nullptr && bar->isVisible() ? QStringLiteral("shown") : QStringLiteral("hidden"));
+      if (document == nullptr || host == nullptr || !host->isVisible() || open == none) return false;
+      return !none || (bar != nullptr && bar->isHidden() && !host->showsTabs());
+    }, 6, QStringLiteral("the window did not show %1").arg(none ? QStringLiteral("the Start page with no design open")
+                                                                 : QStringLiteral("a design")));
   } else if (name == QLatin1String("document-tab-drag")) {
     int from = -1, to = -1;
     if (!indexOf(a.at(0), from) || !indexOf(a.at(1), to)) return true;
@@ -235,4 +271,29 @@ bool TestDriver::runDocumentFrameStep(const QString& name, const QStringList& a,
   } else return false;
   return true;
 }
+// This file's steps (mitcad#2173): their specs, run by its run function before the others.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    // Portable document frame input/observations (mitcad#1172).
+    {"expect-document-frame-tabs", 1, 1, TestDriver::kIdle},
+    {"expect-document-frame-order", 1, -1, TestDriver::kIdle},
+    {"document-tab-click", 1, 2, TestDriver::kInputOfMain},
+    {"document-tab-drag", 2, 2, TestDriver::kInputOfMain},
+    {"document-tab-context", 1, 1, TestDriver::kInputOfMain},
+    {"document-tab-drop", 3, 3, TestDriver::kInputOfMain},
+    {"expect-document-hidden-quiet", 2, 2, TestDriver::kIdle},
+    {"observe-document-frame-close-all", 0, 0, TestDriver::kIdle},
+    // The last design closed (mitcad#2142, TestDriverDocuments.cpp): a
+    // document tab's × clicked, and whether the window shows a design or
+    // the Start page with no design open.
+    {"document-tab-close", 1, 1, TestDriver::kInputOfMain},
+    {"expect-document-frame-design", 1, 1, TestDriver::kIdle},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kDocumentFrameSteps{
+    kStepSpecs, std::size(kStepSpecs), nullptr};
+
 } // namespace mitcad

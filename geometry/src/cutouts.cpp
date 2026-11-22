@@ -2411,4 +2411,310 @@ ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Sh
   });
 }
 
+namespace {
+
+// Whether the face's surface is one side_of takes: a plane, cylinder, cone,
+// sphere or torus.
+bool side_surface(const TopoDS_Face& face) {
+  switch (BRepAdaptor_Surface(face, false).GetType()) {
+  case GeomAbs_Plane:
+  case GeomAbs_Cylinder:
+  case GeomAbs_Cone:
+  case GeomAbs_Sphere:
+  case GeomAbs_Torus:
+    return true;
+  default:
+    return false;
+  }
+}
+
+} // namespace
+
+std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std::vector<int>& owner,
+                                                   double contact) {
+  if (!(contact > 0.0)) {
+    return std::nullopt;
+  }
+  throw_if_cancelled();
+  return occt_guarded([&]() -> std::optional<FacesBeyondGrown> {
+    const TopoDS_Shape& solid = body.occt();
+    const double tolerance = std::max(1.0e-6, 2.0 * BRep_Tool::MaxTolerance(solid, TopAbs_VERTEX));
+    const double body_volume = absolute_volume_of(solid);
+    const EdgeFaces edge_faces(body);
+    ShapeSet selected;
+    for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      if (owner[static_cast<std::size_t>(e)] >= 0) {
+        selected.Add(body.edge(e));
+      }
+    }
+    // The picked edges beside a narrow face replaced: each with its other
+    // face and the faces beyond the narrow face's far edges.
+    struct Replaced {
+      int edge = -1;
+      int other = -1;
+      std::vector<int> beyond;
+    };
+    std::vector<Replaced> replaced;
+    std::vector<int> narrow;
+    ShapeList taken;
+    // (The vertices of the picked edges and of the far edges: the edges
+    // through them on the merged faces' boundaries are joined again.)
+    std::vector<gp_Pnt> loose;
+    for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      if (owner[static_cast<std::size_t>(e)] < 0) {
+        continue;
+      }
+      throw_if_cancelled();
+      const std::vector<int> pair = edge_faces.at(e);
+      if (pair.size() != 2 || pair[0] == pair[1]) {
+        continue;
+      }
+      const TopoDS_Edge& edge = TopoDS::Edge(body.edge(e));
+      if (BRep_Tool::Degenerated(edge) ||
+          ChFi3d::DefineConnectType(edge, body.face(pair[0]), body.face(pair[1]), 1.0e-4, false) != ChFiDS_Concave) {
+        continue;
+      }
+      TopoDS_Vertex first;
+      TopoDS_Vertex last;
+      TopExp::Vertices(edge, first, last);
+      if (first.IsNull() || last.IsNull()) {
+        continue;
+      }
+      for (std::size_t k = 0; k < 2; ++k) {
+        const int n = pair[k];
+        const int other = pair[1 - k];
+        if (std::find(narrow.begin(), narrow.end(), n) != narrow.end()) {
+          continue;
+        }
+        const TopoDS_Face& face = body.face(n);
+        if (!side_surface(face) || !side_surface(body.face(other))) {
+          continue;
+        }
+        // Its far edges (those that do not meet the picked edge), each with
+        // the face beyond it: all nearer the edge than the rounding reaches,
+        // all going on tangentially into a face of side_of's surfaces. The
+        // face holds no other selected edge.
+        bool fits = true;
+        std::vector<int> rims;
+        std::vector<int> beyond;
+        for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More() && fits; ex.Next()) {
+          const TopoDS_Edge& side = TopoDS::Edge(ex.Current());
+          if (side.IsSame(edge) || BRep_Tool::Degenerated(side)) {
+            continue;
+          }
+          if (selected.Contains(side)) {
+            fits = false;
+            continue;
+          }
+          bool meets = false;
+          for (TopExp_Explorer vx(side, TopAbs_VERTEX); vx.More() && !meets; vx.Next()) {
+            meets = vx.Current().IsSame(first) || vx.Current().IsSame(last);
+          }
+          if (meets) {
+            continue;
+          }
+          const int r = body.edge_index(side);
+          int b = -1;
+          if (r >= 0) {
+            for (const int f : edge_faces.at(r)) {
+              b = f != n ? f : b;
+            }
+          }
+          fits = b >= 0 && b != other && side_surface(body.face(b)) && is_smooth(side, face, body.face(b)) &&
+                 distance(side, edge) < contact - tolerance;
+          if (fits && std::find(rims.begin(), rims.end(), r) == rims.end()) {
+            rims.push_back(r);
+            beyond.push_back(b);
+          }
+        }
+        if (!fits || rims.empty()) {
+          continue;
+        }
+        // The material between the narrow face, the faces beyond continued
+        // and the other face's surface: on the narrow face's side of the
+        // other face's surface, into the narrow face's material, out of the
+        // faces' beyond, near the face.
+        const Box box = grown(bounds_of(face), contact + tolerance);
+        std::optional<TopoDS_Shape> region = side_holding(body.face(other), point_and_normal(face).first, box, tolerance);
+        const std::optional<TopoDS_Shape> under = side_of(face, false, box);
+        if (!region || !under) {
+          continue;
+        }
+        region = boolean<BRepAlgoAPI_Common>(*region, *under);
+        for (const int b : beyond) {
+          const std::optional<TopoDS_Shape> out = side_of(body.face(b), true, box);
+          if (!out) {
+            region.reset();
+            break;
+          }
+          region = boolean<BRepAlgoAPI_Common>(*region, *out);
+        }
+        if (!region) {
+          continue;
+        }
+        const TopoDS_Shape material = boolean<BRepAlgoAPI_Common>(*region, solid);
+        ShapeList pieces;
+        bool bounded = true;
+        for (TopExp_Explorer px(material, TopAbs_SOLID); px.More(); px.Next()) {
+          const TopoDS_Shape& piece = px.Current();
+          if (absolute_volume_of(piece) <= 1.0e-9 * std::max(1.0, body_volume) ||
+              !within_distance(piece, face, tolerance) || !within_distance(piece, edge, tolerance)) {
+            continue;
+          }
+          // (Bounded by those faces' surfaces and the body, never by the
+          // box: else it is no narrow strip beside the edge.)
+          const Box b = bounds_of(piece);
+          for (std::size_t i = 0; i < 3; ++i) {
+            bounded = bounded && b[i] > box[i] + 10.0 * tolerance && b[i + 3] < box[i + 3] - 10.0 * tolerance;
+          }
+          pieces.Append(BRepBuilderAPI_Copy(piece).Shape());
+        }
+        if (pieces.IsEmpty() || !bounded) {
+          continue;
+        }
+        for (const TopoDS_Shape& piece : pieces) {
+          taken.Append(piece);
+        }
+        for (const TopoDS_Vertex& v : {first, last}) {
+          loose.push_back(BRep_Tool::Pnt(v));
+        }
+        for (const int r : rims) {
+          for (TopExp_Explorer vx(body.edge(r), TopAbs_VERTEX); vx.More(); vx.Next()) {
+            loose.push_back(BRep_Tool::Pnt(TopoDS::Vertex(vx.Current())));
+          }
+        }
+        narrow.push_back(n);
+        replaced.push_back({e, other, beyond});
+        break;
+      }
+    }
+    if (replaced.empty()) {
+      return std::nullopt;
+    }
+    // The body with that material taken away, the pieces of the other faces
+    // and of the faces beyond on their surfaces merged.
+    BRepAlgoAPI_Cut cut;
+    const TopoDS_Shape cleared = boolean(solid, taken, cut);
+    const occ::handle<BRepTools_History> history = cut.History();
+    std::vector<occ::handle<Geom_Surface>> surfaces;
+    for (const Replaced& r : replaced) {
+      surfaces.push_back(BRep_Tool::Surface(body.face(r.other)));
+      for (const int b : r.beyond) {
+        surfaces.push_back(BRep_Tool::Surface(body.face(b)));
+      }
+    }
+    const TopoDS_Shape grown_body = merged_on(cleared, surfaces, solid, tolerance, *history, loose);
+    int solids = 0;
+    for (TopExp_Explorer ex(grown_body, TopAbs_SOLID); ex.More(); ex.Next()) {
+      ++solids;
+    }
+    if (solids != 1 || !BRepCheck_Analyzer(grown_body).IsValid()) {
+      return std::nullopt;
+    }
+    FaceNamer namer(grown_body);
+    namer.carry(*history, body);
+    namer.finish();
+    FacesBeyondGrown out;
+    out.body = namer.shape();
+    const Shape& m = *out.body;
+    // The faces of `m` an input face became.
+    const auto images = [&](const TopoDS_Shape& face) {
+      std::vector<int> found;
+      if (history->IsRemoved(face)) {
+        return found;
+      }
+      const ShapeList& modified = history->Modified(face);
+      if (modified.IsEmpty()) {
+        const int i = m.face_index(face);
+        if (i >= 0) {
+          found.push_back(i);
+        }
+      }
+      for (const TopoDS_Shape& image : modified) {
+        const int i = m.face_index(image);
+        if (i >= 0 && std::find(found.begin(), found.end(), i) == found.end()) {
+          found.push_back(i);
+        }
+      }
+      return found;
+    };
+    const auto holds = [](const std::vector<int>& faces, int f) {
+      return f >= 0 && std::find(faces.begin(), faces.end(), f) != faces.end();
+    };
+    out.owner.assign(static_cast<std::size_t>(m.edge_count()), -1);
+    for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      const int s = owner[static_cast<std::size_t>(e)];
+      if (s < 0) {
+        continue;
+      }
+      const TopoDS_Shape& edge = body.edge(e);
+      const auto r = std::find_if(replaced.begin(), replaced.end(), [&](const Replaced& x) { return x.edge == e; });
+      if (r == replaced.end()) {
+        const NCollection_List<TopoDS_Shape>& modified = history->Modified(edge);
+        const int i = history->IsRemoved(edge) || modified.Extent() > 1
+                          ? -1
+                          : m.edge_index(modified.IsEmpty() ? edge : modified.First());
+        if (i < 0) {
+          return std::nullopt; // a selected edge split or gone
+        }
+        out.owner[static_cast<std::size_t>(i)] = s;
+        continue;
+      }
+      // The new edge between the other face and a face beyond, nearest the
+      // picked edge.
+      const std::vector<int> others = images(body.face(r->other));
+      std::vector<int> beyonds;
+      for (const int b : r->beyond) {
+        for (const int i : images(body.face(b))) {
+          beyonds.push_back(i);
+        }
+      }
+      int best = -1;
+      double nearest = Precision::Infinite();
+      for (int i = 0; i < m.edge_count(); ++i) {
+        const std::array<int, 2> faces = m.edge_faces(i);
+        if (!(holds(others, faces[0]) && holds(beyonds, faces[1])) &&
+            !(holds(others, faces[1]) && holds(beyonds, faces[0]))) {
+          continue;
+        }
+        const double d = distance(m.edge(i), edge);
+        if (d < nearest) {
+          nearest = d;
+          best = i;
+        }
+      }
+      if (best < 0 || !(nearest < contact) || out.owner[static_cast<std::size_t>(best)] >= 0) {
+        return std::nullopt;
+      }
+      out.owner[static_cast<std::size_t>(best)] = s;
+      // (The new edge and its vertices stand for the picked edge and its
+      // vertices, the nearer of them each, in the names of the rounding's
+      // faces.)
+      if (!m.edge_name(best).empty() && !body.edge_name(e).empty() && m.edge_name(best) != body.edge_name(e)) {
+        out.renames.emplace_back(m.edge_name(best), body.edge_name(e));
+      }
+      TopoDS_Vertex own_first;
+      TopoDS_Vertex own_last;
+      TopExp::Vertices(m.edge(best), own_first, own_last);
+      TopoDS_Vertex first;
+      TopoDS_Vertex last;
+      TopExp::Vertices(TopoDS::Edge(edge), first, last);
+      for (const TopoDS_Vertex& v : {own_first, own_last}) {
+        if (v.IsNull() || first.IsNull() || last.IsNull()) {
+          continue;
+        }
+        const gp_Pnt p = BRep_Tool::Pnt(v);
+        const TopoDS_Vertex& stands_for =
+            p.Distance(BRep_Tool::Pnt(first)) <= p.Distance(BRep_Tool::Pnt(last)) ? first : last;
+        const std::optional<std::string> own = m.name_of_vertex(v);
+        const std::optional<std::string> theirs = body.name_of_vertex(stands_for);
+        if (own && theirs && *own != *theirs) {
+          out.renames.emplace_back(*own, *theirs);
+        }
+      }
+    }
+    return out;
+  });
+}
+
 } // namespace mitcad::geometry::detail

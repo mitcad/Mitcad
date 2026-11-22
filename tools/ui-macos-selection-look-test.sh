@@ -24,13 +24,21 @@ UI_TIMEOUT=240
 export MITCAD_TEST_WORK=$UI_OUT/files
 mkdir -p "$MITCAD_TEST_WORK"
 "$cli" run "$here/ui-scripts/selection-look.json" --save "$MITCAD_TEST_WORK/selection-look.mitcad" || exit 1
-# The shared script, the view's frame saved after each measured line.
+# The shared script, the view's frame saved after each measured line. The
+# color dialog's HTML field is focused by its name: macOS has no Alt
+# mnemonics, so the label's Alt+H reaches no field there.
 script=$UI_OUT/selection-look.mitcad-ui
-awk '{ print }
+awk '/^key alt\+h$/ { print "focus-widget qt_colorname_lineedit"; next }
+  { print }
   /^view-line-width / { printf "capture-view-image '\''${MITCAD_TEST_WORK}/line-%s.png'\''\n", $2 }' \
   "$here/ui-scripts/selection-look.mitcad-ui" > "$script" || exit 1
+# Preferences is the Settings window here (no OK): Cmd+W closes it, as in
+# ui-macos-preferences-search-test.sh. --no-native-dialogs: the Qt color
+# dialog with its HTML field, which the script types into (the system's
+# color panel has none).
+export MITCAD_TEST_PREFERENCES_DONE=ctrl+w
 MITCAD_TEST_INPUT=$script MITCAD_TEST_STEP_MS=100 \
-  ui_run_app selection-look --ui=qt --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/selection-look.mitcad"
+  ui_run_app selection-look --ui=qt --no-native-dialogs --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/selection-look.mitcad"
 ui_expect_log '^View selection look: color #1f7aff, line width normal; ' 'Normal and the selection blue by default'
 ui_expect_log '^Preferences: selection color #d02090, line width thick' 'Selected line width saved'
 for step in normal thick sketch; do

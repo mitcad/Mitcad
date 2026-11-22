@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/parameter-error-put-right.mitcad-ui (mitcad#2181): the user parameters sheet_thickness = 18 mm and depth = 600 mm, and no table_lenght yet."},
+  {"cmd": "add_parameter", "name": "sheet_thickness", "expression": "18 mm"},
+  {"cmd": "add_parameter", "name": "depth", "expression": "600 mm"}
+]

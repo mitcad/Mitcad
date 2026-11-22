@@ -313,6 +313,7 @@ impl<K: Kernel> Document<K> {
                         given: Vec::new(),
                         parts: None,
                         unlinked: Vec::new(),
+                        tree: None,
                     });
                     frames
                 }
@@ -640,11 +641,11 @@ impl<K: Kernel> Document<K> {
                         .map(|l| l.supplier.clone())
                         .or_else(|| self.stored_text(c.uid, "Supplier"))
                         .unwrap_or_default(),
-                    part_number: build
-                        .as_ref()
-                        .map(|b| b.part_number.clone())
-                        .or_else(|| library.as_ref().map(|l| l.part_number.clone()))
-                        .or_else(|| self.stored_text(c.uid, "Part number"))
+                    // The component's own number first, then its entry's
+                    // (mitcad#2138); an empty one counts as none.
+                    part_number: self
+                        .stored_text(c.uid, "Part number")
+                        .or_else(|| entry_part_number(build.as_ref(), library.as_ref()))
                         .unwrap_or_default(),
                     supplier_url: library
                         .as_ref()
@@ -660,10 +661,28 @@ impl<K: Kernel> Document<K> {
             .collect()
     }
 
+    /// The part number a library or BUILD part's entry gives it (its BUILD
+    /// or options entry's, else its library's), whatever number of its
+    /// own the component has: what the read-only `Library/Part number`
+    /// row shows (mitcad#2138). None for another component or an empty
+    /// number.
+    pub(crate) fn library_part_number(&self, component: ComponentUid) -> Option<String> {
+        let build = self
+            .build_list_entry(component)
+            .or_else(|| self.options_list_entry(component));
+        let library = build.as_ref().map(|b| b.library.clone()).or_else(|| {
+            self.state
+                .assembly
+                .component(component)
+                .and_then(|c| c.library.clone())
+        });
+        entry_part_number(build.as_ref(), library.as_ref())
+    }
+
     /// A component's own stored text `key` (of any set): its `Part
-    /// number`, the parts list's for a component that is no library or
-    /// BUILD part: one brought in from the web gets its file name's first
-    /// part (mitcad#1579), and a user may give any component one; its
+    /// number`, which comes first in the parts list (mitcad#2138): one
+    /// brought in from the web gets its file name's first part
+    /// (mitcad#1579), and a user may give any component one; its
     /// `Designation` and `Supplier`, which a part converted to features
     /// keeps from its library (mitcad#1815).
     fn stored_text(&self, component: ComponentUid, key: &str) -> Option<String> {
@@ -681,6 +700,19 @@ impl<K: Kernel> Document<K> {
             })
             .filter(|text| !text.is_empty())
     }
+}
+
+/// The part number of a library or BUILD part's entry: its BUILD or
+/// options entry's, else its library's; an empty one counts as none at
+/// every step (mitcad#2138).
+fn entry_part_number(
+    build: Option<&crate::build::part_info::ListEntry>,
+    library: Option<&LibraryRef>,
+) -> Option<String> {
+    let given = |number: &str| Some(number.trim().to_owned()).filter(|n| !n.is_empty());
+    build
+        .and_then(|b| given(&b.part_number))
+        .or_else(|| library.and_then(|l| given(&l.part_number)))
 }
 
 /// The names of a table's rows, for messages.
@@ -734,6 +766,9 @@ fn library_ref(
             .unwrap_or_default(),
         standard: row_standard(source, row_name, standard),
         supplier_parts: row_supplier_parts(source, row_name),
+        // Not for print services (mitcad#2214): copied at insert and
+        // update, so that the design keeps it without the library.
+        non_printable: source.non_printable,
     }
 }
 

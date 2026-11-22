@@ -48,7 +48,7 @@ expect-native-style parameter.d3.2 not-editing
 expect-native-text parameter.d3.2 '^30 deg$'
 expect-native-text parameter.d3.3 '^20 mm$'
 expect-model-bodies 1 48000
-expect-native-text parametersMessage '^d3: .*expected length'
+expect-native-text parametersMessage '^(d3: )?.*expected length'
 expect-native-style parametersMessage error
 native-select parameter.d1.0
 expect-native-style parameter.d3.2 error,single-line
@@ -68,7 +68,7 @@ expect-native-visible parametersTable true
 expect-native-text parameter.d3.2 '^45 deg$'
 expect-native-text parameter.d3.3 '^20 mm$'
 expect-model-bodies 1 48000
-expect-native-text parametersMessage '^d3: .*expected length'
+expect-native-text parametersMessage '^(d3: )?.*expected length'
 expect-native-style parametersMessage error
 expect-native-style parameter.d3.4 editing
 key Escape

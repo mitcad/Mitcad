@@ -156,8 +156,12 @@ rebuilds, the body valid and within its pads' ends, and its volume falls
 by 26.22 mm3 for each millimetre of radius, within hundredths of a cubic
 millimetre of that line across the radii where the corners walk over the
 vertex (inner rims below 31, outer rims below 26.5) and where they do not.
-Each radius still notes the plates' bulge of about 0.02 out of the body
-that 45 noted before (the plates' approximation; mitcad#2009).
+Each radius still noted the plates' bulge of about 0.02 out of the body
+that 45 noted before; it came from the corners at the ribs' feet turning
+the concave edge of a rib's end on the flat, which
+[1805](fillet-rib-foot-corner-1805.md) sets back along that edge only (the
+ribs' feet then no longer walk over a vertex: nothing is set back along
+the rim).
 
 ## Reports and tests
 

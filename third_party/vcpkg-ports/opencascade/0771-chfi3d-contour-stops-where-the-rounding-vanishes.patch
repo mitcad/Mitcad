@@ -58,17 +58,8 @@ a hundredth of the radius as the reach, 30 solver iterations.
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_lens_overflow.cpp,
-test_chain_through_points_where_the_rounding_vanishes (ctest
-geometry.fillet_lens_overflow): after the post's foot, the block's bottom
-outline rounded with 1 through the points where the foot's rounding
-vanishes: valid, the two points kept, its quarters alike. Another caller:
-geometry/tests/test_fillet_occt_cases.cpp,
-test_crossing_cylinders_rounded_through_their_near_tangent_points (ctest
-geometry.fillet_occt_cases). Its failure without the patch is still to be
-shown: with it and the 16 later patches that change the same lines
-reverted at the port's tip, OCCT does not build (tried 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0771.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 index 93ed3625..1904a2d4 100644

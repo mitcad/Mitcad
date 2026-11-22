@@ -1,0 +1,83 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A loft's Tangent Edges: Merge (mitcad#2162). Sketch1 F1 on XY: a slot 160 x 40 (the bottom line c1 from p5 (-60, -20) to p6 (60, -20), the right arc c2 about p9 (60, 0) up to p7 (60, 20), the top line c3 to p8 (-60, 20), the left arc c4 about p10 (-60, 0) back to p5). Plane1 F2 50 mm up and Sketch2 F3 on it: a circle R30. Loft1 F4 from the slot to the circle, merged: one side face, named after the slot's segment whose key sorts first (c1), and the caps."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p5", "type": "point", "at": [-60, -20]}, {"id": "p6", "type": "point", "at": [60, -20]},
+    {"id": "p7", "type": "point", "at": [60, 20]}, {"id": "p8", "type": "point", "at": [-60, 20]},
+    {"id": "p9", "type": "point", "at": [60, 0]}, {"id": "p10", "type": "point", "at": [-60, 0]},
+    {"id": "c1", "type": "line", "start": "p5", "end": "p6"},
+    {"id": "c2", "type": "arc", "center": "p9", "start": "p6", "end": "p7"},
+    {"id": "c3", "type": "line", "start": "p7", "end": "p8"},
+    {"id": "c4", "type": "arc", "center": "p10", "start": "p8", "end": "p5"}]}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 50}}},
+  {"cmd": "sketch.create", "plane": "F2"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [0, 0], "diameter": 60},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"},
+    {"type": "profile", "sketch": "F3", "region": "r{c1}"}], "tangent_edges": "merge", "operation": "new_body"}},
+  {"expect": {"feature": "Loft1", "status": "ok", "body": "F4.b0", "faces": 3, "has_face": "F4:side(c1[c4,c2])"}},
+
+  {"comment": "Kept, Loft2 F5 has a side face for each of the slot's edges (tangent to each other since mitcad#2141)."},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"},
+    {"type": "profile", "sketch": "F3", "region": "r{c1}"}], "operation": "new_body"}},
+  {"expect": {"feature": "Loft2", "status": "ok", "body": "F5.b0", "has_face": "F5:side(c1[c4,c2])"}},
+
+  {"comment": "Fillet1 F6 rounds the merged side's rim at the slot (the edge between the side and the start cap) by 2."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F4.b0",
+    "edges": ["E{F4:side(c1[c4,c2])|F4:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}"], "radius": 2}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "F4.b0", "faces": 4}},
+
+  {"comment": "Three sections, the Hermite surfaces: Plane2 F7 100 mm up, Sketch3 F8 a circle R30 on it; Loft3 F9 slot, circle, circle merged, and Fillet2 F10 on its rim at the slot."},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 100}}},
+  {"cmd": "sketch.create", "plane": "F7"},
+  {"cmd": "sketch.add_circle", "sketch": "F8", "center": [0, 0], "diameter": 60},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"},
+    {"type": "profile", "sketch": "F3", "region": "r{c1}"},
+    {"type": "profile", "sketch": "F8", "region": "r{c1}"}], "tangent_edges": "merge", "operation": "new_body"}},
+  {"expect": {"feature": "Loft3", "status": "ok", "body": "F9.b0", "faces": 3, "has_face": "F9:side(c1[c4,c2])"}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F9.b0",
+    "edges": ["E{F9:side(c1[c4,c2])|F9:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})}"], "radius": 2}},
+  {"expect": {"feature": "Fillet2", "status": "ok", "body": "F9.b0", "faces": 4}},
+
+  {"comment": "A tangent end, the skinned surfaces: Extrude1 F11 the slot 20 mm down; Loft4 F12 from its top face, tangent to its walls (the faces next to each of the slot's edges), up to the circle of Sketch2, merged and joined to it."},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": -20}, "operation": "new_body"}},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "F11.b0", "faces": 6}},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "face", "body": "F11.b0", "face": "F11:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+    {"type": "profile", "sketch": "F3", "region": "r{c1}"}],
+    "start_condition": {"type": "tangent", "weight": 1}, "tangent_edges": "merge",
+    "operation": "join", "participants": ["F11.b0"]}},
+  {"expect": {"feature": "Loft4", "status": "ok", "body": "F11.b0", "has_face": "F12:end(r{c1})"}},
+
+  {"comment": "The slot edited into a rectangle (c2 and c4 lines, the same curves and region): each segment its own face, so the merged faces' names still find a face and the fillets on them still build; then back to the slot."},
+  {"cmd": "edit_feature", "uid": "F1", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p5", "type": "point", "at": [-60, -20]}, {"id": "p6", "type": "point", "at": [60, -20]},
+    {"id": "p7", "type": "point", "at": [60, 20]}, {"id": "p8", "type": "point", "at": [-60, 20]},
+    {"id": "p9", "type": "point", "at": [60, 0]}, {"id": "p10", "type": "point", "at": [-60, 0]},
+    {"id": "c1", "type": "line", "start": "p5", "end": "p6"},
+    {"id": "c2", "type": "line", "start": "p6", "end": "p7"},
+    {"id": "c3", "type": "line", "start": "p7", "end": "p8"},
+    {"id": "c4", "type": "line", "start": "p8", "end": "p5"}]}},
+  {"expect": {"feature": "Loft1", "status": "ok", "body": "F4.b0", "has_face": "F4:side(c1[c4,c2])"}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "F4.b0", "has_face": "F4:side(c3[c2,c4])"}},
+  {"expect": {"feature": "Loft3", "status": "ok", "body": "F9.b0", "has_face": "F9:side(c1[c4,c2])"}},
+  {"expect": {"feature": "Fillet2", "status": "ok", "body": "F9.b0", "has_face": "F9:side(c4[c3,c1])"}},
+  {"expect": {"feature": "Loft4", "status": "ok", "body": "F11.b0", "has_face": "F12:end(r{c1})"}},
+  {"cmd": "edit_feature", "uid": "F1", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p5", "type": "point", "at": [-60, -20]}, {"id": "p6", "type": "point", "at": [60, -20]},
+    {"id": "p7", "type": "point", "at": [60, 20]}, {"id": "p8", "type": "point", "at": [-60, 20]},
+    {"id": "p9", "type": "point", "at": [60, 0]}, {"id": "p10", "type": "point", "at": [-60, 0]},
+    {"id": "c1", "type": "line", "start": "p5", "end": "p6"},
+    {"id": "c2", "type": "arc", "center": "p9", "start": "p6", "end": "p7"},
+    {"id": "c3", "type": "line", "start": "p7", "end": "p8"},
+    {"id": "c4", "type": "arc", "center": "p10", "start": "p8", "end": "p5"}]}},
+  {"expect": {"feature": "Loft1", "status": "ok", "body": "F4.b0", "has_face": "F4:side(c1[c4,c2])"}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "F4.b0", "faces": 4}},
+  {"expect": {"feature": "Loft3", "status": "ok", "body": "F9.b0", "has_face": "F9:side(c1[c4,c2])"}},
+  {"expect": {"feature": "Fillet2", "status": "ok", "body": "F9.b0", "faces": 4}},
+  {"expect": {"feature": "Loft4", "status": "ok", "body": "F11.b0", "has_face": "F12:end(r{c1})"}}
+]

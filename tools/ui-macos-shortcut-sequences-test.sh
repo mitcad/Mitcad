@@ -28,6 +28,9 @@ export MITCAD_TEST_WORK=$UI_OUT/files
 rm -rf "$MITCAD_TEST_WORK"
 mkdir -p "$MITCAD_TEST_WORK"
 export MITCAD_TEST_PRINT_PDF=$MITCAD_TEST_WORK/printed.pdf
+# Each key press and where it went (0.69.0-rc3: the log of one run ended in
+# the middle of a type step, and the app exited 1 without its FAIL line).
+export MITCAD_LOG_KEYS=1
 design=$MITCAD_TEST_WORK/sequences.mitcad
 "$cli" run "$here/ui-scripts/shortcut-sequences.json" --save "$design" > "$UI_OUT/setup.log" 2>&1 ||
   { cat "$UI_OUT/setup.log"; echo 'FAIL: mitcad-cli run shortcut-sequences.json' >&2; exit 1; }
@@ -51,5 +54,9 @@ ui_expect_log '^Keyboard Shortcuts key: Keyboard and Mouse Overview \| .* = G, L
 ui_expect_log '^Shortcut overview: [0-9]+ command shortcuts$' 'G, L runs the menu command'
 ui_expect_log '^TestDriver: done' 'the menu bar shows and runs the sequence'
 ui_expect_no_log 'TestDriver: FAIL' 'no failed menu bar assertion'
-[ "$UI_FAILURES" = 0 ] || exit 1
+if [ "$UI_FAILURES" != 0 ]; then
+  # A full disk ends the log while the app still runs (its FAIL line lost).
+  df -h "$UI_OUT" | sed 's/^/     | /'
+  exit 1
+fi
 echo 'PASS: Qt shortcut sequences'

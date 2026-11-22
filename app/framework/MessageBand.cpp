@@ -25,9 +25,11 @@
 #include <QtLogging>
 
 #include "GlassCard.hpp"
+#include "Icons.hpp"
 #include "PlaceWatcher.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -96,6 +98,12 @@ QString placeText(const QWidget* widget) {
   return QStringLiteral("%1,%2").arg(at.x()).arg(at.y());
 }
 
+// The close button (mitcad#2182): the shared close mark of app/icons at the
+// rows' icon size on a small card button (docs/ui-conventions.md, "Icons").
+constexpr const char* kCloseIcon = "dismiss";
+constexpr int kCloseIconSize = 16;
+constexpr int kCloseButtonSize = 24;
+
 constexpr int kHistoryRowsLogged = 50;
 constexpr int kHistoryMargin = 12; // from the window's edges
 
@@ -114,7 +122,8 @@ MessageCenter::MessageCenter(QObject* parent) : QObject(parent) {
   });
 }
 
-void MessageCenter::post(const QString& text, NoticeLevel level, const QString& feature, const QString& source) {
+void MessageCenter::post(const QString& text, NoticeLevel level, const QString& feature, const QString& source,
+                         const QString& subject) {
   if (text.isEmpty()) {
     const bool full = m_log.shown() == MessageLog::Shown::Full;
     m_log.add(text, level, feature, QDateTime::currentDateTime());
@@ -126,7 +135,7 @@ void MessageCenter::post(const QString& text, NoticeLevel level, const QString& 
     return;
   }
   qDebug().noquote() << QStringLiteral("Message band: %1 %2").arg(noticeLevelName(level), text);
-  if (m_log.add(text, level, feature, QDateTime::currentDateTime(), QString(), source)) {
+  if (m_log.add(text, level, feature, QDateTime::currentDateTime(), QString(), source, subject)) {
     qDebug().noquote() << QStringLiteral("Message band full: %1 %2").arg(noticeLevelName(level), text);
     restartTimer();
   }
@@ -222,6 +231,26 @@ void MessageCenter::closeSource(const QString& source) {
   }
 }
 
+void MessageCenter::resolve(const QString& subject) {
+  const MessageLog::Shown before = m_log.shown();
+  const MessageEntry* shownEntry = before == MessageLog::Shown::Full ? m_log.full() : m_log.stub();
+  const QString text = shownEntry != nullptr ? shownEntry->text : QString();
+  const NoticeLevel level = shownEntry != nullptr ? shownEntry->level : NoticeLevel::Hint;
+  if (!m_log.resolve(subject)) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Message band put right: %1 %2 (%3)").arg(noticeLevelName(level), text, subject);
+  if (before == MessageLog::Shown::Full) {
+    m_timer.stop();
+  }
+  if (m_log.shown() == MessageLog::Shown::Stub) {
+    toStub("put right");
+  } else if (m_log.shown() == MessageLog::Shown::None) {
+    qDebug().noquote() << QStringLiteral("Message band cleared (put right)");
+  }
+  emit changed();
+}
+
 void MessageCenter::toStub(const char* reason) {
   const MessageEntry* latest = m_log.latest();
   if (latest == nullptr) {
@@ -262,10 +291,15 @@ MessageBand::MessageBand(MessageCenter& center, QWidget* parent) : QWidget(paren
   m_text->setTextFormat(Qt::PlainText);
   m_text->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   m_text->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  // The shared close mark (mitcad#2182) on the cards' flat small button:
+  // its hover and pressed tints, the same in both layouts and themes.
   m_close = new QToolButton;
   m_close->setObjectName(QStringLiteral("messageBandClose"));
-  m_close->setAutoRaise(true);
-  m_close->setText(QString(QChar(0x00D7)));
+  setFlatCardButton(m_close);
+  m_close->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  m_close->setIcon(themeIcon(QLatin1String(kCloseIcon)));
+  m_close->setIconSize(uiIconSize(kCloseIconSize, kCloseIconSize));
+  m_close->setFixedSize(uiRoomSize(kCloseButtonSize), uiRoomSize(kCloseButtonSize));
   m_close->setAccessibleName(tr("Close message"));
   m_close->setToolTip(tr("Close the message"));
   m_close->setFocusPolicy(Qt::NoFocus);
@@ -279,7 +313,9 @@ MessageBand::MessageBand(MessageCenter& center, QWidget* parent) : QWidget(paren
   row->addWidget(m_icon, 0, Qt::AlignVCenter);
   row->addWidget(m_text, 1);
   row->addWidget(m_action, 0, Qt::AlignVCenter);
-  row->addWidget(m_close, 0, Qt::AlignTop);
+  // In the middle of the row, as its icon, its text and its button are: a
+  // message on one line or on two (mitcad#2182).
+  row->addWidget(m_close, 0, Qt::AlignVCenter);
   connect(m_close, &QToolButton::clicked, this, [this] { m_center.close(); });
   connect(m_action, &QToolButton::clicked, this, [this] { m_center.runAction(); });
 
@@ -347,7 +383,7 @@ void MessageBand::updateNoticeHover() {
 }
 
 int MessageBand::fullHeight() const {
-  return std::max(2 * m_text->fontMetrics().lineSpacing(), m_close->sizeHint().height());
+  return std::max(2 * m_text->fontMetrics().lineSpacing(), m_close->minimumHeight());
 }
 
 void MessageBand::setAvailableWidth(int width) {
@@ -437,7 +473,7 @@ void MessageBand::fitText() {
   const MessageLog& log = m_center.log();
   const int width = m_width > 0 ? m_width : 600;
   if (const MessageEntry* full = log.full()) {
-    int room = width - m_close->sizeHint().width() - 8;
+    int room = width - m_close->minimumWidth() - 8;
     if (m_icon->isVisibleTo(this)) {
       room -= m_icon->sizeHint().width() + 8;
     }
@@ -460,7 +496,16 @@ void MessageBand::fitText() {
 void MessageBand::logPlaces() {
   QString places;
   if (m_close->isVisible()) {
-    places = QStringLiteral("Message band close at %1").arg(placeText(m_close));
+    // With the row's middle and the button's icon and size, which the UI
+    // tests check it against (mitcad#2182).
+    const int middle = GlassCard::mapToHost(m_fullRow, m_fullRow->rect().center()).y();
+    places = QStringLiteral("Message band close at %1, row middle %2, icon %3 %4 px in %5x%6")
+                 .arg(placeText(m_close))
+                 .arg(middle)
+                 .arg(QLatin1String(kCloseIcon))
+                 .arg(m_close->iconSize().width())
+                 .arg(m_close->width())
+                 .arg(m_close->height());
   } else if (m_stub->isVisible()) {
     places = QStringLiteral("Message stub at %1").arg(placeText(m_stub));
   }
@@ -580,6 +625,10 @@ void MessageHistory::fill() {
     if (entry.count > 1) {
       text += QStringLiteral(" (%1%2)").arg(QChar(0x00D7)).arg(entry.count);
     }
+    if (entry.resolved) {
+      // Its cause was put right since (mitcad#2181).
+      text += QLatin1Char(' ') + tr("(put right)");
+    }
     const QString time = QLocale().toString(entry.time.time(), QStringLiteral("HH:mm:ss"));
     row->setText(row->fontMetrics().elidedText(QStringLiteral("%1   %2").arg(time, text), Qt::ElideRight,
                                                std::max(80, room)));
@@ -592,9 +641,10 @@ void MessageHistory::fill() {
     if (isProblem(entry.level)) {
       styleForLevel(row, entry.level);
     }
-    row->setProperty("historyLine", QStringLiteral("Message history row %1: %2 %3")
+    row->setProperty("historyLine", QStringLiteral("Message history row %1: %2 %3%4")
                                         .arg(index)
-                                        .arg(noticeLevelName(entry.level), oneLine(entry.text)));
+                                        .arg(noticeLevelName(entry.level), oneLine(entry.text),
+                                             entry.resolved ? QStringLiteral(" (put right)") : QString()));
     const QString feature = entry.feature;
     connect(row, &QToolButton::clicked, this, [this, feature] {
       if (feature.isEmpty()) {

@@ -149,12 +149,20 @@
 //! Analyses (mitcad#41), when there are any: `analyses` (`name`,
 //! `"visible": false`, `type`: `section` with `plane`, `offset`, `flip`;
 //! `print` with `bodies`, `bed_face`, `overhang`, `thin_wall`, `estimate`,
-//! mitcad#620, and `min_gap`, mitcad#1519).
+//! mitcad#620, and `min_gap`, mitcad#1519; `draft` with `bodies`, `pull`,
+//! `occurrence`, `flip`, `angle`, mitcad#2166).
 //!
 //! Motion studies and contact sets (mitcad#454), when there are any:
 //! `motion_studies` (`name`, `steps`, `keys`: `joint`, `motion`, `points`
 //! `[[step, value], …]`) and `contact_sets` (`name`, `occurrences` as paths
 //! from the root, `"suppressed": true`), see [`crate::motion`].
+//!
+//! Selection sets (mitcad#2192), when there are any: `selection_sets`
+//! (`name`, `members`: each `{"body": "F2.b0"}`, `{"feature": "F5"}` or
+//! `{"occurrence": "O1/O4"}`, a body or feature with the `occurrence` path
+//! that places it where that is not the root), see
+//! [`crate::SelectionSet`]. Members whose items are gone are left out when
+//! the design is read.
 //!
 //! The direction of gravity (mitcad#1713), when the design has one:
 //! `gravity` (`direction`, a unit vector, and `source`: `geometry`, a
@@ -298,6 +306,12 @@
 //! Annotations folder as `"annotations": true`, mitcad#2041; a design
 //! without it has every folder shown); a favourite parameter has
 //! `"favorite": true`; timeline groups are `groups` (`name`, `features`).
+//!
+//! The user parameters' groups (mitcad#2180): a grouped user parameter has
+//! its group's path, `"group": "Cabinet/Doors"`, and `parameter_groups`
+//! lists every group's path (also of a group that holds no parameter), a
+//! parent before its subgroups, in the order they were made. A file
+//! written before them has every parameter ungrouped.
 //!
 //! A modelled thread stores how its ends are cut (`ends`: `run_out` or
 //! `flat`, mitcad#1300). One without it, in a file written before it

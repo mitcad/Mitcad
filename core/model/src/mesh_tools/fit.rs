@@ -31,6 +31,7 @@ use super::{
     Point, TriangleMesh, area_normal, corners, perpendicular, scatter, solve, symmetric_eigen,
 };
 use crate::boundary::{BoundaryBody, BoundaryCurve, BoundaryEdge, BoundaryFace, BoundarySurface};
+use crate::sketch::bspline::{DEGREE, basis, greville, knot_vector};
 
 /// The kinds of surface a region is fitted with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -646,62 +647,8 @@ fn fit_sphere(region: &Region) -> Result<(Fitted, f64), String> {
     ))
 }
 
-// B-spline surfaces.
-
-const DEGREE: usize = 3;
-
-/// The full clamped knot vector of `poles` poles of degree 3, on [0, 1].
-fn knot_vector(poles: usize) -> Vec<f64> {
-    let spans = poles - DEGREE;
-    let mut knots = vec![0.0; DEGREE];
-    for i in 0..=spans {
-        knots.push(i as f64 / spans as f64);
-    }
-    knots.extend(std::iter::repeat_n(1.0, DEGREE));
-    knots
-}
-
-/// The basis functions' values at `t` (one per pole).
-fn basis(knots: &[f64], poles: usize, t: f64) -> Vec<f64> {
-    let t = t.clamp(0.0, 1.0);
-    // The span: the last knot interval that starts at or before t.
-    let mut span = DEGREE;
-    while span + 1 < poles && knots[span + 1] <= t {
-        span += 1;
-    }
-    let mut n = vec![0.0; poles];
-    let mut local = [0.0; DEGREE + 1];
-    local[0] = 1.0;
-    let mut left = [0.0; DEGREE + 1];
-    let mut right = [0.0; DEGREE + 1];
-    for j in 1..=DEGREE {
-        left[j] = t - knots[span + 1 - j];
-        right[j] = knots[span + j] - t;
-        let mut saved = 0.0;
-        for r in 0..j {
-            let denominator = right[r + 1] + left[j - r];
-            let temp = if denominator.abs() > 0.0 {
-                local[r] / denominator
-            } else {
-                0.0
-            };
-            local[r] = saved + right[r + 1] * temp;
-            saved = left[j - r] * temp;
-        }
-        local[j] = saved;
-    }
-    for (k, value) in local.iter().enumerate() {
-        n[span - DEGREE + k] = *value;
-    }
-    n
-}
-
-/// The Greville abscissa of each pole: where it sits along the surface.
-fn greville(knots: &[f64], poles: usize) -> Vec<f64> {
-    (0..poles)
-        .map(|i| knots[i + 1..=i + DEGREE].iter().sum::<f64>() / DEGREE as f64)
-        .collect()
-}
+// B-spline surfaces: the cubic basis is shared with Insert Points' curve
+// fit (mitcad#2232, `mitcad_sketch::bspline`).
 
 fn fit_bspline(region: &Region) -> Result<(Fitted, f64), String> {
     let (mean, m) = scatter(&region.points);

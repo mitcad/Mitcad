@@ -24,19 +24,8 @@ current point (and its p-curves swapped where that end lies a period
 away), on a surface periodic in one direction; the case of a surface
 periodic in both is unchanged.
 
-Test: geometry/tests/port/p0220-coaxial-cylinders-seams-half-a-turn-apart.cpp
-(ctest geometry.port.0220): test_seams_half_a_turn_apart_merge fuses a
-cylinder of radius 10 with its seam at +x and a cylinder or revolved ring
-of the same radius on it with its seam at -x (made upwards or downwards,
-revolved about +z or -z, either argument first: sixteen cases) and merges
-the result with ShapeUpgrade_UnifySameDomain: each one valid solid of the
-bodies' volume with one face on the cylinder of radius 10;
-test_seams_together_merge does the same with both seams at +x (no half
-circle between them; merged with and without the patch). It fails without
-the patch (shown 2026-11-20 by tools/occt-port-proof.py). The join in
-geometry/tests/test_boolean.cpp
-(test_join_merges_coaxial_cylinders_whatever_their_seams) passes without
-it.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0220.
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -911,6 +911,18 @@

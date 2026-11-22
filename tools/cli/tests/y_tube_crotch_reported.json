@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #517's design (mitcad#2140; opened with --open, never committed; tools/cli/y-tube-crotch-reported-test.cmake): Sweep1 (F3) sweeps Sketch2's circle of diameter 20 along Sketch1's line of 25 and a tangent quarter arc of radius 30; Mirror1 (F4) mirrors it about the YZ plane and joins it, a Y tube. Fillet1 (F5) rounds the crotch, a crease that fades to tangency where the arms leave the trunk, with d5 = 6 by one of its two edges and the tangent chain."},
+  {"expect": {"feature": "Fillet1", "status": "ok", "bodies": 1}},
+  {"comment": "The Shell of the reporter's screenshot: the three ends open, 2 mm inside, Sharp, Tangent Chain on. Before, it failed with 'the geometry kernel's offset raised an error' at every radius (port patch 2140)."},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F3.b0",
+    "faces": ["F4:inst1(F3:end(r{c2}))", "F3:start(r{c2})", "F3:end(r{c2})"], "inside": 2}},
+  {"expect": {"feature": "Shell1", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"status": "ok", "level": null}}},
+  {"comment": "The rounding the reporter needs, 50 mm (before, it built up to 6 mm only: 'the geometry kernel's walk between the two faces fails'), and the Shell after it."},
+  {"cmd": "set_parameter", "name": "d5", "value": 50},
+  {"expect": {"feature": "Fillet1", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F5"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"feature": "Shell1", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"status": "ok", "level": null}}}
+]

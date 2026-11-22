@@ -460,10 +460,196 @@ bool planar(const TopoDS_Face& face) {
   return BRepAdaptor_Surface(face, false).GetType() == GeomAbs_Plane;
 }
 
+// The smallest angle, in degrees, at which a side of a planar face's
+// extension may meet the extension's end line (mitcad#2056): a neighbouring
+// edge continued, or the mitre of two picked edges, that meets it more
+// flatly would make a long sliver, and the side is square to the edge
+// instead.
+constexpr double kMinEndAngleDegrees = 15.0;
+
+// One end of a picked straight edge of a planar face, and where the side of
+// its extension reaches the end line.
+struct PlanarEnd {
+  TopoDS_Vertex vertex;
+  gp_Pnt at;  // the vertex's point
+  gp_Pnt far; // on the end line
+  // How `far` was found: square to the edge, along the neighbouring
+  // edge continued, or at the mitre with the picked neighbour `partner`.
+  enum Kind { Square, Continued, Mitre } kind = Square;
+  int partner = -1; // with Mitre: the neighbour's index among the picked edges
+};
+
+// A picked straight edge of a planar face: its two ends (curve parameters
+// first and last) and the unit direction square to it, in the plane, away
+// from the face.
+struct PlanarStrip {
+  TopoDS_Edge edge;
+  gp_Vec out;
+  std::array<PlanarEnd, 2> ends;
+};
+
+// The face's one other edge at `vertex` besides `edge`; null when there is
+// none or more than one.
+TopoDS_Edge neighbour_at(const TopoDS_Face& face, const TopoDS_Edge& edge, const TopoDS_Vertex& vertex) {
+  TopoDS_Edge found;
+  for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+    const TopoDS_Edge& other = TopoDS::Edge(e.Current());
+    if (other.IsSame(edge) || (!found.IsNull() && other.IsSame(found))) {
+      continue;
+    }
+    TopoDS_Vertex a;
+    TopoDS_Vertex b;
+    TopExp::Vertices(other, a, b);
+    if (!a.IsSame(vertex) && !b.IsSame(vertex)) {
+      continue;
+    }
+    if (!found.IsNull()) {
+      return TopoDS_Edge();
+    }
+    found = other;
+  }
+  return found;
+}
+
+// The direction in which the edge `neighbour` runs on past its end at
+// `vertex` (its tangent there, leaving the edge), put into the plane of
+// `normal`; false for a closed edge or a tangent of no length.
+bool continuation(const TopoDS_Edge& neighbour, const TopoDS_Vertex& vertex, const gp_Dir& normal, gp_Vec& along) {
+  TopoDS_Vertex first;
+  TopoDS_Vertex last;
+  TopExp::Vertices(TopoDS::Edge(neighbour.Oriented(TopAbs_FORWARD)), first, last);
+  if (first.IsSame(last)) {
+    return false;
+  }
+  const BRepAdaptor_Curve curve(neighbour);
+  gp_Pnt p;
+  gp_Vec tangent;
+  if (last.IsSame(vertex)) {
+    curve.D1(curve.LastParameter(), p, tangent);
+  } else if (first.IsSame(vertex)) {
+    curve.D1(curve.FirstParameter(), p, tangent);
+    tangent.Reverse();
+  } else {
+    return false;
+  }
+  tangent -= gp_Vec(normal) * tangent.Dot(gp_Vec(normal));
+  if (tangent.Magnitude() < 1.0e-12) {
+    return false;
+  }
+  along = tangent.Normalized();
+  return true;
+}
+
+// The ends of the strips past the picked straight edges of a planar face
+// (mitcad#2056): each side of a strip continues the face's neighbouring
+// edge where that one is not picked, meets the neighbouring strip at the
+// mitre of their end lines where it is, and is square to the edge where
+// neither can be used: the continuation turns back into the face (a reflex
+// corner) or meets the end line more flatly than kMinEndAngleDegrees, or
+// the strip's two sides would cross before the end line.
+std::vector<PlanarStrip> planar_strips(const TopoDS_Face& face, const std::vector<TopoDS_Edge>& edges,
+                                       const gp_Dir& normal, double distance) {
+  std::vector<PlanarStrip> strips;
+  for (const TopoDS_Edge& edge : edges) {
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.GetType() != GeomAbs_Line) {
+      throw std::invalid_argument("unsupported: extend of a curved edge of a face trimmed inside its plane");
+    }
+    PlanarStrip strip;
+    strip.edge = edge;
+    strip.out = gp_Vec(detail::across_edge(edge, face, (curve.FirstParameter() + curve.LastParameter()) / 2));
+    TopExp::Vertices(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD)), strip.ends[0].vertex, strip.ends[1].vertex);
+    if (strip.ends[0].vertex.IsNull() || strip.ends[1].vertex.IsNull() ||
+        strip.ends[0].vertex.IsSame(strip.ends[1].vertex)) {
+      throw std::runtime_error("extend: the face's extension past an edge could not be built");
+    }
+    for (PlanarEnd& end : strip.ends) {
+      end.at = BRep_Tool::Pnt(end.vertex);
+      end.far = end.at.Translated(strip.out * distance);
+    }
+    strips.push_back(strip);
+  }
+  const double flattest = std::sin(kMinEndAngleDegrees * std::acos(-1.0) / 180.0);
+  for (std::size_t i = 0; i < strips.size(); ++i) {
+    PlanarStrip& strip = strips[i];
+    for (PlanarEnd& end : strip.ends) {
+      const TopoDS_Edge neighbour = neighbour_at(face, strip.edge, end.vertex);
+      if (neighbour.IsNull()) {
+        continue;
+      }
+      int picked = -1;
+      for (std::size_t k = 0; k < strips.size(); ++k) {
+        if (k != i && strips[k].edge.IsSame(neighbour)) {
+          picked = static_cast<int>(k);
+        }
+      }
+      if (picked >= 0) {
+        // Both end lines, `distance` from their edges, meet at the mitre:
+        // the point m with m.out = m.other = distance.
+        const gp_Vec& other = strips[static_cast<std::size_t>(picked)].out;
+        const double cosine = strip.out.Dot(other);
+        if (1.0 + cosine <= 1.0e-12) {
+          continue;
+        }
+        const gp_Vec mitre = (strip.out + other) * (distance / (1.0 + cosine));
+        if (mitre.Normalized().Dot(strip.out) >= flattest) {
+          end.far = end.at.Translated(mitre);
+          end.kind = PlanarEnd::Mitre;
+          end.partner = picked;
+        }
+        continue;
+      }
+      gp_Vec along;
+      if (!continuation(neighbour, end.vertex, normal, along)) {
+        continue;
+      }
+      const double rise = along.Dot(strip.out);
+      if (rise >= flattest) {
+        end.far = end.at.Translated(along * (distance / rise));
+        end.kind = PlanarEnd::Continued;
+      }
+    }
+  }
+  // A strip whose sides would cross before its end line (both turned in,
+  // the edge short) is square at both ends, and so is the picked neighbour
+  // at a mitre it gives up; until no strip crosses (square sides never do).
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (std::size_t i = 0; i < strips.size(); ++i) {
+      PlanarStrip& strip = strips[i];
+      const gp_Vec along_edge(strip.ends[0].at, strip.ends[1].at);
+      const gp_Vec along_end(strip.ends[0].far, strip.ends[1].far);
+      if (along_end.Dot(along_edge) > kSewing * along_edge.Magnitude()) {
+        continue;
+      }
+      for (PlanarEnd& end : strip.ends) {
+        if (end.kind == PlanarEnd::Mitre) {
+          for (PlanarEnd& other : strips[static_cast<std::size_t>(end.partner)].ends) {
+            if (other.kind == PlanarEnd::Mitre && other.partner == static_cast<int>(i) &&
+                other.vertex.IsSame(end.vertex)) {
+              other.kind = PlanarEnd::Square;
+              other.far = other.at.Translated(strips[static_cast<std::size_t>(end.partner)].out * distance);
+            }
+          }
+        }
+        if (end.kind != PlanarEnd::Square) {
+          end.kind = PlanarEnd::Square;
+          end.far = end.at.Translated(strip.out * distance);
+          changed = true;
+        }
+      }
+    }
+  }
+  return strips;
+}
+
 // A planar face trimmed inside its plane (mitcad#1955, GitHub
 // mitcad/Mitcad#407: a wall cut at a slant): the plane continued past each
-// straight edge by `distance`, square to the edge and away from the face,
-// joined to the face as one face. Every mode continues a plane alike.
+// straight edge up to the line `distance` from it, along the face's
+// neighbouring edges continued and mitred where two picked edges meet
+// (mitcad#2056, GitHub mitcad/Mitcad#462; see planar_strips), joined to
+// the face as one face. Every mode continues a plane alike.
 TopoDS_Face extended_planar_face(const TopoDS_Face& face, const std::vector<TopoDS_Edge>& edges, double distance) {
   const BRepAdaptor_Surface surface(face, true);
   const gp_Pln plane = surface.Plane();
@@ -476,27 +662,20 @@ TopoDS_Face extended_planar_face(const TopoDS_Face& face, const std::vector<Topo
   // The fuse puts p-curves on the strips' surfaces onto the edges it shares
   // with them, and the unify rebuilds what it merges: a copy of the face,
   // never the input's own (MITCAD_CHECK_INPUTS). The input face is only
-  // read, for the directions across its edges.
+  // read, for the directions across its edges and its neighbouring edges.
   TopoDS_Shape joined = BRepBuilderAPI_Copy(face, true, false).Shape();
-  for (const TopoDS_Edge& edge : edges) {
-    const BRepAdaptor_Curve curve(edge);
-    if (curve.GetType() != GeomAbs_Line) {
-      throw std::invalid_argument("unsupported: extend of a curved edge of a face trimmed inside its plane");
-    }
-    const double first = curve.FirstParameter();
-    const double last = curve.LastParameter();
-    const gp_Pnt a = curve.Value(first);
-    const gp_Pnt b = curve.Value(last);
-    const gp_Vec out = gp_Vec(detail::across_edge(edge, face, (first + last) / 2)) * distance;
-    BRepBuilderAPI_MakePolygon outline(a, b, b.Translated(out), a.Translated(out), true);
+  for (const PlanarStrip& strip : planar_strips(face, edges, normal, distance)) {
+    const PlanarEnd& a = strip.ends[0];
+    const PlanarEnd& b = strip.ends[1];
+    BRepBuilderAPI_MakePolygon outline(a.at, b.at, b.far, a.far, true);
     if (!outline.IsDone()) {
       throw std::runtime_error("extend: the face's extension past an edge could not be built");
     }
-    const BRepBuilderAPI_MakeFace strip(facing, outline.Wire(), true);
-    if (!strip.IsDone()) {
+    const BRepBuilderAPI_MakeFace piece(facing, outline.Wire(), true);
+    if (!piece.IsDone()) {
       throw std::runtime_error("extend: the face's extension past an edge could not be built");
     }
-    BRepAlgoAPI_Fuse fuse(joined, strip.Face());
+    BRepAlgoAPI_Fuse fuse(joined, piece.Face());
     if (!fuse.IsDone() || fuse.HasErrors()) {
       throw std::runtime_error("extend: the extension could not be joined to the face");
     }

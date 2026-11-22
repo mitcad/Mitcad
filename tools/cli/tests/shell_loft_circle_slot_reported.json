@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The owner's design of mitcad#2141 (opened with --open, never committed; tools/cli/loft-circle-slot-reported-test.cmake): on XZ a circle of radius 50 (Sketch1 F1), a plane 100 along Y (Plane1 F5) with a centre-point slot on it (Sketch2 F6, arc centres 73 either side, radius 21), and Loft1 (F7) from the slot to the circle. Shelled 2 mm inside with the slot's end removed, Sharp, the shell failed ('the offset faces do not close up'): the loft's faces met at creases along the lines between them. Now they are tangent there and the shell builds, with no warning or information."},
+  {"expect": {"feature": "Loft1", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F7.b0",
+    "faces": ["F7:start(r{c1[c2,c4],c2[c3,c1],c3[c4,c2],c4[c1,c3]})"], "inside": 2, "outside": 0,
+    "tangent_chain": true, "rounded": false}},
+  {"expect": {"feature": "Shell1", "status": "ok"}},
+  {"expect": {"bodies": 1}}
+]

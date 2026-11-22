@@ -87,6 +87,8 @@ pub enum PlaceKind {
     Auto,
     Side,
     End,
+    /// Along the target profile, a long face on its side (mitcad#2201).
+    Parallel,
 }
 
 /// An end of a part (a hole at it).
@@ -131,6 +133,10 @@ pub struct PlaceAt {
     /// depth, mitcad#417).
     #[serde(default)]
     pub snap: Option<f64>,
+    /// In parallel (mitcad#2201): centred on the side picked (the default)
+    /// or on one of its slots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub across: Option<crate::parallel::Across>,
 }
 
 /// What a length is bound to.
@@ -156,6 +162,12 @@ pub enum LengthInput {
         #[serde(default)]
         add: Option<ValueInput>,
     },
+    /// The target's length (`{"match": "target"}`): a profile placed in
+    /// parallel (mitcad#2201).
+    Match {
+        #[serde(rename = "match")]
+        what: crate::parallel::MatchLength,
+    },
 }
 
 /// A length as the commands take it (`LengthInput`).
@@ -176,6 +188,10 @@ enum LengthJson {
         #[serde(default)]
         offset: Option<ValueInput>,
     },
+    Match {
+        #[serde(rename = "match")]
+        what: crate::parallel::MatchLength,
+    },
 }
 
 impl TryFrom<LengthJson> for LengthInput {
@@ -185,6 +201,7 @@ impl TryFrom<LengthJson> for LengthInput {
         match json {
             LengthJson::Value(value) => Ok(Self::Value(value)),
             LengthJson::Bound { bind, mode, add } => Ok(Self::Bound { bind, mode, add }),
+            LengthJson::Match { what } => Ok(Self::Match { what }),
             LengthJson::ToFace {
                 mode: BoundMode::ToFace,
                 face,
@@ -311,6 +328,10 @@ pub struct EditAt {
     /// A member by two points: its start (mitcad#478).
     #[serde(default)]
     pub point: Option<V3>,
+    /// A profile placed in parallel (mitcad#2201): centred on the side or
+    /// on one of its slots.
+    #[serde(default)]
+    pub across: Option<crate::parallel::Across>,
 }
 
 /// The fields of `build_edit`.
@@ -371,6 +392,11 @@ pub struct EditInput {
     /// limits again, each left out for its default (mitcad#2088).
     #[serde(default)]
     pub limits: Option<crate::travel::TravelInput>,
+    /// The condition of the joint an end is in (mitcad#2200,
+    /// `conditions.rs`): of profiles along sketch lines, an L's Miter, Butt
+    /// or Square, a T's Near Side, Far Side or Square, kept with the joint.
+    #[serde(default)]
+    pub joint: Option<crate::conditions::JointEdit>,
 }
 
 /// A hole at one of a part's ends.
@@ -524,7 +550,7 @@ pub(crate) fn reach_along_x(
 
 /// A value moved by `by` mm: a number added to, an expression with the
 /// shift written after it.
-fn shifted(value: &ValueInput, by: f64) -> ValueInput {
+pub(crate) fn shifted(value: &ValueInput, by: f64) -> ValueInput {
     match value {
         ValueInput::Number(n) => ValueInput::Number(n + by),
         ValueInput::Name(text) if by.abs() < 1e-9 => ValueInput::Name(text.clone()),
@@ -1390,9 +1416,40 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
         let along_length = along_run
             .as_ref()
             .map(|run| LengthInput::Value(ValueInput::Number(run.length)));
+        // In parallel (mitcad#2201): the target's own length parameter unless
+        // a length is typed.
+        let parallel = input
+            .at
+            .as_ref()
+            .is_some_and(|a| a.place == PlaceKind::Parallel);
+        let matched_length = match (&input.at, &input.length) {
+            (Some(at), None | Some(LengthInput::Match { .. })) if parallel => {
+                Some(LengthInput::Value(ValueInput::Name(
+                    crate::parallel::target_length_name(self, at)?,
+                )))
+            }
+            (_, Some(LengthInput::Bound { .. })) if parallel => {
+                return Err(refuse(
+                    "a profile placed in parallel takes the target's length or a typed one: its length cannot be bound",
+                ));
+            }
+            (_, Some(LengthInput::Match { .. })) => {
+                return Err(refuse(
+                    "the length matches the target's only for a profile placed in parallel",
+                ));
+            }
+            _ => None,
+        };
+        let matched = matched_length.is_some();
+        if parallel && input.flip {
+            return Err(refuse(
+                "a profile placed in parallel runs along its target from its end A: it takes no flip",
+            ));
+        }
         let input_length = along_length
             .as_ref()
             .or(points_length.as_ref())
+            .or(matched_length.as_ref())
             .or(input.length.as_ref());
         let mut length = match (&source.meta.length, input_length) {
             (None, None) => LengthPlan::None,
@@ -1426,6 +1483,12 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                         first: measured.unwrap_or(default),
                         source_default: default,
                     },
+                    // Resolved above to the target's length parameter.
+                    Some(LengthInput::Match { .. }) => {
+                        return Err(refuse(
+                            "the length matches the target's only for a profile placed in parallel",
+                        ));
+                    }
                 }
             }
         };
@@ -1603,6 +1666,19 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             (None, Some(geometry), _) => {
                 let path = self.path_from_host(&at.occurrence)?;
                 match self.target(&path) {
+                    // Along the target, a long face on its side (mitcad#2201).
+                    Some(t) if parallel => {
+                        let spot = crate::parallel::plan_parallel(
+                            self, &source, &t, geometry, &at, &new, &length, matched,
+                        )?;
+                        target = Some(t);
+                        (spot, "parallel")
+                    }
+                    None if parallel => {
+                        return Err(refuse(
+                            "a profile placed in parallel lies along another profile: pick its long side",
+                        ));
+                    }
                     Some(t) => {
                         let (spot, place) = self.plan_on_part(
                             &source,
@@ -1634,6 +1710,14 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 }
             }
         };
+        if parallel && place != "parallel" {
+            return Err(refuse(
+                "a profile placed in parallel lies along another profile: pick its long side",
+            ));
+        }
+        // In parallel the contact face takes the rotation, not the joint
+        // (mitcad#2201).
+        let rotate = if place == "parallel" { 0.0 } else { rotate };
         if let Spot::Joint(j) = &spot {
             warnings.extend(j.warnings.iter().cloned());
         }
@@ -3644,6 +3728,8 @@ pub(crate) fn make_part(
         // given at placement is the user's.
         named_after: (plan.name.is_none() && !plan.designation.is_empty())
             .then(|| plan.designation.clone()),
+        // Along its target, a long face on its side (mitcad#2201).
+        parallel: plan.place == "parallel",
     };
     state.assembly.component_mut(made).expect("made").build = Some(record);
     Ok(Placed {
@@ -3841,6 +3927,22 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
             }
             return self.build_shared_mitre(component, end == EndFrom::B);
         }
+        // A joint's condition (mitcad#2200), on its own.
+        if let Some(joint) = &input.joint {
+            if input.ends.is_some()
+                || input.length.is_some()
+                || input.at.is_some()
+                || input.rotate.is_some()
+                || input.flip.is_some()
+                || input.tilt.is_some()
+                || input.along.is_some()
+            {
+                return Err(refuse(
+                    "a joint's condition is edited on its own: send the other fields in another build_edit",
+                ));
+            }
+            return crate::conditions::ConditionsCrateOps::build_joint(self, component, joint);
+        }
         // A timber frame is laid out again as one (mitcad#479).
         if let Some(frame) = &input.frame {
             return self
@@ -3853,8 +3955,33 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
         }
         // A member along an edge: its edge, face, offsets, lie and row
         // (mitcad#1814).
+        let depth = self.undo_depth();
         if let Some(changed) = self.edit_along(component, input)? {
+            // The joints it is in keep its section anew (mitcad#2200), in
+            // the same undo step.
+            let label = self.undo_label().unwrap_or("Edit").to_owned();
+            crate::conditions::ConditionsCrateOps::refresh_joints(self, component)?;
+            self.merge_undo(depth, &label);
             return Ok(changed);
+        }
+        // A profile placed in parallel (mitcad#2201): placed anew with what
+        // changed.
+        if let Some(changed) =
+            crate::parallel::ParallelCrateOps::edit_parallel(self, component, input)?
+        {
+            return Ok(changed);
+        }
+        if matches!(input.length, Some(LengthInput::Match { .. })) {
+            return Err(refuse(format!(
+                "{} is not placed in parallel: its length matches no target",
+                input.component
+            )));
+        }
+        if input.at.as_ref().is_some_and(|a| a.across.is_some()) {
+            return Err(refuse(format!(
+                "{} is not placed in parallel: Across is for a profile placed in parallel",
+                input.component
+            )));
         }
         if input.along.is_some() {
             return Err(refuse(format!(
@@ -4273,7 +4400,8 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
                     }
                     changed.push("bound".to_owned());
                 }
-                None => {}
+                // Refused above: only a profile placed in parallel matches.
+                Some(LengthInput::Match { .. }) | None => {}
             }
             if let Some(r) = &retilt {
                 let joint = joint.ok_or_else(|| refuse(format!("{} has no joint", info.name)))?;

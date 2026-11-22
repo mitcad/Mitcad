@@ -40,7 +40,7 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "sketch values in inches driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'Add User Parameter dialog opened: unit in' 'a new parameter starts in inches'
+Ui-ExpectLog 'Parameters new row: unit in' 'a new parameter starts in inches'
 Ui-ExpectLog 'TestDriver: done' 'typed values, a dimension made in mm and a new parameter, all stored as inches'
 Ui-StopApp
 

@@ -2,6 +2,7 @@
 #include "BrowserBackground.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -81,16 +82,26 @@ void apply(const Follower& follower, BrowserBackground background) {
   }
 }
 
+// Every Browser card that follows the background shows `background`.
+void applyToFollowers(BrowserBackground background) {
+  for (const Follower& follower : liveFollowers()) {
+    if (follower.card->isBare() != (background == BrowserBackground::Rows)) {
+      apply(follower, background);
+    }
+  }
+}
+
 } // namespace
 
 BrowserBackground defaultBrowserBackground() {
-  // The card everywhere: under the Floating layout's toolbar panel on
-  // Windows and Linux (mitcad#1990) the Browser is one card, its header and
-  // rows inside, as on macOS. Rows stays a choice (mitcad#429).
-  return BrowserBackground::Card;
+  // Rows on every platform (mitcad#2144, as before the toolbar panel on
+  // Windows and Linux, mitcad#429; macOS has the shared Qt UI now): the
+  // Browser's rows under the toolbar panel, the view between and beside
+  // them. Card stays a choice.
+  return BrowserBackground::Rows;
 }
 
-BrowserBackground savedBrowserBackground() {
+std::optional<BrowserBackground> chosenBrowserBackground() {
   const QString saved = QSettings().value(kKey).toString();
   if (saved == QLatin1String("rows")) {
     return BrowserBackground::Rows;
@@ -98,15 +109,26 @@ BrowserBackground savedBrowserBackground() {
   if (saved == QLatin1String("card")) {
     return BrowserBackground::Card;
   }
-  return defaultBrowserBackground();
+  return std::nullopt;
 }
+
+BrowserBackground savedBrowserBackground() { return chosenBrowserBackground().value_or(defaultBrowserBackground()); }
 
 void saveBrowserBackground(BrowserBackground background) {
   QSettings().setValue(kKey, browserBackgroundId(background));
-  for (const Follower& follower : liveFollowers()) {
-    if (follower.card->isBare() != (background == BrowserBackground::Rows)) {
-      apply(follower, background);
-    }
+  applyToFollowers(background);
+}
+
+void clearBrowserBackground() {
+  QSettings().remove(kKey);
+  applyToFollowers(defaultBrowserBackground());
+}
+
+void restoreBrowserBackground(const std::optional<BrowserBackground>& choice) {
+  if (choice) {
+    saveBrowserBackground(*choice);
+  } else {
+    clearBrowserBackground();
   }
 }
 

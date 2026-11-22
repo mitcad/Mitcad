@@ -525,6 +525,7 @@ impl<K: Kernel> Document<K> {
                 given: Vec::new(),
                 parts: None,
                 unlinked: Vec::new(),
+                tree: None,
             });
             component.library = reference;
             if let Some(looks) = &looks {

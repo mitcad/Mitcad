@@ -22,7 +22,10 @@ namespace mitcad::mcp {
 // main() installs the handler once, for the whole run, after the UI test
 // driver's: it passes every message on to the one installed before it
 // (stderr, the test driver), then to the sinks (the session log's file,
-// mitcad#1896, and the debug log's).
+// mitcad#1896, and the debug log's). When stderr is a terminal at the
+// install (not on Windows, not with MITCAD_LOG_STDERR=1, not under the UI
+// test driver), only warning, critical and fatal messages go on to that
+// handler; the ring and its sinks still get every line (mitcad#2213).
 // The longest formatted line (formatLogLine) the ring keeps, in UTF-8
 // bytes, for a thread name of up to 400 characters.
 constexpr qsizetype kMaxLogLineBytes = 4096;

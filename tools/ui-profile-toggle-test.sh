@@ -5,9 +5,10 @@
 # Extrude's profile clicks toggle one entry per region (mitcad#199),
 # through the real UI, in a sketch of a placed component (where the view
 # places the profiles by the component's occurrence):
-#   - The newest profile, taken when Extrude starts, is the region the view
-#     shows: a click on it takes it out instead of listing it twice (the
-#     "profile ... is listed more than once" the Cut failed with).
+#   - The profiles taken when Extrude starts (the newest sketch's outline
+#     set, mitcad#2194: the ring a and the square c) are the regions the
+#     view shows: a click on one takes it out instead of listing it twice
+#     (the "profile ... is listed more than once" the Cut failed with).
 #   - Nested squares A, B, C: clicks on the ring between A and B, the ring
 #     between B and C and the square C, then the middle ring again, leave
 #     the odd/even area "A minus B plus C"; cut from a block below, it
@@ -29,6 +30,7 @@ trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 # c17..c20 (C), each rectangle's corner points after its lines.
 RING_A='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
 RING_B='r{c9[c12,c10],c10[c9,c11],c11[c10,c12],c12[c11,c9]}'
+SQUARE_C='r{c17[c20,c18],c18[c17,c19],c19[c18,c20],c20[c19,c17]}'
 
 # expect_file expression expected description: a Python expression on the
 # saved project file (doc).
@@ -72,19 +74,18 @@ ui_step "top view (search)"              ui_command "Top View"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Bodies shown: F2.b0 in O1" "Part's block shown"
 
-echo "--- The newest profile, clicked, goes out"
+echo "--- The start's profiles, clicked, go out"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
-ui_expect_new "Extrude Profiles: 1 profile [profile " "the newest profile taken"
-SQUARE_C=$(grep "Extrude Profiles: 1 profile \[profile " "$UI_LOG" | tail -1 |
-  sed -n 's/.*\[profile \(r{[^ ]*}\) of F3 in O1\].*/\1/p')
-[ -n "$SQUARE_C" ] || ui_fail "the newest profile is not Sketch2's where Part:1 shows it: $(grep 'Extrude Profiles:' "$UI_LOG" | tail -1)"
-[ "$SQUARE_C" != "$RING_A" ] && [ "$SQUARE_C" != "$RING_B" ] || ui_fail "the newest profile is $SQUARE_C"
-echo "ok   the square c, in O1"
+ui_expect_new "Extrude Profiles: 2 profiles [profile $RING_A of F3 in O1; profile $SQUARE_C of F3 in O1]" \
+  "the outline set taken, in O1: the ring a and the square c"
 ui_expect_new "Pick profile F3/" "Sketch2's profiles can be picked"
 ui_mark
 ui_step "click the square c"             ui_click_pick "profile F3/$SQUARE_C"
-ui_expect_new "Extrude Profiles: nothing" "the click took the newest profile out"
+ui_expect_new "Extrude Profiles: 1 profile [profile $RING_A of F3 in O1]" "the click took the square c out"
+ui_mark
+ui_step "click the ring a"               ui_click_pick "profile F3/$RING_A"
+ui_expect_new "Extrude Profiles: nothing" "the click took the ring a out"
 
 echo "--- Nested squares: a, b, c, then b again"
 ui_mark

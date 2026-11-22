@@ -42,16 +42,8 @@ Windows (MSVC), none on Linux.
 
 Upstream: new.
 
-Test: geometry.port.0901
-(geometry/tests/port/p0901-cap-line-cut-where-it-first-passes-the-end.cpp):
-the roof slab of test_fillet_eave.cpp, 20 to 30 long every 0.1, the tip's
-edge, the eave's end edge and the slope's top edge on the end face rounded
-with 0.9 and with 1.0 (the three blends cut each other at the tip, their
-caps walked): every result one valid solid, on Linux and on Windows.
-Without the patch (reverted at the port's tip) 9 and 5 of the 101 slabs
-came out invalid on Linux, which of them hanging on the walk's rounding
-noise; with the point rule alone, the slab 28.0 long rounded with 1.0 on
-Windows.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0901.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 71c22312..d0b223c8 100644

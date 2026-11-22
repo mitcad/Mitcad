@@ -377,6 +377,111 @@ pub fn corner_at(
     corner(state, thickness, *panel, a, b, Some(start))
 }
 
+/// How far (mm) a point named by where it runs may lie off a chart's
+/// surface or boundary ([`boundary_at`]), as [`corner_at`]'s.
+const ON_CHART: f64 = 1e-6;
+
+/// The boundary a straight edge of the body named after an ordinary feature
+/// runs along (mitcad#2117: the outline of material a Join added to a panel
+/// in its plane, which the sheet-domain adapter keeps with the Join's own
+/// face names), by where it runs (`start`, `end`, the body's coordinates):
+/// the panel whose front or back surface holds both ends, and the straight
+/// boundary piece of its chart that holds them; exactly one, or it fails.
+/// The answer is a picked wall's (`boundary`, `pieces`, `straight`,
+/// `axial`) with the `domain` and the `surface` the edge lies on (`front`,
+/// `back`).
+pub fn boundary_at(
+    state: &SheetState,
+    thickness: f64,
+    start: [f64; 3],
+    end: [f64; 3],
+) -> Result<Value, String> {
+    let mut found = Vec::new();
+    for patch in &state.charts {
+        let SheetDomainRef::Panel(_) = patch.domain else {
+            continue;
+        };
+        let (Some((a, da)), Some((b, db))) = (
+            chart_coordinates(&patch.embedding, start, thickness),
+            chart_coordinates(&patch.embedding, end, thickness),
+        ) else {
+            continue;
+        };
+        let surface = if da.abs() <= ON_CHART && db.abs() <= ON_CHART {
+            "front"
+        } else if (da - thickness).abs() <= ON_CHART && (db - thickness).abs() <= ON_CHART {
+            "back"
+        } else {
+            continue;
+        };
+        if (a[0] - b[0]).hypot(a[1] - b[1]) <= ON_CHART {
+            continue;
+        }
+        for (_, _, edge) in edges(patch) {
+            if !is_line(edge) {
+                continue;
+            }
+            let Ok((p, q)) = edge.curve.ends() else {
+                continue;
+            };
+            if on_segment(p, q, a) && on_segment(p, q, b) {
+                found.push((patch.domain, edge.piece.curve.clone(), surface));
+            }
+        }
+    }
+    let [(domain, curve, surface)] = found.as_slice() else {
+        return Err(format!(
+            "the edge runs along {} straight boundaries of the panels' surfaces",
+            found.len()
+        ));
+    };
+    let middle = std::array::from_fn(|i| 0.5 * (start[i] + end[i]));
+    let mut answer = boundary(state, thickness, *domain, curve, Some(middle))?;
+    answer["domain"] = json!(domain);
+    answer["surface"] = json!(surface);
+    Ok(answer)
+}
+
+/// Whether the chart point `x` lies on the segment `p q` (within
+/// [`ON_CHART`]).
+fn on_segment(p: [f64; 2], q: [f64; 2], x: [f64; 2]) -> bool {
+    let d = [q[0] - p[0], q[1] - p[1]];
+    let length = d[0].hypot(d[1]);
+    if length <= ON_CHART {
+        return false;
+    }
+    let w = [x[0] - p[0], x[1] - p[1]];
+    let along = (w[0] * d[0] + w[1] * d[1]) / length;
+    let off = (w[0] * d[1] - w[1] * d[0]).abs() / length;
+    off <= ON_CHART && along >= -ON_CHART && along <= length + ON_CHART
+}
+
+/// The panel whose front or back surface holds a point of the body (`at`),
+/// on its material (mitcad#2117: a planar face named after an ordinary
+/// feature on a sheet): `{body, domain}`; exactly one, or it fails.
+pub fn panel_at(state: &SheetState, thickness: f64, at: [f64; 3]) -> Result<Value, String> {
+    let found: Vec<SheetDomainRef> = state
+        .charts
+        .iter()
+        .filter(|p| matches!(p.domain, SheetDomainRef::Panel(_)))
+        .filter(|p| {
+            chart_coordinates(&p.embedding, at, thickness).is_some_and(|(uv, depth)| {
+                let surface =
+                    depth.abs().min((depth - thickness).abs()) <= 1e-3 * thickness.max(1.0);
+                surface && p.regions.iter().any(|r| super::flat::contains(r, uv))
+            })
+        })
+        .map(|p| p.domain)
+        .collect();
+    let [domain] = found.as_slice() else {
+        return Err(format!(
+            "the point lies on the surfaces of {} panels' material",
+            found.len()
+        ));
+    };
+    Ok(json!({"body": state.body, "domain": domain}))
+}
+
 /// The panel a picked panel surface stands for at the point picked. The
 /// kernel joins the coplanar caps of panels that meet at a seam into one
 /// face, named after one of them: a point outside the named panel's

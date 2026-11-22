@@ -168,6 +168,11 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
                                 .toArray();
   } catch (const std::exception&) {
   }
+  // Selection sets (mitcad#2192).
+  try {
+    snapshot.selectionSets = model.queryArray(QStringLiteral("selection_sets"));
+  } catch (const std::exception&) {
+  }
   // CAM setups with their operations' states (mitcad#1013): a model
   // without CAM has none.
   try {
@@ -230,7 +235,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
                                           snapshot.sheets, snapshot.motionStudies, snapshot.contactSets,
                                           snapshot.measurements, snapshot.drawings, snapshot.imageReferences,
                                           snapshot.centerOfMass, snapshot.camSetups,
-                                          snapshot.camMachines})
+                                          snapshot.camMachines, snapshot.selectionSets})
                      .toJson(QJsonDocument::Compact);
   // The values Show When conditions use (mitcad#863): a parameter changed
   // without changing what is shown still changes the light bulbs' tooltips.
@@ -299,6 +304,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
       feature.error = (notes + others).join(QStringLiteral("; "));
     }
     feature.component = f.value(QStringLiteral("component")).toString(kRoot);
+    feature.madeComponent = f.value(QStringLiteral("made_component")).toString();
     feature.suppressed = f.value(QStringLiteral("suppressed")).toBool();
     feature.dof = f.value(QStringLiteral("dof")).toInt(-1);
     feature.index = i;
@@ -332,6 +338,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     component.link = c.value(QStringLiteral("link")).toString();
     component.library = c.value(QStringLiteral("library")).isObject();
     component.envelope = c.value(QStringLiteral("envelope")).toDouble();
+    component.linkTree = c.value(QStringLiteral("link_tree")).toBool();
+    component.linkedIn = c.value(QStringLiteral("linked_in")).toString();
     for (const QJsonValue& body : c.value(QStringLiteral("bodies")).toArray()) {
       component.bodies << body.toString();
     }
@@ -828,6 +836,10 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("flex"), QStringLiteral("flex")},
       // Panelize (mitcad#2005).
       {QStringLiteral("panelize"), QStringLiteral("panelize")},
+      // Boundary Fill (mitcad#457, its panel mitcad#2149).
+      {QStringLiteral("boundary_fill"), QStringLiteral("boundary-fill")},
+      // Cone (mitcad#2239).
+      {QStringLiteral("cone"), QStringLiteral("cone")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

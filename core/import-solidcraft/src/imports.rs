@@ -16,6 +16,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// temporary file.
     pub(super) fn import_step(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let i: k::Import = f.typed()?;
+        // An import kept as B-rep records (formats 60 to 63: a file read
+        // through a neutral model, its copies, paint and mesh parts), its
+        // STEP text empty.
+        if i.has_records() {
+            return Err(NotMapped::Unmapped(
+                "its bodies are kept as B-rep records instead of STEP text, which this import does not read"
+                    .to_owned(),
+            ));
+        }
         if i.step.trim().is_empty() {
             return Err(NotMapped::Failed(
                 "the Import feature keeps no STEP text".to_owned(),

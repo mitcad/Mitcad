@@ -2,6 +2,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include <QString>
 
@@ -19,14 +20,25 @@ class GlassCard;
 // both layouts).
 enum class BrowserBackground { Card, Rows };
 
-// Without a saved choice: the card (mitcad#1990; Rows on Windows and Linux
-// before the toolbar panel, mitcad#429).
+// Without a saved choice: Rows on every platform (mitcad#2144; Rows on
+// Windows and Linux before the toolbar panel, mitcad#429, and the card from
+// the toolbar panel, mitcad#1990, until mitcad#2144).
 BrowserBackground defaultBrowserBackground();
+// The choice the user saved; none when nothing is saved (the default
+// applies).
+std::optional<BrowserBackground> chosenBrowserBackground();
 // The saved choice, else the default.
 BrowserBackground savedBrowserBackground();
 // Saves the choice; every Browser card that follows it (followBrowserBackground)
 // changes at once.
 void saveBrowserBackground(BrowserBackground background);
+// Forgets the saved choice (Restore Defaults): the default applies, at once
+// to every Browser card that follows it, and a later change of the default
+// reaches it too.
+void clearBrowserBackground();
+// saveBrowserBackground with a choice, clearBrowserBackground without one
+// (a settings import).
+void restoreBrowserBackground(const std::optional<BrowserBackground>& choice);
 // "card" or "rows", as saved and logged.
 QString browserBackgroundId(BrowserBackground background);
 

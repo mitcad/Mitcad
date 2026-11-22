@@ -14,15 +14,8 @@ conic takes any range); other curves keep the condition. The boxes only
 skip pairs that cannot lie inside one another, so the statuses are
 unchanged.
 
-Test: geometry/tests/port/p0120-wire-boxes-of-arcs-past-their-range.cpp
-(ctest geometry.port.0120),
-test_arc_holes_past_their_range_classified_as_fast_as_exact_ones: the
-bound, 900 holes of arcs ending 4e-15 past 2*PI classified within six times
-the time of the same holes ending at 2*PI (a ratio of about 1; about 25
-without the patch, 5.1 s against 0.21 s). The statuses:
-geometry/tests/test_large_bodies.cpp (ctest geometry.suite.large_bodies),
-test_wires_of_arcs_past_their_range_are_classified (the same without the
-patch).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0120.
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Face.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Face.cxx
 @@ -848,8 +848,15 @@

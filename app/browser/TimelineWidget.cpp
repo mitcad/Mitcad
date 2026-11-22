@@ -1306,11 +1306,23 @@ void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
   QVector<TimelineStrip::Item> items;
   QHash<QString, int> index;
   int hidden = 0;
+  QStringList marks;
   for (const DocumentSnapshot::Feature& feature : snapshot.features) {
     index.insert(feature.uid, static_cast<int>(items.size()));
     const bool filtered = !shown.isEmpty() && !passesFilter(feature, shown, occurrenceComponents);
     hidden += filtered ? 1 : 0;
-    items.append({feature, colours.value(feature.component, -1), -1, filtered});
+    // A new-component operation is marked in the colour of the component
+    // it makes (mitcad#2185), which its bodies are in.
+    const int colour = colours.value(feature.markComponent(), -1);
+    items.append({feature, colour, -1, filtered});
+    marks << QStringLiteral("%1 %2").arg(feature.name,
+                                         colour < 0 ? QStringLiteral("root") : componentColor(colour).name());
+  }
+  const QString markLine = QStringLiteral("Timeline feature colors: %1")
+                               .arg(marks.isEmpty() ? QStringLiteral("none") : marks.join(QStringLiteral(", ")));
+  if (markLine != m_loggedFeatureColors) {
+    m_loggedFeatureColors = markLine;
+    qDebug().noquote() << markLine;
   }
   // Timeline groups (P9): runs of features, folded or open; with a filter,
   // of the features it shows (a group with none is not shown).
@@ -1433,7 +1445,10 @@ QSet<QString> TimelineWidget::filteredComponents() const {
 
 bool TimelineWidget::passesFilter(const DocumentSnapshot::Feature& feature, const QSet<QString>& components,
                                   const QHash<QString, QString>& occurrenceComponents) const {
-  if (components.contains(feature.component)) {
+  // A new-component operation also shows with the component it makes
+  // (mitcad#2185).
+  if (components.contains(feature.component) ||
+      (!feature.madeComponent.isEmpty() && components.contains(feature.madeComponent))) {
     return true;
   }
   if (!feature.isJoint()) {

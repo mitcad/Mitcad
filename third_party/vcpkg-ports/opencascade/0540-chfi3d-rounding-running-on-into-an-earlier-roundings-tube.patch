@@ -34,17 +34,8 @@ ChFi3d_Builder::PerformOneCorner, at an OnSame end:
 The face at the end grows up to the section, as the bodies stored in the
 files have it; other ends are unchanged.
 
-Test: geometry/tests/test_fillet_corners.cpp,
-test_rounding_running_on_into_an_earlier_roundings_tube (ctest
-geometry.suite.fillet_corners): a cut-back side's foot rounded with the
-radius of the rounding at its end, the floor edges as circles and as
-B-splines: the end grows up to the section the two tubes share. Another
-caller: geometry/tests/test_fillet_end_overflow.cpp,
-test_wall_foot_ending_at_a_sliver (ctest geometry.fillet_end_overflow), the
-same end across a sliver. It fails with this patch and 18 later patches
-that change the same lines reverted together, so the test does not single
-this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the patches
-are listed in third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0540.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 25e11c8..0a0fd55 100644

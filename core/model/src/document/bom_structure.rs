@@ -24,10 +24,19 @@
 //! lists the parts the design is made of, each once with how many the
 //! whole design needs, numbered 1, 2, …. Both give each row's mass and
 //! volume of one (an assembly's with what it holds) and the totals.
+//!
+//! **Group identical parts** (mitcad#2215) combines rows of equal parts by
+//! the same key as the list of every component ([`super::PartSignature`]:
+//! measured geometry and material): in the parts-only view across the
+//! whole design, in the structured view equal siblings under one parent
+//! (an assembly row by what it holds, which is then listed once below
+//! it). Rows of different BOM Structures are never combined, so a
+//! Reference stays apart from what is counted; the quantities add up and
+//! the items are numbered again in the grouped order.
 
 use std::collections::BTreeMap;
 
-use super::{Document, MaterialSource, PartsListRow};
+use super::{Document, MaterialSource, PartSignature, PartsListRow};
 use crate::ids::{BodyUid, ComponentUid};
 use crate::kernel::Kernel;
 use crate::properties::{BOM_SET, BOM_STRUCTURE_KEY, PropertyOwner, PropertyValue};
@@ -107,6 +116,10 @@ pub struct BomViewRow {
     /// References.
     pub mass: Option<f64>,
     pub volume: f64,
+    /// The rows Group identical parts combined into this one (mitcad#2215),
+    /// itself first: each its component and, for a body of the root's own,
+    /// that body. Only itself when nothing was combined.
+    pub members: Vec<(ComponentUid, Option<BodyUid>)>,
 }
 
 /// A view's rows with the whole design's mass (kg; none while a counted
@@ -174,6 +187,13 @@ impl<K: Kernel> Document<K> {
     /// A Bill of Materials' structured or parts-only view (mitcad#1985;
     /// the module's documentation says how each structure acts).
     pub fn bom_view(&self, view: BomView) -> BomViewList {
+        self.bom_view_grouped(view, false)
+    }
+
+    /// [`Self::bom_view`], with equal parts' rows combined when
+    /// `group_identical` (mitcad#2215; the module's documentation says
+    /// how).
+    pub fn bom_view_grouped(&self, view: BomView, group_identical: bool) -> BomViewList {
         let walk = Walk {
             structures: self.bom_structures(),
             masses: std::cell::RefCell::new(BTreeMap::new()),
@@ -202,6 +222,7 @@ impl<K: Kernel> Document<K> {
                         structure,
                         mass,
                         volume,
+                        members: vec![(component, None)],
                     });
                 }
             }
@@ -224,10 +245,111 @@ impl<K: Kernel> Document<K> {
                 structure: BomStructure::Normal,
                 mass,
                 volume,
+                members: vec![(ComponentUid::ROOT, Some(body))],
             });
+        }
+        if group_identical {
+            rows = self.grouped_view_rows(view, rows);
         }
         let (mass, volume) = walk.mass(ComponentUid::ROOT, 0);
         BomViewList { rows, mass, volume }
+    }
+
+    /// A view's rows with equal parts combined (mitcad#2215): a row joins
+    /// an earlier one under the same parent (every row of the parts-only
+    /// view is right below the design) of the same BOM Structure whose
+    /// part matches it; the subtree below a row that joined another is
+    /// that one's, not listed again. The items are numbered again.
+    fn grouped_view_rows(&self, view: BomView, rows: Vec<BomViewRow>) -> Vec<BomViewRow> {
+        // Each kept row with its key (and whether it is an assembly's, with
+        // what it holds) and its parent's index.
+        #[allow(clippy::type_complexity)]
+        let mut out: Vec<(BomViewRow, Option<(PartSignature, bool)>, Option<usize>)> = Vec::new();
+        // The kept rows' indices in `out` by level: the open parents.
+        let mut open: Vec<usize> = Vec::new();
+        // While a joined row's subtree is skipped: its level.
+        let mut skipping: Option<usize> = None;
+        for row in rows {
+            if let Some(level) = skipping {
+                if row.level > level {
+                    continue;
+                }
+                skipping = None;
+            }
+            open.truncate(row.level.saturating_sub(1));
+            let parent = if row.level > 1 {
+                open.last().copied()
+            } else {
+                None
+            };
+            let signature = self.view_row_signature(view, &row);
+            // An assembly's row joins assemblies' only, a part's parts'.
+            let found = signature.as_ref().and_then(|(key, whole)| {
+                out.iter_mut().find(|(other, other_key, other_parent)| {
+                    *other_parent == parent
+                        && other.structure == row.structure
+                        && other_key
+                            .as_ref()
+                            .is_some_and(|(k, w)| w == whole && k.matches(key))
+                })
+            });
+            if let Some((group, _, _)) = found {
+                group.quantity += row.quantity;
+                group.placed += row.placed;
+                group.members.extend(row.members);
+                skipping = Some(row.level);
+                continue;
+            }
+            open.push(out.len());
+            out.push((row, signature, parent));
+        }
+        // Numbered again, as the views number them: 1, 2, … right below the
+        // design, `2.1` below item 2; none for a Reference.
+        let mut counters: Vec<usize> = Vec::new();
+        let mut items: Vec<Option<String>> = Vec::new();
+        let mut rows: Vec<BomViewRow> = out.into_iter().map(|(row, _, _)| row).collect();
+        for row in &mut rows {
+            let depth = row.level.saturating_sub(1);
+            counters.truncate(depth + 1);
+            counters.resize(depth + 1, 0);
+            items.truncate(depth);
+            if row.structure == BomStructure::Reference {
+                row.item = None;
+            } else {
+                counters[depth] += 1;
+                let number = counters[depth];
+                row.item = Some(match items.last() {
+                    Some(Some(parent)) => format!("{parent}.{number}"),
+                    _ => number.to_string(),
+                });
+            }
+            items.resize(depth, None);
+            items.push(row.item.clone());
+        }
+        rows
+    }
+
+    /// The key Group identical parts compares a view's row by (mitcad#2215):
+    /// a body's or a part's own bodies; an assembly row with what it holds
+    /// in the structured view, and a Purchased, Inseparable or Reference
+    /// one in the parts-only view (then `true`). None when not measured.
+    fn view_row_signature(&self, view: BomView, row: &BomViewRow) -> Option<(PartSignature, bool)> {
+        if let Some(body) = row.body {
+            return self.part_signature(&[body]).map(|key| (key, false));
+        }
+        let holds = self.assembly().children(row.component).next().is_some();
+        let whole = holds
+            && (view == BomView::Structured
+                || matches!(
+                    row.structure,
+                    BomStructure::Purchased | BomStructure::Inseparable | BomStructure::Reference
+                ));
+        let key = if whole {
+            self.component_part_signature(row.component, row.component, &[])
+        } else {
+            self.part_signature(&self.own_bodies_sorted(row.component))
+        };
+        key.map(|key| (key, whole))
     }
 
     /// A component's bodies at the marker, in the order of their ids.
@@ -320,6 +442,7 @@ impl<K: Kernel> Walk<'_, K> {
                 structure,
                 mass,
                 volume,
+                members: vec![(component, None)],
             });
             if let Some(item) = item
                 && !structure.closed()

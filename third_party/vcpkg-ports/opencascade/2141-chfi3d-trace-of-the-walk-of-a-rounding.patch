@@ -1,0 +1,284 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a trace of the walk of a rounding on the standard error, while
+the environment variable MITCAD_TRACE_FILLET_WALK is set (read each time,
+so that a test can set it round one fillet), for the diagnosis of walks
+that fail (mitcad#2140, GitHub mitcad/Mitcad#517). Nothing else changes.
+
+The case: a Y tube's crotch (two tori meeting along a crease that fades to
+tangency at both ends; each torus's seam passes the crease's highest
+point, where the crease is split into two edges) is rounded with 6, 6.5
+and 7, but from 8 on the walk fails with no piece computed; with the
+seams turned to the arms' inner sides, away from the crease, 8, 20 and 50
+build and 6 fails. The trace says where the walk starts and stops.
+
+- ChFi3d_Builder::StartSol (of a stripe): each place tried for the first
+  section along the spine, whether a section was found there, the states
+  of its points and their places on both faces.
+- ChFi3d_Builder::PerformSetOfSurfOnElSpine: the guide's range, each piece
+  walked (its direction, range, start and flags), the piece's result (its
+  spine range and its ends, on an arc or not), and the stripe's failure
+  ("Path failed").
+- ChFi3d_Builder::ComputeData (between two faces): what the walk walked
+  (its range, points and ends, on arcs or not) and each reason it fails
+  (no first section, no path, not completed, no point, a walk that drags,
+  too few points).
+- In StartSol the states of the first section's points start as
+  TopAbs_UNKNOWN (they were read uninitialised where no section was
+  tried).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2141.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -16,6 +16,8 @@
+ 
+ #include <Extrema_ExtPC.hxx>
+ #include <GCPnts_AbscissaPoint.hxx>
++#include <OSD_Environment.hxx>
++#include <cstdio>
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Approx_CurveOnSurface.hxx>
+ #include <Geom_BSplineCurve.hxx>
+@@ -156,6 +158,18 @@
+                                    const double                     Ang,
+                                    const bool                       SmoothOnly);
+ 
++//=======================================================================
++// function : ChFi3d_TracingWalkOnSpine
++// purpose  : Whether the walk of a rounding says on the standard error
++//            where it starts, each piece it walks and where it fails
++//            (MITCAD_TRACE_FILLET_WALK set, read each time so that a test
++//            can set it round one fillet; mitcad#2140).
++//=======================================================================
++static bool ChFi3d_TracingWalkOnSpine()
++{
++  return !OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty();
++}
++
+ namespace
+ {
+ 
+@@ -1279,7 +1293,7 @@
+                   Spine->FirstParameter(1),
+                   Spine->LastParameter(nbed),
+                   Precision::Confusion());
+-  TopAbs_State Pos1, Pos2;
++  TopAbs_State Pos1 = TopAbs_UNKNOWN, Pos2 = TopAbs_UNKNOWN;
+   for (nbessai = 0; nbessai <= nbessaimax; nbessai++)
+   {
+     double t  = nbessai * unsurnbessaimax;
+@@ -1367,8 +1381,20 @@
+                         Choix,
+                         SolDep);
+     }
+-    if (projected
+-        && PerformFirstSection(Spine, HGuide, Choix, HS1, HS2, I1, I2, w, SolDep, Pos1, Pos2))
++    const bool aFirstSection =
++      projected && PerformFirstSection(Spine, HGuide, Choix, HS1, HS2, I1, I2, w, SolDep, Pos1, Pos2);
++    if (ChFi3d_TracingWalkOnSpine())
++    {
++      const gp_Pnt aQ1 = HS1->Value(SolDep(1), SolDep(2));
++      const gp_Pnt aQ2 = HS2->Value(SolDep(3), SolDep(4));
++      std::fprintf(stderr,
++                   "fillet walk: start try %d at w %.9g (edge %d, spine point (%.6f %.6f %.6f)): projected %d, "
++                   "section %d, states %d %d, (%.6f %.6f %.6f) uv (%.9g %.9g), (%.6f %.6f %.6f) uv (%.9g %.9g)\n",
++                   nbessai, w, iedge, pnt.X(), pnt.Y(), pnt.Z(), int(projected), int(aFirstSection), int(Pos1),
++                   int(Pos2), aQ1.X(), aQ1.Y(), aQ1.Z(), SolDep(1), SolDep(2), aQ2.X(), aQ2.Y(), aQ2.Z(),
++                   SolDep(3), SolDep(4));
++    }
++    if (aFirstSection)
+     {
+       P1.SetCoord(SolDep(1), SolDep(2));
+       P2.SetCoord(SolDep(3), SolDep(4));
+@@ -5669,6 +5695,14 @@
+     return false;
+   };
+ 
++  if (ChFi3d_TracingWalkOnSpine())
++  {
++    std::fprintf(stderr,
++                 "fillet walk: guide %.9g to %.9g (spine %.9g to %.9g, %d edges, periodic %d), previous %d, next %d, "
++                 "simulated %d\n",
++                 wf, wl, Spine->FirstParameter(1), lastedlastp, nbed, int(Guide.IsPeriodic()),
++                 int(!Guide.Previous().IsNull()), int(!Guide.Next().IsNull()), int(Simul));
++  }
+   occ::handle<ChFiDS_SurfData> ref = Guide.Previous();
+   occ::handle<ChFiDS_SurfData> refbis, SD;
+   occ::handle<ChFiDS_SurfData> raf = Guide.Next();
+@@ -6898,6 +6932,17 @@
+     {
+       const occ::handle<Adaptor3d_TopolTool>& aTT1 = It1; // to avoid ambiguity
+       const occ::handle<Adaptor3d_TopolTool>& aTT2 = It2; // to avoid ambiguity
++      if (ChFi3d_TracingWalkOnSpine())
++      {
++        const gp_Pnt aQ1 = HS1->Value(Soldep(1), Soldep(2));
++        const gp_Pnt aQ2 = HS2->Value(Soldep(3), Soldep(4));
++        std::fprintf(stderr,
++                     "fillet walk: piece %s from w %.9g to %.9g (inside %d, intf %d, intl %d, reframe %d %d, "
++                     "obstacles %d %d) from (%.6f %.6f %.6f) and (%.6f %.6f %.6f)\n",
++                     forward ? "forwards" : "backwards", First, Last, int(Inside), intf, intl, int(RecS1),
++                     int(RecS2), int(obstacleon1), int(obstacleon2), aQ1.X(), aQ1.Y(), aQ1.Z(), aQ2.X(), aQ2.Y(),
++                     aQ2.Z());
++      }
+       CallPerformSurf(Stripe,
+                       Simul,
+                       SeqSD,
+@@ -6932,6 +6977,29 @@
+       decroch1 = decroch2 = false;
+     }
+ 
++    if (ChFi3d_TracingWalkOnSpine())
++    {
++      if (!done || SD.IsNull())
++      {
++        std::fprintf(stderr, "fillet walk: piece not done (First %.9g, Last %.9g, intf %d, intl %d)\n", First,
++                     Last, intf, intl);
++      }
++      else
++      {
++        const ChFiDS_CommonPoint& aF1 = SD->VertexFirstOnS1();
++        const ChFiDS_CommonPoint& aF2 = SD->VertexFirstOnS2();
++        const ChFiDS_CommonPoint& aL1 = SD->VertexLastOnS1();
++        const ChFiDS_CommonPoint& aL2 = SD->VertexLastOnS2();
++        std::fprintf(stderr,
++                     "fillet walk: piece done, spine %.9g to %.9g (intf %d, intl %d); first (%.6f %.6f %.6f) arc %d, "
++                     "(%.6f %.6f %.6f) arc %d; last (%.6f %.6f %.6f) arc %d, (%.6f %.6f %.6f) arc %d\n",
++                     SD->FirstSpineParam(), SD->LastSpineParam(), intf, intl, aF1.Point().X(), aF1.Point().Y(),
++                     aF1.Point().Z(), int(aF1.IsOnArc()), aF2.Point().X(), aF2.Point().Y(), aF2.Point().Z(),
++                     int(aF2.IsOnArc()), aL1.Point().X(), aL1.Point().Y(), aL1.Point().Z(), int(aL1.IsOnArc()),
++                     aL2.Point().X(), aL2.Point().Y(), aL2.Point().Z(), int(aL2.IsOnArc()));
++      }
++    }
++
+     if (!done)
+     { // Case of fail
+       if ((!Ok1 && !obstacleon1) || (!Ok2 && !obstacleon2))
+@@ -7003,6 +7071,13 @@
+       }
+       else
+       { // Otherwise invalidation of the stripe.
++        if (ChFi3d_TracingWalkOnSpine())
++        {
++          std::fprintf(stderr,
++                       "fillet walk: path failed (forward %d, First %.9g, Last %.9g, starts %d %d, obstacles %d "
++                       "%d)\n",
++                       int(forward), First, Last, int(Ok1), int(Ok2), int(obstacleon1), int(obstacleon2));
++        }
+         Spine->SetErrorStatus(ChFiDS_WalkingFailure);
+         myWalkOnEdge = false;
+         throw Standard_Failure("CallPerformSurf : Path failed!");
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+@@ -84,9 +84,21 @@
+ #include <NCollection_IndexedMap.hxx>
+ #include <TopExp_Explorer.hxx>
+ #include <TopTools_ShapeMapHasher.hxx>
++#include <OSD_Environment.hxx>
+ 
+ #include <cstdio>
+ 
++//=======================================================================
++// function : ChFi3d_TracingWalkOnFaces
++// purpose  : Whether the walk between two faces says on the standard error
++//            what it walked and why it failed (MITCAD_TRACE_FILLET_WALK
++//            set, read each time; mitcad#2140).
++//=======================================================================
++static bool ChFi3d_TracingWalkOnFaces()
++{
++  return !OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty();
++}
++
+ #ifdef OCCT_DEBUG
+ extern bool ChFi3d_GettraceDRAWFIL();
+ extern bool ChFi3d_GettraceDRAWWALK();
+@@ -2727,6 +2739,10 @@
+ #ifdef OCCT_DEBUG
+       std::cout << "ChFi3d_Builder::ComputeData : calculation fail first section" << std::endl;
+ #endif
++      if (ChFi3d_TracingWalkOnFaces())
++      {
++        std::fprintf(stderr, "fillet walk: compute data fails: %s (from w %.9g towards %.9g)\n", "no first section", NewFirst, Target);
++      }
+       return false;
+     }
+   }
+@@ -2778,6 +2794,10 @@
+ #ifdef OCCT_DEBUG
+       std::cout << "Path is not created" << std::endl;
+ #endif
++      if (ChFi3d_TracingWalkOnFaces())
++      {
++        std::fprintf(stderr, "fillet walk: compute data fails: %s (from w %.9g towards %.9g)\n", "no path", NewFirst, Target);
++      }
+       return false;
+     }
+     Lin = TheWalk.Line();
+@@ -2805,6 +2825,10 @@
+ #ifdef OCCT_DEBUG
+       std::cout << "Not completed" << std::endl;
+ #endif
++      if (ChFi3d_TracingWalkOnFaces())
++      {
++        std::fprintf(stderr, "fillet walk: compute data fails: %s (from w %.9g towards %.9g)\n", "not completed", NewFirst, Target);
++      }
+       return false;
+     }
+ 
+@@ -2817,6 +2841,10 @@
+ #ifdef OCCT_DEBUG
+       std::cout << "0 point of path, quit." << std::endl;
+ #endif
++      if (ChFi3d_TracingWalkOnFaces())
++      {
++        std::fprintf(stderr, "fillet walk: compute data fails: %s (from w %.9g towards %.9g)\n", "no point walked", NewFirst, Target);
++      }
+       return false;
+     }
+     double fpointpar = Lin->Point(1).Parameter();
+@@ -2846,6 +2874,10 @@
+ #ifdef OCCT_DEBUG
+         std::cout << "If it drags without control, quit." << std::endl;
+ #endif
++        if (ChFi3d_TracingWalkOnFaces())
++        {
++          std::fprintf(stderr, "fillet walk: compute data fails: %s (from w %.9g towards %.9g, %d points, w %.9g to %.9g)\n", "the walk drags", NewFirst, Target, Nbpnt, fpointpar, lpointpar);
++        }
+         return false;
+       }
+       tchernobyl = true;
+@@ -2891,6 +2923,10 @@
+ #ifdef OCCT_DEBUG
+           std::cout << "Number of points is still too small, quit" << std::endl;
+ #endif
++          if (ChFi3d_TracingWalkOnFaces())
++          {
++            std::fprintf(stderr, "fillet walk: compute data fails: %s (from w %.9g towards %.9g, %d points)\n", "still too few points", NewFirst, Target, Nbpnt);
++          }
+           return false;
+         }
+       }
+@@ -2922,6 +2958,20 @@
+   // The extensions are targeted.
+   //*****************************//
+ 
++  if (ChFi3d_TracingWalkOnFaces())
++  {
++    const Blend_Point& aB = Lin->Point(1);
++    const Blend_Point& aE = Lin->Point(Nbpnt);
++    std::fprintf(stderr,
++                 "fillet walk: walked w %.9g to %.9g, %d points; start (%.6f %.6f %.6f) (%.6f %.6f %.6f) on arcs %d "
++                 "%d; end (%.6f %.6f %.6f) (%.6f %.6f %.6f) on arcs %d %d\n",
++                 aB.Parameter(), aE.Parameter(), Nbpnt, aB.PointOnS1().X(), aB.PointOnS1().Y(),
++                 aB.PointOnS1().Z(), aB.PointOnS2().X(), aB.PointOnS2().Y(), aB.PointOnS2().Z(),
++                 Lin->StartPointOnFirst().NbPointOnRst(), Lin->StartPointOnSecond().NbPointOnRst(),
++                 aE.PointOnS1().X(), aE.PointOnS1().Y(), aE.PointOnS1().Z(), aE.PointOnS2().X(),
++                 aE.PointOnS2().Y(), aE.PointOnS2().Z(), Lin->EndPointOnFirst().NbPointOnRst(),
++                 Lin->EndPointOnSecond().NbPointOnRst());
++  }
+   Gd1 = Gd2 = Gf1 = Gf2 = false;
+ 
+   bool unseulsuffitdeb = (intf >= 2);

@@ -20,17 +20,8 @@ one arc or the other, at 0.79999, 0.8 or 0.80001, on one body or a copy
   only those above 1e-9 of the largest along the boundary: a field that
   vanishes at a corner does not count as turning there.
 
-Test: geometry/tests/test_fillet_ball_twice_arc.cpp, test_case_body (ctest
-geometry.fillet_ball_twice_arc): the case ball-twice-arc-rounding, the
-body MitCad builds and the stored state, rounded at 0.79999, 0.8 and
-0.80001: the area of the B-spline faces round each 0.4 arc the same within
-1e-3 mm2 (the two endings differ by 0.06), the material added at 0.8
-within 1e-3 mm3 of that at both radii beside it; without the patch the
-area differs at one arc or the other (the port's notes). It fails without
-the patch (shown 2026-11-20 by tools/occt-port-proof.py). The test reads a
-stored case (MITCAD_GEOMETRY_CASES), not a synthetic body: a synthetic
-test is still wanted (mitcad#1986). The synthetic pocket of
-test_pocket_floor_rounded checks the material added only.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1410.
 diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_ConstrainedFilling.cxx b/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_ConstrainedFilling.cxx
 index fe70c81b..7a30d36b 100644
 --- a/src/ModelingAlgorithms/TKGeomAlgo/GeomFill/GeomFill_ConstrainedFilling.cxx

@@ -54,6 +54,7 @@ const QVector<ActivatingCommand>& activatingCommands() {
       {QStringLiteral("solid.cylinder"), {QStringLiteral("at")}},
       {QStringLiteral("solid.sphere"), {QStringLiteral("at")}},
       {QStringLiteral("solid.torus"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.cone"), {QStringLiteral("at")}}, // mitcad#2239
       // Fill Cavity (mitcad#1818): the body it fills and its seed face.
       {QStringLiteral("solid.fill_cavity"), {QStringLiteral("body"), QStringLiteral("seed")}},
       // Panelize (mitcad#2005): the faces it splits off.
@@ -142,7 +143,7 @@ bool linksShafts(const QString& command) {
   static const QStringList parts = {
       QStringLiteral("solid.gear"),     QStringLiteral("solid.pulley"),   QStringLiteral("solid.bearing"),
       QStringLiteral("solid.coil"),     QStringLiteral("solid.box"),      QStringLiteral("solid.cylinder"),
-      QStringLiteral("solid.sphere"),   QStringLiteral("solid.torus"),
+      QStringLiteral("solid.sphere"),   QStringLiteral("solid.torus"),    QStringLiteral("solid.cone"),
   };
   return parts.contains(command);
 }

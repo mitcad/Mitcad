@@ -68,6 +68,9 @@ impl<K: Kernel> Document<K> {
         if occurrence.flexible.is_some() == flexible {
             return Ok(());
         }
+        // A part inside a linked design is flexible as the design has it
+        // (mitcad#2209); the linked design's own occurrence can be.
+        self.state.editable(occurrence.parent)?;
         let name = self.state.assembly.occurrence_name(uid);
         let has_parts = self
             .state

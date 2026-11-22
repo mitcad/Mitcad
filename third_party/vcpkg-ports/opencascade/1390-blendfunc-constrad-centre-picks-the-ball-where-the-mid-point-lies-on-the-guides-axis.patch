@@ -29,13 +29,8 @@ guide's normal plane, as between surfaces of revolution about the axis of
 a circular guide, both conditions pick the same ball; elsewhere the
 mid-point stays the condition, unchanged.
 
-Test: geometry/tests/test_fillet_ball_twice_arc.cpp, a pocket whose floor
-meets concave arcs of 0.4, rounded with 0.8 (and 0.79999, 0.80001) by
-OCCT's fillet alone and by MitCad's, and the reported body (a case of
-MITCAD_GEOMETRY_CASES): the rounding builds at exactly 0.8, valid, without
-MitCad's 0.1 % smaller retry, and on the pocket it lies within 1e-4 mm of
-the roundings at 0.79999 and 0.80001 (6e-6 mm measured). Without the
-patch OCCT's fillet is not done at 0.8 (one faulty contour).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1390.
 
 Upstream: new.
 

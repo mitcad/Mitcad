@@ -539,11 +539,12 @@ QJsonObject printOverlayJson(const QJsonObject& def, const PrintAnswers& answers
 }
 
 PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor,
-                            const QColor& gapColor) {
+                            const QColor& gapColor, const std::array<QColor, 3>& draftColors) {
   PrintOverlay overlay;
   overlay.overhangColor = overhangColor;
   overlay.thinColor = thinColor;
   overlay.gapColor = gapColor;
+  overlay.draftColors = draftColors;
   overlay.title = json.value(QStringLiteral("title")).toString();
   const auto flatten = [](const QJsonValue& parts, std::vector<float>& out) {
     for (const QJsonValue& body : parts.toArray()) {
@@ -600,6 +601,19 @@ PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor
           QObject::tr("Gap %1 mm").arg(fixed(gaps.value(QStringLiteral("closest")).toDouble(), 2));
     }
   }
+  // Draft Analysis (mitcad#2166): its three classes with their legend.
+  const QJsonObject draft = json.value(QStringLiteral("draft")).toObject();
+  if (!draft.isEmpty()) {
+    const QString angle = plain(draft.value(QStringLiteral("angle")).toDouble());
+    const char* const classes[3] = {"positive", "under", "negative"};
+    const QString words[3] = {QObject::tr("Draft %1° or more along the pull").arg(angle),
+                              QObject::tr("Needs more draft, under %1°").arg(angle),
+                              QObject::tr("Draft %1° or more against the pull").arg(angle)};
+    for (std::size_t c = 0; c < 3; ++c) {
+      flatten(draft.value(QLatin1String(classes[c])), overlay.draft[c]);
+      overlay.legend.emplace_back(draftColors[c], words[c]);
+    }
+  }
   return overlay;
 }
 
@@ -622,6 +636,16 @@ QString printOverlayLog(const PrintOverlay& overlay) {
       marker += QStringLiteral(", marker %1 at (%2, %3, %4)")
                     .arg(overlay.narrowestLabel, plain(g[0]), plain(g[1]), plain(g[2]));
     }
+  }
+  // Draft Analysis' classes (mitcad#2166), when it has any.
+  if (!overlay.draft[0].empty() || !overlay.draft[1].empty() || !overlay.draft[2].empty()) {
+    marker += QStringLiteral(", draft %1 along %2, %3 under %4, %5 against %6")
+                  .arg(static_cast<qulonglong>(overlay.draft[0].size() / 9))
+                  .arg(overlay.draftColors[0].name())
+                  .arg(static_cast<qulonglong>(overlay.draft[1].size() / 9))
+                  .arg(overlay.draftColors[1].name())
+                  .arg(static_cast<qulonglong>(overlay.draft[2].size() / 9))
+                  .arg(overlay.draftColors[2].name());
   }
   QStringList legend;
   for (const auto& [color, words] : overlay.legend) {

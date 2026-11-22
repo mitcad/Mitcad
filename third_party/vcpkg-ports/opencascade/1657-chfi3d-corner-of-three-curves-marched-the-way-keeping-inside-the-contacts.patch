@@ -17,11 +17,8 @@ parameters): both blends' wires crossed themselves.
   p-curves cross either contact's p-curve to the side away from that point
   (sampled), from that point back; the way crossing least is kept.
 
-Test: geometry/tests/test_fillet_roof_slab.cpp, test_slab (ctest
-geometry.fillet_roof_slab): the roof slab rounded on all its edges with
-1.1, valid and closed (both blends' wires crossing themselves without the
-patch). It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1657.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
 index 0185540c..a7312933 100644

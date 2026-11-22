@@ -41,14 +41,8 @@ from that point.
   is reduced to that point, counts as an end at the nearer vertex, so that
   the consumed face goes.
 
-Test: geometry/tests/test_fillet_eave.cpp, test_eave_all_edges (ctest
-geometry.fillet_eave): the eave's four edges rounded with 0.9 and 1, the
-end edges' blends meeting the tip's where their contacts reach the obtuse
-edge, the material taken within 1e-4 of the removal sets' union (fails
-without the patch). It fails without the patch at its place in the chain:
-OCCT with the patches before it, without and with this one (shown
-2026-11-20 by tools/occt-port-proof.py --in-chain, with 1662, 1701
-carried, which add API the MitCad code uses).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1651.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 9f67a0e5..772eca20 100644

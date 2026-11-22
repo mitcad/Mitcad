@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/CommandSessionAuto app/commands/ExtrudeCommands.cpp core/model/src/document/auto_operation.rs
 # check-all sources: app/platform/macos/NativeForms app/platform/macos/NativeMacWindow app/platform/macos/NativeTestInput
+# check-all sources: app/framework/ExtrudeStartPreference.cpp
 # Edits keep their stored operation (mitcad#868) through the chosen panel:
 # a Join going into its bodies, deliberate choices, target scope, an
-# input while the first preview computes.
+# input while the first preview computes. In the Qt frontend also
+# Preferences > General > Extrude starts with: New Body (mitcad#2164,
+# ui-scripts/extrude-starts-new-body.mitcad-ui): a square on a block's face
+# extruded inward and outward stays New Body.
 # Usage: bash tools/ui-macos-edit-auto-operation-test.sh <app> [out directory] [qt|native]
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -15,8 +19,8 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
 fi
 frontend=${3:-qt}
 case "$frontend" in
-  qt) schemes=default ;;
-  native) schemes='light dark' ;;
+  qt) schemes=default; extra_phases=prefer-new-body ;;
+  native) schemes='light dark'; extra_phases= ;;
   *) echo "unknown frontend: $frontend" >&2; exit 2 ;;
 esac
 ui_init "$1" "${2:-ui-macos-edit-auto-operation}"
@@ -26,7 +30,7 @@ export MITCAD_TEST_WORK=$UI_OUT/files
 mkdir -p "$MITCAD_TEST_WORK"
 
 for scheme in $schemes; do
- for phase in automatic new-body participants overrides scope early; do
+ for phase in automatic new-body participants overrides scope early $extra_phases; do
   run=$phase
   if [ "$frontend" = native ]; then run=$phase-$scheme; fi
   # Variants keep identical geometry; only the stored Operation/Objects
@@ -48,11 +52,21 @@ elif phase == 'scope':
     feature['extent']['distance'] = -15
     del feature['participants']
     feature['cut_scope'].pop('initialize_on_cut')
+elif phase == 'prefer-new-body':
+    # A 40 x 30 x 20 block under XY (its top face in XY) and a 10 x 10
+    # square on that face, nothing else (mitcad#2164).
+    script = [script[0],
+              {'cmd': 'add_feature', 'def': {'type': 'box', 'plane': {'origin': [0, 0, -20], 'normal': [0, 0, 1]},
+                                             'corner': [0, 0], 'length': 40, 'width': 30, 'height': 20,
+                                             'operation': 'new_body'}},
+              {'cmd': 'sketch.create'},
+              {'cmd': 'sketch.add_rectangle', 'sketch': 'F2', 'corner': [10, 10], 'width': 10, 'height': 10},
+              {'expect': {}}]
 expected = script[-1]['expect']
 expected['instances'] = {'automatic': 2, 'new-body': 4, 'participants': 3,
-                         'overrides': 2, 'scope': 3, 'early': 4}[phase]
+                         'overrides': 2, 'scope': 3, 'early': 4, 'prefer-new-body': 1}[phase]
 expected['world_volume'] = {'automatic': 27000, 'overrides': 27000,
-                            'scope': 34000}.get(phase, 39000)
+                            'scope': 34000, 'prefer-new-body': 24000}.get(phase, 39000)
 with open(sys.argv[2], 'w', encoding='utf-8') as target:
     json.dump(script, target)
 PY
@@ -63,6 +77,7 @@ PY
     automatic) driver=edit-auto-operation; delay=0 ;;
     new-body|participants) driver=edit-auto-operation-retained; delay=0 ;;
     early) driver=edit-auto-operation-early; delay=0,preview=1500 ;;
+    prefer-new-body) driver=extrude-starts-new-body; delay=0 ;;
     *) driver=edit-auto-operation-$phase; delay=0 ;;
   esac
   input=$here/ui-scripts/$driver.mitcad-ui
@@ -72,6 +87,14 @@ PY
     export MITCAD_TEST_COLOR_SCHEME=$scheme
     export MITCAD_SETTINGS_DIR=$UI_ROOT/settings-$run
     mkdir -p "$MITCAD_SETTINGS_DIR"
+  fi
+  if [ "$phase" = prefer-new-body ]; then
+    # Settings of the run's own with the preference set (mitcad#2164; with
+    # MITCAD_SETTINGS_DIR the app's INI file is under its organization's
+    # domain on macOS).
+    export MITCAD_SETTINGS_DIR=$UI_ROOT/settings-$run
+    mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+    printf '[extrude]\nstartOperation=new_body\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
   fi
   MITCAD_TEST_STEP_MS=20 MITCAD_TEST_RECOMPUTE_DELAY_MS=$delay \
     MITCAD_TEST_INPUT=$input \

@@ -228,4 +228,22 @@ void TestDriver::testManipulatorFeedback() {
   });
 }
 
+// This file's steps (mitcad#2173): their specs and their chain.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    {"test-manipulator-feedback", 0, 0, TestDriver::kInputOfMain},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kManipulatorSteps{
+    kStepSpecs, std::size(kStepSpecs), &TestDriver::runManipulatorStep};
+
+void TestDriver::runManipulatorStep(const QString& name, const QStringList&, int) {
+  if (name == QLatin1String("test-manipulator-feedback")) {
+    testManipulatorFeedback();
+  }
+}
+
 } // namespace mitcad

@@ -51,12 +51,9 @@ the rim so: no bridge, and the stripe fails as stock does there ("Chaining
 is impossible"); a cut piece that cannot be made leaves the bridge
 without it, reported to its caller. Any other failure (a broken invariant,
 a signal) is rethrown.
-Test: geometry/tests/port/p0160-walked-blend-over-a-rounded-rim.cpp (ctest
-geometry.port.0160): a block's edge rounded with 3 past a hole whose rim is
-rounded with 0.5, and past a wider hole whose rim is rounded with 1, the
-contact on the top crossing the hole's mouth: built, valid, the rim cutting
-the blend (the body less the ball's corner region); a hole whose mouth
-stays behind the contact, as stock.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0160.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index 5b87977b..b25afc06 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx

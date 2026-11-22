@@ -1,4 +1,4 @@
-# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695
+# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170
 
 OCCT's face merge after booleans (`ShapeUpgrade_UnifySameDomain`) and the
 boolean's wire splitter. The face merge's speed-ups are 0006 in
@@ -33,6 +33,11 @@ boolean's wire splitter. The face merge's speed-ups are 0006 in
 - **1695** stops the decomposition of a walking intersection line at the
   faces' boundaries from reading a point past the line's ends, which
   crashed a boolean in a release build (mitcad#1819).
+- **2170** lets the wire splitter tell apart the two points of a vertex
+  that a face's edges meet a period apart, with no closed edge there:
+  the union of a reported design's finned rods with a ring and
+  triangles left faces closed in space but not in the face's parameters,
+  an invalid union (mitcad#2170).
 
 ## 0110: a chain that cannot be concatenated
 
@@ -243,6 +248,63 @@ loop now stops before an index outside `1..NbPnts`, as it ends when it
 finds no distinct point within the piece; every case that read only points
 of the line keeps its result.
 
+## 2170: a vertex met a period apart
+
+The patch 2170 comes from a reported design (mitcad#2170, GitHub
+mitcad/Mitcad#463): a Combine joining a hub with 30 blades, triangles,
+rods and a ring, read from a STEP file. Six of the bodies are each a rod
+with three thin fins. The rod's side is one cylindrical face without a
+seam: its boundary runs down a line of the cylinder at u = 0, round the
+rod, and back up beside the fins just short of u = 2 pi; it reaches
+u = 2 pi only at the vertex where two fins meet the rod (and at the
+rod's end circle), and passes that vertex a second time on the line at
+u = 0. A two-edge inner wire, where the third fin's knife edge grazes the
+rod, touches the boundary at that vertex, at u = 0. Six edge uses meet
+there, at two points of the face's parameters a period apart, and none
+of the edges is closed on the face (so the face's vertex is not marked
+as one on a seam).
+
+### 2170-bopalgo-wiresplitter-vertex-met-a-period-apart
+
+A union of such a rod with the ring or a triangle that trims its side
+face sends the face to the boolean's face builder (a vertex used more
+than twice keeps BuildDraftFace from rebuilding the face's wires as they
+were). Its wire splitter (`BOPAlgo_WireSplitter`, `Path`) walks the
+edges vertex by vertex and closes a loop where it comes back to a vertex
+it passed; it compares the points in the face's parameters only at a
+vertex with a closed or degenerated edge (`aVertMap`). At the rod's
+vertex it closed a loop on coming to its point at u = 2 pi after leaving
+it at u = 0, and chose the edge to go on along among those leaving both
+points, by angles measured each at its own point: two of the five loops
+of the trimmed face were closed in space but a period apart in 2d, and
+their faces could not be oriented (`BRepCheck_NotClosed`,
+`BRepCheck_UnorientableShape`). The union of the design's 26 bodies
+that do not lie inside others was invalid (the other five, bare rods
+each inside a finned rod, are left out of the union by mitcad#2053).
+
+`SplitBlock` now marks a vertex used by more than two edges, none of
+them closed on the face or degenerated, whose edges meet it at points
+more than half a period apart on a surface periodic or closed in u or v
+(`aVertCopies`), where the face's own wires (the face given to the face
+builder) also meet it at points a period apart. A vertex the boundary
+passes once, where an edge whose curve on the face the boolean made (a
+section, a split shared with another face's edge, on a face spanning
+more than the period) lies a period from the boundary, is not marked:
+the patch's first form marked such a vertex in the join of a pad flush
+with a body's merged cylindrical walls (mitcad#964's case in
+`geometry.suite.boolean`), and the join came out without the pad. The
+face's own vertex is matched with the vertex in the split where it is
+that vertex or lies within their tolerances of it: where another
+argument's vertex coincides with it, the pave filler puts a new vertex in
+its place (`MakeSDVertices`), as in a finned rod's common with a union
+holding it; matched by identity alone, the reported union of all 31
+bodies still missed 24 of them and the finned rods' commons with the
+union came out 2 % short. At a marked vertex `Path` closes a loop only at the visit
+that left from the point it comes to, and goes on only along edges
+leaving that point, as it does at a vertex on a seam with the 2d
+tolerance. Planar faces, vertices whose edges meet them at one point and
+vertices on a closed edge are split as before.
+
 ## Reports and tests
 
 - 0220: mitcad#284 and the coaxial cylinders' join in
@@ -281,3 +343,8 @@ of the line keeps its result.
   two-distance chamfer of 0.99 of the strip's width along a tangent chain
   over a cylinder strip, whose reference boolean crashed in a release
   build.
+- 2170: mitcad#2170 and `geometry/tests/port/p2170-vertex-met-a-period-apart.cpp`
+  (ctest `geometry.port.2170`): such a face built from scratch on a
+  cylinder, split by the face builder from its own edges and with a
+  section line across it, in every order of the edges; and the reported
+  join of 31 bodies in `geometry/tests/test_join_holds_inputs.cpp`.

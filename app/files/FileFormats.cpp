@@ -30,7 +30,9 @@ FileKind fileKind(const QString& path) {
   if (suffix == QStringLiteral("serp")) {
     return FileKind::Cad;
   }
-  if (suffix == QStringLiteral("stl") || suffix == QStringLiteral("obj")) {
+  // 3MF files (mitcad#2156): mesh bodies, a part placed more than once as
+  // a component, in the file's own unit.
+  if (suffix == QStringLiteral("stl") || suffix == QStringLiteral("obj") || suffix == QStringLiteral("3mf")) {
     return FileKind::Mesh;
   }
   if (suffix == QStringLiteral("dxf") || suffix == QStringLiteral("svg")) {
@@ -65,6 +67,8 @@ FileKind fileKind(const QString& path) {
   return FileKind::None;
 }
 
+bool meshFileHasUnit(const QString& path) { return QFileInfo(path).suffix().toLower() == QStringLiteral("3mf"); }
+
 bool importsAsComponent(FileKind kind) {
   return kind == FileKind::F3d || kind == FileKind::FreeCad || kind == FileKind::Ipt;
 }
@@ -81,8 +85,9 @@ namespace {
 const char* const kCad = "*.FCStd *.fcstd *.f3d *.f3z *.ipt *.IPT *.iam *.IAM *.ifc *.IFC *.ifczip *.rvt *.RVT *.rfa *.RFA "
                          "*.rte *.rft *.sc *.SC *.solidcraft *.dwg *.DWG *.3dm *.3DM *.serp *.SERP *.step *.stp *.iges "
                          "*.igs *.brep *.brp";
-// glTF files (mitcad#1826) in both spellings, as the others.
-const char* const kMesh = "*.stl *.obj *.glb *.GLB *.gltf *.GLTF";
+// glTF files (mitcad#1826) and 3MF files (mitcad#2156) in both spellings,
+// as the others.
+const char* const kMesh = "*.stl *.obj *.glb *.GLB *.gltf *.GLTF *.3mf *.3MF";
 const char* const kDrawing = "*.dxf *.svg";
 
 QString kinds(bool designs) {
@@ -92,7 +97,7 @@ QString kinds(bool designs) {
                       QLatin1String(kDrawing));
   filters << QObject::tr("MitCad designs (*.mitcad)");
   filters << QObject::tr("CAD files (%1)").arg(QLatin1String(kCad));
-  filters << QObject::tr("Meshes: STL, OBJ and glTF (%1)").arg(QLatin1String(kMesh));
+  filters << QObject::tr("Meshes: STL, OBJ, glTF and 3MF (%1)").arg(QLatin1String(kMesh));
   filters << QObject::tr("Drawings: DXF and SVG (%1)").arg(QLatin1String(kDrawing));
   filters << QObject::tr("All files (*)");
   return filters.join(QStringLiteral(";;"));

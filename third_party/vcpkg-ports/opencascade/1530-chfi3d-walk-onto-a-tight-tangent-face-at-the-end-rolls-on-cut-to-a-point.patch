@@ -38,19 +38,8 @@ the vertex.
   ends in a point of its own short of it (the stripes on both sides of the
   vertex where a hole touches the hub).
 
-Test: geometry/tests/test_fillet_tight_tangent_end.cpp,
-test_ends_cut_by_the_rims (ctest geometry.fillet_tight_tangent_end): the
-case hub-foot-tight-rim-ends, its nine edges rounded with 1: valid and
-closed, the material added the stored body's within 0.5 %, on the stored
-body and back within 0.01 mm about both holes; the port's notes record the
-contour failing without the patch. It fails with this patch and 27 later
-patches that change the same lines reverted together, so the test does not
-single this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the
-patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md). The test reads
-a stored case (MITCAD_GEOMETRY_CASES): OCCT's fillet cannot make the
-earlier roundings of a hole's rim that touches the hub, so no synthetic
-body has been built (left, mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1530.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 6dbda3b7f..71c4e41e0 100644

@@ -80,7 +80,8 @@ void giveViewEdgePolygons(const TopoDS_Shape& own);
 // out of what is drawn: an edge with one surface on both sides (a
 // cylinder's or a sphere's seam, the edge between two pieces of one face
 // that a split left; with `named`, the Shape whose occt() `shape` is, by
-// their names too) across which the surface runs on smoothly. They keep
+// their names too, unless the pieces lie on provably different analytic
+// surfaces, mitcad#2148) across which the surface runs on smoothly. They keep
 // their copies (a highlight of such an edge, selected through the model,
 // is drawn), but are not drawn with the shape in any visual style, and its
 // FineEdges objects do not pick them (dropSmoothSeams). A cache whose

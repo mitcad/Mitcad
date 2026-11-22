@@ -1102,6 +1102,15 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
         };
         let bodies: Vec<BodyUid> = drawn.iter().map(|d| d.0).collect();
         let names: Vec<String> = drawn.iter().map(|d| d.1.clone()).collect();
+        // The placements drawn (mitcad#2147): each body where an occurrence
+        // places it, once over the sheets written; a body of a component
+        // placed many times is one body in many placements.
+        let placements = sheets
+            .iter()
+            .flat_map(|s| &s.evaluated.shown)
+            .map(|s| (s.body, s.path.as_slice()))
+            .collect::<BTreeSet<_>>()
+            .len();
         let pages = if format == Format::Pdf {
             composed.len()
         } else {
@@ -1124,6 +1133,7 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
             "views": first.views,
             "bodies": bodies,
             "body_names": names,
+            "placements": placements,
             "dimensions": composed.iter().map(|c| c.dimensions).sum::<usize>(),
             "holes": composed.iter().map(|c| c.holes).sum::<usize>(),
             "hole_table_rows": composed.iter().map(|c| c.hole_rows).sum::<usize>(),

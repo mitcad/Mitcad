@@ -15,7 +15,11 @@
 //!   is measured to the outer face from the virtual sharp (`outer`), the
 //!   bend inside, at the edge (outside) or on the bend line (middle); it
 //!   turns towards the side of the sheet the pick is on, the other way
-//!   with `flip`. A hem is a Flange of 180 degrees.
+//!   with `flip`. A hem is a Flange of 180 degrees, its inside radius half
+//!   its gap (the space between its leg and the face it folds over; a hem
+//!   without one takes its rule's `hem_gap`). Picked edges are found by
+//!   their saved names where the import translates them (a base flange's
+//!   rims, format 62), else at the pick.
 //! - A fold is a Fold on the sketch line; unfold and refold are Unfold
 //!   and Refold of every bend, the base panel staying.
 //! - A contour flange is a Contour Flange of the sketch lines (mitcad#461),
@@ -23,7 +27,12 @@
 //!   sketch normal (against it with `reverse`).
 //! - A conversion is a Convert to Sheet Metal of the face and edges at its
 //!   points, with rules of the thickness the file measures from the body
-//!   (a plate's, a shell's walls') where it does.
+//!   (a plate's, a shell's walls') where it does. Recognize Sheet Metal
+//!   of a plate from a picked face (format 62, as an older design's
+//!   conversion of a plate opens) is the same conversion of the plate;
+//!   other recognitions, a conversion of several faces, with engravings
+//!   or the material outside, and a conversion of a whole body from its
+//!   faces are placeholders.
 //! - A perforation field is a Perforate of the newest sheet (or its body).
 
 use mitcad_model::{BodyUid, ComponentUid, FeatureUid, Kernel};
@@ -43,6 +52,9 @@ struct Rule {
     relief_depth: String,
     corner_relief: String,
     corner_shape: String,
+    /// The space between a hem's leg and the face it folds over (format
+    /// 62; older designs' values doubled as they open).
+    hem_gap: String,
 }
 
 impl<K: Kernel> Importer<'_, '_, K> {
@@ -56,6 +68,13 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "sheet_contour" => self.sheet_contour(f, component),
             "sheet_perforate" => self.sheet_perforate(f, component),
             "sheet_convert" => self.sheet_convert(f, component),
+            // Format 62: Recognize Sheet Metal (an older design's
+            // conversion of a plate opens as one), and a conversion of a
+            // whole body from its faces.
+            "sheet_recognize" => self.sheet_recognize(f, component),
+            "sheet_surface_convert" => Err(NotMapped::Unmapped(
+                "MitCad has no conversion of a whole body to sheet metal from its faces (every face a panel of the rule's thickness, no fixed face)".to_owned(),
+            )),
             // Format 36: a chain of edge flanges along sketch lines drawn
             // across an edge.
             "sheet_path" => Err(NotMapped::Unmapped(
@@ -68,33 +87,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     fn rule(&self, name: Option<&str>) -> Rule {
-        let rules = self.design.sheet.get("rules").and_then(Value::as_array);
-        let active = self.design.sheet.get("active").and_then(Value::as_str);
-        let wanted = name.or(active);
-        let found = rules.and_then(|r| {
-            r.iter()
-                .find(|x| wanted.is_some() && x.get("name").and_then(Value::as_str) == wanted)
-                .or_else(|| r.first())
-        });
-        let text = |key: &str, default: &str| {
-            found
-                .and_then(|r| r.get(key))
-                .and_then(mitcad_solidcraft::inputs::expr_text)
-                .unwrap_or_else(|| default.to_owned())
-        };
-        Rule {
-            name: found
-                .and_then(|r| r.get("name").and_then(Value::as_str))
-                .unwrap_or("Steel (mm)")
-                .to_owned(),
-            thickness: text("thickness", "2.5 mm"),
-            k_factor: text("k_factor", "0.44"),
-            bend_radius: text("bend_radius", "Thickness"),
-            relief_width: text("relief_width", "Thickness"),
-            relief_depth: text("relief_depth", "Thickness * 0.5"),
-            corner_relief: text("corner_relief", "Thickness * 4.0"),
-            corner_shape: text("corner_relief_shape", "notch"),
-        }
+        rule_of(self.design, name)
     }
 
     /// The `sheet_rules` feature of a rule and side, made the first time.
@@ -157,6 +150,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let uid = self.add(&def, Some(&f.name), component)?;
         for body in self.doc.bodies().iter().filter(|x| x.uid.feature == uid) {
             self.sheet_bases.insert(body.uid, uid);
+            self.sheet_body_rules.insert(body.uid, b.rule.clone());
         }
         Ok(Mapped::parametric())
     }
@@ -188,6 +182,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let uid = self.add(&def, Some(&f.name), component)?;
         for body in self.doc.bodies().iter().filter(|x| x.uid.feature == uid) {
             self.sheet_bases.insert(body.uid, uid);
+            self.sheet_body_rules.insert(body.uid, c.rule.clone());
         }
         Ok(Mapped::parametric())
     }
@@ -197,12 +192,6 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// goes on the newest sheet, as in the file's own evaluation.
     fn sheet_perforate(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let p: k::SheetPerforate = f.typed()?;
-        if p.sketch.is_some() {
-            // Format 48: the holes only inside the profiles of a sketch.
-            return Err(NotMapped::Unmapped(
-                "its field is bounded by the profiles of a sketch, and MitCad's perforation covers the whole sheet".to_owned(),
-            ));
-        }
         let body = match p.body.as_deref() {
             Some(name) => self.body(name)?,
             None => self
@@ -226,12 +215,21 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if p.margin.is_some() {
             def["margin"] = json!(self.slot(f, "/margin")?);
         }
+        if let Some(sketch) = p.sketch {
+            let selection = p.profiles.as_ref().unwrap_or(&k::ProfileSel::All);
+            def["outline"] = json!({"profiles": self.profiles(sketch, selection)?});
+        } else if p.profiles.is_some() {
+            return Err("a perforation outline's profiles require a sketch".into());
+        }
+        let anchor = if p.sketch.is_some() {
+            "the outline in the developed sheet"
+        } else {
+            "the developed sheet"
+        };
         self.add(&def, Some(&f.name), component)?;
-        Ok(Mapped::partial(vec![
-            "the holes are cut through the sheet; the grid starts at the corner of the \
-             developed sheet in its first panel's axes"
-                .to_owned(),
-        ]))
+        Ok(Mapped::partial(vec![format!(
+            "the holes are cut through the sheet; the grid starts at the corner of {anchor} in its first panel's axes"
+        )]))
     }
 
     /// A conversion to sheet metal: the face at the fixed point, the edges
@@ -242,16 +240,84 @@ impl<K: Kernel> Importer<'_, '_, K> {
     /// rules are made with that thickness.
     fn sheet_convert(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let c: k::SheetConvert = f.typed()?;
-        let body = self.body(&c.body)?;
-        let (on, face) = self.face_at(component, Some(&c.body), c.face)?;
+        // What format 62 adds to a conversion of picked faces: MitCad's
+        // converts the body from one face, the material behind it.
+        if !c.faces.is_empty() {
+            return Err(NotMapped::Unmapped(
+                "it converts several picked faces, where MitCad's Convert to Sheet Metal starts from one face"
+                    .to_owned(),
+            ));
+        }
+        if !c.engrave.is_empty() {
+            return Err(NotMapped::Unmapped(
+                "it keeps faces of recesses as engravings of the panels round them, which MitCad's Convert to Sheet Metal does not take"
+                    .to_owned(),
+            ));
+        }
+        if !matches!(c.direction.as_str(), "" | "inside") {
+            return Err(NotMapped::Unmapped(format!(
+                "its material lies `{}` the faces, where MitCad's Convert to Sheet Metal keeps it behind the face",
+                c.direction
+            )));
+        }
+        self.convert_from_face(f, component, &c.body, c.face, &c.bends, c.rule.as_deref())
+            .map(|notes| {
+                if notes.is_empty() {
+                    Mapped::parametric()
+                } else {
+                    Mapped::partial(notes)
+                }
+            })
+    }
+
+    /// Recognize Sheet Metal (format 62), as an older design's conversion
+    /// of a plate opens: the plate from the face it picked is MitCad's
+    /// conversion of a plate. A recognition of the body's largest face,
+    /// with faces left out or with bend edges has no MitCad counterpart.
+    fn sheet_recognize(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
+        let r: k::SheetRecognize = f.typed()?;
+        let Some(face) = r.face else {
+            return Err(NotMapped::Unmapped(
+                "it recognizes sheet metal from the body's largest face, where MitCad's Convert to Sheet Metal needs a picked face"
+                    .to_owned(),
+            ));
+        };
+        if !r.skip.is_empty() || !r.bends.is_empty() {
+            return Err(NotMapped::Unmapped(
+                "it recognizes a body of bent walls as sheet metal (faces left out, bends where cylinders join them), which MitCad has no feature for"
+                    .to_owned(),
+            ));
+        }
+        let mut notes =
+            self.convert_from_face(f, component, &r.body, face, &[], r.rule.as_deref())?;
+        notes.push(
+            "a plate read as one sheet from the picked face (SolidCraft from 0.45.0 makes it the rule's thickness, and says so where the plate's differs)"
+                .to_owned(),
+        );
+        Ok(Mapped::partial(notes))
+    }
+
+    /// A MitCad Convert to Sheet Metal of `body_name` from the face at
+    /// `face_at`, bent at the edges at `bend_points`: the notes it gives.
+    fn convert_from_face(
+        &mut self,
+        f: &Feature,
+        component: ComponentUid,
+        body_name: &str,
+        face_at: [f64; 3],
+        bend_points: &[[f64; 3]],
+        rule: Option<&str>,
+    ) -> Result<Vec<String>, NotMapped> {
+        let body = self.body(body_name)?;
+        let (on, face) = self.face_at(component, Some(body_name), face_at)?;
         if on != body {
             return Err(NotMapped::Failed(
                 "the fixed face is on another body".to_owned(),
             ));
         }
         let mut bends = Vec::new();
-        for p in &c.bends {
-            let (on, edge) = self.edge_at(component, Some(&c.body), *p)?;
+        for p in bend_points {
+            let (on, edge) = self.edge_at(component, Some(body_name), *p)?;
             if on != body {
                 return Err(NotMapped::Failed(format!(
                     "the bend edge at {p:?} is on another body"
@@ -259,21 +325,18 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
             bends.push(edge);
         }
-        let thickness = self.convert_thickness(body, &face, c.bends.is_empty())?;
-        let rules = self.sheet_rules_of(c.rule.as_deref(), false, thickness, component)?;
+        let thickness = self.convert_thickness(body, &face, bend_points.is_empty())?;
+        let rules = self.sheet_rules_of(rule, false, thickness, component)?;
         let def = json!({"type": "sheet_convert", "rules": rules.to_string(),
             "body": body.to_string(), "face": face, "bends": bends});
         let uid = self.add(&def, Some(&f.name), component)?;
         self.sheet_bases.insert(body, uid);
+        self.sheet_body_rules.insert(body, rule.map(str::to_owned));
         let mut notes = Vec::new();
         if let Some(t) = thickness {
             notes.push(format!("the sheet is {t} mm thick, as the body"));
         }
-        Ok(if notes.is_empty() {
-            Mapped::parametric()
-        } else {
-            Mapped::partial(notes)
-        })
+        Ok(notes)
     }
 
     /// The thickness a conversion takes from the body (see
@@ -349,15 +412,17 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
     }
 
-    /// The boundary of the sheet at an edge pick, and whether the pick is
-    /// on the sheet's back surface.
+    /// The boundary of the sheet at an edge pick (and its saved name, the
+    /// model's since format 62, where the import translates it), and
+    /// whether the pick is on the sheet's back surface.
     fn boundary_at(
         &self,
         body: BodyUid,
         pick: [f64; 3],
+        name: Option<&str>,
         component: ComponentUid,
     ) -> Result<(Value, bool), String> {
-        let (on, edge) = self.edge_at(component, None, pick)?;
+        let (on, edge) = self.edge_named(component, None, pick, name)?;
         if on != body {
             return Err("the edge is on another body".to_owned());
         }
@@ -427,7 +492,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         let several = fl.edges.len() > 1;
         for (i, e) in fl.edges.iter().enumerate() {
-            let (boundary, back) = self.boundary_at(body, e.point, component)?;
+            let (boundary, back) = self.boundary_at(
+                body,
+                e.point,
+                f.edge_names.get(i).map(String::as_str),
+                component,
+            )?;
             let angle_ptr = if e.angle.is_some() {
                 format!("/edges/{i}/angle")
             } else {
@@ -463,21 +533,40 @@ impl<K: Kernel> Importer<'_, '_, K> {
     fn sheet_hem(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let h: k::SheetHem = f.typed()?;
         let body = self.sheet_body(h.body.as_deref(), component)?;
-        let mut notes = vec!["a hem is a 180 degree flange of the rule's radius".to_owned()];
-        if h.gap.is_some() {
-            notes.push("the hem's gap is the bend's inside diameter".to_owned());
-        }
+        // The gap is the space between the hem's leg and the face it folds
+        // over, so the bend's inside radius is half of it (format 62; the
+        // upgrade doubles an older design's gaps, the inside radius
+        // itself before); a hem without a gap of its own takes its rule's
+        // `hem_gap`.
+        let mut notes = vec![
+            "a hem is a 180 degree flange whose inside radius is half the hem's gap".to_owned(),
+        ];
+        let rule_radius = match h.gap {
+            Some(_) => None,
+            None => {
+                let rule_name = self.sheet_body_rules.get(&body).cloned().flatten();
+                let rule = self.rule(rule_name.as_deref());
+                let half = self.params.expression(self.doc, &hem_radius(None, &rule))?;
+                notes.push(format!(
+                    "the gap is the rule's ({}: `{}`)",
+                    rule.name, rule.hem_gap
+                ));
+                Some(half)
+            }
+        };
         for (i, p) in h.edges.iter().enumerate() {
-            let (boundary, back) = self.boundary_at(body, *p, component)?;
+            let (boundary, back) =
+                self.boundary_at(body, *p, f.edge_names.get(i).map(String::as_str), component)?;
             let up = back ^ h.flip;
             let angle = if up { "180 deg" } else { "-180 deg" };
             let angle = self.params.unnamed(self.doc, angle);
-            let mut def = json!({"type": "sheet_flange", "body": body.to_string(), "boundary": boundary,
+            let radius = match &rule_radius {
+                Some(half) => self.params.unnamed(self.doc, half),
+                None => self.slot_of(f, "/gap", |n| format!("{n} / 2"))?,
+            };
+            let def = json!({"type": "sheet_flange", "body": body.to_string(), "boundary": boundary,
                 "angle": angle, "length": {"mode": "tangent", "value": self.slot(f, "/length")?},
-                "position": "edge"});
-            if h.gap.is_some() {
-                def["radius"] = json!(self.slot_of(f, "/gap", |n| format!("{n} / 2"))?);
-            }
+                "position": "edge", "radius": radius});
             let name = if h.edges.len() > 1 {
                 format!("{} ({})", f.name, i + 1)
             } else {
@@ -600,6 +689,57 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 }
 
+/// The rule a feature names, else the design's active one, else its first,
+/// with SolidCraft's defaults (`sheet.rs`, `SheetRule::steel`) for what it
+/// leaves out; the default rule when the design has none.
+fn rule_of(design: &mitcad_solidcraft::Design, name: Option<&str>) -> Rule {
+    let found = design.sheet_rule(name);
+    let found = found.as_ref();
+    let text = |value: Option<&k::Expr>, default: &str| {
+        value.map_or_else(|| default.to_owned(), |e| e.as_str().to_owned())
+    };
+    Rule {
+        name: found
+            .map(|r| r.name.as_str())
+            .filter(|n| !n.is_empty())
+            .unwrap_or("Steel (mm)")
+            .to_owned(),
+        thickness: text(found.and_then(|r| r.thickness.as_ref()), "2.5 mm"),
+        k_factor: text(found.and_then(|r| r.k_factor.as_ref()), "0.44"),
+        bend_radius: text(found.and_then(|r| r.bend_radius.as_ref()), "Thickness"),
+        relief_width: text(found.and_then(|r| r.relief_width.as_ref()), "Thickness"),
+        relief_depth: text(
+            found.and_then(|r| r.relief_depth.as_ref()),
+            "Thickness * 0.5",
+        ),
+        corner_relief: text(
+            found.and_then(|r| r.corner_relief.as_ref()),
+            "Thickness * 4.0",
+        ),
+        corner_shape: found
+            .and_then(|r| r.corner_relief_shape.clone())
+            .unwrap_or_else(|| "notch".to_owned()),
+        hem_gap: text(
+            found.and_then(|r| r.hem_gap.as_ref()),
+            k::SheetRule::DEFAULT_HEM_GAP,
+        ),
+    }
+}
+
+/// A hem's inside radius as an expression of the file's: half its own gap,
+/// else half its rule's `hem_gap` (`Thickness` in it the rule's thickness).
+/// The gap is the space between the hem's leg and the face it folds over
+/// (format 62; the upgrade doubles an older design's values).
+fn hem_radius(gap: Option<&str>, rule: &Rule) -> String {
+    match gap {
+        Some(gap) => format!("({gap}) / 2"),
+        None => format!(
+            "({}) / 2",
+            replace_word(&rule.hem_gap, "Thickness", &format!("({})", rule.thickness))
+        ),
+    }
+}
+
 /// `text` with the whole word `word` replaced.
 fn replace_word(text: &str, word: &str, with: &str) -> String {
     let mut out = String::new();
@@ -620,4 +760,87 @@ fn replace_word(text: &str, word: &str, with: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod hem_tests {
+    //! A hem's inside radius (mitcad#2153): half its gap, the space between
+    //! its leg and the face it folds over since format 62, whose upgrade
+    //! doubles an older design's values; a hem without a gap takes its
+    //! rule's `hem_gap`.
+
+    use mitcad_model::Document;
+    use mitcad_model::testing::MockKernel;
+    use mitcad_solidcraft::SolidcraftFile;
+    use mitcad_solidcraft::inputs::Kind;
+    use serde_json::{Value, json};
+
+    use super::{hem_radius, rule_of};
+    use crate::params::Params;
+
+    /// A sheet of `t` thick under the rule `rule`, a hem with a gap of its
+    /// own (`Own`) and one without (`Ruled`), in format `format`.
+    fn design(format: u32, rule: Value) -> SolidcraftFile {
+        SolidcraftFile::from_value(json!({
+        "format": format!("solidcraft/{format}"), "name": "Hems", "units": "mm",
+        "params": [{"name": "t", "expr": "2 mm", "unit": "mm"}],
+        "sheet": {"rules": [rule], "active": "Plate"},
+        "features": [
+            {"id": 1, "name": "Own", "type": "sheet_hem", "edges": [[0, 0, 0]],
+             "length": "10", "gap": "1 mm"},
+            {"id": 2, "name": "Ruled", "type": "sheet_hem", "edges": [[0, 0, 0]],
+             "length": "10"}
+        ]}))
+        .unwrap()
+    }
+
+    /// The inside radius of hem `name` of `file`, in mm.
+    fn radius(file: &SolidcraftFile, name: &str) -> f64 {
+        let d = &file.design;
+        let hem = d.features.iter().find(|f| f.name == name).unwrap();
+        let gap = hem.def.get("gap").and_then(Value::as_str);
+        let expr = hem_radius(gap, &rule_of(d, None));
+        let mut doc = Document::new(MockKernel::default());
+        Params::new(d)
+            .value(&mut doc, &expr, Kind::Length)
+            .unwrap_or_else(|e| panic!("{expr}: {e}"))
+    }
+
+    #[test]
+    fn a_format_57_hem_keeps_the_radius_its_gap_gave_it() {
+        // SolidCraft 0.43.0 read a hem's gap as its inside radius.
+        let file = design(
+            57,
+            json!({"name": "Plate", "thickness": "t", "hem_gap": "0.5 mm"}),
+        );
+        assert!((radius(&file, "Own") - 1.0).abs() < 1e-9);
+        // The rule's `hem_gap` likewise.
+        assert!((radius(&file, "Ruled") - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_format_57_hem_without_a_gap_takes_the_old_default_of_a_rule_without_one() {
+        let file = design(57, json!({"name": "Plate", "thickness": "t"}));
+        // Twice the old default, 0.01 mm, halved.
+        assert!((radius(&file, "Ruled") - 0.01).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_format_63_hem_without_a_gap_takes_half_its_rules_hem_gap() {
+        let file = design(
+            63,
+            json!({"name": "Plate", "thickness": "t", "hem_gap": "Thickness / 2"}),
+        );
+        assert!(file.upgrades.is_empty());
+        // Thickness 2: a gap of 1, an inside radius of 0.5.
+        assert!((radius(&file, "Ruled") - 0.5).abs() < 1e-9);
+        // Its own gap of 1 mm: an inside radius of 0.5.
+        assert!((radius(&file, "Own") - 0.5).abs() < 1e-9);
+        // A design without rules: SolidCraft's default rule's 0.01 mm.
+        let bare = SolidcraftFile::from_value(json!({"format": "solidcraft/63", "name": "B",
+            "params": [], "features": [{"id": 1, "name": "Ruled", "type": "sheet_hem",
+            "edges": [[0, 0, 0]], "length": "10"}]}))
+        .unwrap();
+        assert!((radius(&bare, "Ruled") - 0.005).abs() < 1e-9);
+    }
 }

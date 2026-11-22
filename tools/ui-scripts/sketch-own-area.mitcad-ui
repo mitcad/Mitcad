@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+# The face's edges do not split a shape the user closed (mitcad#2197,
+# GitHub mitcad/Mitcad#544), on sketch-own-area.json (a 60 x 40 x 20 block,
+# F1.b0, and on its top face Sketch1, F2: a circle c1 of diameter 16 about
+# the middle of the face's right edge, half on the face; a 50 x 60
+# rectangle c3 to c6 from (-10, -10) past the face's other edges, with the
+# circles c11 across the face's left edge and c13 on the face, of diameter
+# 8, inside it):
+#   1. Sketch1 has five profiles: the disc of c1, the plate (the rectangle
+#      less both circles), the two small discs and the face's leftover
+#      between the plate and the disc.
+#   2. Extrude: one click takes the whole disc (r{c1}, not the half on the
+#      face); 5 mm, OK: the Join adds the whole cylinder,
+#      48000 + 64 pi 5 = 49005.31 mm3.
+#   3. Extrude again: one click takes the plate without its holes; 8 mm,
+#      OK: the Join adds (3000 - 32 pi) 8, in all 72000 + 64 pi =
+#      72201.06 mm3.
+# The distances differ from Extrude's default (10 mm) and from each other,
+# so that typing them makes a new preview.
+# Run by tools/ui-sketch-own-area-test.sh (Linux) and
+# tools/ui-windows-sketch-own-area-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.top
+command view.fit
+wait-idle
+
+# 1. Five profiles: the disc across the edge is one.
+expect-profiles 5
+
+# 2. One click takes the whole disc; the Join adds the whole cylinder.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+# Extrude may preselect a profile: cleared, so that the click adds this one.
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F2/r\{c1\} ' 20
+mark
+click-pick 'profile F2/r\{c1\} '
+wait-log '^Extrude Profiles: 1 profile \[profile r\{c1\}'
+mark
+type-in '^Panel Extrude input distance at ' '5 mm'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/whole-disc-preview.png'
+mark
+button '^OK$'
+wait-log '^Added extrude \(Join\)' 30
+wait-idle
+expect-model-bodies 1 49005.30964914873
+
+# 3. One click in the plate takes it without its holes.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F2/r\{c3\[' 20
+mark
+click-pick 'profile F2/r\{c3\['
+wait-log '^Extrude Profiles: 1 profile \[profile r\{c3\[c6,c4\],c4\[c3,c5\],c5\[c4,c6\],c6\[c5,c3\]\}'
+mark
+type-in '^Panel Extrude input distance at ' '8 mm'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/plate-preview.png'
+mark
+button '^OK$'
+wait-log '^Added extrude \(Join\)' 30
+wait-idle
+expect-model-bodies 1 72201.06192982975
+expect-never 'Preview Extrude: failed|Recompute failed|TestDriver: FAIL'

@@ -1082,6 +1082,10 @@ void RemoteController::updateNotice(bool saved) {
 // Sync
 
 void RemoteController::sync() {
+  // Each way out of a Sync is logged, so that a Sync (Ctrl+Alt+Y) that
+  // started nothing tells why, or that it never came (mitcad#2189: a UI
+  // test's Ctrl+Alt+Y left no line at all).
+  qInfo().noquote() << QStringLiteral("Sync asked");
   const std::optional<rust::Box<Project>> repo = project();
   if (!repo) {
     qInfo().noquote() << QStringLiteral("Sync: no project with versions");
@@ -1107,6 +1111,9 @@ void RemoteController::sync() {
     return;
   }
   if (m_task != nullptr) {
+    // Logged, as the paths below are: a Sync that started nothing leaves
+    // why in the log.
+    qInfo().noquote() << QStringLiteral("Sync waits: %1 runs").arg(m_task->name());
     if (m_task->name() == QLatin1String("sync")) {
       m_host.status(tr("A sync is running."), false);
     } else {

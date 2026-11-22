@@ -160,6 +160,34 @@ fn hidden_bodies_and_other_components_bodies_are_not_touched() {
     );
 }
 
+/// A failed preview of the definition still carries the suggestion
+/// (mitcad#2216): the app tries the suggested operation after a direction
+/// flip whose preview failed with the user's own.
+#[test]
+fn a_failed_definition_still_reports_the_suggestion() {
+    let mut doc = Document::new(MockKernel::default());
+    block(&mut doc);
+    let far = square(&mut doc, [30.0, 30.0]);
+    // The mock's Booleans reach no target, as the real ones away from the
+    // block.
+    *doc.kernel().touch.borrow_mut() = Some(vec![false]);
+    for operation in ["cut", "join"] {
+        let def = extrude(far.0, &[&far.1], 5.0, operation, &[]);
+        let command = json!({"cmd": "add_feature", "def": def, "auto_operation": true});
+        let report: Value =
+            serde_json::from_str(&doc.preview(&command.to_string()).unwrap()).unwrap();
+        assert_ne!(
+            report["status"], "ok",
+            "a {operation} that reaches no body fails: {report}"
+        );
+        assert_eq!(
+            report["auto_operation"],
+            json!({"operation": "new_body", "objects": []}),
+            "{report}"
+        );
+    }
+}
+
 #[test]
 fn without_the_request_nothing_is_chosen() {
     let mut doc = Document::new(MockKernel::default());

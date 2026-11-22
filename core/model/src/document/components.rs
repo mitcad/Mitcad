@@ -116,6 +116,19 @@ impl DocState {
                 link.path
             )));
         }
+        // A component of a design linked with its components (mitcad#2209).
+        if let Some(linked) = a.linked_in(component) {
+            let path = a
+                .component(linked)
+                .and_then(|c| c.link.as_ref())
+                .map(|l| l.path.clone())
+                .unwrap_or_default();
+            return Err(invalid(format!(
+                "{} is part of {}, which is linked from {path}; it changes only with that file",
+                a.name(component),
+                a.name(linked)
+            )));
+        }
         Ok(())
     }
 
@@ -827,6 +840,9 @@ impl<K: Kernel> Document<K> {
         if occurrence.grounded == grounded {
             return Ok(());
         }
+        // A part of a linked design is grounded as the design grounds it
+        // (mitcad#2209).
+        self.state.editable(occurrence.parent)?;
         self.apply(|state| {
             let name = state.assembly.occurrence_name(uid);
             state.assembly.occurrence_mut(uid).expect("exists").grounded = grounded;
@@ -901,6 +917,8 @@ impl<K: Kernel> Document<K> {
     ) -> Result<Option<Added>, ModelError> {
         check_transform(&transform)?;
         let occurrence = self.state.require_occurrence(uid)?;
+        // Not a part of a linked design (mitcad#2209).
+        self.state.editable(occurrence.parent)?;
         let name = self.state.assembly.occurrence_name(uid);
         if occurrence.grounded {
             return Err(invalid(format!("{name} is grounded")));
@@ -1424,6 +1442,8 @@ impl<K: Kernel> Document<K> {
         }
         // Chosen parts of the design only (mitcad#2130).
         let mut chosen = None;
+        // The whole design with its components, read only (mitcad#2209).
+        let mut tree = None;
         // Its mount frames (mitcad#525): a linked part's are joint origins
         // of its own where the design has them; a copy has the design's.
         let (bodies, mounts) = if let (true, Some(input)) = (options.link, &options.parts) {
@@ -1433,6 +1453,16 @@ impl<K: Kernel> Document<K> {
             super::link_parts::check_found(&read.parts, path)?;
             chosen = Some(read.parts);
             (Some((read.bodies, read.looks)), read.mounts)
+        } else if options.link && super::link_tree::has_components(&source) {
+            // Its root's own bodies in the linked component, its
+            // components beside them (mitcad#2209).
+            let origin = CopySource::Document(resolved.parent());
+            let mut read = self.design_tree(&source, path, &origin)?;
+            let bodies = std::mem::take(&mut read.root);
+            let looks = std::mem::take(&mut read.root_looks);
+            let mounts = std::mem::take(&mut read.mounts);
+            tree = Some(read);
+            (Some((bodies, looks)), mounts)
         } else if options.link {
             // With the materials and appearances the design gives its
             // bodies (mitcad#1921).
@@ -1467,11 +1497,18 @@ impl<K: Kernel> Document<K> {
                 Some((bodies, looks)) => {
                     let base = BaseDef {
                         source: Some(file_label(path)),
+                        // With its components: the root may have no
+                        // bodies of its own (mitcad#2209).
+                        linked_tree: tree.is_some(),
                         ..BaseDef::new(bodies)
                     };
                     let added = state.add_feature_in(&FeatureDef::Base(base), None, made)?;
                     state.give_new_link_looks(added.uid, &looks)?;
                     let frames = super::mounts::add_linked_mounts(state, made, &mounts)?;
+                    let tree = match &tree {
+                        Some(read) => Some(state.build_link_tree(made, read, &file_label(path))?),
+                        None => None,
+                    };
                     state.assembly.component_mut(made).expect("made").link = Some(ExternalLink {
                         path: recorded_link_path(path, &resolved, options.base.as_deref()),
                         digest: digest(&text),
@@ -1484,6 +1521,7 @@ impl<K: Kernel> Document<K> {
                         given: Vec::new(),
                         parts: chosen,
                         unlinked: Vec::new(),
+                        tree,
                     });
                     frames
                 }
@@ -1799,13 +1837,16 @@ impl<K: Kernel> Document<K> {
         // Library parts with options linked before their materials came
         // with them take them once (mitcad#1923).
         sources.extend(self.options_library_look_updates(&mut messages)?);
-        updates.extend(self.file_link_updates(base, &|_| true, &mut messages)?);
+        // Those kept with their components (mitcad#2209).
+        let mut trees = Vec::new();
+        updates.extend(self.file_link_updates(base, &|_| true, &mut messages, &mut trees)?);
         // Part of opening the file: no undo step, but a new revision. The
         // new state is computed before it is taken.
-        if !updates.is_empty() || !sources.is_empty() {
+        if !updates.is_empty() || !sources.is_empty() || !trees.is_empty() {
             let mut state = self.state.clone();
             super::component_options::apply_file_updates(&mut state, sources)?;
             super::link_updates::apply_link_updates(&mut state, updates)?;
+            messages.extend(super::link_tree::apply_tree_updates(&mut state, trees)?);
             // A file read again leaves its old source unused (mitcad#801).
             state.prune_library_sources(&self.state);
             let result = self.compute(&state)?;

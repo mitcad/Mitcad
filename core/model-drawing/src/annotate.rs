@@ -1066,13 +1066,13 @@ pub fn lay_out(
         }
         AnnotationType::HoleCallout => {
             // Its lines as the caller wrote them (`hole_callout_text`), one
-            // to a line of `value`.
-            let tip = leader_tip(annotation, &seen[0], frame);
-            let shift = annotation.text_offset.unwrap_or(NOTE_SHIFT);
+            // to a line of `value`; on a circle seen end on its leader
+            // points at the centre (mitcad#2212).
+            let (tip, knee) = leader_ends(annotation, &seen[0], frame, NOTE_SHIFT);
             let lines: Vec<String> = value
                 .map(|v| v.text.lines().map(|l| l.trim_end().to_owned()).collect())
                 .unwrap_or_default();
-            leader_text(&mut g, tip, add2(tip, shift), &lines, h);
+            leader_text(&mut g, tip, knee, &lines, h);
         }
         AnnotationType::Datum => {
             let tip = leader_tip(annotation, &seen[0], frame);
@@ -2303,6 +2303,61 @@ fn leader_tip(annotation: &ViewAnnotation, seen: &Seen, frame: &Frame<'_>) -> P2
     frame.at(leader_point(annotation, seen))
 }
 
+/// A hole callout's leader on a circle seen end on (mitcad#2212), on the
+/// sheet: its arrow and its shoulder. The shoulder is kept from the
+/// circle's centre (`text_offset`; when left out, where the text went
+/// from an arrow at the circle's right); a callout written before keeps
+/// its text from where its arrow was (the circle's point nearest `at`, its
+/// point at 0° without one), so it stays where it was drawn. The arrow
+/// lands where the line from the shoulder to the centre crosses the circle
+/// (an arc's nearer end off its sweep), so the leader points at the
+/// centre. None for anything else.
+fn callout_leader(annotation: &ViewAnnotation, seen: &Seen, frame: &Frame<'_>) -> Option<(P2, P2)> {
+    let Seen::Circle {
+        center,
+        radius,
+        end_on: true,
+        ..
+    } = *seen
+    else {
+        return None;
+    };
+    if annotation.kind != AnnotationType::HoleCallout {
+        return None;
+    }
+    let middle = frame.at(center);
+    let knee = if annotation.text_from_center {
+        let shift = annotation
+            .text_offset
+            .unwrap_or([radius * frame.map.scale + NOTE_SHIFT[0], NOTE_SHIFT[1]]);
+        add2(middle, shift)
+    } else {
+        add2(
+            frame.at(leader_point(annotation, seen)),
+            annotation.text_offset.unwrap_or(NOTE_SHIFT),
+        )
+    };
+    // Towards the shoulder from the centre in the view (a break between
+    // them on the sheet turns nothing).
+    let toward = add2(center, mul2(sub2(knee, middle), 1.0 / frame.map.scale));
+    Some((frame.at(seen.nearest(toward)), knee))
+}
+
+/// A leader's arrow and the end of its line at its text (sheet): a hole
+/// callout's on a circle seen end on from its centre ([`callout_leader`]),
+/// the others' text `default` from the arrow unless moved.
+fn leader_ends(
+    annotation: &ViewAnnotation,
+    seen: &Seen,
+    frame: &Frame<'_>,
+    default: P2,
+) -> (P2, P2) {
+    callout_leader(annotation, seen, frame).unwrap_or_else(|| {
+        let tip = leader_tip(annotation, seen, frame);
+        (tip, add2(tip, annotation.text_offset.unwrap_or(default)))
+    })
+}
+
 /// Where a leader's arrow points in its view (view mm): a datum's or a
 /// frame's place along its pick where it has one (mitcad#1295), else the
 /// pick's point nearest where it was clicked.
@@ -2894,7 +2949,22 @@ pub fn moved(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'_>, 
             }
             None => {}
         },
-        AnnotationType::Note | AnnotationType::Frame | AnnotationType::HoleCallout => {
+        AnnotationType::HoleCallout => {
+            // Its text from the hole's centre (mitcad#2212), a callout
+            // written before converted so: the arrow goes round the hole.
+            let from_center = seen.first().and_then(|first| {
+                let (_, knee) = callout_leader(annotation, first, frame)?;
+                Some(sub2(knee, frame.at(first.point())))
+            });
+            match from_center {
+                Some(shoulder) => {
+                    annotation.text_offset = Some(add2(shoulder, delta));
+                    annotation.text_from_center = true;
+                }
+                None => annotation.text_offset = shift(annotation.text_offset, NOTE_SHIFT),
+            }
+        }
+        AnnotationType::Note | AnnotationType::Frame => {
             annotation.text_offset = shift(annotation.text_offset, NOTE_SHIFT);
         }
         AnnotationType::Datum => {
@@ -2942,7 +3012,7 @@ pub fn leader_line(
     let h = frame.text;
     match annotation.kind {
         AnnotationType::Note | AnnotationType::HoleCallout => {
-            Some((tip, add2(tip, annotation.text_offset.unwrap_or(NOTE_SHIFT))))
+            Some(leader_ends(annotation, first, frame, NOTE_SHIFT))
         }
         AnnotationType::Datum => {
             let at = add2(tip, annotation.text_offset.unwrap_or(DATUM_SHIFT));
@@ -2993,9 +3063,19 @@ pub fn snap_leader(
     if (angle - snapped).abs() > LEADER_SNAP {
         return None;
     }
-    let r = len2(sub2(to, from));
+    // A hole callout's leader on a circle seen end on runs from its centre
+    // (mitcad#2212): it turns about the centre, its arrow going round.
+    let pivot = match seen.first() {
+        Some(Seen::Circle {
+            center,
+            end_on: true,
+            ..
+        }) if annotation.kind == AnnotationType::HoleCallout => frame.at(*center),
+        _ => from,
+    };
+    let r = len2(sub2(to, pivot));
     let a = snapped.to_radians();
-    let want = add2(from, mul2([a.cos(), a.sin()], r));
+    let want = add2(pivot, mul2([a.cos(), a.sin()], r));
     // The text's end moves with the drag; the feature's end stays while
     // the text keeps its side of the feature.
     let snapped_delta = add2(delta, sub2(want, to));
@@ -3073,10 +3153,21 @@ pub fn placed_at(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'
         | AnnotationType::Frame
         | AnnotationType::Finish
         | AnnotationType::Balloon
-        | AnnotationType::HoleCallout => {
-            let tip = leader_tip(annotation, &seen[0], frame);
-            annotation.text_offset = Some(sub2(at, tip));
-        }
+        | AnnotationType::HoleCallout => match seen.first() {
+            // A hole callout's text from the hole's centre (mitcad#2212).
+            Some(Seen::Circle {
+                center,
+                end_on: true,
+                ..
+            }) if annotation.kind == AnnotationType::HoleCallout => {
+                annotation.text_offset = Some(sub2(at, frame.at(*center)));
+                annotation.text_from_center = true;
+            }
+            _ => {
+                let tip = leader_tip(annotation, &seen[0], frame);
+                annotation.text_offset = Some(sub2(at, tip));
+            }
+        },
         AnnotationType::HoleTable | AnnotationType::PartsList => {
             if let Some(table) = &mut annotation.table {
                 table.place = at;
@@ -3165,7 +3256,10 @@ pub fn turned_with_view(annotation: &mut ViewAnnotation, angle: f64) {
 /// then `format.before` in front of the first line and `format.after` after
 /// the last, a space between. A line break in either makes a line of its
 /// own: the lines of `before` but its last stand above the first line, the
-/// lines of `after` but its first below the last.
+/// lines of `after` but its first below the last. A line break at the end
+/// of `before` puts all its lines above the first line, one at the start
+/// of `after` all its lines below the last (mitcad#2212). Spaces at the
+/// ends of each line are trimmed and empty lines dropped.
 pub fn hole_callout_text(lines: &[String], format: &mitcad_model::AnnotationFormat) -> Vec<String> {
     let split = |text: &str| -> Vec<String> {
         text.lines()
@@ -3181,21 +3275,29 @@ pub fn hole_callout_text(lines: &[String], format: &mitcad_model::AnnotationForm
         (_, true) => a.to_owned(),
         _ => format!("{a} {b}"),
     };
-    let before = split(format.before.trim());
+    // Spaces at its ends trimmed, its line breaks kept (mitcad#2212).
+    let spaces = |c: char| c.is_whitespace() && c != '\n' && c != '\r';
+    let before_text = format.before.trim_end_matches(spaces);
+    let before = split(before_text);
+    // A line break at its end: all its lines above the first line.
+    let before_alone = before_text.ends_with(['\n', '\r']);
     if let Some((last, above)) = before.split_last() {
-        match out.first_mut() {
-            Some(first) => *first = join(last, first),
-            None => out.push(last.clone()),
-        }
         let mut lines: Vec<String> = above.to_vec();
+        match out.first_mut() {
+            Some(first) if !before_alone => *first = join(last, first),
+            _ => lines.push(last.clone()),
+        }
         lines.append(&mut out);
         out = lines;
     }
-    let after = split(format.after.trim());
+    let after_text = format.after.trim_start_matches(spaces);
+    let after = split(after_text);
+    // A line break at its start: all its lines below the last line.
+    let after_alone = after_text.starts_with(['\n', '\r']);
     if let Some((first, below)) = after.split_first() {
         match out.last_mut() {
-            Some(last) => *last = join(last, first),
-            None => out.push(first.clone()),
+            Some(last) if !after_alone => *last = join(last, first),
+            _ => out.push(first.clone()),
         }
         out.extend(below.iter().cloned());
     }
@@ -4967,6 +5069,10 @@ mod tests {
 mod asme_tests;
 
 #[cfg(test)]
+#[path = "annotate_callout_tests.rs"]
+mod callout_tests;
+
+#[cfg(test)]
 mod hole_callout_tests {
     use super::hole_callout_text;
     use crate::compose::{CalloutStyle, HoleInput, hole_callout};
@@ -5072,5 +5178,51 @@ mod hole_callout_tests {
         );
         // No lines (a hole that writes nothing): its own texts alone.
         assert_eq!(hole_callout_text(&[], &own), ["TYP BOTH SIDES"]);
+    }
+
+    #[test]
+    fn a_line_break_at_the_end_of_before_or_the_start_of_after_makes_lines_of_their_own() {
+        // mitcad#2212: a line break at the end of Text Before puts its
+        // lines above the hole's, one at the start of Text After below.
+        let mut cbore = HoleInput {
+            hole: hole(6.6, false, 20.0),
+            thread: None,
+        };
+        cbore.hole.counterbore = Some((11.0, 6.8));
+        let hole_lines = lines(&cbore, 4, None);
+        assert_eq!(
+            hole_callout_text(&hole_lines, &format("TYP\n", "", None)),
+            ["TYP", "4x Ø6.6 ↧ 20", "⌴ Ø11 ↧ 6.8"]
+        );
+        assert_eq!(
+            hole_callout_text(&hole_lines, &format("", "\n2 PLACES", None)),
+            ["4x Ø6.6 ↧ 20", "⌴ Ø11 ↧ 6.8", "2 PLACES"]
+        );
+        // Without one, joined as before.
+        assert_eq!(
+            hole_callout_text(&hole_lines, &format("TYP", "", None)),
+            ["TYP 4x Ø6.6 ↧ 20", "⌴ Ø11 ↧ 6.8"]
+        );
+        // Spaces around the line break trimmed, empty lines dropped; all
+        // the lines of a text with more than one go above (below).
+        assert_eq!(
+            hole_callout_text(
+                &hole_lines,
+                &format(" DRILL\nTYP \n\n ", " \r\n DEBURR\nBOTH SIDES ", None)
+            ),
+            [
+                "DRILL",
+                "TYP",
+                "4x Ø6.6 ↧ 20",
+                "⌴ Ø11 ↧ 6.8",
+                "DEBURR",
+                "BOTH SIDES"
+            ]
+        );
+        // A line break alone adds nothing.
+        assert_eq!(
+            hole_callout_text(&hole_lines, &format("\n", "\n", None)),
+            ["4x Ø6.6 ↧ 20", "⌴ Ø11 ↧ 6.8"]
+        );
     }
 }

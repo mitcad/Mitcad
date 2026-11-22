@@ -58,14 +58,8 @@ and chamfers that add material keep their ends as before.
 
 Upstream: new.
 
-Test: geometry/tests/test_chamfer_overflow.cpp,
-test_chamfer_of_a_groove_end_wall (ctest geometry.suite.chamfer_overflow): a
-groove's end wall chamfered past its flanks at three reaches: the volume
-removed that of the chamfer's wedge within the groove carried on past the
-wall, and one edge between the chamfer and the top through MitCad's chamfer.
-Its failure without the patch is still to be shown: with it and the 15
-later patches that change the same lines reverted at the port's tip, the
-test does not build (tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0671.
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

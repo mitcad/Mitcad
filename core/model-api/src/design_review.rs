@@ -121,6 +121,7 @@ fn fixed_plane<K: Kernel>(doc: &Document<K>, def: &FeatureDef) -> bool {
         FeatureDef::Cylinder(def) => placed(&def.plane, def.at.as_ref()),
         FeatureDef::Sphere(def) => placed(&def.plane, def.at.as_ref()),
         FeatureDef::Torus(def) => placed(&def.plane, def.at.as_ref()),
+        FeatureDef::Cone(def) => placed(&def.plane, def.at.as_ref()),
         _ => false,
     }
 }

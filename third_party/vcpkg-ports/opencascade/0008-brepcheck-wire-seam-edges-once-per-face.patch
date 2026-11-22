@@ -18,13 +18,9 @@ check, which marks the wire and the face failed: the same status a failure
 of the search had when each wire searched the face itself. (The patch's
 first form caught it on its own and fell back to that search, which would
 fail alike.)
-Test: geometry/tests/port/p0008-wire-closure-many-holes.cpp (ctest
-geometry.port.0008): a plate of 2 025 round holes and a cylinder's side
-with 96 holes (its seam found once) are valid, a wire of the holed side's
-bottom circle alone is still not closed, and a plate of 3 600 holes of 24
-edges each (86 404 edges) is checked within 10 s with topological checks
-only (BRepCheck_Analyzer with its geometric controls off; going through all
-edges of the face for each wire is quadratic).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0008.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
 index 48ccc13a..928d992c 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx

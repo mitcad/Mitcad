@@ -35,10 +35,8 @@ that covers the reported fin's walk past the stretch's end; a walk that
 must run on farther still falls off (a derived length would be the walk's
 reach past E, which is not known before the walk; left, mitcad#1986).
 
-Test: geometry/tests/test_fillet_fin_end.cpp, the reported fin's end
-rounded along its sides on the body MitCad builds: the rounding builds,
-closed, and the stored body after it lies on the result within 0.01 mm
-round the end (the rounding fails without the patch).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1311.
 
 Failures (mitcad#1986): the extrusion run on past its curve's end fails
 with OCCT's reports of a computation it cannot make

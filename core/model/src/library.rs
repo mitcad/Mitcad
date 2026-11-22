@@ -65,6 +65,14 @@ pub struct LibraryRef {
     /// gives them, each with its supplier's name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supplier_parts: Vec<SupplierPart>,
+    /// The library says its bodies are not for print services
+    /// (mitcad#2214, the manifest's `non_printable`): the bodies of this
+    /// component and its occurrences must not be sent to a cloud print
+    /// service; the rest of the design stays printable. It does not stop
+    /// the user's own export or Send to Slicer. Kept with the design so
+    /// that it holds without the library.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub non_printable: bool,
 }
 
 /// The standard tag of a row made to no standard (mitcad#949): a
@@ -263,6 +271,9 @@ pub struct LibrarySource {
     /// configuration row's standards and suppliers' articles (with the
     /// suppliers' names), by the row's name; empty when it has none.
     pub rows: std::collections::BTreeMap<String, LibraryRow>,
+    /// The manifest's `non_printable` of the component, else of the
+    /// library (mitcad#2214): its bodies are not for print services.
+    pub non_printable: bool,
 }
 
 impl LibrarySource {
@@ -433,6 +444,7 @@ mod tests {
             supplier_url: None,
             build: None,
             rows: BTreeMap::new(),
+            non_printable: false,
         }
     }
 

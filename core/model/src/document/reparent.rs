@@ -543,6 +543,16 @@ fn rewrite_references(
             }
             // Bodies and a bed face by uid and name: no occurrence path.
             AnalysisDef::Print(_) => {}
+            // The pull reference's path (mitcad#2166), as a section's plane.
+            AnalysisDef::Draft(draft) => {
+                if let Some(path) = &draft.occurrence {
+                    let mut moved = path.0.clone();
+                    if absolute_all(rewrites, &mut moved) {
+                        out.analyses.push((i, false, OccurrencePath(moved)));
+                        updates.push(analysis.name.clone());
+                    }
+                }
+            }
         }
     }
     for (i, item) in state.display.isolated.iter().enumerate() {
@@ -1242,6 +1252,7 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
             AnalysisDef::Section(section) if *axis => section.axis_occurrence = Some(path.clone()),
             AnalysisDef::Section(section) => section.occurrence = Some(path.clone()),
             AnalysisDef::Print(_) => {}
+            AnalysisDef::Draft(draft) => draft.occurrence = Some(path.clone()),
         }
     }
     for (i, text) in &plan.changes.isolated {

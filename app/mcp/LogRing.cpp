@@ -12,6 +12,10 @@
 #include <QThread>
 #include <QtLogging>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 namespace mitcad::mcp {
 namespace {
 
@@ -28,6 +32,8 @@ struct Ring {
   quint64 next = 1;
   QtMessageHandler previous = nullptr;
   bool installed = false;
+  // mitcad#2213: only warnings and worse go on to the previous handler.
+  bool quietTerminal = false;
   std::atomic<LogSink> sink{nullptr};
   // The session log's file (mitcad#1896), beside the debug log's.
   std::atomic<LogSink> sessionSink{nullptr};
@@ -83,6 +89,27 @@ QString keptText(const QString& text) {
 // by the handler before it): passed on to the previous handler only.
 thread_local bool t_handling = false;
 
+// Whether the previous handler gets only warnings and worse (mitcad#2213):
+// when stderr is a terminal, so that a run started from a terminal does not
+// print a line for every action, unless MITCAD_LOG_STDERR=1 asks for every
+// line, and never under the UI test driver (MITCAD_TEST_INPUT), which
+// records the lines in its handler before the ring. A stderr redirected to
+// a file or a pipe (the UI tests, the tools) gets every line; so does
+// Windows, where the app has no console.
+bool stderrQuiet() {
+#if defined(_WIN32)
+  return false;
+#else
+  if (qEnvironmentVariableIntValue("MITCAD_LOG_STDERR") != 0 || !qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+    return false;
+  }
+  return isatty(STDERR_FILENO) != 0;
+#endif
+}
+
+// Whether a message goes on to the previous handler.
+bool passesOn(QtMsgType type, bool quiet) { return !quiet || (type != QtDebugMsg && type != QtInfoMsg); }
+
 QString levelName(QtMsgType type) {
   switch (type) {
   case QtDebugMsg:
@@ -117,11 +144,13 @@ void handle(QtMsgType type, const QMessageLogContext& context, const QString& me
   Ring& r = ring();
   if (t_handling) {
     QtMessageHandler previous = nullptr;
+    bool quiet = false;
     {
       const std::lock_guard<std::mutex> lock(r.mutex);
       previous = r.previous;
+      quiet = r.quietTerminal;
     }
-    if (previous != nullptr) {
+    if (previous != nullptr && passesOn(type, quiet)) {
       previous(type, context, message);
     }
     return;
@@ -133,6 +162,7 @@ void handle(QtMsgType type, const QMessageLogContext& context, const QString& me
   line.time = QDateTime::currentMSecsSinceEpoch();
   line.thread = threadName();
   QtMessageHandler previous = nullptr;
+  bool quiet = false;
   {
     // Any thread logs (the model's worker too).
     const std::lock_guard<std::mutex> lock(r.mutex);
@@ -144,6 +174,7 @@ void handle(QtMsgType type, const QMessageLogContext& context, const QString& me
       r.lines.pop_front();
     }
     previous = r.previous;
+    quiet = r.quietTerminal;
   }
   // The file first: for a fatal message the default handler ends the
   // process.
@@ -153,7 +184,7 @@ void handle(QtMsgType type, const QMessageLogContext& context, const QString& me
   if (const LogSink sink = r.sink.load()) {
     sink(type, line);
   }
-  if (previous != nullptr) {
+  if (previous != nullptr && passesOn(type, quiet)) {
     previous(type, context, message);
   }
   t_handling = false;
@@ -168,6 +199,7 @@ void installLogRing() {
   }
   // Messages of other threads wait until the previous handler is known.
   const std::lock_guard<std::mutex> lock(r.mutex);
+  r.quietTerminal = stderrQuiet();
   r.previous = qInstallMessageHandler(handle);
   r.installed = true;
 }

@@ -69,10 +69,11 @@ pub enum PlaneRef {
     },
     /// Turned about a line (world coordinates) by an angle; with `line`, an
     /// edge or round face of the model found again (format 39), the axis
-    /// where it was when picked.
+    /// where it was when picked. The axis's origin may be length
+    /// expressions (format 59).
     AtAngle {
         base: Box<PlaneRef>,
-        axis_origin: Vec3,
+        axis_origin: [Expr; 3],
         axis_dir: Vec3,
         angle: Expr,
         #[serde(default)]
@@ -90,9 +91,13 @@ pub enum PlaneRef {
         datum: String,
     },
     /// A construction plane feature, by id (format 40; older designs' names
-    /// are ids after the upgrade).
+    /// are ids after the upgrade). `placement`: where the plane's component
+    /// stood relative to the sketch's when it was picked, for a plane of
+    /// another component (format 58).
     Construction {
         feature: u64,
+        #[serde(default)]
+        placement: Option<Mat>,
     },
     /// Seen from its other side: a half turn about its x axis, or its y
     /// axis with `about_y`.
@@ -365,6 +370,16 @@ pub struct Extent {
     /// when its object was picked (format 57): `[{component, placement}]`.
     #[serde(default)]
     pub picked_placements: Vec<Value>,
+    /// From Object on a slanted flat face starts on a plane parallel to
+    /// the sketch, at the level where the face meets the middle of the
+    /// profiles, as designs before format 58 read it; without it the start
+    /// lies on the face.
+    #[serde(default)]
+    pub from_level: bool,
+    /// A symmetric extrude that was one-sided: the way it went then
+    /// (format 59), which cap answers to `start`.
+    #[serde(default)]
+    pub one_sided_direction: Option<Direction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -505,6 +520,10 @@ pub struct Fillet {
     /// rounds only the picked edges).
     #[serde(default = "yes")]
     pub tangent_chain: bool,
+    /// Each picked edge's own radius, in the order of `edges` (format 60);
+    /// empty: every edge takes `radius`.
+    #[serde(default)]
+    pub edge_radii: Vec<Expr>,
 }
 
 /// A fillet corner at `vertex` set back `distance` along its edges.
@@ -673,6 +692,10 @@ pub struct Pattern {
     pub pattern: PatternKind,
     #[serde(default)]
     pub bodies: Vec<String>,
+    /// The occurrence path each of `bodies` was picked at (format 58);
+    /// empty: the bodies as their own components hold them.
+    #[serde(default)]
+    pub placements: Vec<Vec<u64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -865,13 +888,34 @@ pub struct SweepRail {
     pub curves: Vec<String>,
 }
 
+/// One curve of a sweep's path: a curve of the feature's `path_sketch`, by
+/// its id alone, or a curve of another sketch, saved with that sketch
+/// (format 63).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum PathEntry {
+    OfPathSketch(String),
+    OfSketch { sketch: u64, curve: String },
+}
+
+impl PathEntry {
+    /// The sketch the curve is in (`path_sketch` where the entry names
+    /// none) and the curve's id.
+    pub fn split(&self, path_sketch: u64) -> (u64, &str) {
+        match self {
+            PathEntry::OfPathSketch(id) => (path_sketch, id),
+            PathEntry::OfSketch { sketch, curve } => (*sketch, curve),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Sweep {
     pub sketch: u64,
     #[serde(default)]
     pub profiles: ProfileSel,
     pub path_sketch: u64,
-    pub path: Vec<String>,
+    pub path: Vec<PathEntry>,
     /// The path on a body's edges instead of sketch curves (format 53):
     /// the body and a point on each edge of the chain.
     #[serde(default)]
@@ -935,6 +979,9 @@ pub struct Split {
     pub plane: PlaneRef,
     #[serde(default)]
     pub tool: Option<FaceAt>,
+    /// Only the tool face's infinite plane (format 58).
+    #[serde(default)]
+    pub tool_plane: bool,
     #[serde(default)]
     pub sketch: Option<u64>,
     #[serde(default)]
@@ -1065,6 +1112,9 @@ pub struct Rib {
     pub web: bool,
     #[serde(default)]
     pub normal: bool,
+    /// The curves' open ends run on until they meet the body (format 58).
+    #[serde(default)]
+    pub extend: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1073,6 +1123,11 @@ pub struct Move {
     pub translate: [Expr; 3],
     #[serde(default)]
     pub rotate_axis: Option<Vec3>,
+    /// The model edge or round face the turn was picked on, found again on
+    /// each rebuild (format 58); `rotate_axis` and `origin` are where it
+    /// was when picked.
+    #[serde(default)]
+    pub rotate_about: Option<GeoRef>,
     /// The point the turn is about, length expressions (format 55); none:
     /// the origin.
     #[serde(default)]
@@ -1099,6 +1154,21 @@ pub struct Import {
     pub step: String,
     #[serde(default)]
     pub skip: Vec<u64>,
+    /// The bodies kept as B-rep records instead of STEP text (formats 60
+    /// to 63: `records`, in a container the part `records_blob`); `step`
+    /// is then empty.
+    #[serde(default)]
+    pub records: Option<Value>,
+    #[serde(default)]
+    pub records_blob: Option<Value>,
+}
+
+impl Import {
+    /// Whether the bodies are kept as B-rep records (format 60).
+    pub fn has_records(&self) -> bool {
+        self.records.as_ref().is_some_and(|r| !r.is_null())
+            || self.records_blob.as_ref().is_some_and(|r| !r.is_null())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1288,6 +1358,60 @@ pub struct SheetConvert {
     pub rule: Option<String>,
     #[serde(default)]
     pub bends: Vec<Vec3>,
+    /// The faces picked after the first (format 62).
+    #[serde(default)]
+    pub faces: Vec<Vec3>,
+    /// Faces of recesses kept as engravings of the panels round them
+    /// (format 62).
+    #[serde(default)]
+    pub engrave: Vec<Vec3>,
+    /// `inside` (empty, the default) or `outside`: the side of the faces
+    /// the material lies on (format 62).
+    #[serde(default)]
+    pub direction: String,
+}
+
+/// Recognize Sheet Metal (format 62): a body that is sheet metal already
+/// becomes the rule's sheet, its surface the side of the face at `face`
+/// (none: the body's largest face), less the faces at `skip`, the sharp
+/// edges cut open but those at `bends`. An older design's conversion of a
+/// plate is one, from the face it picked.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SheetRecognize {
+    pub body: String,
+    #[serde(default)]
+    pub face: Option<Vec3>,
+    #[serde(default)]
+    pub skip: Vec<Vec3>,
+    #[serde(default)]
+    pub bends: Vec<Vec3>,
+    #[serde(default)]
+    pub rule: Option<String>,
+}
+
+/// A sheet metal rule (SolidCraft's `sheet.rs`, `SheetRule`): its values
+/// as expressions, `None` where the file leaves them to their defaults.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct SheetRule {
+    pub name: String,
+    pub thickness: Option<Expr>,
+    pub k_factor: Option<Expr>,
+    pub bend_radius: Option<Expr>,
+    pub relief_width: Option<Expr>,
+    pub relief_depth: Option<Expr>,
+    pub corner_relief: Option<Expr>,
+    pub corner_relief_shape: Option<String>,
+    /// The space between a hem's leg and the face it folds over (its
+    /// bend's inner radius is half of it; format 62).
+    pub hem_gap: Option<Expr>,
+    /// The material the rule is for, a label (format 63).
+    pub material: Option<String>,
+}
+
+impl SheetRule {
+    /// SolidCraft's default `hem_gap` (`sheet.rs`, `rule_hem_gap`).
+    pub const DEFAULT_HEM_GAP: &'static str = "0.01 mm";
 }
 
 /// A plastic boss (mitcad#459).
@@ -1434,6 +1558,14 @@ pub struct BoundingSolid {
     /// "0" when the file has none.
     #[serde(default)]
     pub margin: Option<Expr>,
+    /// A margin for each side instead of `margin` (format 58): -X, +X,
+    /// -Y, +Y, -Z, +Z.
+    #[serde(default)]
+    pub margins: Option<[Expr; 6]>,
+    /// The box of every body placed inside the feature's own component,
+    /// its subcomponents' too, instead of `bodies` (format 63).
+    #[serde(default)]
+    pub contents: bool,
 }
 
 /// Boundary Fill (mitcad#457): the cells the tools enclose, each picked by
@@ -1589,6 +1721,10 @@ pub struct SurfaceSweep {
     pub rails: Vec<SweepRail>,
     #[serde(default)]
     pub rail_fit: Option<String>,
+    /// A 3D sketch spline in the path is followed as the lines between its
+    /// samples, as designs before format 58 swept it.
+    #[serde(default)]
+    pub spline_as_samples: bool,
 }
 
 /// A section of a surface loft: one chain of a sketch (a profile's
@@ -1826,4 +1962,53 @@ pub struct SurfaceFair {
     #[serde(default = "yes")]
     pub keep_edges: bool,
     pub tolerance: Expr,
+}
+
+/// A frame member (format 35, mitcad#2157): one body per straight line of
+/// a sketch, a profile laid square to the line at its start and run the
+/// line's length (SolidCraft's `eval_frame.rs`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct FrameMember {
+    pub path_sketch: u64,
+    /// The lines by curve or 3D curve id; none: every straight line drawn
+    /// in the sketch.
+    #[serde(default)]
+    pub lines: Vec<String>,
+    pub profile: MemberProfile,
+    /// The profile point on the line: `origin` (none), `center`,
+    /// `centroid`, `top_left`, `top`, `top_right`, `left`, `right`,
+    /// `bottom_left`, `bottom` or `bottom_right`.
+    #[serde(default)]
+    pub anchor: Option<String>,
+    /// The profile point on the line, from the profile's own origin
+    /// (format 56); before `anchor`.
+    #[serde(default)]
+    pub locate: Option<[f64; 2]>,
+    /// The profile's turn about the line.
+    #[serde(default)]
+    pub angle: Option<Expr>,
+    /// Mirrored across its y axis before it turns.
+    #[serde(default)]
+    pub mirror: bool,
+    /// What members without a name of their own are named after.
+    #[serde(default)]
+    pub body_name: Option<String>,
+    /// Each member's body name by its line's id.
+    #[serde(default)]
+    pub names: std::collections::BTreeMap<String, String>,
+}
+
+/// Where a frame member's section comes from.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum MemberProfile {
+    /// A built-in profile: `kind` and its dimensions as expressions (a
+    /// standard `size` saved with its dimensions, format 56).
+    Library { profile: Value },
+    /// The profiles of a sketch, in its own x and y.
+    Sketch {
+        sketch: u64,
+        #[serde(default)]
+        profiles: ProfileSel,
+    },
 }

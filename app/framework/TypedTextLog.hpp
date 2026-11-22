@@ -52,8 +52,12 @@ void installKeyLogIfRequested();
 // deactivated: ...", "Window state <window>: maximized (was normal)",
 // "Focus window: ...", "Application state: ..." and on Windows the native
 // activation, focus, enabling and size messages ("Native WM_ACTIVATE
-// inactive: <window> (other <window>)"). "Shortcut log on" says it is
-// installed.
+// inactive: <window> (other <window>)"); on X11 the focus the X server
+// gives a window of the application or takes from it ("Native FocusIn:
+// <window> (detail nonlinear, mode normal)", "Native FocusOut: ...";
+// mitcad#2206: tools/ui-locks-test.sh turns the diagnosis on and waits for
+// the main window's "Focus window" before a window shortcut's key).
+// "Shortcut log on" says it is installed.
 void installShortcutLogIfRequested();
 
 } // namespace mitcad

@@ -68,11 +68,8 @@ puts them in place at its end, so it has no handler of its own in
 Compute. The handler round PerformTightCorners fails the fillet
 (Failure_Corner): a boundary that reports the failure.
 
-Test: geometry/tests/test_fillet_tight_corner.cpp (ctest
-geometry.fillet_tight_corner): a block's bottom outline rounded with a
-radius larger than its vertical corners' rounding, the front wall square
-to the bottom or leaning: valid, the vertex blend and torus at each
-corner. Fails without the patch, passes with it (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0970.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

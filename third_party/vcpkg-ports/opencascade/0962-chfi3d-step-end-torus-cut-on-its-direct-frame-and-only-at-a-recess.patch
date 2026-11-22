@@ -43,12 +43,9 @@ stepped-back face's edge with the other face, a plane face parallel to
 the strip (within 1e-6) closes the recess, a stand-in for "the run-on
 across the step meets no other face before the recess ends"; a general
 condition would test that run-on itself (left, mitcad#1986).
-Test: geometry/tests/test_fillet_step_end.cpp (ctest
-geometry.fillet_step_end): test_rounding_ends_at_a_step_back_of_its_wall
-with the body's faces in the reverse order (the shape invalid or the
-fillet failing before), and test_second_rounding_runs_on_across_the_step
-(the cylinder run on to the first rounding's torus, no torus of its own).
-It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0962.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

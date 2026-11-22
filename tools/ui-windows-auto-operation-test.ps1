@@ -3,6 +3,7 @@
 # check-all sources: app/framework/CommandSession.cpp app/framework/CommandSessionAuto.cpp
 # check-all sources: app/framework/Numbers.cpp
 # check-all sources: app/framework/AutoOperationPolicy.hpp app/framework/Command.hpp
+# check-all sources: app/framework/ExtrudeStartPreference.cpp
 # check-all sources: core/model/src/document/auto_operation.rs core/model-api/src/lib.rs
 # check-all sources: geometry/src/contact.cpp geometry/src/boolean.cpp tools/cli
 # Input-driven Windows UI test of Extrude's automatic operation for new
@@ -24,6 +25,10 @@
 #       block, then flipped into it, the Operation field stays Join; Cut
 #       chosen by hand (the wheel) still works; cancelled.
 #   4. Editing the deliberate touching New Body keeps its stored choice.
+#   5. Preferences > General > Extrude starts with: New Body (mitcad#2164),
+#      started again on the block and its face's square alone: Extrude
+#      starts with New Body and the model chooses nothing, inward (OK: a
+#      new body inside the block) and, undone, outward (a new body on it).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-auto-operation-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -196,6 +201,72 @@ Ui-ExpectNew ' with Extrude' 'editing Extrude3 again' 30
 Ui-ExpectNew 'operation=new_body' 'still New Body'
 Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Extrude cancelled' 'edit cancelled'
+if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
+
+Write-Host '--- 5. Preferences > General > Extrude starts with: New Body (mitcad#2164)'
+# Started again with the preference set, on the block and its face's
+# square alone: outward and inward the extrusion stays New Body.
+Ui-StopApp
+$newBodyScript = Join-Path $work 'new-body.json'
+$newBodyDesign = Join-Path $work 'new-body.mitcad'
+Set-Content -Encoding ascii $newBodyScript (@'
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "RECT"}],
+    "extent": {"type": "distance", "distance": -20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [10, 10], "width": 10, "height": 10}
+]
+'@ -creplace 'RECT', $region)
+$made = & $cli run $newBodyScript --save $newBodyDesign
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $newBodyDesign)) { Ui-Fail "mitcad-cli (New Body design): $($made -join ' / ')" }
+Add-Content -Encoding ascii (Join-Path $script:UiSettings 'Mitcad\Mitcad.ini') @('[extrude]', 'startOperation=new_body')
+Ui-StartApp 'auto-operation-new-body' @('--open', $newBodyDesign)
+Ui-ExpectLog 'Bodies shown: F2.b0' 'the block shown'
+Ui-Mark
+Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
+Ui-ExpectNew "Extrude Profiles: 1 profile [profile $region of F3]" 'the square on the block''s face taken'
+Ui-ExpectNew 'Extrude: automatic operation off by preference' 'the preference keeps the model''s choice off' 30
+Ui-ExpectNew 'Preview Extrude: ok' 'the outward New Body previewed (10 mm up from the face)' 30
+Ui-WaitIdle
+Start-Sleep -Milliseconds 500
+Expect-NoNew 'Extrude: automatic Operation' 'outward, touching the block: it stays New Body'
+Ui-Mark
+Ui-Step 'distance -5'                    { Ui-TypeIn 'Panel Extrude input distance' '-5' }
+Ui-ExpectNew 'Extrude Distance: -5 = -5 mm' 'into the block'
+Ui-ExpectNew 'Preview Extrude: ok' 'the inward New Body previewed' 30
+Ui-WaitIdle
+Start-Sleep -Milliseconds 500
+Expect-NoNew 'Extrude: automatic Operation' 'inward: still New Body, no Cut'
+Ui-FocusMain
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Added extrude (New Body), distance -5' 'a new body inside the block' 30
+Ui-ExpectNew 'New body ' 'a body added' 30
+Ui-ExpectNew '): volume 500.000 mm3' 'the new body is the 10 x 10 x 5 square' 30
+Expect-NoNew 'Body Body1 (F2.b0): volume' 'the block is not cut'
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Undo: ' 'the inward body undone' 30
+Ui-Mark
+Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
+Ui-ExpectNew "Extrude Profiles: 1 profile [profile $region of F3]" 'the square on the face again'
+Ui-ExpectNew 'Extrude: automatic operation off by preference' 'off by preference again' 30
+Ui-ExpectNew 'Preview Extrude: ok' 'previewed' 30
+Ui-Mark
+Ui-Step 'distance 5'                     { Ui-TypeIn 'Panel Extrude input distance' '5' }
+Ui-ExpectNew 'Extrude Distance: 5 = 5 mm' '5 mm out of the face'
+Ui-ExpectNew 'Preview Extrude: ok' 'the outward New Body previewed' 30
+Ui-WaitIdle
+Start-Sleep -Milliseconds 500
+Expect-NoNew 'Extrude: automatic Operation' 'outward: no Join'
+Ui-FocusMain
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Added extrude (New Body), distance 5' 'a new body on the block''s face' 30
+Ui-ExpectNew '): volume 500.000 mm3' 'the new body is the 10 x 10 x 5 square' 30
+Expect-NoNew 'Body Body1 (F2.b0): volume' 'the block does not grow'
 
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 Ui-Finish 'UI Windows auto operation test'

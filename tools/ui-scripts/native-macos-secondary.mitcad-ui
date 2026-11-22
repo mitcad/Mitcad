@@ -145,23 +145,20 @@ button '^Close$'
 expect-native-dialog-gone '^Project Settings - NativeCloudProject$'
 focus-main
 
-# Add a parameter through a native child sheet; accepting it must keep the
-# outer Parameters sheet open and update the shared document model.
+# Add a parameter in the native Parameters sheet's empty row (mitcad#2202:
+# name, Tab, value, Enter); the sheet stays open and the shared document
+# model has it.
 mark
 native-action solid.parameters
 expect-log 'Parameters dialog opened'
 focus-dialog '^Parameters$'
-native-click parametersAdd
-expect-log 'Add User Parameter dialog opened'
-focus-dialog '^Add User Parameter$'
+native-click parameters.new.0
+expect-log 'Editing new parameter name'
 type 'nativeWidth'
 key Tab
-key Ctrl+a
-type 'mm'
-key Tab
 type '30'
-button '^OK$'
-expect-log 'Added parameter nativeWidth = 30 mm' 30
+key Return
+expect-log 'Created user parameter nativeWidth = 30 mm' 30
 focus-dialog '^Parameters$'
 button '^OK$'
 focus-main

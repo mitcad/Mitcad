@@ -20,6 +20,8 @@ geometry::PrimitiveKind geometry_kind(PrimitiveKind kind) {
     return geometry::PrimitiveKind::Sphere;
   case PrimitiveKind::Torus:
     return geometry::PrimitiveKind::Torus;
+  case PrimitiveKind::Cone:
+    return geometry::PrimitiveKind::Cone;
   default:
     return geometry::PrimitiveKind::Box;
   }

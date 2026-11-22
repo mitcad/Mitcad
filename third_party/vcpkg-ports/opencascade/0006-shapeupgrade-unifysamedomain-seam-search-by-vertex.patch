@@ -10,11 +10,8 @@ such faces). The edges are indexed by their vertices once per merged face,
 and the same edges are tried in the same order (the loop skipped the others
 without side effects), so the result is unchanged.
 
-Test: none, because the patch changes only the time the merge takes: the
-removed edges are looked up by vertex and tried in the same order as
-before, so every result is stock OCCT's and no result can fail without it,
-and its gain shows only on bodies of hundreds of pieces across a seam
-(mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0006.
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -839,7 +839,13 @@

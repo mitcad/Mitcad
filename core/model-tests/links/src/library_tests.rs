@@ -148,6 +148,7 @@ impl LinkResolver for Library {
             supplier_url: None,
             build: None,
             rows: self.rows.lock().unwrap().clone(),
+            non_printable: false,
         })
     }
 }

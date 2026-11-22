@@ -1,0 +1,20 @@
+{
+  "comment": "Worked out by hand (mitcad#2157), SolidCraft's eval_frame.rs: each member a profile laid square to its line at the line's start, its y up towards +Z as far as the line allows (x = y x line), turned by the angle about the line, and run the line's length. Tubes: a round tube 20 x 2 along two 3D lines meeting at (100, 0, 0), a pipe each, square at the corner: 36 pi 100 = 11309.7336 and 36 pi 80 = 9047.7868. Rail: a 40 x 20 x 2 rectangular tube without radii (224 mm2) along a 3D line of length rail = 200 at y 100, turned 30 degrees: 44800; across the line it reaches 20 cos 30 + 10 sin 30 = 22.3205 in y and 20 sin 30 + 10 cos 30 = 18.6603 in z. Post: the 10 x 10 square less a circle of radius 2 (100 - 4 pi) of a sketch, mirrored, up a vertical 3D line of 50 at x 300 (its x is +X): x 290 to 300, 5000 - 200 pi = 4371.6815. Beam: a 10 x 6 bar along a sketch line at y -100, its top middle on the line: 6000, z from -6 to 0. Total 75529.2019.",
+  "volume_tolerance": 1e-9,
+  "bbox_tolerance": 1e-6,
+  "body_count": 5,
+  "total": {"volume_mm3": 75529.20186454391},
+  "bbox": {"min": [0, -105, -18.660254037844386], "max": [300, 122.32050807568878, 80]},
+  "bodies": [
+    {"name": "Tube", "volume_mm3": 11309.733552923255, "bbox": {"min": [0, -10, -10], "max": [100, 10, 10]}},
+    {"name": "Tube (2)", "volume_mm3": 9047.786842338604, "bbox": {"min": [90, -10, 0], "max": [110, 10, 80]}},
+    {"name": "Top rail", "volume_mm3": 44800,
+     "bbox": {"min": [0, 77.67949192431122, -18.660254037844386], "max": [200, 122.32050807568878, 18.660254037844386]}},
+    {"name": "Profile", "volume_mm3": 4371.681469282042, "bbox": {"min": [290, 0, 0], "max": [300, 10, 50]}},
+    {"name": "Bar 10x6", "volume_mm3": 6000, "bbox": {"min": [0, -105, -6], "max": [100, -95, 0]}}
+  ],
+  "timeline": [{"name": "Route"}, {"name": "Tubes"}, {"name": "Rails"}, {"name": "Rail"}, {"name": "Profile"},
+               {"name": "Posts"}, {"name": "Post"}, {"name": "Base"}, {"name": "Beam"}],
+  "params": [{"name": "rail"}],
+  "parametric": 7
+}

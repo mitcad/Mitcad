@@ -11,7 +11,7 @@
 // (browser/ActivateQuestion): there, keeping the active component is a real
 // choice.
 //
-// A part placed by a pick (Gear, Pulley, Bearing, Coil, Box, Cylinder,
+// A part placed by a pick (Gear, Pulley, Bearing, Coil, Box, Cylinder, Cone,
 // Sphere, Torus; mitcad#1752) is in the table too, by its Place On: its
 // placement refers to its own component's geometry, so a face or vertex of
 // another component's body activates that component, as a Hole's does. A

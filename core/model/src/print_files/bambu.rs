@@ -522,17 +522,31 @@ fn source_of(sources: &[Option<usize>], slot: usize) -> Option<usize> {
 }
 
 /// Writes the design's purge table of the slots (mitcad#705): the table
-/// divided by the multiplier, which the slicer applies, once per extruder
-/// (the printer's `nozzle_diameter` entries); the multiplier; each slot's
-/// two values (out, then in), unmultiplied.
-fn write_purge(config: &mut Map<String, Value>, purge: &crate::print_purge::Matrix) {
+/// divided by the multiplier, which the slicer applies, and the
+/// multiplier, each once per extruder; each slot's two values (out, then
+/// in), unmultiplied. The extruders are the printer's `nozzle_diameter`
+/// entries, or `preset` (those of the slicer's own preset of the printer,
+/// mitcad#2207) when it has more: a printer named only by its preset
+/// keeps one nozzle diameter, and the slicer loads the preset's
+/// extruders. The family's loaders (read 21.11.2026: Bambu Studio,
+/// OrcaSlicer and QIDI Studio alike) keep the multiplier as a list per
+/// extruder and count the matrix's tables by its length
+/// (`PresetBundle::update_multi_material_filament_presets`); a list
+/// shorter than the extruders crashes Bambu Studio 2.9's slicing of a
+/// two-extruder printer.
+fn write_purge(
+    config: &mut Map<String, Value>,
+    purge: &crate::print_purge::Matrix,
+    preset: Option<usize>,
+) {
     if purge.slots.is_empty() {
         return;
     }
-    let extruders = match config.get("nozzle_diameter") {
+    let listed = match config.get("nozzle_diameter") {
         Some(Value::Array(items)) if !items.is_empty() => items.len(),
         _ => 1,
     };
+    let extruders = listed.max(preset.unwrap_or(1));
     let m = purge.multiplier;
     let text = |x: f64| json!(print_keys::number_text((x * 1000.0).round() / 1000.0));
     let table: Vec<Value> = purge.volumes().into_iter().map(|v| text(v / m)).collect();
@@ -551,7 +565,10 @@ fn write_purge(config: &mut Map<String, Value>, purge: &crate::print_purge::Matr
                 .collect(),
         ),
     );
-    config.insert(MULTIPLIER.to_owned(), text(m));
+    config.insert(
+        MULTIPLIER.to_owned(),
+        Value::Array(vec![text(m); extruders]),
+    );
 }
 
 /// The family's prime (wipe) tower switch, a process setting of the whole
@@ -669,7 +686,23 @@ const MANUAL_CHANGE_GCODE: &str =
 /// of the design's, not the slicer's) would not stop for the new spool,
 /// so the export writes [`MANUAL_CHANGE_GCODE`] and says so. A printer's
 /// own G-code stays.
-fn manual_change_gcode(config: &mut Map<String, Value>, warnings: &mut Vec<String>) {
+///
+/// Only when the change G-code that counts is the file's (mitcad#2235,
+/// the rule of [`reset_e_each_layer`], mitcad#2211): the printer names no
+/// system preset of the export's own slicer (`own_preset` false: none, or
+/// a name lent from another family member), or its block lists
+/// `change_filament_gcode` in its `different_settings_to_system`. A preset
+/// of the slicer's own gives the key from the installed preset (for a
+/// printer of several extruders or a filament changer, its real tool
+/// change), so it is left to it: not written, not listed, no warning.
+fn manual_change_gcode(
+    config: &mut Map<String, Value>,
+    own_preset: bool,
+    warnings: &mut Vec<String>,
+) {
+    if own_preset && !printer_lists(config, CHANGE_GCODE) {
+        return;
+    }
     let own = config
         .get(CHANGE_GCODE)
         .and_then(source::json_text)
@@ -741,7 +774,24 @@ fn resets_e(gcode: &str) -> bool {
 /// `G92 E0` as the last line of `before_layer_change_gcode`, where the
 /// family's own printer profiles keep it, and says relative extrusion is
 /// on. Relative extrusion stays: the prime tower works only with it.
-fn reset_e_each_layer(config: &mut Map<String, Value>) {
+///
+/// Only when the layer G-code that counts is the file's (mitcad#2211):
+/// the printer names no system preset of the export's own slicer
+/// (`own_preset` false: none, or a name lent from another family
+/// member, which that slicer may not have, and then its built-in
+/// defaults count), or its block lists `before_layer_change_gcode` or
+/// `layer_change_gcode` in its `different_settings_to_system`. A preset
+/// of the slicer's own gives every layer key not listed from the
+/// installed preset, so both keys are left to it: neither written nor
+/// listed (adding them made the slicer ask to confirm G-code the design
+/// never set).
+fn reset_e_each_layer(config: &mut Map<String, Value>, own_preset: bool) {
+    if own_preset
+        && !printer_lists(config, BEFORE_LAYER_GCODE)
+        && !printer_lists(config, LAYER_GCODE)
+    {
+        return;
+    }
     let relative = match config.get(RELATIVE_E) {
         None => true,
         Some(value) => source::json_text(value).is_some_and(|t| matches!(t.trim(), "1" | "true")),
@@ -775,6 +825,18 @@ fn reset_e_each_layer(config: &mut Map<String, Value>) {
         config.insert(RELATIVE_E.to_owned(), json!("1"));
         differs_from_preset(config, usize::MAX, RELATIVE_E);
     }
+}
+
+/// Whether the printer's entry of `different_settings_to_system` (the
+/// last) lists `key`.
+fn printer_lists(config: &Map<String, Value>, key: &str) -> bool {
+    let Some(Value::Array(items)) = config.get("different_settings_to_system") else {
+        return false;
+    };
+    items
+        .last()
+        .and_then(Value::as_str)
+        .is_some_and(|keys| keys.split(';').any(|k| k == key))
 }
 
 /// Adds `key` to an entry of `different_settings_to_system` (`entry`: 0
@@ -960,12 +1022,24 @@ pub(super) fn export(
             )
         })
         .collect();
-    let printer_inherits = raw
+    let raw_inherits = raw
         .and_then(|r| r.get("@inherits"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or(printer_preset)
-        .unwrap_or_default();
+        .map(str::to_owned);
+    // Whether the printer's entry names a preset of this slicer's own
+    // (mitcad#2211): the preset the kept block of this slicer inherits
+    // from, else the profile's preset name for this slicer, not one lent
+    // from another family member (`dialect_value`).
+    let own_printer_preset = match &raw_inherits {
+        Some(name) => !name.trim().is_empty(),
+        None => first
+            .and_then(|f| f.values.get("printer_settings_id"))
+            .and_then(|(v, _)| v.as_object())
+            .and_then(|names| names.get(dialect.id()))
+            .and_then(Value::as_str)
+            .is_some_and(|name| !name.trim().is_empty()),
+    };
+    let printer_inherits = raw_inherits.or(printer_preset).unwrap_or_default();
     let mut inherits = vec![json!(process_preset.unwrap_or_default())];
     inherits.extend(filament_inherits);
     inherits.push(json!(printer_inherits));
@@ -1024,7 +1098,7 @@ pub(super) fn export(
     // The printer's extruders and nozzle variants (mitcad#2008).
     extruder_structure(&mut config, &mut warnings);
     // The design's purge volumes (mitcad#705).
-    write_purge(&mut config, &shared.purge);
+    write_purge(&mut config, &shared.purge, shared.extruders);
     // The build's objects, each with its parts.
     let every: Vec<usize> = (0..shared.parts.len()).collect();
     let listed: Vec<(&str, &[usize])> = if objects.is_empty() {
@@ -1039,10 +1113,12 @@ pub(super) fn export(
     // prime tower.
     if shared.layer_changes && manual_changes_only(shared, &listed, plates) {
         prime_tower_off(&mut config, &mut warnings);
-        manual_change_gcode(&mut config, &mut warnings);
+        // Where the change G-code is the file's (mitcad#2235).
+        manual_change_gcode(&mut config, own_printer_preset, &mut warnings);
     }
-    // Relative extrusion resets E at each layer (mitcad#1596).
-    reset_e_each_layer(&mut config);
+    // Relative extrusion resets E at each layer (mitcad#1596), where the
+    // layer G-code is the file's (mitcad#2211).
+    reset_e_each_layer(&mut config, own_printer_preset);
     // Only settings, each of the type the loader reads (mitcad#2008).
     project_types(&mut config, &mut dropped, &mut warnings);
     let mut project =

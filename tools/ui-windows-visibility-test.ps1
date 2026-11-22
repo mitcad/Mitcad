@@ -105,7 +105,18 @@ function Hide-Body1([string]$Command) {
   if ($drawn.Contains('F2.b0 at')) { Ui-Fail "the preview still draws Body1: $drawn" }
   if (-not $drawn.Contains('F4.b0 at')) { Ui-Fail "the preview lost Body2: $drawn" }
   Write-Host 'ok   the preview without Body1, with Body2'
-  Ui-ExpectNone "Preview ${Command}: " 'the preview not computed again'
+  # The display meshes' refinement (CommandSession::refinePreview) is not a
+  # computation: its timer runs a moment after the preview, so under load
+  # its "Preview <command>: refining ..." lines fall after the mark
+  # (mitcad#2189).
+  Ui-Sync
+  Start-Sleep -Milliseconds 500
+  $computed = (Ui-LogLines | Select-Object -Skip $script:UiMark) | Where-Object {
+    $_.Contains("Preview ${Command}: ") -and
+    -not ($_ -match "^Preview ${Command}: (refining the display meshes|display meshes refined)")
+  }
+  if ($computed) { Ui-Fail "the preview not computed again: '$(@($computed)[0])' is in the log" }
+  Write-Host 'ok   the preview not computed again'
 }
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |

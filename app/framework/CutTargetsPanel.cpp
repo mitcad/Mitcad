@@ -23,7 +23,9 @@
 
 #include "../platform/NativeDialogs.hpp"
 #include "ModelMessages.hpp"
+#include "NoticePlaces.hpp"
 #include "PanelTree.hpp"
+#include "UserText.hpp"
 
 namespace mitcad {
 namespace {
@@ -375,19 +377,80 @@ CutTargetsPanel::CutTargetsPanel(QWidget* parent) : QWidget(parent) {
 void CutTargetsPanel::setScope(const QJsonObject& scope) { m_scope = scope; }
 
 void CutTargetsPanel::setPreview(const QJsonObject& report) {
-  m_current = !report.isEmpty();
-  emit highlightChanged({});
-  m_tree->setEnabled(m_current);
-  if (!m_current) {
-    // A checkbox callback may still be on the model's stack. Retain its
-    // items until the next asynchronous result; stale rows cannot be used.
-    m_all->setEnabled(false);
-    m_none->setEnabled(false);
-    m_status->setText(tr("Updating affected components…"));
+  if (report.isEmpty()) {
+    // Stale while the inputs change: "Updating…" only while a preview of
+    // them computes (mitcad#2118: a failed preview left it for good);
+    // until then the line says what it said, so that it does not flicker
+    // in the moment before the preview starts.
+    markStale();
+    if (m_computing) {
+      setStatus(tr("Updating affected components…"));
+    }
     return;
   }
+  m_current = true;
+  emit highlightChanged({});
+  m_tree->setEnabled(true);
   m_report = report;
   rebuild();
+}
+
+void CutTargetsPanel::setPreviewResult(const QJsonObject& report) {
+  const QJsonObject targets = report.value(QStringLiteral("cut_targets")).toObject();
+  const QString status = report.value(QStringLiteral("status")).toString();
+  if (!targets.isEmpty() || report.isEmpty()) {
+    setPreview(targets);
+    return;
+  }
+  markStale();
+  if (status == QStringLiteral("error")) {
+    // The extrusion failed before its cut's scope was worked out (an end
+    // it cannot reach): what failed in the words the panel's message
+    // gives, its notices' or its text without the agents' tail
+    // (mitcad#1612), in the interface language.
+    const QStringList notices = noticeMessages(report, QStringLiteral("error"));
+    const QString said = notices.isEmpty() ? userText(report.value(QStringLiteral("error")).toString())
+                                           : notices.join(QLatin1Char(' '));
+    const QString reason = modelMessage(said.trimmed());
+    setStatus(reason.isEmpty() ? tr("Affected components could not be found: the cut could not be previewed.")
+                               : tr("Affected components could not be found: %1").arg(reason));
+    return;
+  }
+  // No cut of these inputs yet (an input still needed), or a preview that
+  // made none.
+  setStatus(tr("Affected components show once the inputs make a cut."));
+}
+
+void CutTargetsPanel::setComputing(bool computing) {
+  if (computing == m_computing) {
+    return;
+  }
+  m_computing = computing;
+  if (!m_current) {
+    // A preview that ends without a result (cancelled) leaves the list
+    // stale until the next one.
+    setStatus(computing ? tr("Updating affected components…")
+                        : tr("Affected components show once the inputs make a cut."));
+  }
+}
+
+void CutTargetsPanel::markStale() {
+  m_current = false;
+  emit highlightChanged({});
+  m_tree->setEnabled(false);
+  // A checkbox callback may still be on the model's stack. Retain its
+  // items until the next asynchronous result; stale rows cannot be used.
+  m_all->setEnabled(false);
+  m_none->setEnabled(false);
+}
+
+void CutTargetsPanel::setStatus(const QString& text) {
+  if (m_status->text() == text) {
+    return;
+  }
+  m_status->setText(text);
+  // What the Affected components line says, for UI tests (mitcad#2118).
+  qDebug().noquote() << QStringLiteral("Cut targets status: %1").arg(text);
 }
 
 void CutTargetsPanel::rebuild() {
@@ -486,7 +549,7 @@ void CutTargetsPanel::rebuild() {
                              : tr("1 component selected (%1 bodies)").arg(selectedBodies))
       : (selectedBodies == 1 ? tr("%1 components selected (1 body)").arg(selected)
                              : tr("%1 components selected (%2 bodies)").arg(selected).arg(selectedBodies));
-  m_status->setText(!m_current ? tr("Update the inputs to preview affected components.")
+  setStatus(!m_current ? tr("Update the inputs to preview affected components.")
       : selected > 0 ? selection
       // A cut drawn away from the body (mitcad#1676): the model found that
       // the other direction would cut.

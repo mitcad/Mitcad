@@ -59,15 +59,8 @@ rim's ball within 5e-4 mm; a block's bottom outline past vertical corners
 rounded with 0.3, its front wall leaning 15 and 30 degrees away from the
 bottom, rounded with 0.5: valid (before, invalid at 15 and failed at 30).
 
-Test: geometry/tests/test_fillet_tight_rim_corner.cpp (ctest
-geometry.fillet_tight_rim_corner):
-test_tube_cut_face_rounded_past_its_rims (the four tori, the strips and
-triangles on the rim's ball),
-test_block_bottom_past_corners_with_an_obtuse_wall (the obtuse wall at 15
-and 30 degrees, its corner faces on the corner's ball) and
-test_reported_body (the stored case `tube-rim-tight-corners`); each
-documented to fail without this patch. It fails without the patch (shown
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1590.
 
 Failures (mitcad#1986): the test of an arc at a contour's end as an
 obtuse tight arc (ChFi3d_TightArc) fails with OCCT's reports of a

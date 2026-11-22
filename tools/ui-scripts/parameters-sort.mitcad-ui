@@ -14,10 +14,11 @@
 #      the sort and stays selected; the search filter hides count.
 #   5. OK and Edit Parameters again: the sort is kept; Value's header once
 #      more: the creation order.
-#   6. Sorted by Name, Add User Parameter len5: its row is selected in its
-#      place; Name twice: the creation order, kept in the settings.
-#   7. The Unit column shows Number for count (no unit); Add User
-#      Parameter n4 with the unit Number adds it without a unit, shown as
+#   6. Sorted by Name, len5 typed in the empty row (mitcad#2202): its row
+#      is selected in its place; Name twice: the creation order, kept in
+#      the settings.
+#   7. The Unit column shows Number for count (no unit); n4 typed in the
+#      empty row with the unit Number is added without a unit, shown as
 #      Number (mitcad#1920).
 # Run by tools/ui-parameters-sort-test.sh (Linux),
 # tools/ui-windows-parameters-sort-test.ps1 (Windows) and
@@ -112,19 +113,21 @@ wait-idle
 mark
 dialog-click-logged '^Parameters header name at '
 wait-log '^Parameters sorted by name ascending$'
+wait-log '^Parameters new row: unit mm, after Width$'
 wait-idle
 mark
-button '^Add User Parameter$' parametersAdd
-focus-dialog '^Add User Parameter$'
-wait-log '^Add User Parameter dialog opened: unit mm$'
-focus-widget parameterName
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
 type len5
-focus-widget parameterExpression
+key Tab
 type 5
 key Return
-wait-log '^Added parameter len5 = 5 mm'
-focus-dialog '^Parameters$'
+wait-log '^Created user parameter len5 = 5 mm [(]mm[)] in the new row$'
 wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] count, len2, len5, len10, Width [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^;]+; selected len5$'
+# The new empty row took the keyboard: Escape leaves it.
+wait-log '^Editing new parameter name$'
+key Escape
+focus-dialog '^Parameters$'
 wait-idle
 mark
 dialog-click-logged '^Parameters header name at '
@@ -138,23 +141,26 @@ expect-setting parameters/sort none
 wait-idle
 
 # 7. The unit Number (mitcad#1920, GitHub mitcad/Mitcad#378): the Unit
-# column shows Number for count, which has no unit; Add User Parameter's
-# Number adds a parameter without a unit, shown as Number too.
+# column shows Number for count, which has no unit; the empty row's Unit
+# Number adds a parameter without a unit, shown as Number too
+# (mitcad#2202: Tab goes Name, Expression, Comment, Unit).
 expect-parameter-cell count 1 '^Number$' visible
 expect-parameter-cell len5 1 '^mm$' visible
 mark
-button '^Add User Parameter$' parametersAdd
-focus-dialog '^Add User Parameter$'
-wait-log '^Add User Parameter dialog opened: unit mm$'
-focus-widget parameterName
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
 type n4
-focus-widget parameterUnit
+key Tab
+type 4
+key Tab
+wait-log '^Editing new parameter comment$'
+key Tab
+wait-log '^Editing new parameter unit$'
 key ctrl+a
 type Number
-focus-widget parameterExpression
-type 4
 key Return
-wait-log '^Added parameter n4 = 4$'
+wait-log '^Created user parameter n4 = 4 [(]Number[)] in the new row$'
+key Escape
 focus-dialog '^Parameters$'
 wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] len10, Width, len2, count, len5, n4 [[]Model Parameters[]] [^;]+; selected n4$'
 wait-idle

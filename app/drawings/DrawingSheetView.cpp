@@ -61,6 +61,10 @@ QPointF pointOf(const QJsonValue& value) {
   return {a.at(0).toDouble(), a.at(1).toDouble()};
 }
 
+QString arrowPlace(const QPointF& point) {
+  return QStringLiteral("%1,%2").arg(point.x(), 0, 'f', 6).arg(point.y(), 0, 'f', 6);
+}
+
 // A pill of words over the sheet (the tool's hint, the job's note, the
 // hover words): white on a dark, translucent backing, as over the 3D view.
 void drawPill(QPainter& painter, const QRectF& pill, const QString& text) {
@@ -208,6 +212,7 @@ void DrawingSheetView::setTitleBlockEditor(TitleBlockEditor* editor) {
   }
   m_blockEditor = editor;
   m_drag = Drag::None;
+  setDraggedCallout({});
   // The model's title block hidden under the editor's, or shown again.
   sheetMoved();
 }
@@ -215,6 +220,7 @@ void DrawingSheetView::setTitleBlockEditor(TitleBlockEditor* editor) {
 void DrawingSheetView::setSheet(const QJsonObject& sheet) {
   // The views' new lines are here (mitcad#1997).
   clearUpdating();
+  setDraggedCallout({});
   const double w = sheet.value(QStringLiteral("width")).toDouble(297.0);
   const double h = sheet.value(QStringLiteral("height")).toDouble(210.0);
   const bool resized = w != m_width || h != m_height;
@@ -310,6 +316,9 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
         const bool tipped = entry->type == QStringLiteral("datum") || entry->type == QStringLiteral("frame");
         if (tipped && entry->tip.isEmpty()) {
           entry->tip = fill;
+        }
+        if (entry->type == QStringLiteral("hole_callout") && entry->arrow.isEmpty()) {
+          entry->arrow = fill;
         }
       } else if (item.contains(QStringLiteral("text"))) {
         const QPolygonF text = textArea(item);
@@ -416,19 +425,29 @@ bool DrawingSheetView::followsPointer() const {
 
 void DrawingSheetView::logAnnotations() {
   QStringList parts;
+  // Where a hole callout's arrow points, sheet mm (mitcad#2212: on the
+  // side of the hole its text is on).
+  QStringList arrows;
   for (const SheetAnnotation& a : std::as_const(m_annotations)) {
     if (a.broken) {
       parts << QStringLiteral("%1 broken").arg(a.id);
     } else {
       parts << QStringLiteral("%1 = %2").arg(a.id).arg(a.label.isEmpty() ? a.type : a.label);
     }
+    if (!a.broken && !a.arrow.isEmpty()) {
+      arrows << QStringLiteral("Drawing hole callout %1 arrow at %2").arg(a.id).arg(arrowPlace(a.arrow.first()));
+    }
   }
   const QString text = parts.join(QStringLiteral(" | "));
-  if (text == m_loggedAnnotations) {
+  const QString key = text + QLatin1Char('\n') + arrows.join(QLatin1Char('\n'));
+  if (key == m_loggedAnnotations) {
     return;
   }
-  m_loggedAnnotations = text;
+  m_loggedAnnotations = key;
   qDebug().noquote() << QStringLiteral("Drawing annotations drawn: %1").arg(text.isEmpty() ? QStringLiteral("none") : text);
+  for (const QString& arrow : std::as_const(arrows)) {
+    qDebug().noquote() << arrow;
+  }
 }
 
 void DrawingSheetView::selectAnnotation(int id) {
@@ -773,13 +792,39 @@ void DrawingSheetView::setPlacingSnap(bool snapped, const QPointF& at, const QSt
   update();
 }
 
-void DrawingSheetView::setDragSnap(bool snapped, const QPointF& delta, const QString& hint) {
+void DrawingSheetView::setDragSnap(bool snapped, const QPointF& delta, const QString& hint, const QJsonObject& preview) {
+  if (!draggedAlone()) {
+    return;
+  }
+  setDraggedCallout(preview);
   if (snapped == m_dragSnapped && delta == m_dragSnap && hint == m_snapHint) {
     return;
   }
   m_dragSnapped = snapped;
   m_dragSnap = delta;
   m_snapHint = snapped ? hint : QString();
+  update();
+}
+
+void DrawingSheetView::setDraggedCallout(const QJsonObject& preview) {
+  if (preview == m_draggedCallout) {
+    return;
+  }
+  // The sheet picture omits the old callout while the live group is drawn
+  // over it. Repaint the sheet only when this group starts or stops moving.
+  if (preview.isEmpty() != m_draggedCallout.isEmpty()) {
+    m_sheetPainted = false;
+  }
+  m_draggedCallout = preview;
+  const QJsonObject group = preview.value(QStringLiteral("group")).toObject();
+  for (const QJsonValue& value : group.value(QStringLiteral("items")).toArray()) {
+    const QJsonArray fill = value.toObject().value(QStringLiteral("fill")).toArray();
+    if (!fill.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Drawing hole callout %1 drag arrow at %2")
+                                .arg(m_dragView).arg(arrowPlace(pointOf(fill.first())));
+      break;
+    }
+  }
   update();
 }
 
@@ -1125,7 +1170,8 @@ void DrawingSheetView::paintSheet(const QSize& pixels, qreal ratio) {
   const QRectF paper(toWidget({0.0, m_height}), toWidget({m_width, 0.0}));
   painter.fillRect(paper.translated(3.0, 3.0), QColor(0, 0, 0, 40));
   painter.fillRect(paper, Qt::white);
-  paintItems(painter);
+  const QJsonObject dragged = m_draggedCallout.value(QStringLiteral("group")).toObject();
+  paintItems(painter, m_groups, dragged.value(QStringLiteral("id")).toString());
   m_sheetPainted = true;
   ++m_sheetPaints;
 }
@@ -1143,6 +1189,11 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
   QPainter painter(this);
   painter.drawPixmap(QPointF(0.0, 0.0), m_sheetPicture);
   painter.setRenderHint(QPainter::Antialiasing);
+  if (!m_draggedCallout.isEmpty()) {
+    painter.save();
+    paintItems(painter, QJsonArray{m_draggedCallout.value(QStringLiteral("group"))});
+    painter.restore();
+  }
 
   // The views: the selected one, the one under the pointer, a tool's
   // parent.
@@ -1372,7 +1423,14 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
     // A dimension dragged alone by its snapped drag (mitcad#1173).
     const bool snappedDrag = dragged && m_dragSnapped && draggedAlone();
     const QPointF offset = dragged ? (snappedDrag ? m_dragSnap : m_dragOffset) : QPointF();
-    const QRectF drawn = widgetBox(a.box.adjusted(-1.0, -1.0, 1.0, 1.0).translated(offset));
+    QRectF box = a.box.translated(offset);
+    if (dragged && a.id == m_dragView) {
+      const QJsonArray previewBox = m_draggedCallout.value(QStringLiteral("box")).toArray();
+      if (previewBox.size() == 2) {
+        box = QRectF(pointOf(previewBox.at(0)), pointOf(previewBox.at(1))).normalized();
+      }
+    }
+    const QRectF drawn = widgetBox(box.adjusted(-1.0, -1.0, 1.0, 1.0));
     painter.drawRect(drawn);
     if (snappedDrag) {
       paintSnapHint(painter, drawn.topRight(), m_snapHint);
@@ -1597,7 +1655,7 @@ void DrawingSheetView::paintBlockEditor(QPainter& painter) const {
   painter.restore();
 }
 
-void DrawingSheetView::paintItems(QPainter& painter) const {
+void DrawingSheetView::paintItems(QPainter& painter, const QJsonArray& groups, const QString& hiddenGroup) const {
   // Lines in sheet millimetres: the painter scaled, y up.
   painter.save();
   painter.translate(m_origin);
@@ -1641,15 +1699,16 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
   QVector<Label> labels;
   // The title block editor's block is painted over the sheet instead of the
   // model's (mitcad#1625).
-  const auto shown = [this](const QJsonValue& group) {
-    return m_blockEditor == nullptr ||
-           group.toObject().value(QStringLiteral("class")).toString() != QStringLiteral("title-block");
+  const auto shown = [this, &hiddenGroup](const QJsonValue& value) {
+    const QJsonObject group = value.toObject();
+    return (hiddenGroup.isEmpty() || group.value(QStringLiteral("id")).toString() != hiddenGroup) &&
+           (m_blockEditor == nullptr || group.value(QStringLiteral("class")).toString() != QStringLiteral("title-block"));
   };
   // A title block's images first, under its lines (mitcad#1625), in the
   // widget's own coordinates: upright.
   painter.save();
   painter.resetTransform();
-  for (const QJsonValue& groupValue : m_groups) {
+  for (const QJsonValue& groupValue : groups) {
     if (!shown(groupValue)) {
       continue;
     }
@@ -1664,7 +1723,7 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
     }
   }
   painter.restore();
-  for (const QJsonValue& groupValue : m_groups) {
+  for (const QJsonValue& groupValue : groups) {
     if (!shown(groupValue)) {
       continue;
     }
@@ -1763,6 +1822,7 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
 // same place: the tests wait for its place after opening a drawing.
 void DrawingSheetView::hideEvent(QHideEvent* event) {
   QWidget::hideEvent(event);
+  setDraggedCallout({});
   m_loggedPlaces.clear();
 }
 
@@ -1794,6 +1854,7 @@ void DrawingSheetView::mousePressEvent(QMouseEvent* event) {
   m_dragMoved = false;
   m_dragSnapped = false;
   m_dragTip = false;
+  setDraggedCallout({});
   if (event->button() == Qt::MiddleButton) {
     m_drag = Drag::Pan;
     m_dragFrom = event->position();

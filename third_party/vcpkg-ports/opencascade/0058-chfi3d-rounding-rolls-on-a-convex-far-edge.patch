@@ -26,12 +26,8 @@ fillet (its rounding takes the edge away: the two blends overlap, 0013),
 and not where the contact passes more faces before it reaches one it
 touches (OCCT's handling of several narrow faces is kept).
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow), test_rounding_rolls_on_a_bevels_far_edge,
-test_concave_rounding_rolls_on_a_strips_far_edge: Its failure without the
-patch is still to be shown: the patch does not revert at the port's tip
-without the more than 40 later patches that change the same lines (tried
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0058.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 48fd090..4bb35ec 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

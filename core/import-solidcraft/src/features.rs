@@ -151,7 +151,7 @@ fn map_kind<K: Kernel>(
         "revolve" => revolve(im, f, component)?,
         "fillet" => fillet(im, f, component)?,
         "chamfer" => chamfer(im, f, component)?,
-        "box" | "cylinder" | "sphere" | "torus" => primitive(im, f, component)?,
+        "box" | "cylinder" | "sphere" | "torus" | "cone" => primitive(im, f, component)?,
         "combine" => combine(im, f, component)?,
         "construction_plane" => construction_plane(im, f, component)?,
         "construction_axis" => construction_axis(im, f, component)?,
@@ -199,18 +199,10 @@ fn map_kind<K: Kernel>(
         "snap_fit" => super::plastic::snap_fit(im, f, component)?,
         "rest" => super::plastic::rest(im, f, component)?,
         // Kinds of the later formats (mitcad#1331) MitCad has no feature
-        // for: placeholders with the reason.
-        "cone" => {
-            return Err(NotMapped::Unmapped(
-                "MitCad has no cone primitive".to_owned(),
-            ));
-        }
-        "frame_member" => {
-            return Err(NotMapped::Unmapped(
-                "MitCad has no frame member feature (a profile along each line of a frame sketch)"
-                    .to_owned(),
-            ));
-        }
+        // for: placeholders with the reason (a cone is MitCad's own since
+        // mitcad#2239, above).
+        // One Pipe or Sweep per line (mitcad#2157).
+        "frame_member" => im.frame_member(f, component)?,
         "repair" => {
             return Err(NotMapped::Unmapped(
                 "MitCad has no Repair Part feature (faces rebuilt, free edges sewn, holes patched)"
@@ -273,6 +265,18 @@ fn extrude<K: Kernel>(
             "the taper closes the sharp corners as MitCad does (the file: `{corner}`)"
         ));
     }
+    // From Object on a slanted flat face: MitCad starts on the face, as the
+    // file does since format 58; a design saved before (`from_level`)
+    // started on a plane parallel to the sketch.
+    if e.extent.from_level
+        && let Some(from) = e.extent.from
+        && from_face_slanted(im, f, component, &e, from)
+    {
+        notes.push(
+            "it starts on the slanted face it extrudes from, where the file (saved before format 58) starts on a plane parallel to the sketch at the level where the face meets the middle of the profiles"
+                .to_owned(),
+        );
+    }
     // Where the other components stood when its object was picked (format
     // 57): MitCad measures against the placements the file shows.
     if moved_since_picked(im.design, f.component, &e.extent.picked_placements) {
@@ -284,11 +288,50 @@ fn extrude<K: Kernel>(
     Ok(Mapped::partial(notes))
 }
 
+/// Whether the face an extrude starts From Object on (at `from`) is a
+/// flat face at a slant to the sketch: neither square to the extrusion nor
+/// along it.
+fn from_face_slanted<K: Kernel>(
+    im: &Importer<'_, '_, K>,
+    f: &Feature,
+    component: ComponentUid,
+    e: &k::Extrude,
+    from: [f64; 3],
+) -> bool {
+    let Some(sketch) = im.sketches.get(&e.sketch) else {
+        return false;
+    };
+    let normal = sketch.frame.normal();
+    let index = usize::from(e.extent.to.is_some());
+    let Ok((body, face)) = im.face_named(
+        component,
+        None,
+        from,
+        f.face_names.get(index).map(String::as_str),
+    ) else {
+        return false;
+    };
+    let (Some(shape), Ok(name)) = (
+        im.doc.body_shape(body),
+        face.parse::<mitcad_model::FaceName>(),
+    ) else {
+        return false;
+    };
+    im.doc
+        .kernel()
+        .face_plane(shape, &name)
+        .ok()
+        .and_then(|p| unit(p.normal))
+        .is_some_and(|n| {
+            let c = dot(n, normal).abs();
+            c < 1.0 - 1e-9 && c > 1e-9
+        })
+}
+
 /// Whether a component of `pins` (an extrude's `picked_placements`,
 /// relative to its own component `own`) stands elsewhere now.
 fn moved_since_picked(design: &mitcad_solidcraft::Design, own: u64, pins: &[Value]) -> bool {
-    use mitcad_solidcraft::document::{Mat, mat_mul};
-    let world = design.component_world(own);
+    use mitcad_solidcraft::document::Mat;
     pins.iter().any(|pin| {
         let Some(component) = pin.get("component").and_then(Value::as_u64) else {
             return false;
@@ -296,13 +339,24 @@ fn moved_since_picked(design: &mitcad_solidcraft::Design, own: u64, pins: &[Valu
         let Ok(placement) = serde_json::from_value::<Mat>(pin["placement"].clone()) else {
             return false;
         };
-        let then = mat_mul(&world, &placement);
-        let now = design.component_world(component);
-        then.iter()
-            .flatten()
-            .zip(now.iter().flatten())
-            .any(|(a, b)| (a - b).abs() > 1e-6)
+        moved_since(design, own, component, &placement)
     })
+}
+
+/// Whether component `other` stands elsewhere now than `placement`
+/// (relative to component `own`, saved when it was picked) puts it.
+pub(super) fn moved_since(
+    design: &mitcad_solidcraft::Design,
+    own: u64,
+    other: u64,
+    placement: &mitcad_solidcraft::document::Mat,
+) -> bool {
+    let then = mitcad_solidcraft::document::mat_mul(&design.component_world(own), placement);
+    let now = design.component_world(other);
+    then.iter()
+        .flatten()
+        .zip(now.iter().flatten())
+        .any(|(a, b)| (a - b).abs() > 1e-6)
 }
 
 /// The definition of an extrude; `profiles` instead of the file's
@@ -728,6 +782,11 @@ fn fillet<K: Kernel>(
                 .to_owned(),
         );
     }
+    // Each picked edge at its own radius (format 60): one set per edge,
+    // each body's sets one fillet.
+    if !fl.edge_radii.is_empty() {
+        return edge_radii_fillet(im, f, component, &fl, notes);
+    }
     let groups = edges_by_body(im, component, fl.body.as_deref(), &fl.edges, &f.edge_names)?;
     let radius = im.slot(f, "/radius")?;
     let size = match &fl.style {
@@ -796,6 +855,75 @@ fn fillet<K: Kernel>(
         if corners {
             def["rolling_ball_corners"] = json!(false);
         }
+        let name = if several {
+            format!("{} ({})", f.name, i + 1)
+        } else {
+            f.name.clone()
+        };
+        im.add(&def, Some(&name), component)?;
+    }
+    Ok(Mapped::partial(notes))
+}
+
+/// A fillet that rounds each picked edge at its own radius (`edge_radii`,
+/// format 60: a constant, exact, rolling-corner, mitred round of the picked
+/// edges alone): one MitCad set per edge with that radius's slot, the sets
+/// of a body one fillet.
+fn edge_radii_fillet<K: Kernel>(
+    im: &mut Importer<'_, '_, K>,
+    f: &Feature,
+    component: ComponentUid,
+    fl: &k::Fillet,
+    notes: Vec<String>,
+) -> MapResult {
+    if fl.edge_radii.len() != fl.edges.len() {
+        return Err(NotMapped::Failed(format!(
+            "it gives {} edge radii for {} edges",
+            fl.edge_radii.len(),
+            fl.edges.len()
+        )));
+    }
+    // SolidCraft refuses edge radii with any other option
+    // (`EDGE_RADII_TAKE`); so does the import.
+    let plain = matches!(fl.style, k::FilletStyle::Constant)
+        && fl.fit.as_deref().is_none_or(|x| x == "exact")
+        && fl.corner.as_deref().is_none_or(|x| x == "rolling")
+        && fl.setbacks.is_empty()
+        && fl.turn.as_deref().is_none_or(|x| x == "mitre")
+        && !fl.tangent_chain;
+    if !plain {
+        return Err(NotMapped::Failed(
+            "each edge at its own radius is a constant round of the picked edges alone: it takes a constant radius, an exact fit, rolling corners, no setbacks, mitred turns and no tangent chains (SolidCraft refuses it too)"
+                .to_owned(),
+        ));
+    }
+    let mut bodies: BTreeMap<String, (BodyUid, Vec<Value>)> = BTreeMap::new();
+    let mut seen: Vec<String> = Vec::new();
+    for (k, p) in fl.edges.iter().enumerate() {
+        let (b, edge) = im.edge_named(
+            component,
+            fl.body.as_deref(),
+            *p,
+            f.edge_names.get(k).map(String::as_str),
+        )?;
+        // An edge may be in one set only: a second pick of it keeps the
+        // first's radius.
+        if seen.contains(&edge) {
+            continue;
+        }
+        seen.push(edge.clone());
+        let radius = im.slot(f, &format!("/edge_radii/{k}"))?;
+        let set = json!({"edges": [edge], "size": {"type": "constant", "radius": radius},
+            "tangent_chain": false});
+        bodies
+            .entry(b.to_string())
+            .or_insert((b, Vec::new()))
+            .1
+            .push(set);
+    }
+    let several = bodies.len() > 1;
+    for (i, (b, sets)) in bodies.values().enumerate() {
+        let def = json!({"type": "fillet", "body": b.to_string(), "sets": sets});
         let name = if several {
             format!("{} ({})", f.name, i + 1)
         } else {
@@ -945,6 +1073,12 @@ fn primitive<K: Kernel>(
             }
             ("base", c.axis, c.operation)
         }
+        // A cone or a frustum (format 40, mitcad#2239): placed as a
+        // cylinder, its base on the plane.
+        "cone" => {
+            let c: k::Cone = f.typed()?;
+            ("base", c.axis, c.operation)
+        }
         "sphere" => {
             let s: k::Sphere = f.typed()?;
             ("center", [0.0, 0.0, 1.0], s.operation)
@@ -1044,6 +1178,9 @@ fn primitive<K: Kernel>(
             "height": im.slot(f, "/height")?, "operation": operation}),
         "sphere" => json!({"type": "sphere", "plane": plane, "center": uv,
             "diameter": im.slot_of(f, "/radius", |n| format!("2 * {n}"))?, "operation": operation}),
+        "cone" => json!({"type": "cone", "plane": plane, "center": uv,
+            "radius": im.slot(f, "/radius")?, "top_radius": im.slot(f, "/top_radius")?,
+            "height": im.slot(f, "/height")?, "operation": operation}),
         _ => json!({"type": "torus", "plane": plane, "center": uv,
             "diameter": im.slot_of(f, "/major", |n| format!("2 * {n}"))?,
             "section_diameter": im.slot_of(f, "/minor", |n| format!("2 * {n}"))?,
@@ -1594,6 +1731,14 @@ fn pattern<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let p: k::Pattern = f.typed()?;
+    // Bodies copied where a placement of their component shows them
+    // (format 58): MitCad patterns a body in its own component.
+    if p.placements.iter().any(|path| !path.is_empty()) {
+        return Err(NotMapped::Unmapped(
+            "it copies bodies where a placement of their component shows them, which MitCad's pattern does not take"
+                .to_owned(),
+        ));
+    }
     let mut notes = Vec::new();
     let objects = objects(im, &p.features, &p.bodies)?;
     let def = match &p.pattern {
@@ -1777,9 +1922,22 @@ fn move_bodies<K: Kernel>(
     let mut copy = m.copy;
     if m.angle.is_some() {
         let axis = m.rotate_axis.unwrap_or([0.0, 0.0, 1.0]);
+        // The edge or round face the turn was picked on (format 58): the
+        // axis MitCad finds there on every recompute, turned the file's way.
+        let about = match &m.rotate_about {
+            Some(g) => {
+                let reference = im.geo(g, component, &mut notes)?;
+                let r: mitcad_model::GeomRef =
+                    serde_json::from_value(reference.clone()).map_err(|e| e.to_string())?;
+                let line = im.doc.resolve_axis(&r)?;
+                Some((reference, dot(line.direction, axis) < 0.0))
+            }
+            None => None,
+        };
         // The point it turns about (format 55), where its expressions put
         // it now; else the origin.
         let origin = match &m.origin {
+            _ if about.is_some() => [0.0; 3],
             Some(o) => {
                 if o.iter()
                     .any(|e| mitcad_solidcraft::expr::literal(e.as_str(), 1.0).is_none())
@@ -1797,9 +1955,16 @@ fn move_bodies<K: Kernel>(
             }
             None => [0.0; 3],
         };
+        let (axis, angle) = match about {
+            Some((reference, false)) => (reference, im.slot(f, "/angle")?),
+            Some((reference, true)) => (reference, im.slot_of(f, "/angle", |n| format!("-{n}"))?),
+            None => (
+                json!({"origin": origin, "direction": axis}),
+                im.slot(f, "/angle")?,
+            ),
+        };
         let def = json!({"type": "move", "bodies": moved, "copy": copy,
-            "transform": {"type": "rotate", "axis": {"origin": origin, "direction": axis},
-                "angle": im.slot(f, "/angle")?}});
+            "transform": {"type": "rotate", "axis": axis, "angle": angle}});
         let name = format!("{} (turn)", f.name);
         let before: Vec<BodyUid> = im.doc.bodies().iter().map(|b| b.uid).collect();
         let uid: FeatureUid = im.add(&def, Some(&name), component)?;
@@ -2091,14 +2256,22 @@ pub(super) fn sweep_def<K: Kernel>(
             let ps = im
                 .sketches
                 .get(&s.path_sketch)
-                .cloned()
                 .ok_or("the path's sketch did not come in")?;
-            let curves: Vec<String> = s
-                .path
-                .iter()
-                .map(|c| ps.curve(c))
-                .collect::<Result<_, _>>()?;
-            json!({"sketch": ps.uid.to_string(), "curves": curves})
+            // A path joining curves of several sketches (format 63):
+            // MitCad's sweep path is curves of one sketch.
+            let mut ids: Vec<String> = Vec::new();
+            for entry in &s.path {
+                let (sketch, curve) = entry.split(s.path_sketch);
+                if sketch != s.path_sketch {
+                    return Err(NotMapped::Unmapped(
+                        "its path joins curves of several sketches, where MitCad's sweep path is curves of one sketch"
+                            .to_owned(),
+                    ));
+                }
+                ids.push(curve.to_owned());
+            }
+            // Its curves, or its 3D curves (mitcad#2157).
+            ps.path(&ids)?
         }
     };
     let orientation = match &s.orientation {
@@ -2125,14 +2298,8 @@ pub(super) fn sweep_def<K: Kernel>(
         let rs = im
             .sketches
             .get(&rail.sketch)
-            .cloned()
             .ok_or("the rail's sketch did not come in")?;
-        let rc: Vec<String> = rail
-            .curves
-            .iter()
-            .map(|c| rs.curve(c))
-            .collect::<Result<_, _>>()?;
-        rails.push(json!({"sketch": rs.uid.to_string(), "curves": rc}));
+        rails.push(rs.path(&rail.curves)?);
     }
     match rails.as_slice() {
         [] => {}
@@ -2161,18 +2328,13 @@ fn pipe<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let p: k::Pipe = f.typed()?;
-    let s = im
+    let path = im
         .sketches
         .get(&p.path_sketch)
-        .cloned()
-        .ok_or("the path's sketch did not come in")?;
-    let curves: Vec<String> = p
-        .path
-        .iter()
-        .map(|c| s.curve(c))
-        .collect::<Result<_, _>>()?;
+        .ok_or("the path's sketch did not come in")?
+        .path(&p.path)?;
     let (operation, participants) = im.operation(p.operation, &p.targets)?;
-    let mut def = json!({"type": "pipe", "path": {"sketch": s.uid.to_string(), "curves": curves},
+    let mut def = json!({"type": "pipe", "path": path,
         "section": "circular", "size": im.slot(f, "/diameter")?,
         "operation": operation, "participants": participants});
     if p.wall.is_some() {
@@ -2270,6 +2432,10 @@ fn rib<K: Kernel>(im: &mut Importer<'_, '_, K>, f: &Feature, component: Componen
     if kind == "rib" {
         def["thickness_location"] = json!("symmetric");
     }
+    // The curves' open ends run on until they meet the body (format 58).
+    if r.extend {
+        def["extend_ends"] = json!(true);
+    }
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
 }
@@ -2320,6 +2486,22 @@ fn bounding_solid<K: Kernel>(
 ) -> MapResult {
     let b: k::BoundingSolid = f.typed()?;
     let mut notes = Vec::new();
+    // Its component's envelope (format 63): every body placed inside the
+    // component, its subcomponents' too. MitCad's box of no bodies is that
+    // of the component's own bodies, the same where it has none placed in
+    // it.
+    if b.contents {
+        if im.design.components.iter().any(|c| c.parent == f.component) {
+            return Err(NotMapped::Unmapped(
+                "it bounds every body placed inside its component, its subcomponents' too, where MitCad's bounding solid bounds bodies of its own component"
+                    .to_owned(),
+            ));
+        }
+        let def = json!({"type": "bounding_solid", "bodies": [],
+            "margin": margin_slot(im, f, &b)?});
+        im.add(&def, Some(&f.name), component)?;
+        return Ok(Mapped::parametric());
+    }
     if b.bodies.is_empty()
         && im.doc.bodies().iter().any(|body| {
             im.doc
@@ -2331,9 +2513,29 @@ fn bounding_solid<K: Kernel>(
             .push("bounds only its own component's bodies (the file bounds every body)".to_owned());
     }
     let def = json!({"type": "bounding_solid", "bodies": im.body_ids(&b.bodies)?,
-        "margin": im.slot(f, "/margin")?});
+        "margin": margin_slot(im, f, &b)?});
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
+}
+
+/// A bounding solid's margin: its `margin`, or its six side margins
+/// (format 58) where they are one expression; MitCad's box grows by one
+/// margin on every side.
+fn margin_slot<K: Kernel>(
+    im: &mut Importer<'_, '_, K>,
+    f: &Feature,
+    b: &k::BoundingSolid,
+) -> Result<String, NotMapped> {
+    match &b.margins {
+        None => Ok(im.slot(f, "/margin")?),
+        Some(sides) if sides.iter().all(|s| s.as_str() == sides[0].as_str()) => {
+            Ok(im.slot(f, "/margins/0")?)
+        }
+        Some(_) => Err(NotMapped::Unmapped(
+            "a margin of its own on each side, where MitCad's bounding solid grows the box by one margin on every side"
+                .to_owned(),
+        )),
+    }
 }
 
 /// Boundary Fill (mitcad#457): `boundary_fill` with the file's tools and

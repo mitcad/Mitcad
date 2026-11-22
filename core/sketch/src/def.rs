@@ -547,10 +547,17 @@ pub struct RetrimmedDef {
 /// the sketch) still means the whole region, not the piece most like it,
 /// whose extra lobe changed the bodies made from it (mitcad#1182). Empty
 /// for a sketch that is not on a face.
+///
+/// It also keeps the pieces that the automatic boundaries (the face's
+/// edges, its outline projected when the sketch was made) cut out of an
+/// area of the user's curves before mitcad#2197, when they still bounded
+/// profiles there ([`crate::regions::OwnAreaRegions::earlier`]): a
+/// reference to one means that piece, as the design was saved.
 #[derive(Debug, Default)]
 pub struct OwnRegions {
     curves: Vec<RegionCurve>,
     regions: OnceLock<Vec<Region>>,
+    earlier: Vec<Region>,
 }
 
 impl OwnRegions {
@@ -558,7 +565,15 @@ impl OwnRegions {
         Self {
             curves,
             regions: OnceLock::new(),
+            earlier: Vec::new(),
         }
+    }
+
+    /// With the pieces the automatic boundaries cut out of the own areas
+    /// (mitcad#2197).
+    pub fn with_earlier(mut self, earlier: Vec<Region>) -> Self {
+        self.earlier = earlier;
+        self
     }
 
     /// The regions (computed on the first call).
@@ -566,18 +581,32 @@ impl OwnRegions {
         self.regions
             .get_or_init(|| regions_and_layout(&self.curves).0)
     }
+
+    /// The pieces the automatic boundaries cut out of the own areas, as
+    /// profiles were bounded before mitcad#2197.
+    pub fn earlier(&self) -> &[Region] {
+        &self.earlier
+    }
 }
 
-/// Equal when the curves are: the regions follow from them.
+/// Equal when the curves and the earlier pieces are: the regions follow
+/// from the curves.
 impl PartialEq for OwnRegions {
     fn eq(&self, other: &Self) -> bool {
-        self.curves == other.curves
+        self.curves == other.curves && self.earlier == other.earlier
     }
 }
 
 impl SketchOutput {
     pub fn region(&self, key: &RegionKey) -> Option<&ProfileRegion> {
         self.regions.iter().find(|r| &r.key == key)
+    }
+
+    /// Its outline set (mitcad#2194, [`crate::outlines`]): the regions
+    /// (indices into `regions`) at an even nesting depth, or none when two
+    /// of its closed curves cross.
+    pub fn outline_set(&self) -> crate::outlines::OutlineSet {
+        crate::outlines::outline_set(&self.region_info, &self.layout)
     }
 
     /// The regions a reference means now, the main one first (mitcad#407):
@@ -595,6 +624,15 @@ impl SketchOutput {
         let aliased = self.layout.aliased(key);
         let key = aliased.as_ref().unwrap_or(key);
         if let Some(region) = self.region_info.iter().find(|r| &r.profile.key == key) {
+            return Some(FoundRegions {
+                regions: vec![region],
+                exact: true,
+            });
+        }
+        // A piece that the face's edges or its automatic outline cut out of
+        // an area of the user's curves before they stopped splitting it
+        // (mitcad#2197): that piece, so that the design keeps its bodies.
+        if let Some(region) = self.own.earlier().iter().find(|r| &r.profile.key == key) {
             return Some(FoundRegions {
                 regions: vec![region],
                 exact: true,
@@ -761,6 +799,31 @@ impl<P> SketchDef<P> {
             .chain(self.offsets.iter().map(|o| o.id.0))
             .chain(self.blocks.iter().map(|b| b.id.0));
         ConstraintUid(used.max().map_or(1, |n| n + 1))
+    }
+
+    /// `curves` (the sketch's profile curves, [`SketchDef::region_curves_of`])
+    /// as the user's own curves and those of the face's outline that the
+    /// sketch got when it was made ([`Projection::automatic`], mitcad#2197),
+    /// which bound profiles only outside the areas of the own curves
+    /// ([`crate::regions::own_area_regions`]).
+    pub fn split_automatic(
+        &self,
+        curves: Vec<RegionCurve>,
+    ) -> (Vec<RegionCurve>, Vec<RegionCurve>) {
+        let automatic: BTreeSet<EntityUid> = self
+            .projections
+            .iter()
+            .filter(|p| p.automatic)
+            .flat_map(|p| &p.entities)
+            .filter(|r| !r.is_point())
+            .map(|r| r.uid())
+            .collect();
+        if automatic.is_empty() {
+            return (curves, Vec::new());
+        }
+        curves.into_iter().partition(
+            |c| !matches!(&c.uid, crate::topo::CurveId::Curve(id) if automatic.contains(id)),
+        )
     }
 
     /// The curves that bound profiles: not construction.

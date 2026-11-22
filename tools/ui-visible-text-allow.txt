@@ -14,4 +14,4 @@
 # expression the visible text must match> | <reason>
 
 F\d+ | ^My F\d+$ | tools/ui-my-library-test.sh imports its own filament presets, named My F1 to My F30
-p[1-8] | ^(?:Uses )?p[1-8](?: \* 2)?$ | tools/ui-parameter-align-test.sh adds user parameters p1 to p8 (p8 = p1 * 2) and reads their columns
+p[1-8] | ^(?:(?:Uses|Delete) )?p[1-8](?: \* 2)?$|^parameter p1 is used by p8$ | tools/ui-parameter-align-test.sh adds user parameters p1 to p8 (p8 = p1 * 2) and reads their columns; each row's delete button names its parameter, p1's says what uses it (mitcad#2202)

@@ -34,9 +34,8 @@ by a cut along the bore its thread crosses (the crest's section and the
 hole's section leaving their vertices 0.01 to 0.02 radians apart, as
 measured) lost faces with a window of 0.01.
 
-Test: geometry/tests/test_boolean.cpp (ctest geometry.suite.boolean),
-test_split_by_curves_tangent_at_a_vertex: It fails without the patch
-(shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0360.
 --- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_WireSplitter_1.cxx
 +++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_WireSplitter_1.cxx
 @@ -87,6 +87,13 @@ static double Tolerance2D(const TopoDS_Vertex& aV, const BRepAdaptor_Surface& aG

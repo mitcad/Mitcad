@@ -15,6 +15,9 @@
 #   - A click on the stub opens the history: the newest message first, the
 #     error below it; a click on the error's row selects Fillet2 (without
 #     saying its error again) and closes the history. Esc closes it too.
+#   - The close button (mitcad#2182): the shared close mark
+#     (app/icons/dismiss.svg) on a small card button, its middle that of
+#     the band's row within 2 px (the logged "Message band close at").
 #   - Another design clears the band (mitcad#1174): the error shown, New
 #     (Ctrl+N) empties the band and shows only the new design's hint; the
 #     block opened (Ctrl+O) and its error shown, Open of a design without
@@ -26,11 +29,20 @@
 # New and Open put another design into the same window here (Preferences >
 # General, open in the current window): by default each design has a
 # document window of its own (mitcad#1172), whose band is its own.
+#   With a folder given: pictures of the error row with the pointer on its
+#   close button, message-band-light.png and, after one more start in the
+#   dark theme with the same checks, message-band-dark.png. That start's
+#   settings file is written afresh (Open in the current window and the
+#   Theme preference Dark), and its log must say the dark theme was taken
+#   (mitcad#2196).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
-# Usage: tools/ui-message-band-test.sh
+# Usage: tools/ui-message-band-test.sh [pictures-folder]
 
 source "$(dirname "$0")/ui-test-lib.sh"
+
+SHOTS=${1:-}
+[ -z "$SHOTS" ] || mkdir -p "$SHOTS"
 
 # New and Open replace the design, as these steps expect (mitcad#1172).
 ui_open_in_current_window
@@ -123,6 +135,25 @@ select_from_history() {
   not_since "^Message band: error Fillet2" "$1: the error is not said again"
 }
 
+# check_close description: the newest close button place line (mitcad#2182)
+# shows the shared close mark (app/icons/dismiss.svg) at the rows' icon
+# size on a small card button, its middle that of the band's row (2 px).
+check_close() {
+  local line y middle icon side wide tall dy
+  line=$(grep -E "^Message band close at " "$UI_LOG" | tail -1)
+  read -r _ y middle icon side wide tall <<< "$(sed -nE \
+    's/^Message band close at ([0-9-]+),([0-9-]+), row middle ([0-9-]+), icon ([a-z-]+) ([0-9]+) px in ([0-9]+)x([0-9]+)$/\1 \2 \3 \4 \5 \6 \7/p' \
+    <<< "$line")"
+  [ -n "$tall" ] || ui_fail "$1: the close button's place: '$line'"
+  [ "$icon" = dismiss ] || ui_fail "$1: the close button is not the shared close mark: '$line'"
+  [ "$side" -ge 16 ] && [ "$wide" -ge 24 ] && [ "$tall" -ge 24 ] ||
+    ui_fail "$1: the close button is smaller than a small card button: '$line'"
+  echo "ok   $1: the close button is the shared close mark, $side px in ${wide}x$tall"
+  dy=$((y - middle))
+  [ "${dy#-}" -le 2 ] || ui_fail "$1: the close button is $dy px off the row's middle: '$line'"
+  echo "ok   $1: the close button in the middle of the row ($dy px)"
+}
+
 ui_start_display
 ui_start_app --open "$FILE" --chrome=floating --no-native-dialogs
 ui_step "fit (F6)"                         ui_key F6
@@ -156,6 +187,14 @@ read -r CY CH <<< "$(sed -nE 's/.*; browserDock [0-9-]+,([0-9-]+) [0-9]+x([0-9]+
 [ $((CY + CH)) -le "$BY" ] || ui_fail "the Browser's card reaches into the band: $CY + $CH > $BY"
 echo "ok   the Browser's card ends above the band"
 ui_expect_log "Message band close at" "the close button is placed"
+check_close "light theme"
+if [ -n "$SHOTS" ]; then
+  # The pointer on the close button: the picture shows its hover tint.
+  xdotool mousemove $(ui_logged_at "Message band close")
+  ui_sync
+  ui_capture "$SHOTS/message-band-light.png"
+  echo "ok   picture $SHOTS/message-band-light.png"
+fi
 sleep 8
 ui_sync
 not_since "^Message band stub: " "the error is still shown 8 s later"
@@ -257,5 +296,34 @@ ui_expect_new "New document" "a new design"
 expect_line "^Status line cleared \(another design\)$" "New cleared the status line"
 expect_line "^Message band cleared \(another design\)$" "and the message band's message"
 not_since "^Status error: " "no error on the status line"
+
+if [ -n "$SHOTS" ]; then
+  echo "--- The error row in the dark theme (mitcad#2182, the pictures)"
+  ui_stop_app
+  # The settings of the first start again, with the Theme preference Dark:
+  # written afresh, not appended to the file the runs before saved, so the
+  # start does not depend on how a repeated [appearance] group is read
+  # (mitcad#2196); the log (begun afresh by the start) then says the theme
+  # was taken.
+  printf '[appearance]\ntheme=dark\n\n' > "$UI_CONFIG/Mitcad/Mitcad.conf"
+  ui_open_in_current_window
+  ui_start_app --open "$FILE" --chrome=floating --no-native-dialogs
+  ui_expect_log "Theme: dark (preference" "the dark theme is taken"
+  ui_expect_log "Failures button at" "the failures summary is placed"
+  ui_mark
+  ui_step "click the failures summary"     ui_click_logged "Failures button"
+  expect_line "^Message band full: error Fillet2: " "the band shows Fillet2's error"
+  # Its place is logged only when it changes: the band, and its close
+  # button, showed Fillet2's error on opening, before the mark, and the
+  # click leaves the button where it was. The whole log, begun by this
+  # start, as for the light picture.
+  ui_expect_log "Message band close at" "the close button is placed"
+  ui_sync
+  check_close "dark theme"
+  xdotool mousemove $(ui_logged_at "Message band close")
+  ui_sync
+  ui_capture "$SHOTS/message-band-dark.png"
+  echo "ok   picture $SHOTS/message-band-dark.png"
+fi
 
 ui_finish "UI message band test"

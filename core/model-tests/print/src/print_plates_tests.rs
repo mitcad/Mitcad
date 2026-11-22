@@ -1235,3 +1235,212 @@ fn a_slicer_s_key_on_a_plate_names_the_key_to_write() {
     assert_eq!(walls["value"], "arachne", "{walls}");
     assert_eq!(walls["from"], "plate");
 }
+
+/// The bodies a `print_plates` plate lists (its `bodies`), each placement's
+/// body.
+fn listed_bodies(plates: &Value, plate: usize) -> Vec<String> {
+    plates["plates"][plate]["bodies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["body"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// mitcad#2222: a hidden body that no item names goes on no plate; one put
+/// on a plate as an item still prints there.
+#[test]
+fn a_hidden_body_goes_on_no_plate_unless_it_is_an_item() {
+    let mut doc = Document::new(MockKernel::default());
+    command(&mut doc, box_at(0.0));
+    command(&mut doc, box_at(20.0));
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F2.b0", "visible": false}),
+    );
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    // The plate prints the shown box only; the hidden one is on no plate.
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][0]["pieces"], 1, "{plates}");
+    assert_eq!(listed_bodies(&plates, 0), ["F1.b0"], "{plates}");
+    assert_eq!(unplaced_bodies(&plates), ["F1.b0"], "{plates}");
+
+    // The shown box put on the plate: nothing is left on no plate, and the
+    // hidden one still prints nowhere.
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1", "items": [{"body": "F1.b0"}]}),
+    );
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["unplaced"], json!([]), "{plates}");
+    assert_eq!(plates["plates"][0]["pieces"], 1, "{plates}");
+    assert_eq!(listed_bodies(&plates, 0), ["F1.b0"], "{plates}");
+
+    // The hidden box put on the plate on purpose prints there.
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1", "items": [{"body": "F2.b0"}]}),
+    );
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][0]["pieces"], 2, "{plates}");
+    assert_eq!(listed_bodies(&plates, 0), ["F1.b0", "F2.b0"], "{plates}");
+    assert_eq!(plates["unplaced"], json!([]), "{plates}");
+
+    // Taken off again, it goes on no plate.
+    command(
+        &mut doc,
+        json!({"cmd": "remove_from_plates", "items": [{"body": "F2.b0"}]}),
+    );
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(listed_bodies(&plates, 0), ["F1.b0"], "{plates}");
+}
+
+/// mitcad#2222: a body placed in two occurrences, one of them hidden, goes
+/// on the first plate in the shown one only; hidden in both, on no plate.
+#[test]
+fn only_the_shown_placements_go_on_the_first_plate() {
+    let (mut doc, root_body, arm_body, arm) = plated();
+    assert_eq!(arm, "O1");
+    let component: ComponentUid = doc
+        .instances()
+        .into_iter()
+        .find(|i| i.body == arm_body)
+        .expect("the arm's body is placed")
+        .component;
+    let second: OccurrenceUid = doc
+        .add_occurrence(
+            component,
+            ComponentUid::ROOT,
+            Transform::translation([80.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    assert_eq!(second.to_string(), "O2");
+    doc.recompute();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    let placements = |doc: &Document<MockKernel>| -> Vec<(String, String)> {
+        query(doc, json!({"query": "print_plates"}))["unplaced"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| {
+                (
+                    u["body"].as_str().unwrap().to_owned(),
+                    u["occurrence"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+    let root = (root_body.to_string(), String::new());
+    let in_arm = |o: &str| (arm_body.to_string(), o.to_owned());
+    assert_eq!(placements(&doc), [root.clone(), in_arm("O1"), in_arm("O2")]);
+
+    command(
+        &mut doc,
+        json!({"cmd": "set_occurrence_visible", "occurrence": "O2", "visible": false}),
+    );
+    assert_eq!(placements(&doc), [root.clone(), in_arm("O1")]);
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][0]["pieces"], 2, "{plates}");
+
+    // Hidden in every occurrence: on no plate.
+    command(
+        &mut doc,
+        json!({"cmd": "set_occurrence_visible", "occurrence": "O1", "visible": false}),
+    );
+    assert_eq!(placements(&doc), [root]);
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][0]["pieces"], 1, "{plates}");
+    let layout = query(&doc, json!({"query": "plate_layout", "plate": "plate1"}));
+    assert_eq!(layout["pieces"], 1, "{layout}");
+    assert_eq!(
+        listed_bodies(&plates, 0),
+        [root_body.to_string()],
+        "{plates}"
+    );
+
+    // The arm's body as an item prints at its first placement all the same.
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": arm_body.to_string()}]}),
+    );
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][0]["pieces"], 2, "{plates}");
+}
+
+/// mitcad#2222: `remove_from_plates` on a body or an occurrence that is no
+/// plate's item is refused with its name, changing nothing and making no
+/// undo step, also when the call names an item too; on an item it works
+/// as before.
+#[test]
+fn taking_off_what_is_no_item_is_refused() {
+    let (mut doc, root_body, arm_body, arm) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": arm_body.to_string()}]}),
+    );
+    let label = doc.undo_label().map(str::to_owned);
+    let depth = doc.undo_depth();
+    let plates = doc.print_plates().to_vec();
+    let refused = |doc: &mut Document<MockKernel>, items: Value| {
+        doc.command(&json!({"cmd": "remove_from_plates", "items": items}).to_string())
+            .unwrap_err()
+            .to_string()
+    };
+    let root_name = doc.body_name(root_body);
+    let why = "is not placed on a plate by itself: what no plate names prints on the first \
+               plate; hide it to leave it out.";
+    let error = refused(&mut doc, json!([{"body": root_body.to_string()}]));
+    assert!(error.contains(&format!("{root_name} {why}")), "{error}");
+    // With an item too: the whole call refused, a line per such target.
+    let error = refused(
+        &mut doc,
+        json!([{"body": arm_body.to_string()}, {"body": root_body.to_string()},
+               {"occurrence": arm.clone()}]),
+    );
+    assert!(error.contains(&format!("{root_name} {why}")), "{error}");
+    let arm_name = doc.assembly().path_name(&[arm.parse().unwrap()]);
+    assert!(error.contains(&format!("{arm_name} {why}")), "{error}");
+    assert_eq!(error.matches(why).count(), 2, "{error}");
+    assert_eq!(doc.print_plates(), plates.as_slice());
+    assert_eq!(doc.undo_depth(), depth);
+    assert_eq!(doc.undo_label().map(str::to_owned), label);
+
+    // On the item: taken off, one undo step.
+    command(
+        &mut doc,
+        json!({"cmd": "remove_from_plates", "items": [{"body": arm_body.to_string()}]}),
+    );
+    assert_eq!(doc.undo_depth(), depth + 1);
+    assert!(doc.undo_label().unwrap().starts_with("Take "));
+    assert!(doc.print_plates()[0].items.is_empty());
+}
+
+/// mitcad#2222: the plates' 3MF leaves out a hidden body that no item
+/// names.
+#[test]
+fn the_plates_3mf_leaves_out_a_hidden_body_on_no_plate() {
+    let (mut doc, root_body, arm_body, _) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": arm_body.to_string(), "visible": false}),
+    );
+    let path = folder("plates-hidden").join("plates.3mf");
+    let result = command(
+        &mut doc,
+        json!({"cmd": "export", "path": path.to_str().unwrap(), "dialect": "bambu_studio",
+               "plates": "one_file"}),
+    );
+    assert_eq!(
+        plate_bodies(&result, 0),
+        [root_body.to_string()],
+        "{result}"
+    );
+    assert_eq!(result["plates"][0]["pieces"], 1, "{result}");
+    let read = mitcad_3mf::read(&std::fs::read(&path).unwrap()).unwrap();
+    let placements: usize = read.parts.iter().map(|p| p.placements.len()).sum();
+    assert_eq!(placements, 1, "{result}");
+}

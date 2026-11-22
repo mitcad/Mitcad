@@ -1,0 +1,210 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the corner where one rounding ends at a vertex of more than three
+edges, one of them a concave sharp edge, is set back along the concave
+edges only, and its plate meets its borders G0, so that it stays inside
+the body (mitcad#2038).
+
+The bent guide of 1800 to 1803 (GitHub #456): the rounding (0.5) of each
+rib's sloped edge, where its end face meets its underside, ends at its foot
+on the tube's rim, a vertex of four edges: the rounded edge, the rib's end
+on the flat (concave), the flat's rim past the rib (sharp) and the smooth
+edge under the rib where its underside goes on into the tube. The end is
+PerformMoreThreeCorner's corner of one stripe (from
+PerformIntersectionAtEnd: the smooth edge beside the rounded one). It set
+back 0.5 along every sharp edge, the concave one too: the plate's borders
+left that edge's point up the rib's end face and out along the flat, and a
+smooth plate between them turned the concave corner on its air side. All
+twelve such corners reached 0.017 to 0.029 out of the body above the flat
+past the rib, at every bend radius; MitCad's dressup check warned of the
+two whose plate tolerance is the smallest ("the corner of the fillet
+reaches 0.02 mm out of the body"), on opening the design at its own radius
+of 45 and at 17 and 18.
+
+- PerformMoreThreeCorner, for one stripe (not two tangent stripes, not
+  OnSame + OnDiff, no free border, no seam), where a sharp edge at the
+  vertex that is neither regular nor tangent to another edge is concave
+  (ChFi3d::DefineConnectType): the set-back is taken along the concave
+  edges only; every other sharp edge keeps its point at the vertex
+  (1801's walk over a vertex is not tried). Such a point is the vertex in
+  the DS (as for two tangent stripes) and its edge is not limited. The
+  plate's border on the face beyond the concave edge then runs along that
+  edge from the vertex, and the plate closes against the faces the rounding
+  takes away. Its constraints are all G0: at the vertex the faces meet at
+  sharp angles and no tangency holds there (the corner's G1 error was 1.53
+  rad before too); held G1 to the rounding and to the faces, the plate's
+  fit to its borders came out 0.05 off at the inner rim.
+- Elsewhere nothing changes. No catch is added.
+
+On the guide at 45 the twelve corners now reach at most 0.0003 out of the
+body (within their plates' tolerances, 0.0011 to 0.0013), and every corner
+is valid at bend radii from 16.8 to 50. The rounding takes slightly more
+material than before (0.06 mm3 over the twelve corners, about 5e-5 of the
+body).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1805.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index 286a60ac..0146edb0 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -2086,7 +2086,43 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+   Vnear.Init(V1);
+   walkoff.Init(0.);
+   int walkcross = -1, walkonto = -1;
+-  if (!deuxconges && !isOnSameDiff && !bordlibre && !couture && nconges >= 1 && nedge >= 3)
++
++  // (A rounding ending at a vertex where a sharp edge is concave, as a
++  // rib's sloped edge ending at its foot on a flat beside a tube's rim:
++  // set back along that edge, the plate's borders left its point on both of
++  // its faces, the plate turned the concave corner there and reached out of
++  // the body into it. Then the corner is set back along the concave edges
++  // only: the other sharp edges keep their points at the vertex, so that
++  // the plate's border on the face beyond the concave edge runs along that
++  // edge, and the plate closes against the faces the rounding takes away
++  // and stays inside the body.)
++  NCollection_Array1<bool> concave(0, size);
++  NCollection_Array1<bool> atvertex(0, size);
++  concave.Init(false);
++  atvertex.Init(false);
++  bool concavering = false;
++  if (nconges == 1 && !deuxconges && !isOnSameDiff && !bordlibre && !couture)
++  {
++    for (ic = 0; ic < nedge; ic++)
++    {
++      if (!sharp.Value(ic) || regul.Value(ic) || tangentregul.Value(ic))
++      {
++        continue;
++      }
++      const TopoDS_Edge& anE = TopoDS::Edge(Evive.Value(ic));
++      TopoDS_Face        aF1, aF2;
++      ChFi3d_edge_common_faces(myEFMap(anE), aF1, aF2);
++      if (!aF1.IsNull() && !aF2.IsNull() && !aF1.IsSame(aF2)
++          && ChFi3d::DefineConnectType(anE, aF1, aF2, 1.e-4, false) == ChFiDS_Concave)
++      {
++        concave.SetValue(ic, true);
++        concavering = true;
++      }
++    }
++  }
++
++  if (!deuxconges && !isOnSameDiff && !bordlibre && !couture && nconges >= 1 && nedge >= 3
++      && !concavering)
+   {
+     // The set-back: the largest distance of the stripes' ends from V1, where
+     // no two stripes are next to each other (no intersection between them).
+@@ -2589,7 +2625,11 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+         {
+           BRepAdaptor_Curve C(TopoDS::Edge(Evive.Value(ic)));
+           // to pass from 3D distance to a parametric distance
+-          if (!tangentregul(ic))
++          if (concavering && !concave.Value(ic))
++          {
++            ec = 0.0;
++          }
++          else if (!tangentregul(ic))
+           {
+             ec = distance * 100 * C.Resolution(0.01);
+           }
+@@ -3283,6 +3323,14 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+   // 0 very often causes unpredictable undulations of solution
+   int                         degree = 3, nbcurvpnt = 10, nbiter = 1;
+   int                         constr = 1; // G1
++  // (A concave edge in the corner: the plate meets its borders G0. At the
++  // vertex the faces meet at sharp angles and no tangency holds there;
++  // held G1 to the rounding and to the faces, the plate's fit to its
++  // borders came out 0.05 off.)
++  if (concavering)
++  {
++    constr = 0;
++  }
+   // (A corner of a stripe that rides on another's contact line, RideOnOverlap:
+   // its blend meets the other's along that line in a crease, and the
+   // stripes at the corner are cut where their contacts meet on faces the
+@@ -3447,7 +3495,16 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+         indpoint.SetValue(ic, 0, IVtx);
+         indpoint.SetValue(ic, 1, IVtx);
+       }
+-      if (!sharp.Value(icplus))
++      else if (concavering && PE.Distance(BRep_Tool::Pnt(V1)) <= BRep_Tool::Tolerance(V1))
++      {
++        // (A concave edge in the corner: a point at the vertex is the vertex,
++        // and the edge is not limited.)
++        atvertex.SetValue(ic, true);
++        IVtx = DStr.AddShape(V1);
++        indpoint.SetValue(ic, 0, IVtx);
++        indpoint.SetValue(ic, 1, IVtx);
++      }
++      if (!sharp.Value(icplus) && !atvertex.Value(ic))
+       {
+         isfirst = (sens.Value(icplus) == 1);
+         jfp     = 3 - jf.Value(icplus);
+@@ -3460,7 +3517,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+           indpoint.SetValue(ic, 1, indpoint.Value(icplus, 0));
+         }
+       }
+-      if (!sharp.Value(icmoins))
++      if (!sharp.Value(icmoins) && !atvertex.Value(ic))
+       {
+         isfirst = (sens.Value(icmoins) == 1);
+         cp      = CD.Value(icmoins)
+@@ -3764,6 +3821,10 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+           {
+             Order.SetValue(n3d, 1);
+           }
++          if (concavering)
++          {
++            Order.SetValue(n3d, 0);
++          }
+           occ::handle<GeomPlate_CurveConstraint> Cont =
+             new GeomPlate_CurveConstraint(HCons, Order.Value(n3d), 10, tolapp3d, angular, 0.1);
+           PSurf.Add(Cont);
+@@ -3804,6 +3865,11 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+             IsVt1 = sharp.Value(ic);
+             IsVt2 = sharp.Value(icplus);
+           }
++          else if (concavering)
++          {
++            IsVt1 = atvertex.Value(ic);
++            IsVt2 = atvertex.Value(icplus);
++          }
+           Interfp1 = ChFi3d_FilPointInDS(TopAbs_FORWARD,
+                                          indcurve3d.Value(n3d),
+                                          indpoint.Value(ic, 1),
+@@ -4390,7 +4456,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+       Indices(nedge, ic, icplus, icmoins);
+       if (!oksea.Value(ic))
+       {
+-        if (sharp.Value(ic) && !deuxconges)
++        if (sharp.Value(ic) && !deuxconges && !atvertex.Value(ic))
+         {
+           // limitation of the alive edge
+           TopAbs_Orientation ori;
+@@ -4421,11 +4487,14 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+             n3d++;
+             TopOpeBRepDS_Curve& tcourb1 = DStr.ChangeCurve(indcurve3d.Value(n3d));
+             tcourb1.Tolerance(tcourb1.Tolerance() + apperror);
+-            if (!deuxconges)
++            if (!deuxconges && !atvertex.Value(ic))
+             {
+               TopOpeBRepDS_Point& tpt11 = DStr.ChangePoint(indpoint(ic, 1));
+-              TopOpeBRepDS_Point& tpt21 = DStr.ChangePoint(indpoint(icplus, 0));
+               tpt11.Tolerance(tpt11.Tolerance() + apperror);
++            }
++            if (!deuxconges && !atvertex.Value(icplus))
++            {
++              TopOpeBRepDS_Point& tpt21 = DStr.ChangePoint(indpoint(icplus, 0));
+               tpt21.Tolerance(tpt21.Tolerance() + apperror);
+             }
+             Interfc = ChFi3d_FilCurveInDS(indcurve3d.Value(n3d),
+@@ -4509,7 +4578,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+       Indices(nedge, ic, icplus, icmoins);
+       if (!oksea.Value(ic))
+       {
+-        if (sharp.Value(ic) && !deuxconges)
++        if (sharp.Value(ic) && !deuxconges && !atvertex.Value(ic))
+         {
+           // limitation of the alive edge
+           TopAbs_Orientation ori;

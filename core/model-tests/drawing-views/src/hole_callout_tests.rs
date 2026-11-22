@@ -246,6 +246,48 @@ fn format(doc: &mut Document<MockKernel>, id: u64, format: Value) {
 }
 
 #[test]
+fn a_dragged_hole_callout_previews_the_same_group_as_its_move_draws() {
+    let (mut doc, _) = counterbored();
+    let id = add_callout(&mut doc);
+    format(
+        &mut doc,
+        id,
+        json!({"before": "TYP\n", "after": "2 PLACES"}),
+    );
+    let group_id = format!("A{id}");
+    for (delta, free) in [([-55.0, 0.0], false), ([55.0, 0.0], true)] {
+        let moved = json!({"cmd": "edit_drawing_annotation", "drawing": "D1",
+                           "annotation": id, "move": delta});
+        let before = sheet(&doc);
+        let snap = query(
+            &doc,
+            json!({"query": "drawing_snap", "command": moved, "free": free}),
+        );
+        assert!(snap["preview"]["group"]["items"].is_array(), "{snap}");
+        assert_eq!(sheet(&doc), before, "the preview is a read-only query");
+
+        let mut moved = moved;
+        moved["move"] = snap["move"].clone();
+        command(&mut doc, moved);
+        let after = sheet(&doc);
+        let group = after["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| group["id"] == group_id)
+            .unwrap();
+        assert_eq!(&snap["preview"]["group"], group);
+        let entry = after["annotations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .unwrap();
+        assert_eq!(snap["preview"]["box"], entry["box"]);
+    }
+}
+
+#[test]
 fn a_hole_callout_writes_its_hole_and_follows_it() {
     let (mut doc, _) = counterbored();
     let id = add_callout(&mut doc);

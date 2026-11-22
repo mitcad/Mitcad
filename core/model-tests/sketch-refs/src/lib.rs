@@ -48,3 +48,9 @@ mod text_profiles_1993_tests;
 // A sketch on a planar face starts with the face's outline, and Convert to
 // Sketch Geometry takes a profile (mitcad#2051).
 mod face_outline_on_create_tests;
+// A sketch pattern's spacing or angle that uses a driven dimension of its
+// own sketch, solved after it like a driving dimension (mitcad#2057).
+mod pattern_driven_uses_2057_tests;
+// The face's own edges and the outline a sketch got when it was made do
+// not split an area the sketch's own curves close (mitcad#2197).
+mod own_area_profiles_2197_tests;

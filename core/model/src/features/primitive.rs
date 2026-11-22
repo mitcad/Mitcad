@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
-//! Primitives (Box, Cylinder, Sphere and Torus): a solid placed
+//! Primitives (Box, Cylinder, Sphere, Torus and Cone): a solid placed
 //! on a plane at a point in the plane's coordinates (the frame a sketch on
 //! the plane has, see [`super::geom_ref`]), sized by parameters, that
 //! becomes a new body or joins, cuts or intersects bodies like an
 //! extrusion. Faces are `<feature>:bottom` (on the plane), `top` and
 //! `side<i>`: a box's sides follow its base rectangle counter-clockwise
 //! from the side along the plane's x axis (side0 at the corner's y, side1
-//! at x + length, …), a cylinder's, sphere's and torus's curved face is
-//! `side0`. The height of a box or a cylinder goes along the plane's normal
-//! (against it when negative), or both ways with `symmetric` (experiment
-//! K59 asks the defaults of .f3d designs). `at` places a primitive by
+//! at x + length, …), a cylinder's, cone's, sphere's and torus's curved
+//! face is `side0`. The height of a box or a cylinder goes along the
+//! plane's normal (against it when negative), or both ways with `symmetric`
+//! (experiment K59 asks the defaults of .f3d designs). A cone (mitcad#2239)
+//! keeps its base (`radius`, the face `bottom`) on the plane and its top
+//! (`top_radius`, `top`; 0: an apex) at the height, against the normal
+//! when the height is negative. `at` places a primitive by
 //! picked geometry instead (mitcad#656, `place_at.rs`): its frame is the
 //! plane, its origin the position (a box's corner).
 
@@ -223,6 +226,56 @@ pub struct TorusDef<P = ParamId> {
     pub at: Option<PlaceAt<P>>,
 }
 
+/// A cone or a frustum (mitcad#2239), placed as a cylinder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConeDef<P = ParamId> {
+    /// None with `at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plane: Option<GeomRef>,
+    /// The centre of the base, in plane coordinates.
+    #[serde(default = "origin")]
+    pub center: [Coord<P>; 2],
+    /// The radius of the base, on the plane.
+    pub radius: P,
+    /// The radius at the height; left out: 0, a full cone ending in an
+    /// apex.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub top_radius: Option<P>,
+    /// Along the plane's normal; negative: against it, the base still on
+    /// the plane.
+    pub height: P,
+    /// The height both ways from the plane, the base below it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub symmetric: bool,
+    pub operation: Operation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub participants: Vec<BodyUid>,
+    /// Placed by picked geometry instead of `plane` and the position
+    /// (mitcad#656, `place_at.rs`).
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub at: Option<PlaceAt<P>>,
+}
+
+impl<P> ConeDef<P> {
+    pub const TYPE: &'static str = "cone";
+    pub const BASE_NAME: &'static str = "Cone";
+
+    map_params! {
+        ConeDef {
+            plane: clone,
+            center: with(map_center),
+            radius: param,
+            top_radius: option,
+            height: param,
+            symmetric: copy,
+            operation: copy,
+            participants: clone,
+            at: with(map_at),
+        }
+    }
+}
+
 impl<P> BoxDef<P> {
     pub const TYPE: &'static str = "box";
     pub const BASE_NAME: &'static str = "Box";
@@ -363,15 +416,16 @@ impl Common<'_> {
     }
 
     /// The solid, named after `feature`, on the plane moved by `placement`;
-    /// `lift` moves it along the plane's normal.
+    /// `lift` moves it along the plane's normal, `flip` then turns its
+    /// frame over (the normal reversed, the x axis kept).
     fn tool<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
         feature: FeatureUid,
         placement: &Transform,
-        shape: PrimitiveShape,
-        lift: f64,
+        sized: ShapeAt,
     ) -> Result<K::Shape, String> {
+        let ShapeAt { shape, lift, flip } = sized;
         let mut frame = match (self.plane, self.at) {
             // Placed by picked geometry (mitcad#656).
             (_, Some(at)) => ctx.place_def(at)?.frame,
@@ -384,6 +438,9 @@ impl Common<'_> {
             (None, None) => return Err(format!("a {} needs a plane or a placement", self.what)),
         };
         frame.origin = add(frame.origin, scaled(frame.normal(), lift));
+        if flip {
+            frame.y_axis = scaled(frame.y_axis, -1.0);
+        }
         let spec = PrimitiveSpec {
             feature,
             frame: placement.apply_frame(&frame),
@@ -471,13 +528,64 @@ fn torus_radii(diameter: f64, section: f64, position: TorusPosition) -> Result<(
     }
 }
 
-/// Reads the values of a primitive: its shape and the lift of its base.
+/// A cone's radii (mitcad#2239): neither negative, not both zero (no
+/// solid), not equal (a cylinder, which Cylinder makes).
+fn cone_radii(radius: f64, top_radius: f64) -> Result<(), String> {
+    for (what, value) in [("cone radius", radius), ("cone top radius", top_radius)] {
+        if !value.is_finite() {
+            return Err(format!("the {what} must be finite, got {value}"));
+        }
+        if value < 0.0 {
+            return Err(format!("the {what} must not be negative, got {value}"));
+        }
+    }
+    if radius == 0.0 && top_radius == 0.0 {
+        return Err(
+            "a cone needs a radius greater than zero at its base or its top, got two zeros"
+                .to_owned(),
+        );
+    }
+    if (radius - top_radius).abs() < 1e-9 {
+        return Err(format!(
+            "the cone's radius and top radius are equal ({radius}): that is a cylinder, use Cylinder"
+        ));
+    }
+    Ok(())
+}
+
+/// A cone's height along the normal, the lift of its base and whether its
+/// frame turns over: a negative height goes against the normal with the
+/// base still on the plane; a symmetric one has its base half the height
+/// below the plane (above it when negative).
+fn cone_height(height: f64, symmetric: bool) -> (f64, f64, bool) {
+    let lift = if symmetric { -height / 2.0 } else { 0.0 };
+    (height.abs(), lift, height < 0.0)
+}
+
+/// A primitive's shape as the kernel builds it, the lift of its base
+/// along the plane's normal and whether its frame turns over (a cone of a
+/// negative height).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ShapeAt {
+    shape: PrimitiveShape,
+    lift: f64,
+    flip: bool,
+}
+
+impl ShapeAt {
+    fn new(shape: PrimitiveShape, lift: f64) -> Self {
+        Self {
+            shape,
+            lift,
+            flip: false,
+        }
+    }
+}
+
+/// Reads the values of a primitive: its shape and where its base goes.
 trait Primitive {
     fn common(&self) -> Common<'_>;
-    fn shape<K: Kernel>(
-        &self,
-        ctx: &mut EvalContext<'_, K>,
-    ) -> Result<(PrimitiveShape, f64), String>;
+    fn shape<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<ShapeAt, String>;
 }
 
 impl Primitive for BoxDef {
@@ -492,16 +600,13 @@ impl Primitive for BoxDef {
         }
     }
 
-    fn shape<K: Kernel>(
-        &self,
-        ctx: &mut EvalContext<'_, K>,
-    ) -> Result<(PrimitiveShape, f64), String> {
+    fn shape<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<ShapeAt, String> {
         let length = ctx.positive(self.length)?;
         let width = ctx.positive(self.width)?;
         let height = ctx.param(self.height)?;
         nonzero(&ctx.param_name(self.height), height)?;
         let (height, lift) = height_and_lift(height, self.symmetric);
-        Ok((
+        Ok(ShapeAt::new(
             PrimitiveShape::Box {
                 length,
                 width,
@@ -524,15 +629,15 @@ impl Primitive for CylinderDef {
         }
     }
 
-    fn shape<K: Kernel>(
-        &self,
-        ctx: &mut EvalContext<'_, K>,
-    ) -> Result<(PrimitiveShape, f64), String> {
+    fn shape<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<ShapeAt, String> {
         let radius = ctx.positive(self.diameter)? / 2.0;
         let height = ctx.param(self.height)?;
         nonzero(&ctx.param_name(self.height), height)?;
         let (height, lift) = height_and_lift(height, self.symmetric);
-        Ok((PrimitiveShape::Cylinder { radius, height }, lift))
+        Ok(ShapeAt::new(
+            PrimitiveShape::Cylinder { radius, height },
+            lift,
+        ))
     }
 }
 
@@ -548,12 +653,9 @@ impl Primitive for SphereDef {
         }
     }
 
-    fn shape<K: Kernel>(
-        &self,
-        ctx: &mut EvalContext<'_, K>,
-    ) -> Result<(PrimitiveShape, f64), String> {
+    fn shape<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<ShapeAt, String> {
         let radius = ctx.positive(self.diameter)? / 2.0;
-        Ok((PrimitiveShape::Sphere { radius }, 0.0))
+        Ok(ShapeAt::new(PrimitiveShape::Sphere { radius }, 0.0))
     }
 }
 
@@ -569,20 +671,51 @@ impl Primitive for TorusDef {
         }
     }
 
-    fn shape<K: Kernel>(
-        &self,
-        ctx: &mut EvalContext<'_, K>,
-    ) -> Result<(PrimitiveShape, f64), String> {
+    fn shape<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<ShapeAt, String> {
         let diameter = ctx.positive(self.diameter)?;
         let section = ctx.positive(self.section_diameter)?;
         let (major_radius, minor_radius) = torus_radii(diameter, section, self.position)?;
-        Ok((
+        Ok(ShapeAt::new(
             PrimitiveShape::Torus {
                 major_radius,
                 minor_radius,
             },
             0.0,
         ))
+    }
+}
+
+impl Primitive for ConeDef {
+    fn common(&self) -> Common<'_> {
+        Common {
+            what: "cone",
+            plane: self.plane.as_ref(),
+            at: self.at.as_ref(),
+            point: &self.center,
+            operation: self.operation,
+            participants: &self.participants,
+        }
+    }
+
+    fn shape<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<ShapeAt, String> {
+        let radius = ctx.param(self.radius)?;
+        let top_radius = match self.top_radius {
+            Some(id) => ctx.param(id)?,
+            None => 0.0,
+        };
+        cone_radii(radius, top_radius)?;
+        let height = ctx.param(self.height)?;
+        nonzero(&ctx.param_name(self.height), height)?;
+        let (height, lift, flip) = cone_height(height, self.symmetric);
+        Ok(ShapeAt {
+            shape: PrimitiveShape::Cone {
+                radius,
+                top_radius,
+                height,
+            },
+            lift,
+            flip,
+        })
     }
 }
 
@@ -620,10 +753,10 @@ macro_rules! primitive_feature {
                 &self,
                 ctx: &mut EvalContext<'_, K>,
             ) -> Result<FeatureOutput<K::Shape>, String> {
-                let (shape, lift) = self.shape(ctx)?;
+                let shape = self.shape(ctx)?;
                 let common = self.common();
                 let uid = ctx.uid;
-                let tool = common.tool(ctx, uid, &Transform::IDENTITY, shape, lift)?;
+                let tool = common.tool(ctx, uid, &Transform::IDENTITY, shape)?;
                 common.evaluate(ctx, tool)
             }
 
@@ -640,9 +773,10 @@ macro_rules! primitive_feature {
                 if matches!(common.plane, Some(GeomRef::Face { .. })) || common.at.is_some() {
                     return None;
                 }
-                Some(self.shape(ctx).and_then(|(shape, lift)| {
-                    self.common().tool(ctx, feature, placement, shape, lift)
-                }))
+                Some(
+                    self.shape(ctx)
+                        .and_then(|shape| self.common().tool(ctx, feature, placement, shape)),
+                )
             }
         }
     };
@@ -673,6 +807,12 @@ primitive_feature!(TorusDef, |self, value| {
     torus_radii(diameter, section, self.position).map(|_| ())
 });
 
+primitive_feature!(ConeDef, |self, value| {
+    check_point("cone", &self.center, value)?;
+    cone_radii(value(self.radius), self.top_radius.map_or(0.0, value))?;
+    nonzero("cone height", value(self.height)).map(|_| ())
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +839,32 @@ mod tests {
         assert_eq!(height_and_lift(10.0, false), (10.0, 0.0));
         assert_eq!(height_and_lift(-10.0, false), (10.0, -10.0));
         assert_eq!(height_and_lift(10.0, true), (10.0, -5.0));
+    }
+
+    #[test]
+    fn a_cone_keeps_its_base_on_the_plane() {
+        assert_eq!(cone_height(10.0, false), (10.0, 0.0, false));
+        // Against the normal: the frame turns over, the base stays.
+        assert_eq!(cone_height(-10.0, false), (10.0, 0.0, true));
+        // Both ways: the base half the height below, or above when turned.
+        assert_eq!(cone_height(10.0, true), (10.0, -5.0, false));
+        assert_eq!(cone_height(-10.0, true), (10.0, 5.0, true));
+    }
+
+    #[test]
+    fn cone_radii_are_refused_in_words() {
+        assert_eq!(cone_radii(10.0, 0.0), Ok(()));
+        assert_eq!(cone_radii(0.0, 4.0), Ok(()));
+        assert_eq!(cone_radii(10.0, 4.0), Ok(()));
+        let message = |r: f64, t: f64| cone_radii(r, t).unwrap_err();
+        assert!(message(0.0, 0.0).contains("needs a radius greater than zero"));
+        assert!(message(-1.0, 4.0).contains("cone radius must not be negative"));
+        assert!(message(4.0, -1.0).contains("cone top radius must not be negative"));
+        assert!(message(f64::NAN, 4.0).contains("must be finite"));
+        let equal = message(5.0, 5.0);
+        assert!(
+            equal.contains("that is a cylinder, use Cylinder"),
+            "{equal}"
+        );
     }
 }

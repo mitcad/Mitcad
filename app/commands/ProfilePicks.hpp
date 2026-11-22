@@ -58,4 +58,52 @@ std::optional<SelectionItem> automaticProfile(const QJsonArray& profiles);
 // asked only for a planar sketch.
 void newestProfile(CommandState& state, const CommandContext& context);
 
+// The outline set of a sketch (mitcad#2194, core/model-api commands.md
+// "The outline set"): the regions its own curves bound at an even nesting
+// depth, a plate less its holes, as the model's `profiles` query marks them
+// (`outline`), or none when its closed curves cross (`curves_cross`).
+struct OutlinePick {
+  // Its unused members, as Profiles entries of the sketch.
+  Selection items;
+  // The sketch's closed curves cross: it has no outline set.
+  bool crossing = false;
+};
+
+// The outline pick of `sketch` in `profiles`, the model's `profiles` query;
+// the entries name `occurrence` (where the sketch is shown).
+OutlinePick sketchOutline(const QJsonArray& profiles, const QString& sketch,
+                          const QString& occurrence = QString());
+
+// The state's text (CommandState::text) that names the sketch whose closed
+// curves cross, set when Extrude or Revolve started on it or a whole sketch
+// so was picked for Profiles (mitcad#2194); empty otherwise.
+QString crossingSketch(const CommandState& state);
+
+// The `init` of Extrude and Revolve (mitcad#2194): a whole sketch selected
+// before the command becomes its outline pick (expandWholeSketches); an
+// empty Profiles takes the unused members of the outline set of the sketch
+// newestProfile would take a region of, else newestProfile's region (the
+// set all used, or the sketch's closed curves cross, which the panel then
+// says: crossingNote). A QR code's region keeps newestProfile's rule.
+void newestOutline(CommandState& state, const CommandContext& context);
+
+// Each whole sketch (SelectKind::Sketch) in Profiles, picked on its Browser
+// row or its timeline cell, replaced by the unused members of its outline
+// set, after the entries already there; for a sketch whose closed curves
+// cross, by nothing, and crossingSketch names it. Profiles' onPick and
+// newestOutline's first step.
+void expandWholeSketches(CommandState& state, const CommandContext& context);
+
+// The panel's words while Profiles hold nothing but regions of a sketch
+// whose closed curves cross (crossingSketch), or nothing at all: that its
+// areas are to be clicked. Empty otherwise. Extrude's and Revolve's note
+// and the empty Profiles' message.
+QString crossingNote(const CommandState& state, const CommandContext& context);
+
+// Whether a row of the `profiles` query is drawn without fill by Show
+// profiles (mitcad#2194): a region the sketch's own curves bound outside
+// its outline set (a hole's disc), of a sketch whose closed curves do not
+// cross.
+bool unfilledProfile(const QJsonObject& row);
+
 } // namespace mitcad::cmd

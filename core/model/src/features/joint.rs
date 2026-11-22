@@ -320,7 +320,8 @@ pub struct JointDef<P = ParamId> {
     /// at 0, so that its origins meet at the offset and angle; a drag's
     /// values, so that the drag is kept. A free motion without one starts
     /// at the value nearest to where the side is. Unused for a motion
-    /// that is driven and for a joint that closes a loop.
+    /// that is driven, for a joint that closes a loop and in a later
+    /// joint's solve where the joint holds (mitcad#2199).
     #[serde(default = "BTreeMap::new", skip_serializing_if = "BTreeMap::is_empty")]
     pub start: BTreeMap<Motion, f64>,
 }

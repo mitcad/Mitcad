@@ -237,7 +237,11 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   m_textureProjection->addItem(tr("Box"), QStringLiteral("box"));
   m_textureProjection->addItem(tr("Planar"), QStringLiteral("planar"));
   m_textureProjection->addItem(tr("Texture coordinates"), QStringLiteral("uv"));
-  m_textureProjection->setToolTip(tr("How the image is laid on the body: Box, Planar or the mesh's Texture coordinates"));
+  // Each face from its own plane, the image's width along its longest side
+  // (mitcad#2186): the built-in woods' and panels' grain.
+  m_textureProjection->addItem(tr("Along the grain"), QStringLiteral("grain"));
+  m_textureProjection->setToolTip(
+      tr("How the image lies on the body; Along the grain follows each face's longest side"));
   form->addRow(tr("Projection"), m_textureProjection);
   m_textureEmbed = new QCheckBox(tr("Embed the image in the design"));
   m_textureEmbed->setObjectName(QStringLiteral("appearanceTextureEmbed"));
@@ -1084,7 +1088,7 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
   m_textureWidth->setValue(texture.width);
   m_textureHeight->setValue(texture.height);
   m_textureRotation->setValue(texture.rotation / kDegree);
-  m_textureProjection->setCurrentIndex(texture.uv ? 2 : texture.planar ? 1 : 0);
+  m_textureProjection->setCurrentIndex(texture.uv ? 2 : texture.grain ? 3 : texture.planar ? 1 : 0);
   m_textureEmbed->setChecked(texture.embedded);
   m_building = false;
   m_textureInfo->setToolTip(QString());
@@ -1095,8 +1099,16 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
                                .arg(texture.missing));
     qDebug().noquote() << QStringLiteral("Appearance %1 texture missing: %2").arg(a->id, texture.missing);
   } else {
-    m_textureInfo->setText((texture.embedded ? tr("The image is embedded in the design. ") : QString()) +
-                           tr("The rendered view draws the texture; the shaded view shows the base color."));
+    // The shaded view draws the base color image too (mitcad#2186), but
+    // not by a mesh's own texture coordinates.
+    // A library appearance's images are built in (mitcad#2186), not the
+    // design's.
+    const QString kept = !texture.embedded ? QString()
+                         : a->library      ? tr("The images are built into MitCad. ")
+                                           : tr("The image is embedded in the design. ");
+    m_textureInfo->setText(kept +
+                           (texture.uv ? tr("The rendered view draws the texture; the shaded view shows the base color.")
+                                       : tr("The shaded view draws the image; the rendered view draws the whole set.")));
   }
   if (!has) {
     return;
@@ -1112,7 +1124,7 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
   QStringList lines;
   if (!maps.isEmpty()) {
     lines << tr("Maps: base color, %1%2.")
-                 .arg(maps.join(QStringLiteral(", ")), texture.embedded ? tr(" (embedded)") : QString());
+                 .arg(maps.join(QStringLiteral(", ")), texture.embedded && !a->library ? tr(" (embedded)") : QString());
   }
   if (!source.isEmpty()) {
     QString from = source.value(QStringLiteral("asset")).toString();
@@ -1121,6 +1133,10 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
       if (known->id() == sourceName) {
         sourceName = known->name();
       }
+    }
+    // The built-in woods' and panels' own images (mitcad#2186).
+    if (sourceName == QLatin1String("mitcad")) {
+      sourceName = QStringLiteral("MitCad");
     }
     QStringList details;
     for (const char* key : {"resolution", "license"}) {

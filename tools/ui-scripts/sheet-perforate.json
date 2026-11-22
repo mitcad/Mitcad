@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. A contour flange with one flat-face outline. It overlaps part of the bend's developed width, and its circular inner loop excludes one hole."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.3},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_line","sketch":"F2","start":[0,0],"end":[60,0]},
+  {"cmd":"sketch.add_line","sketch":"F2","start":"p3","end":[60,40]},
+  {"cmd":"add_feature","def":{"type":"sheet_contour","rules":"F1","sketch":"F2","curves":["c1","c4"],"width":50}},
+  {"expect":{"feature":"F3","status":"ok","body":"F3.b0","volume":10028.318530717958}},
+  {"cmd":"sketch.create","plane":"xz","upright":true},
+  {"cmd":"sketch.add_rectangle","sketch":"F4","corner":[10,5],"width":58,"height":40},
+  {"cmd":"sketch.add_circle","sketch":"F4","center":[27.5,22.5],"diameter":4}
+]

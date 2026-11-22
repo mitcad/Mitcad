@@ -214,6 +214,14 @@ pub(super) fn parameter_modified(
             .to_owned(),
         );
     }
+    // Its group (mitcad#2180).
+    if has("group") {
+        parts.push(if y.group.is_empty() {
+            format!("out of the group {}", x.group)
+        } else {
+            format!("in the group {}", y.group)
+        });
+    }
     format!("{}: {}", parameter_label(new, &y.comment), parts.join("; "))
 }
 

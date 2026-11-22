@@ -27,9 +27,18 @@ pub struct Sketch {
     pub offsets: Vec<Value>,
     #[serde(default)]
     pub freeform_offsets: Vec<Value>,
-    /// 3D curves.
+    /// 3D curves, each read by [`Wire::read`] (one that does not read is
+    /// left out alone).
     #[serde(default)]
     pub wires: Vec<Value>,
+    /// Relations and dimensions among the drawn 3D curves' fit points
+    /// (format 58), each read by [`WireConstraint::read`].
+    #[serde(default)]
+    pub wire_constraints: Vec<Value>,
+    /// The drawn 3D curves that met were joined once by coincident
+    /// relations (format 58): only those relations join them.
+    #[serde(default)]
+    pub wires_joined: bool,
     /// Equation curves (format 44): the fit splines of `curves` they
     /// place, with their formulas.
     #[serde(default)]
@@ -445,5 +454,304 @@ impl Sketch {
 
     pub fn point_index(&self, id: &str) -> Option<usize> {
         self.points.iter().position(|p| p.id == id)
+    }
+}
+
+/// The coordinates a 3D curve is in (SolidCraft's `WireSpace`): the
+/// world's (the default, drawn or detached geometry), or the sketch's
+/// component's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireSpace {
+    #[default]
+    World,
+    Component,
+}
+
+/// A 3D curve of a sketch (SolidCraft's `crates/sketch/src/wire.rs`): a
+/// drawn one through its fit points (one: a point, two: a line, more: a
+/// spline; three with `arc`: an exact arc), or a linked one (`link`) with
+/// its exact pieces or only its sampled points.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Wire {
+    pub id: String,
+    /// The sampled polyline.
+    #[serde(default)]
+    pub pts: Vec<[f64; 3]>,
+    #[serde(default)]
+    pub space: WireSpace,
+    #[serde(default)]
+    pub link: Option<String>,
+    #[serde(default)]
+    pub fit: Vec<[f64; 3]>,
+    #[serde(default)]
+    pub arc: Option<WireArc>,
+    /// A linked curve's exact pieces, end to end.
+    #[serde(default)]
+    pub exact: Vec<WireCurve>,
+}
+
+impl Wire {
+    /// A 3D curve as the file stores it.
+    pub fn read(v: &Value) -> Result<Wire, String> {
+        Wire::deserialize(v).map_err(|e| format!("a 3D curve that does not read: {e}"))
+    }
+
+    /// Its ends as the file has them: the first and last fit points of a
+    /// drawn curve, else of its samples.
+    pub fn ends(&self) -> Option<([f64; 3], [f64; 3])> {
+        let pts = if self.fit.len() >= 2 {
+            &self.fit
+        } else {
+            &self.pts
+        };
+        Some((*pts.first()?, *pts.last()?))
+    }
+}
+
+/// An exact circular arc drawn in 3D: counter-clockwise about `normal`
+/// from `start` to `end` round `center`.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct WireArc {
+    pub center: [f64; 3],
+    pub normal: [f64; 3],
+    pub radius: f64,
+    pub start: [f64; 3],
+    pub end: [f64; 3],
+}
+
+/// One exact piece of a linked 3D curve: a curve on its interval.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WireCurve {
+    pub curve: RecordCurve,
+    pub interval: [f64; 2],
+}
+
+/// A frame of a record curve: origin and axes.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct RecordFrame {
+    pub origin: [f64; 3],
+    pub x_axis: [f64; 3],
+    pub y_axis: [f64; 3],
+}
+
+/// The curves of SolidCraft's records (`solidcore_record::brep::Curve`),
+/// each with its parameter `t`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RecordCurve {
+    /// `start + t (end - start)`.
+    Line { start: [f64; 3], end: [f64; 3] },
+    /// `origin + radius (cos t x + sin t y)`.
+    Circle { frame: RecordFrame, radius: f64 },
+    /// `origin + radii[0] cos t x + radii[1] sin t y`.
+    Ellipse { frame: RecordFrame, radii: [f64; 2] },
+    /// Straight segments, segment i on [i, i + 1].
+    Polyline { points: Vec<[f64; 3]> },
+    /// A B-spline on its knots (its degree: knots less points less one).
+    Spline {
+        knots: Vec<f64>,
+        points: Vec<[f64; 3]>,
+    },
+    /// A NURBS curve by homogeneous `[x w, y w, z w, w]` coefficients.
+    RationalSpline {
+        knots: Vec<f64>,
+        homogeneous: Vec<[f64; 4]>,
+    },
+    /// An intersection curve of two surfaces (known here only near its
+    /// leader), or a kind of a later format.
+    #[serde(other)]
+    Other,
+}
+
+/// One fit point of a drawn 3D curve: `index` into its `fit`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize)]
+pub struct WirePoint {
+    pub wire: String,
+    pub index: usize,
+}
+
+/// The expressions placing a 3D point, each coordinate of its curve's
+/// space.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PointExprs3 {
+    #[serde(default)]
+    pub x: Option<String>,
+    #[serde(default)]
+    pub y: Option<String>,
+    #[serde(default)]
+    pub z: Option<String>,
+}
+
+/// A relation or dimension among drawn 3D curves (format 58, SolidCraft's
+/// `crates/sketch/src/wire_solve.rs`). Axes are `x`, `y`, `z`; origin
+/// planes `xy`, `yz`, `xz`; lines and arcs by their 3D curve ids; values
+/// in mm and radians.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WireConstraintKind {
+    Coincident {
+        a: WirePoint,
+        b: WirePoint,
+    },
+    /// On the infinite line through a drawn line.
+    PointOnLine {
+        p: WirePoint,
+        line: String,
+    },
+    /// Held at `at`; with `exprs` those coordinates follow parameters.
+    Fix {
+        p: WirePoint,
+        at: [f64; 3],
+        #[serde(default)]
+        exprs: Option<PointExprs3>,
+    },
+    AlongAxis {
+        line: String,
+        axis: String,
+    },
+    Distance {
+        a: WirePoint,
+        b: WirePoint,
+        value: f64,
+    },
+    /// From `a` to `b` along an axis; `reversed`: `b` before `a`.
+    AxisDistance {
+        a: WirePoint,
+        b: WirePoint,
+        axis: String,
+        #[serde(default)]
+        reversed: bool,
+        value: f64,
+    },
+    /// Between two lines' directions, each start to end (end to start
+    /// where reversed).
+    Angle {
+        a: String,
+        b: String,
+        #[serde(default)]
+        a_reversed: bool,
+        #[serde(default)]
+        b_reversed: bool,
+        value: f64,
+    },
+    Radius {
+        arc: String,
+        value: f64,
+    },
+    Parallel {
+        a: String,
+        b: String,
+    },
+    Perpendicular {
+        a: String,
+        b: String,
+    },
+    Collinear {
+        a: String,
+        b: String,
+    },
+    /// Equal lengths of lines, or with `arcs` equal radii.
+    Equal {
+        a: String,
+        b: String,
+        #[serde(default)]
+        arcs: bool,
+    },
+    /// A line's end (0 start, 1 end) tangent to an arc's end (0 start, 2
+    /// end) where they meet.
+    Tangent {
+        line: String,
+        arc: String,
+        line_end: usize,
+        arc_end: usize,
+    },
+    ParallelToPlane {
+        line: String,
+        plane: String,
+    },
+    OnPlane {
+        p: WirePoint,
+        plane: String,
+    },
+    /// The signed distance from an origin plane along its normal
+    /// (`reversed`: behind it).
+    PlaneDistance {
+        p: WirePoint,
+        plane: String,
+        #[serde(default)]
+        reversed: bool,
+        value: f64,
+    },
+    PlaneAngle {
+        line: String,
+        plane: String,
+        #[serde(default)]
+        reversed: bool,
+        value: f64,
+    },
+    /// A kind of a later format.
+    #[serde(other)]
+    Other,
+}
+
+impl WireConstraintKind {
+    /// The kind's name in the file.
+    pub fn name(&self) -> &'static str {
+        use WireConstraintKind::*;
+        match self {
+            Coincident { .. } => "coincident",
+            PointOnLine { .. } => "point_on_line",
+            Fix { .. } => "fix",
+            AlongAxis { .. } => "along_axis",
+            Distance { .. } => "distance",
+            AxisDistance { .. } => "axis_distance",
+            Angle { .. } => "angle",
+            Radius { .. } => "radius",
+            Parallel { .. } => "parallel",
+            Perpendicular { .. } => "perpendicular",
+            Collinear { .. } => "collinear",
+            Equal { .. } => "equal",
+            Tangent { .. } => "tangent",
+            ParallelToPlane { .. } => "parallel_to_plane",
+            OnPlane { .. } => "on_plane",
+            PlaneDistance { .. } => "plane_distance",
+            PlaneAngle { .. } => "plane_angle",
+            Other => "a 3D relation of a later format",
+        }
+    }
+
+    /// A dimension's value (mm or radians).
+    pub fn value(&self) -> Option<f64> {
+        use WireConstraintKind::*;
+        match *self {
+            Distance { value, .. }
+            | AxisDistance { value, .. }
+            | Angle { value, .. }
+            | Radius { value, .. }
+            | PlaneDistance { value, .. }
+            | PlaneAngle { value, .. } => Some(value),
+            _ => None,
+        }
+    }
+}
+
+/// A 3D relation or dimension with its id, its parameter (a driving
+/// dimension's) and whether it is driven.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WireConstraint {
+    pub id: String,
+    #[serde(flatten)]
+    pub kind: WireConstraintKind,
+    #[serde(default)]
+    pub param: Option<String>,
+    #[serde(default)]
+    pub driven: bool,
+}
+
+impl WireConstraint {
+    /// A 3D relation as the file stores it.
+    pub fn read(v: &Value) -> Result<WireConstraint, String> {
+        WireConstraint::deserialize(v).map_err(|e| format!("a 3D relation that does not read: {e}"))
     }
 }

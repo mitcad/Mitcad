@@ -28,8 +28,8 @@
 #   - in a narrow window the groups stay within it;
 #   - the SOLID CREATE menu in its sections with separators (mitcad#579,
 #     mitcad#1975): New Component and Create Sketch; from profiles; on a
-#     body's faces; the primitives; the Pattern submenu, Mirror and
-#     Thicken; the Curves submenu; the plastic, envelope, form and flex
+#     body's faces; the primitives; the Pattern submenu, Mirror, Thicken
+#     and Boundary Fill (mitcad#2149); the Curves submenu; the plastic, envelope, form and flex
 #     features; the Machine Elements submenu (Gear, Gear Pair, Pulley,
 #     Belt Drive, Bearing), from which Gear starts by the keyboard.
 #   - Pin to Toolbar (mitcad#1001), in both layouts in a 1600 x 900 window,
@@ -70,8 +70,8 @@ CREATE="$CREATE | Patterns > [$PATTERNS] | Project / Include > [$REFERENCES] | S
 SOLID_PATTERNS="Rectangular Pattern | Circular Pattern | Pattern on Path | Pattern at Points"
 SOLID_CREATE="New Component | Create Sketch | - | Extrude | Revolve | Sweep | Loft | Rib | Web | Emboss"
 SOLID_CREATE="$SOLID_CREATE | - | Hole | Thread"
-SOLID_CREATE="$SOLID_CREATE | - | Box | Cylinder | Sphere | Torus | Coil | Pipe"
-SOLID_CREATE="$SOLID_CREATE | - | Pattern > [$SOLID_PATTERNS] | Mirror | Thicken"
+SOLID_CREATE="$SOLID_CREATE | - | Box | Cylinder | Cone | Sphere | Torus | Coil | Pipe"
+SOLID_CREATE="$SOLID_CREATE | - | Pattern > [$SOLID_PATTERNS] | Mirror | Thicken | Boundary Fill"
 SOLID_CREATE="$SOLID_CREATE | - | Curves > [Helix | Intersection Curve | Helix Curve]"
 SOLID_CREATE="$SOLID_CREATE | - | Plastic Feature | Envelope | Form | Flex"
 SOLID_CREATE="$SOLID_CREATE | - | Machine Elements > [Gear | Gear Pair | Pulley | Belt Drive | Bearing"

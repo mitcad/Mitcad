@@ -11,22 +11,8 @@ TopOpeBRepDS_DataStructure::Point (a closed blend rolling on a closed edge,
 from the edge overflow of the previous patch, reaches it). The type now
 comes from the first common point too.
 
-Test: none, because no small body was found that reaches the branch at
-the port's tip (mitcad#2121, from the code; nothing was run for it). It
-needs a closed stripe whose first common point on a side is a vertex
-while the walk ends its last one, at the same point one period on,
-without that vertex. The case it was written for, the foot of a round
-step rounded higher than the step, the ball rolling on the closed top rim
-(geometry/tests/test_fillet_overflow.cpp,
-test_closed_roundings_roll_on_a_rim), starts on the rim's vertex, where
-the seams of the step's side and of the foot meet, and builds without the
-patch at the tip (shown 2026-11-20 by tools/occt-port-proof.py): the end
-there is taken for the vertex too, or the start is not, since later
-patches handle a closed rolling stripe starting on a seam vertex (0152)
-and make a closed stripe's end the vertex where its contact runs along a
-face's edge (0321). A rim whose vertex lies off the spine's start puts
-neither end on a vertex; a run-based search for a body that starts on a
-vertex and ends off it is still to be made.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0012.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index b8def97..e583b66 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

@@ -25,6 +25,7 @@
             "-",
             "solid.box",
             "solid.cylinder",
+            "solid.cone",
             "solid.sphere",
             "solid.torus",
             "solid.coil",
@@ -36,6 +37,7 @@
             },
             "solid.mirror",
             {"command": "surface.thicken", "repeat": true},
+            "solid.boundary_fill",
             "-",
             {
               "submenu": "Curves",
@@ -152,6 +154,7 @@
             "inspect.interference",
             {"command": "inspect.section", "button": true},
             {"command": "inspect.print_analysis", "repeat": true},
+            "inspect.draft_analysis",
             "inspect.properties",
             "inspect.center_of_mass",
             "comment.add"
@@ -166,6 +169,7 @@
             {"command": "insert.mesh", "button": true},
             {"command": "insert.dxf", "button": true},
             "insert.svg",
+            "insert.points",
             "insert.open_design",
             "insert.component_web",
             "file.import",
@@ -216,7 +220,8 @@
             "surface.match",
             "surface.fair",
             "-",
-            {"command": "surface.thicken", "button": true}
+            {"command": "surface.thicken", "button": true},
+            {"command": "solid.boundary_fill", "repeat": true}
           ]
         },
         {
@@ -274,14 +279,15 @@
             "sheet.convert",
             "-",
             {"command": "sheet.bend", "button": true},
-            "sheet.fold",
-            "-",
-            "sheet.cut"
+            "sheet.fold"
           ]
         },
         {
           "group": "MODIFY",
           "entries": [
+            "sheet.cut",
+            "sheet.perforate",
+            "-",
             "sheet.corner_relief",
             "sheet.corner_round",
             "sheet.corner_chamfer",
@@ -291,7 +297,8 @@
             {"command": "sheet.flat_pattern", "button": true},
             "sheet.show_flat",
             "-",
-            {"command": "sheet.export_dxf", "repeat": true}
+            {"command": "sheet.export_dxf", "repeat": true},
+            {"command": "sheet.export_bend_table", "repeat": true}
           ]
         },
         {
@@ -466,6 +473,7 @@
           "group": "EXPORT",
           "entries": [
             {"command": "sheet.export_dxf", "button": true},
+            {"command": "sheet.export_bend_table", "button": true},
             {"command": "make.export_face_dxf", "button": true}
           ]
         },
@@ -710,6 +718,7 @@
             "sketch.chamfer",
             {"command": "sketch.trim", "button": true},
             "sketch.extend",
+            "sketch.extend_to_meet",
             "sketch.break",
             "sketch.split",
             {"command": "sketch.offset", "button": true},
@@ -756,7 +765,8 @@
           "group": "INSERT",
           "entries": [
             {"command": "sketch.insert_dxf", "button": true},
-            "sketch.insert_svg"
+            "sketch.insert_svg",
+            "sketch.insert_points"
           ]
         },
         {
@@ -997,6 +1007,7 @@
             "view.style.hidden_edges",
             "view.style.wireframe",
             "view.style.wireframe_hidden",
+            "view.style.wireframe_visible",
             "-",
             "view.rendered",
             "view.render_environment",
@@ -1144,7 +1155,8 @@
     "test.component_web_file",
     "test.leave_wait_cursor",
     "test.nested_wait",
-    "edit.repeat"
+    "edit.repeat",
+    "sketch.explode_text"
   ],
   "optional": [
     "file.render_image",

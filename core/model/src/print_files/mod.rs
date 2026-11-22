@@ -40,7 +40,9 @@
 //! the table of the filament slots, computed from the materials and the
 //! multiplier with the design's overrides, as the Bambu family's
 //! `flush_volumes_matrix` (divided by the multiplier, which it writes
-//! beside it as `flush_multiplier`; one table per extruder) and
+//! beside it as `flush_multiplier`; one table and one multiplier per
+//! extruder, mitcad#2207: the printer's `nozzle_diameter` entries, or the
+//! slicer's own preset's when it has more) and
 //! `flush_volumes_vector`, and as PrusaSlicer's `wiping_volumes_matrix`
 //! (with `wiping_volumes_use_custom_matrix` on) and
 //! `wiping_volumes_extruders`. Cura has no table, and its per-material
@@ -693,6 +695,9 @@ pub(crate) struct Shared<'a> {
     pub overrides: Vec<BTreeMap<String, Value>>,
     /// The purge table of the slots (mitcad#705).
     pub purge: print_purge::Matrix,
+    /// The printer's extruders as the slicer's own preset of it has them
+    /// (mitcad#2207), when the document found it.
+    pub extruders: Option<usize>,
     /// Whether the export writes filament changes at print heights that
     /// change to filaments of their own slots (mitcad#1596: the Bambu
     /// family's manual changes).
@@ -768,6 +773,7 @@ impl<'a> Shared<'a> {
             values,
             overrides,
             purge,
+            extruders: None,
             layer_changes: !extra.is_empty(),
         }
     }
@@ -904,6 +910,7 @@ pub fn export_plates(
         purge,
         plates,
         &ChangeExport::default(),
+        None,
     )
 }
 
@@ -911,7 +918,11 @@ pub fn export_plates(
 /// of its plates (mitcad#1596, `layer_events.rs`): the Bambu family gets a
 /// filament slot for each filament changed to that no part prints with,
 /// and its prime tower off when every plate's parts print with one
-/// filament (`bambu.rs`, `manual_changes_only`).
+/// filament (`bambu.rs`, `manual_changes_only`). `extruders`: the
+/// printer's extruders as the slicer's own preset of it has them
+/// (mitcad#2207), which the Bambu family's purge table and multiplier
+/// follow when the design's printer lists fewer nozzles.
+#[allow(clippy::too_many_arguments)]
 pub fn export_print(
     dialect: Dialect,
     model_name: &str,
@@ -920,6 +931,7 @@ pub fn export_print(
     purge: &[PurgeOverride],
     plates: &[ExportPlate<'_>],
     changes: &ChangeExport,
+    extruders: Option<usize>,
 ) -> ExportOutput {
     let extra: Vec<&EffectivePrint> = match dialect {
         Dialect::BambuStudio | Dialect::OrcaSlicer | Dialect::QidiStudio => {
@@ -947,7 +959,8 @@ pub fn export_print(
         out.own_values = vec![0; parts.len()];
         return out;
     }
-    let shared = Shared::new(dialect, parts, purge, &extra);
+    let mut shared = Shared::new(dialect, parts, purge, &extra);
+    shared.extruders = extruders;
     let mut out = match dialect {
         Dialect::BambuStudio | Dialect::OrcaSlicer | Dialect::QidiStudio => {
             bambu::export(&shared, model_name, objects, plates)

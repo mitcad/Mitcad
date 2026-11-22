@@ -155,7 +155,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # Flex: routes of flexible items, their solids and end ports (mitcad#1713).
   kernel/flex.rs
   # Flex drape: a Flex item let hang (mitcad#1713).
-  kernel/flex_drape.rs)
+  kernel/flex_drape.rs
+  # Surface groups of faces for model_render's edges (mitcad#2148).
+  kernel/surface_groups.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -372,6 +374,10 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/flex_drape.cpp
   cpp/bridge/flex_drape.hpp)
+# Surface groups of faces for model_render's edges (mitcad#2148).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/surface_groups.cpp
+  cpp/bridge/surface_groups.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -586,7 +592,8 @@ if(BUILD_TESTING)
   # (mitcad#640; core/model-tests/print/src/print_files_corpus.rs, an ignored
   # test that core.model.print leaves out): each project an index.tsv lists
   # imported as the application imports it, checked against its row,
-  # exported in the same dialect and read back; skipped without the corpus.
+  # exported in the same dialect and read back; its meshes imported as
+  # File > Import imports a 3MF file (mitcad#2156); skipped without the corpus.
   add_test(NAME 3mf.corpus
     COMMAND "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-debug.tsv"
             "-DTEST_NAME=3mf.corpus"

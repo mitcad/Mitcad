@@ -20,10 +20,8 @@ r = 3: the result had a face of 4e-6 mm2 at each end. ContactsAtTangentEnd
 now takes a width up to that of ChFi3d_EndBeforeVanishing, a twentieth of
 its reach (a hundredth of the radius) where that is more than 10 tolesp.
 
-Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
-and the boss's foot rounded together with 3 and 6 on the synthetic bodies
-and on the case of MITCAD_GEOMETRY_CASES: no face of the result smaller
-than 1e-3 mm2; 24 checks fail without the patch.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1402.
 
 Upstream: new.
 

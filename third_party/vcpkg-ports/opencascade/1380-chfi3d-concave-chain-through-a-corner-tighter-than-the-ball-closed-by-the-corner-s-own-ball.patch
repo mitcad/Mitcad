@@ -117,15 +117,8 @@ pass's handler hid, leaving the stripes after it unextended.
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_three_face_corner.cpp,
-test_radius_of_the_reported_design and test_other_radii (ctest
-geometry.fillet_three_face_corner): a synthetic rod and wall as the
-case's, rounded with 3, 2 and 4: at 3 the corner's points, the strip's and
-the triangle's areas and the material added are the stored body's; the
-port's notes record each failing without the patch. It fails without the
-patch at its place in the chain: OCCT with the patches before it, without
-and with this one (shown 2026-11-20 by tools/occt-port-proof.py
---in-chain, with 1662, 1701 carried, which add API the MitCad code uses).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1380.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 685f6ec2..63b6ec58 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

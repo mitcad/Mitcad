@@ -48,6 +48,7 @@
 #include "../framework/MenuBarReveal.hpp"
 #include "../framework/NoticeLevel.hpp"
 #include "../framework/BoostButton.hpp"
+#include "../framework/DiscordButton.hpp"
 #include "../framework/QuickAccess.hpp"
 #include "../framework/RibbonLabels.hpp"
 #include "../framework/SettingsTransfer.hpp"
@@ -388,9 +389,14 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
     // The Boost development button (mitcad#1990).
     through<bool>(before, {BoostSettings::visibleKey()}, [] { return BoostSettings::loadVisible(); },
                   [](const bool& visible) { BoostSettings::saveVisible(visible); });
-    through<BrowserBackground>(before, {QStringLiteral("appearance/browserBackground")},
-                               [] { return savedBrowserBackground(); },
-                               [](const BrowserBackground& background) { saveBrowserBackground(background); });
+    // Without a choice in the imported settings the default applies
+    // (mitcad#2144): none is written for it.
+    through<std::optional<BrowserBackground>>(
+        before, {QStringLiteral("appearance/browserBackground")}, [] { return chosenBrowserBackground(); },
+        [](const std::optional<BrowserBackground>& choice) { restoreBrowserBackground(choice); });
+    // The Discord button (mitcad#2159).
+    through<bool>(before, {DiscordSettings::visibleKey()}, [] { return DiscordSettings::loadVisible(); },
+                  [](const bool& visible) { DiscordSettings::saveVisible(visible); });
     // The share of the view the Browser's rows take at most (mitcad#1932).
     through<int>(before, {QStringLiteral("appearance/browserRowsShare")}, [] { return savedBrowserRowsShare(); },
                  [](const int& percent) { saveBrowserRowsShare(percent); });

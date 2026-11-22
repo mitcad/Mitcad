@@ -908,6 +908,7 @@ impl<K: Kernel> Document<K> {
                 participants: Vec::new(),
                 source: Some(source.label()),
                 replaces: Vec::new(),
+                linked_tree: false,
                 values: std::marker::PhantomData,
             });
             let base_entry = FeatureEntry {

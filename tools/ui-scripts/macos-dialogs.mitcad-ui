@@ -71,15 +71,17 @@ key Return
 focus-dialog '^Parameters$'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 expect-parameter-cell d1 2 '^60 mm$' visible
-button '^Add User Parameter$'
-focus-dialog '^Add User Parameter$'
-focus-widget parameterName
+# A user parameter typed in the table's empty row (mitcad#2202): name,
+# Tab, value, Enter.
+dialog-click-logged '^Parameters new name at '
+expect-log '^Editing new parameter name$'
 type width
-key Tab Tab
+key Tab
 type 30
 screenshot-dialog '${MITCAD_DIALOG_SHOTS}/parameters-add-${MITCAD_TEST_COLOR_SCHEME}.png'
 key Return
-expect-log '^Added parameter width = 30 mm'
+expect-log '^Created user parameter width = 30 mm [(]mm[)] in the new row$'
+key Escape
 focus-dialog '^Parameters$'
 expect-parameter-cell width 2 '^30 mm$' visible
 

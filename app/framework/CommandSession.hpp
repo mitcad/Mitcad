@@ -693,7 +693,9 @@ private:
   // of the text input (P9: a pattern's suppressed instances).
   void toggleElement(const QString& key, int element);
   void schedulePreview(int delay = 150);
-  void runPreview();
+  // `timed`: from the preview timer, which waits behind calls waiting for
+  // the model's idle point too (idleCallsWaiting, mitcad#2189).
+  void runPreview(bool timed = false);
   bool previewReady(QString& message, bool& error) const;
   bool previewReady(const CommandState& state, QString& message, bool& error) const;
   // The rows a preview leaves out (InputDef::previewCompleteRows,
@@ -1002,6 +1004,12 @@ private:
   bool m_drainingNumber = false;
   void supersedePendingNumbers(const QString& key);
   bool m_previewWaiting = false;
+  // The busy mark shows while the panel's preview or input waits for the
+  // model to finish another job (mitcad#2118); showWaitingMark and
+  // endWaitingMark.
+  bool m_waitingMark = false;
+  void showWaitingMark();
+  void endWaitingMark();
   bool m_asyncPending = false;
   // Since the feature preview computing now (m_asyncPending) started;
   // invalid while none computes (mitcad#1788).
@@ -1264,6 +1272,22 @@ private:
   bool takeAutoOperation(const QJsonObject& report);
   void autoOperationOverruled(const QString& key);
   AutoOperationPolicy m_autoOperation;
+  // A direction flip whose preview fails tries the model's other operation
+  // (mitcad#2216, CommandSessionAuto.cpp): the tool's direction seen before
+  // each preview, and its answer. True when the inputs changed: their own
+  // preview follows instead of the answer's.
+  void observeToolDirection();
+  bool retryFlippedOperation(const QJsonObject& report);
+  // The bodies a suggestion names, placed as the feature's first input.
+  Selection suggestedObjects(const QJsonObject& choice) const;
+  // Operation and Objects set without a hand choice (an automatic or a
+  // flip's operation); `objects` only when the command has Objects.
+  // `react`: the command's own reaction (CommandDef::autoOperationApplied)
+  // follows a changed operation.
+  void setOperation(const QString& operation, const Selection& objects, bool react);
+  // What a flip's tried operation replaced: the user's own.
+  QString m_flipOperation;
+  Selection m_flipObjects;
 
   // What the preview draws, logged as "Preview bodies: ..." when it
   // changed (mitcad#266), for UI tests.

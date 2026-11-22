@@ -95,6 +95,7 @@ pub(crate) fn settle(
                                 &input.regions,
                                 &boundary.piece,
                                 source.span,
+                                None,
                             )?);
                         }
                     }
@@ -616,28 +617,17 @@ fn sketch_tools<K: Kernel>(
 ) -> Result<Vec<MaterialRegion>, String> {
     let fixed = SheetDomainRef::Panel(stationary);
     let (frame, parity) = plane(chart(state, stationary)?)?;
-    let f = frame.normal().map(|v| v * parity.sign());
     let mut tools = Vec::new();
     let mut sketches: Vec<FeatureUid> = d.profiles.iter().map(|p| p.sketch).collect();
     sketches.sort();
     sketches.dedup();
     for sketch_uid in sketches {
         let sketch = ctx.sketch(sketch_uid)?;
-        let s = sketch.frame;
-        let offset = dot(sub(s.origin, frame.origin), f);
-        if dot(s.normal(), frame.normal()).abs() < 1.0 - 1e-9
-            || (offset.abs() > 1e-6 && (offset - thickness).abs() > 1e-6)
-        {
+        let Some(to_chart) = sketch_surface_map(sketch.frame, frame, parity, thickness) else {
             return Err(format!(
                 "the cut sketch {sketch_uid} is not on a surface of the developed {}",
                 domain_label(fixed)
             ));
-        }
-        let o = sub(s.origin, frame.origin);
-        let to_chart = Isometry2 {
-            origin: [dot(o, frame.x_axis), dot(o, frame.y_axis)],
-            x_axis: [dot(s.x_axis, frame.x_axis), dot(s.x_axis, frame.y_axis)],
-            y_axis: [dot(s.y_axis, frame.x_axis), dot(s.y_axis, frame.y_axis)],
         };
         for profile in d.profiles.iter().filter(|p| p.sketch == sketch_uid) {
             // A changed sketch keeps resolving the region as extrusions do
@@ -650,6 +640,29 @@ fn sketch_tools<K: Kernel>(
         }
     }
     Ok(tools)
+}
+
+/// Maps a sketch on either material surface of a panel into its chart.
+pub(super) fn sketch_surface_map(
+    sketch: SketchFrame,
+    panel: SketchFrame,
+    parity: MaterialParity,
+    thickness: f64,
+) -> Option<Isometry2> {
+    let normal = panel.normal();
+    let origin = sub(sketch.origin, panel.origin);
+    let offset = dot(origin, normal) * parity.sign();
+    if dot(sketch.normal(), normal).abs() < 1.0 - 1e-9
+        || (offset.abs() > 1e-6 && (offset - thickness).abs() > 1e-6)
+    {
+        return None;
+    }
+    let uv = |v| [dot(v, panel.x_axis), dot(v, panel.y_axis)];
+    Some(Isometry2 {
+        origin: uv(origin),
+        x_axis: uv(sketch.x_axis),
+        y_axis: uv(sketch.y_axis),
+    })
 }
 
 /// A simple hole through a sheet as a cut of its material domain
@@ -802,7 +815,7 @@ pub(crate) fn straight_profiles<K: Kernel>(
 /// The regions a cut profile means in its evaluated sketch, as extrusions
 /// find them (the main one under the referenced key, the other pieces of a
 /// split one under their own), warning when the key changed (mitcad#407).
-fn found_profiles<K: Kernel>(
+pub(super) fn found_profiles<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     sketch: &crate::features::SketchOutput,
     sketch_uid: FeatureUid,
@@ -818,7 +831,10 @@ fn found_profiles<K: Kernel>(
 }
 
 /// A sketch region as a sheet region, its segments named in the sketch.
-fn sheet_region(sketch: FeatureUid, region: &crate::profile::ProfileRegion) -> SheetRegion {
+pub(super) fn sheet_region(
+    sketch: FeatureUid,
+    region: &crate::profile::ProfileRegion,
+) -> SheetRegion {
     SheetRegion {
         loops: region
             .loops

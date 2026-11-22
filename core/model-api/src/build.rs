@@ -372,10 +372,27 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                                         LengthPlan::None => Value::Null,
                                     });
                                 }
+                                // The joints and their conditions
+                                // (mitcad#2200): which member runs through.
+                                let joints: Vec<Value> = self
+                                    .line_joints(&input)
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .map(|j| {
+                                        json!({
+                                            "at": active.apply_point(j.at),
+                                            "kind": j.kind,
+                                            "condition": j.condition.as_str(),
+                                            "members": j.members,
+                                            "through": j.through,
+                                        })
+                                    })
+                                    .collect();
                                 value["lines"] = json!({
                                     "count": frames.len(),
                                     "frames": frames,
                                     "lengths": lengths,
+                                    "joints": joints,
                                 });
                             }
                             Err(e) => value = problems(e),
@@ -816,6 +833,20 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     mitcad_model_build::side_offset(self, info.component).or(ground)
                 );
                 part["ground"] = json!(ground.is_some());
+                // A profile placed in parallel (mitcad#2201): the target and
+                // its frame, how it stands across the side, its turn (also
+                // as `rotate`, which its joint does not turn) and whether
+                // its length is the target's.
+                part["parallel"] = match mitcad_model_build::parallel_of(self, info.component) {
+                    Some(p) => {
+                        part["rotate"] = json!(p.rotate);
+                        json!({"target": p.target, "frame": p.frame,
+                               "across": p.across.map(mitcad_model_build::Across::as_str),
+                               "rotate": p.rotate,
+                               "length": if p.matched { "match" } else { "typed" }})
+                    }
+                    None => Value::Null,
+                };
                 // A member along an edge (mitcad#1814): its edge frame,
                 // whose definition has the edge, the face and the offsets,
                 // and how it lies.
@@ -944,6 +975,18 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     Err(why) if why.is_empty() => (Value::Null, Value::Null),
                     Err(why) => (Value::Null, json!(why)),
                 };
+                // The joint it is in and its condition (mitcad#2200).
+                let joint = match &e.joint {
+                    Some(j) => json!({
+                        "kind": j.kind.as_str(),
+                        "component": j.other,
+                        "end": j.other_end_b.map(end_name),
+                        "condition": j.condition.as_str(),
+                        "through": j.through,
+                        "problem": j.problem,
+                    }),
+                    None => Value::Null,
+                };
                 json!({
                     "component": e.component,
                     "occurrence": path_text(&e.path),
@@ -953,6 +996,7 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     "leans": leans,
                     "meets": meets,
                     "why": why,
+                    "joint": joint,
                 })
             })
             .collect();
@@ -1220,7 +1264,9 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
             Some(mitcad_model_build::LengthInput::Value(_))
         ) || (input.to.is_some() && input.length.is_none())
             // Along an edge the edge and its offsets give it (mitcad#1814).
-            || input.along.is_some();
+            || input.along.is_some()
+            // In parallel the target's length or the typed one (mitcad#2201).
+            || plan.place == "parallel";
         let mut length_value = match (&plan.length, &hit) {
             (LengthPlan::None, _) => None,
             (LengthPlan::Bound { first, .. }, _) => Some(*first),
@@ -1319,7 +1365,10 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
         // part then stands (its middle along the slot).
         let mut snaps = Vec::new();
         let mut snapped = Value::Null;
-        if plan.place == "side"
+        // In parallel (mitcad#2201) the side as a part on it, without snaps:
+        // its offset is typed.
+        let parallel = plan.place == "parallel";
+        if (plan.place == "side" || parallel)
             && let (Some(target), Spot::Joint(joint)) = (&plan.target, &plan.spot)
             && let GeomRef::Mount { name, .. } = &joint.b.geometry
             && let Some(slot) = target.info.mount(name)
@@ -1333,7 +1382,7 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
                 json!({"component": l.component, "occurrence": path_text(&l.path),
                        "name": l.name})
             };
-            for s in side.snaps() {
+            for s in side.snaps().into_iter().filter(|_| !parallel) {
                 let mut snap = json!({"kind": s.kind, "offset": s.offset, "point": at(s.offset)});
                 if let Some(l) = s.with {
                     snap["with"] = with(l);
@@ -1421,9 +1470,50 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
             }
             None => Value::Null,
         };
+        // In parallel (mitcad#2201): the target and its frame the profile
+        // lies on, how it stands across the side, its turn, whether its
+        // length is the target's, and the side's outward normal.
+        let parallel_shown = match (&plan.target, &plan.spot) {
+            (Some(target), Spot::Joint(joint)) if parallel => {
+                let frame_name = match &joint.b.geometry {
+                    GeomRef::Mount { name, .. } => name.clone(),
+                    _ => String::new(),
+                };
+                let target_length = target.info.length.map(|(id, _)| self.parameters().name(id));
+                let matched = plan
+                    .source
+                    .meta
+                    .length
+                    .as_ref()
+                    .and_then(|m| plan.values.get(&m.parameter))
+                    .is_some_and(|v| {
+                        matches!(v, ValueInput::Name(n) if Some(n.trim()) == target_length.as_deref())
+                    });
+                let rotate = match &input.rotate {
+                    Some(v) => value_in(self, v, Unit::DEG).unwrap_or(0.0),
+                    None => 0.0,
+                };
+                let normal = target
+                    .info
+                    .mount(&frame_name)
+                    .map(|t| active.after(&target.placement).after(t))
+                    .map(|t| mitcad_model::internal::build::z_axis(&t));
+                json!({
+                    "target": target.info.component,
+                    "occurrence": path_text(&target.path),
+                    "frame": frame_name,
+                    "across": joint.side.as_ref().and_then(|s| s.across),
+                    "rotate": rotate,
+                    "length": if matched { "match" } else { "typed" },
+                    "normal": normal,
+                })
+            }
+            _ => Value::Null,
+        };
         Ok(json!({
             "frame": frame_json(&frame),
             "place": plan.place,
+            "parallel": parallel_shown,
             "closing": closing,
             "points": points,
             "length": {

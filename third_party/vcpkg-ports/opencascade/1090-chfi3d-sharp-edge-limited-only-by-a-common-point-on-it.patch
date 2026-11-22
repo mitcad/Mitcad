@@ -43,14 +43,8 @@ a step of OCCT's chamfer sequence equal_dist B9 failed, mitcad#1902).
 
 Upstream: new.
 
-Test: geometry/tests/test_chamfer_sharp_corner.cpp,
-test_convex_and_concave_bevel_at_a_sharp_edge (ctest
-geometry.chamfer_sharp_corner): both ends of a bracket, either edge first,
-and the floor's whole top face: the corner within the bevels' reach, a few
-thousand triangles at most, the ends' volumes equal; one end fails without
-the patch (the port's notes). It fails without the patch (shown 2026-11-20
-by tools/occt-port-proof.py, reverted together with 1801, 1803, which
-change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1090.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 index c7a31b93..4cd10ba0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx

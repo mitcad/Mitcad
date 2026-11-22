@@ -19,6 +19,8 @@
 #   3. The next FireRating typed (the component's, after Wall:1's Mark), F2:
 #      its type's values as a choice; the next one (Down: the list cannot
 #      open in session 0) sets EI60, which Wall:1 inherits.
+#   3b. The component's standing Part number row (empty, mitcad#2138)
+#      typed in place (its row found by typing its name, F2): WP-100.
 #   4. Find in Design (a shortcut) by property: FireRating = EI60 finds
 #      both occurrences.
 #   5. The Bill of Materials (a shortcut) takes Mark and FireRating as columns:
@@ -98,6 +100,8 @@ Ui-ExpectNew 'Property Sets opened for O1' 'the window opened for Wall:1'
 Ui-ExpectNew 'Property sets row: occurrence Identity/Mark = W-13 (user, overrides)' 'Wall:1''s own Mark'
 Ui-ExpectNew 'Property sets row: occurrence Pset_WallCommon/FireRating = EI30 (user, inherited)' 'FireRating inherited'
 Ui-ExpectNew 'Property sets row: component Identity/Mark = W-12 (user)' 'the component''s Mark'
+Ui-ExpectNew 'Property sets row: component Identity/Part number =  ()' 'the component''s standing Part number row, empty (mitcad#2138)'
+Ui-ExpectNew 'Property sets row: component Identity/Description =  ()' 'and its Description row'
 
 Write-Host '--- 2. A value edited in place'
 Ui-FocusDialog '^Property Sets$'
@@ -122,6 +126,19 @@ Ui-Step 'the next value (Down)'           { Ui-Key 'Down' }
 Ui-ExpectNew 'Property component Pset_WallCommon/FireRating chosen: EI60' 'EI60 chosen'
 Ui-ExpectNew 'Property sets row: component Pset_WallCommon/FireRating = EI60 (user)' 'the component''s FireRating is EI60'
 Ui-ExpectNew 'Property sets row: occurrence Pset_WallCommon/FireRating = EI60 (user, inherited)' 'Wall:1 inherits it'
+
+Write-Host '--- 3b. The standing Part number typed in place (mitcad#2138)'
+Ui-FocusDialog '^Property Sets$'
+Ui-Mark
+Start-Sleep -Milliseconds 800
+Ui-Step 'go to Part number (type its name)' { Ui-Type 'Part' }
+Start-Sleep -Milliseconds 800
+Ui-Step 'edit (F2)'                      { Ui-Key 'F2' }
+Ui-ExpectNew 'Editing property component Identity/Part number' 'the component''s standing row in edit'
+Ui-Step 'WP-100 (Enter)'                 { Ui-Key 'ctrl+a'; Ui-Type 'WP-100'; Ui-Key 'Return' }
+Ui-ExpectNew 'Property component Identity/Part number set: WP-100' 'the edit is a model command'
+Ui-ExpectNew 'Property sets row: component Identity/Part number = WP-100 (user)' 'stored, in its own row'
+Ui-ExpectNew 'Property sets row: component Identity/Description =  ()' 'the Description still stands empty'
 Ui-Step 'close (Esc)'                    { Ui-Key 'Escape' }
 
 Write-Host '--- 4. Find in Design by property'

@@ -10,7 +10,8 @@
 # browser-widths-restart.mitcad-ui (also run by
 # tools/ui-windows-browser-widths-test.ps1 and
 # tools/ui-macos-browser-widths-test.sh) on a design that mitcad-cli makes
-# (tools/ui-scripts/browser-widths.json). With Rows a long component name
+# (tools/ui-scripts/browser-widths.json). Rows at the start without a saved
+# choice (mitcad#2144); with Rows a long component name
 # widens the rows and the card so that it shows in full, a longer one stops
 # at a third of the view and is elided (its tooltip has it in full), a
 # limit changed in Preferences takes effect at once, the card shrinks back

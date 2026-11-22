@@ -2,23 +2,31 @@
 // Copyright (c) 2026 SolidCraft contributors
 //
 // Adapted from SolidCraft (https://github.com/tangency-labs/solidcraft, release
-// v0.43.0, commit 8ba46e9e2181396a9b5903b98031399aef61cf26): the JSON
+// v0.45.0, commit e8ce12ef78fe76281a04b7242a9ce059ff7d5067): the JSON
 // upgrade steps of `crates/doc/src/format.rs` (`v2_to_v3`, `v3_to_v4`,
 // `v4_to_v5`, `v5_to_v6`, `v13_to_v14` and their helpers), the upgrade path
 // and the newer-file test of `crates/format/src/lib.rs` (`Formats::upgrade`,
 // `Formats::parts`, `Family::newer`, `Family::canonical_applied_name`), the
-// change files of `crates/doc/src/format/v23` to `v57` (their names, and the
+// change files of `crates/doc/src/format/v23` to `v63` (their names, and the
 // steps of `v28/two-sided-extrude-direction.rs`, `v29/face-pieces-by-place.rs`,
 // `v35/inserted-file-features.rs`, `v40/feature-id-refs.rs`,
 // `v49/join-to-body-apart.rs`, `v49/join-touching-bodies.rs`,
 // `v49/thread-ends.rs`, `v49/thread-hand.rs`, `v50/thread-nominal-size.rs`,
 // `v51/two-sided-extrude-fixed-sides.rs`, `v53/configuration-row-ids.rs`,
 // `v53/hole-sketch-plane-start.rs`, `v56/pattern-names-by-source.rs`,
-// `v57/extrude-to-object-keeps-picked-placements.rs` and
-// `v57/sweep-walls-named-along-the-path.rs`, with their tests), the
-// placement helpers of `crates/doc/src/assembly.rs` (`mat_mul`,
-// `mat_inverse`, `transform_through`) and the feature-input naming of
-// `crates/doc/src/params.rs` (`Document::name_all_feature_inputs`).
+// `v57/extrude-to-object-keeps-picked-placements.rs`,
+// `v57/sweep-walls-named-along-the-path.rs`,
+// `v58/extrude-from-slanted-face.rs`, `v58/sketch-reference-placements.rs`,
+// `v58/surface-sweep-exact-spline-path.rs`, `v62/sheet-edge-names.rs`,
+// `v62/sheet-face-names.rs`, `v62/sheet-hem-gap.rs` and
+// `v62/sheet-surface-convert.rs`, with their tests), the placement helpers
+// of `crates/doc/src/assembly.rs` (`mat_mul`, `mat_inverse`,
+// `transform_through`, `is_placement`), the helpers the format 58 sketch
+// reference step uses (`face_anchor::plane_face_anchor`,
+// `FaceAnchor::author_frame`, `EmbossFace::component_frame`,
+// `Document::placement_frame`, `project::source_sketches`) and the
+// feature-input naming of `crates/doc/src/params.rs`
+// (`Document::name_all_feature_inputs`).
 // Changes: the steps work on `serde_json::Value` and return
 // `Result<(), String>`; the input count per feature comes from
 // `crate::inputs` (Mitcad's port of the feature walk); the formats this
@@ -370,6 +378,79 @@ pub const FOLDED: &[(u32, &[Part])] = &[
             ),
             known("thread-multiple-faces"),
             known("thread-single-face-selection"),
+        ],
+    ),
+    (
+        58,
+        &[
+            known("bounding-solid-side-margins"),
+            step("extrude-from-slanted-face", extrude_from_slanted_face),
+            known("joint-lateral-offsets"),
+            known("move-rotate-about-edge"),
+            known("names-count-characters"),
+            known("pattern-placements"),
+            known("rib-extend-ends"),
+            known("sketch-3d-constraints"),
+            known("sketch-3d-dimensions"),
+            known("sketch-3d-relations"),
+            step(
+                "sketch-reference-placements",
+                sketch_reference_placements::step,
+            ),
+            known("split-planar-tool"),
+            known("step-import-solid-items"),
+            step(
+                "surface-sweep-exact-spline-path",
+                surface_sweep_exact_spline_path,
+            ),
+            known("whole-profile-holes-share-a-curve"),
+        ],
+    ),
+    (
+        59,
+        &[
+            known("bom-item-numbers"),
+            known("bom-suppressed-parts"),
+            known("drawings"),
+            known("extrude-one-sided-direction"),
+            known("named-view-roll-and-up"),
+            known("occurrence-bom-type"),
+            known("plane-at-angle-axis-origin-expressions"),
+        ],
+    ),
+    (
+        60,
+        &[
+            known("fillet-edge-radii"),
+            known("import-records"),
+            known("plugin-data-documents"),
+        ],
+    ),
+    (61, &[known("import-record-copies")]),
+    (
+        62,
+        &[
+            known("import-record-paint"),
+            known("rigid-groups"),
+            step("sheet-edge-names", sheet_edge_names::step),
+            step("sheet-face-names", sheet_face_names::step),
+            step("sheet-hem-gap", sheet_hem_gap),
+            known("sheet-recognize"),
+            step("sheet-surface-convert", sheet_surface_convert),
+        ],
+    ),
+    (
+        63,
+        &[
+            known("bounding-solid-contents"),
+            known("canvas-anchor"),
+            known("closed-control-splines"),
+            known("freeform-chain-offsets"),
+            known("import-record-meshes"),
+            known("link-inherited-metadata"),
+            known("projected-curve-edge-names"),
+            known("sheet-rule-material"),
+            known("sweep-path-across-sketches"),
         ],
     ),
 ];
@@ -1381,6 +1462,898 @@ fn names_face_of(name: &str, id: u64) -> bool {
     })
 }
 
+/// An extrude From Object on a flat face at a slant to the extrusion
+/// starts on that face since format 58; every saved extrude with a From
+/// Object is marked `from_level`, which keeps the older reading: a plane
+/// parallel to the sketch at the level where the face meets the middle of
+/// the profiles.
+fn extrude_from_slanted_face(v: &mut Value) -> Result<(), String> {
+    let Some(Value::Array(features)) = v.get_mut("features") else {
+        return Ok(());
+    };
+    for feature in features {
+        if feature.get("type").and_then(Value::as_str) != Some("extrude") {
+            continue;
+        }
+        let Some(extent) = feature.get_mut("extent").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if extent.get("from").is_some_and(|p| !p.is_null()) {
+            extent.insert("from_level".into(), Value::Bool(true));
+        }
+    }
+    Ok(())
+}
+
+/// A surface sweep along a 3D sketch spline follows the spline itself
+/// since format 58 (one wall along it); every saved surface sweep whose
+/// path lists a 3D sketch curve is marked `spline_as_samples`, which keeps
+/// the older walls along the lines between the spline's samples.
+fn surface_sweep_exact_spline_path(v: &mut Value) -> Result<(), String> {
+    let Some(Value::Array(features)) = v.get_mut("features") else {
+        return Ok(());
+    };
+    // Each sketch's 3D curve ids, by the sketch feature's id.
+    let wires: Vec<(u64, Vec<String>)> = features
+        .iter()
+        .filter_map(|f| {
+            let id = f.get("id")?.as_u64()?;
+            let ids = f
+                .get("sketch")?
+                .get("wires")?
+                .as_array()?
+                .iter()
+                .filter_map(|w| w.get("id")?.as_str().map(str::to_owned))
+                .collect();
+            Some((id, ids))
+        })
+        .collect();
+    for feature in features.iter_mut() {
+        if feature.get("type").and_then(Value::as_str) != Some("surface_sweep") {
+            continue;
+        }
+        let Some(sketch) = feature.get("path_sketch").and_then(Value::as_u64) else {
+            continue;
+        };
+        let Some((_, ids)) = wires.iter().find(|(id, _)| *id == sketch) else {
+            continue;
+        };
+        let on_wire = feature
+            .get("path")
+            .and_then(Value::as_array)
+            .is_some_and(|p| {
+                p.iter()
+                    .any(|c| c.as_str().is_some_and(|c| ids.iter().any(|w| w == c)))
+            });
+        if on_wire && let Some(f) = feature.as_object_mut() {
+            f.insert("spline_as_samples".into(), Value::Bool(true));
+        }
+    }
+    Ok(())
+}
+
+/// A hem's `gap` and a sheet metal rule's `hem_gap` are the space between
+/// the hem's leg and the face it folds over since format 62 (the bend's
+/// inner radius is half of it); older designs read the value as the
+/// radius itself, so each saved value is doubled (`2 * (…)`), and a rule
+/// saved without `hem_gap` gets twice the old default.
+fn sheet_hem_gap(v: &mut Value) -> Result<(), String> {
+    // The default `hem_gap` a rule had when it was the inner radius,
+    // doubled.
+    const OLD_DEFAULT_DOUBLED: &str = "0.02 mm";
+    /// `expr` read as twice itself.
+    fn doubled(expr: &str) -> String {
+        format!("2 * ({expr})")
+    }
+    for feature in v
+        .get_mut("features")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if feature.get("type").and_then(Value::as_str) != Some("sheet_hem") {
+            continue;
+        }
+        if let Some(Value::String(gap)) = feature.get_mut("gap") {
+            *gap = doubled(gap);
+        }
+    }
+    for rule in v
+        .pointer_mut("/sheet/rules")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let Some(rule) = rule.as_object_mut() else {
+            continue;
+        };
+        match rule.get_mut("hem_gap") {
+            Some(Value::String(gap)) => *gap = doubled(gap),
+            _ => {
+                rule.insert("hem_gap".into(), Value::String(OLD_DEFAULT_DOUBLED.into()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A conversion to sheet metal without bend edges (and without the faces,
+/// engravings or side only format 62 saves) converted a plate as one sheet
+/// from the face it picked: since format 62 it is Recognize of that plate
+/// from that face under its rule (`sheet_recognize`). One with bend edges
+/// stays a conversion.
+fn sheet_surface_convert(v: &mut Value) -> Result<(), String> {
+    for feature in v
+        .get_mut("features")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let Some(f) = feature.as_object_mut() else {
+            continue;
+        };
+        if f.get("type").and_then(Value::as_str) != Some("sheet_convert") {
+            continue;
+        }
+        let listed = |key: &str| {
+            f.get(key)
+                .and_then(Value::as_array)
+                .is_some_and(|l| !l.is_empty())
+        };
+        let side = f
+            .get("direction")
+            .and_then(Value::as_str)
+            .is_some_and(|d| !d.is_empty());
+        if listed("bends") || listed("faces") || listed("engrave") || side {
+            continue;
+        }
+        f.remove("bends");
+        f.insert("type".into(), Value::String("sheet_recognize".into()));
+    }
+    Ok(())
+}
+
+/// Whether `m` is a placement an occurrence may have (SolidCraft's
+/// `assembly::is_placement`): finite, a rotation (orthonormal axes, not
+/// mirrored) and a translation within 1e9 mm, its last column `0, 0, 0, 1`.
+fn is_placement(m: &Mat) -> bool {
+    let axis = |i: usize| [m[i][0], m[i][1], m[i][2]];
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let cross = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let (x, y, z) = (axis(0), axis(1), axis(2));
+    m.iter().flatten().all(|v| v.is_finite())
+        && m[3][..3].iter().all(|v| v.abs() <= 1e9)
+        && [x, y, z].iter().all(|v| (dot(*v, *v) - 1.0).abs() < 1e-6)
+        && dot(x, y).abs() < 1e-6
+        && dot(x, z).abs() < 1e-6
+        && dot(y, z).abs() < 1e-6
+        && dot(cross(x, y), z) > 0.0
+        && [m[0][3], m[1][3], m[2][3]].iter().all(|v| v.abs() < 1e-9)
+        && (m[3][3] - 1.0).abs() < 1e-9
+}
+
+/// Format 58: sketch links save `sketch_placements` (the source sketches'
+/// placements relative to the sketch's own component) and a sketch's
+/// construction plane of another component saves its relative
+/// `placement`. A design saved before captures them as it opens, keeping
+/// the geometry it was built with; root and same-component references stay
+/// live (SolidCraft's `v58/sketch-reference-placements.rs`).
+mod sketch_reference_placements {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde_json::{Value, json};
+
+    use super::{IDENTITY, Mat, Placing, is_placement, mat_inverse, mat_mul, transform_through};
+
+    /// The most sketches one link reads (`project::MAX_SKETCH_PLACEMENTS`).
+    const MAX_SKETCH_PLACEMENTS: usize = 1_000;
+
+    /// The assembly as the step reads it: the occurrences, with one at the
+    /// identity for each component the file never placed.
+    struct Context {
+        occurrences: Vec<Placing>,
+    }
+
+    impl Context {
+        fn component_transform(&self, component: u64) -> Mat {
+            transform_through(component, &self.occurrences)
+        }
+
+        /// The world frame of one occurrence path from the root
+        /// (`Document::placement_frame`).
+        fn placement_frame(&self, path: &[u64]) -> Result<Mat, String> {
+            if path.len() > 64 || self.occurrences.len() > 100_000 {
+                return Err("the placement path exceeds work limits".to_owned());
+            }
+            let mut frame = IDENTITY;
+            let mut component = 0;
+            let mut seen = BTreeSet::new();
+            for id in path {
+                if *id == 0 || !seen.insert(*id) {
+                    return Err("invalid placement path".to_owned());
+                }
+                let occurrence = self
+                    .occurrences
+                    .iter()
+                    .find(|o| o.id == *id && o.parent == component)
+                    .ok_or("the placement no longer exists")?;
+                frame = mat_mul(&frame, &occurrence.transform);
+                component = occurrence.component;
+            }
+            Ok(frame)
+        }
+
+        /// The frame of component `owner` through `path`
+        /// (`EmbossFace::component_frame`).
+        fn component_frame(&self, owner: u64, path: &[u64]) -> Result<Mat, String> {
+            let frame = self.placement_frame(path)?;
+            match path.split_last() {
+                None => Ok(self.component_transform(owner)),
+                Some((last, _)) => {
+                    let component = self
+                        .occurrences
+                        .iter()
+                        .find(|o| o.id == *last)
+                        .map(|o| o.component);
+                    if component == Some(owner) {
+                        Ok(frame)
+                    } else {
+                        Err("the path belongs to another component".to_owned())
+                    }
+                }
+            }
+        }
+    }
+
+    /// The face anchor of a sketch plane, also beneath an offset, a plane
+    /// through a point, an angle or a flip (`face_anchor::plane_face_anchor`):
+    /// its `author_path`, when the anchor reads as one.
+    fn anchor_author_path(plane: &Value) -> Option<Vec<u64>> {
+        let mut at = plane;
+        for _ in 0..=64 {
+            match at.get("type").and_then(Value::as_str)? {
+                "face" => {
+                    let anchor = at.get("anchor").filter(|a| !a.is_null())?;
+                    // An anchor reads with its paths (`FaceAnchor`).
+                    anchor.get("path")?.as_array()?;
+                    return anchor
+                        .get("author_path")?
+                        .as_array()?
+                        .iter()
+                        .map(Value::as_u64)
+                        .collect();
+                }
+                "offset" | "through_point" | "at_angle" | "flipped" => at = at.get("base")?,
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// The sketches a link's source reads, the two sides of an
+    /// intersection too (`project::source_sketches`). None for a source
+    /// that does not read as one.
+    fn source_sketches(source: &Value) -> Result<Option<BTreeSet<u64>>, String> {
+        let mut sketches = BTreeSet::new();
+        let mut pending = vec![(source, 0usize)];
+        let mut work = 0;
+        while let Some((source, depth)) = pending.pop() {
+            work += 1;
+            if depth > 64 || work > MAX_SKETCH_PLACEMENTS {
+                return Err("too many nested sketch projection references".to_owned());
+            }
+            let text = |key: &str| source.get(key).and_then(Value::as_str);
+            match source.get("type").and_then(Value::as_str) {
+                Some("sketch_curve" | "sketch_point" | "on_surface") => {
+                    let named = text("curve").or_else(|| text("point"));
+                    match (source.get("sketch").and_then(Value::as_u64), named) {
+                        (Some(sketch), Some(_)) => {
+                            sketches.insert(sketch);
+                        }
+                        _ => return Ok(None),
+                    }
+                }
+                Some("intersection") => match (source.get("a"), source.get("b")) {
+                    (Some(a), Some(b)) => pending.extend([(a, depth + 1), (b, depth + 1)]),
+                    _ => return Ok(None),
+                },
+                Some(_) => {}
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(sketches))
+    }
+
+    fn relative(context: &Context, inverse: &Mat, owner: u64) -> Result<Mat, String> {
+        let placement = mat_mul(inverse, &context.component_transform(owner));
+        if !is_placement(&placement) {
+            return Err("captured sketch reference placement is invalid".to_owned());
+        }
+        Ok(placement)
+    }
+
+    fn capture_plane(
+        plane: &mut Value,
+        author: u64,
+        inverse: &Mat,
+        context: &Context,
+        owners: &BTreeMap<u64, u64>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 64 {
+            return Err("sketch plane reference is too deep".to_owned());
+        }
+        if plane.get("type").and_then(Value::as_str) == Some("construction")
+            && plane.get("placement").is_none_or(Value::is_null)
+            && let Some(owner) = plane
+                .get("feature")
+                .and_then(Value::as_u64)
+                .and_then(|id| owners.get(&id))
+                .filter(|owner| **owner != author)
+        {
+            let placement = relative(context, inverse, *owner)?;
+            if let Some(plane) = plane.as_object_mut() {
+                plane.insert("placement".into(), json!(placement));
+            }
+        }
+        if let Some(base) = plane.get_mut("base") {
+            capture_plane(base, author, inverse, context, owners, depth + 1)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn step(value: &mut Value) -> Result<(), String> {
+        // Only the assembly's frames are needed; a feature this reader
+        // does not know does not keep the known sketches from it.
+        let read = |key: &str| value.get(key).cloned().unwrap_or_else(|| json!([]));
+        let Ok(components) = serde_json::from_value::<Vec<Value>>(read("components")) else {
+            return Ok(());
+        };
+        let Ok(mut occurrences) = serde_json::from_value::<Vec<Placing>>(read("occurrences"))
+        else {
+            return Ok(());
+        };
+        let missing: Vec<(u64, u64)> = components
+            .iter()
+            .filter_map(|c| {
+                Some((
+                    c.get("id")?.as_u64()?,
+                    c.get("parent").and_then(Value::as_u64).unwrap_or(0),
+                ))
+            })
+            .filter(|(id, _)| *id != 0 && !occurrences.iter().any(|o| o.component == *id))
+            .collect();
+        for (component, parent) in missing {
+            let id = occurrences
+                .iter()
+                .map(|o| o.id)
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or("too many items in the design")?;
+            occurrences.push(Placing {
+                id,
+                component,
+                parent,
+                transform: IDENTITY,
+            });
+        }
+        let context = Context { occurrences };
+        let owners: BTreeMap<u64, u64> = value
+            .get("features")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|feature| {
+                Some((
+                    feature.get("id")?.as_u64()?,
+                    feature
+                        .get("component")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                ))
+            })
+            .collect();
+        for feature in value
+            .get_mut("features")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if feature.get("type").and_then(Value::as_str) != Some("sketch") {
+                continue;
+            }
+            let author = feature
+                .get("component")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if author == 0 {
+                continue;
+            }
+            let frame = match feature.get("plane").and_then(anchor_author_path) {
+                // A dangling attachment stays the feature's error, not a
+                // reason to refuse the file (`FaceAnchor::author_frame`).
+                Some(path) if path.is_empty() => continue,
+                Some(path) => match context.component_frame(author, &path) {
+                    Ok(frame) => frame,
+                    Err(_) => continue,
+                },
+                None => context.component_transform(author),
+            };
+            let inverse = mat_inverse(&frame).ok_or("projection author frame is invalid")?;
+            if let Some(plane) = feature.get_mut("plane") {
+                capture_plane(plane, author, &inverse, &context, &owners, 0)?;
+            }
+            for link in feature
+                .get_mut("sketch")
+                .and_then(|s| s.get_mut("links"))
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                if link.get("sketch_placements").is_some() {
+                    continue;
+                }
+                let Some(source) = link.get("source") else {
+                    continue;
+                };
+                let Some(sketches) = source_sketches(source)? else {
+                    continue;
+                };
+                let mut pins = Vec::new();
+                for sketch in sketches {
+                    let Some(owner) = owners.get(&sketch).filter(|owner| **owner != author) else {
+                        continue;
+                    };
+                    pins.push(json!({"sketch": sketch, "placement": relative(&context, &inverse, *owner)?}));
+                }
+                if !pins.is_empty()
+                    && let Some(link) = link.as_object_mut()
+                {
+                    link.insert("sketch_placements".into(), Value::Array(pins));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Format 62: a flange's or a hem's picked edges are saved by the model's
+/// names for them; an older design's sheet names (`base:<line>:<side>`,
+/// `F<f>.<k>:<edge>:<side>`) of an edge the design says what made become
+/// the model's names (SolidCraft's `v62/sheet-edge-names.rs`, whose
+/// comment says which).
+mod sheet_edge_names {
+    use serde_json::Value;
+
+    /// The features that make a sheet.
+    const MAKERS: [&str; 5] = [
+        "sheet_base",
+        "sheet_contour",
+        "sheet_convert",
+        "sheet_recognize",
+        "sheet_surface_convert",
+    ];
+
+    /// The features that make a sheet of a body they convert.
+    const CONVERSIONS: [&str; 3] = ["sheet_convert", "sheet_recognize", "sheet_surface_convert"];
+
+    /// How deep a flange stands on flanges before it, at most, whose names
+    /// are followed.
+    const DEPTH: usize = 64;
+
+    /// A sketch line: its id and its ends.
+    type Line = (String, [f64; 2], [f64; 2]);
+
+    fn kind(f: &Value) -> Option<&str> {
+        f.get("type").and_then(Value::as_str)
+    }
+
+    fn id(f: &Value) -> Option<u64> {
+        f.get("id").and_then(Value::as_u64)
+    }
+
+    /// Whether feature `f` may copy a body, and a sheet with it.
+    fn copies(f: &Value) -> bool {
+        matches!(kind(f), Some("pattern" | "mirror"))
+            || (kind(f) == Some("move") && f.get("copy").and_then(Value::as_bool) == Some(true))
+    }
+
+    /// The base flange whose sheet the edges feature `at` picked lie on, as
+    /// the saved design says.
+    fn base_of(features: &[Value], at: usize) -> Option<&Value> {
+        let f = features.get(at)?;
+        let base = |x: &Value| kind(x) == Some("sheet_base");
+        if let Some(body) = f
+            .get("body")
+            .and_then(Value::as_str)
+            .filter(|b| !b.is_empty())
+        {
+            let keeps = |x: &&Value| {
+                x.get("body_names")
+                    .and_then(Value::as_array)
+                    .is_some_and(|n| n.iter().any(|n| n.as_str() == Some(body)))
+            };
+            let converts = |x: &Value| {
+                kind(x).is_some_and(|k| CONVERSIONS.contains(&k))
+                    && x.get("body").and_then(Value::as_str) == Some(body)
+            };
+            let kept: Vec<&Value> = features.iter().filter(keeps).collect();
+            if let [one] = kept.as_slice()
+                && base(one)
+                && !features.iter().any(converts)
+            {
+                return Some(*one);
+            }
+        }
+        let before = features.get(..at)?;
+        let makers: Vec<&Value> = before
+            .iter()
+            .filter(|x| kind(x).is_some_and(|k| MAKERS.contains(&k)))
+            .collect();
+        match makers.as_slice() {
+            [one] if base(one) && !before.iter().any(copies) => Some(*one),
+            _ => None,
+        }
+    }
+
+    /// The lines of sketch feature `sketch` (not its construction lines):
+    /// each one's id and its ends as the sketch saved them.
+    fn lines(features: &[Value], sketch: u64) -> Vec<Line> {
+        let Some(s) = features
+            .iter()
+            .find(|f| kind(f) == Some("sketch") && id(f) == Some(sketch))
+            .and_then(|f| f.get("sketch"))
+        else {
+            return Vec::new();
+        };
+        let points = s
+            .get("points")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        let at = |c: &Value, end: &str| -> Option<[f64; 2]> {
+            let pos = points
+                .get(usize::try_from(c.get(end)?.as_u64()?).ok()?)?
+                .get("pos")?;
+            Some([pos.get(0)?.as_f64()?, pos.get(1)?.as_f64()?])
+        };
+        s.get("curves")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|c| {
+                kind(c) == Some("line")
+                    && c.get("construction").and_then(Value::as_bool) != Some(true)
+            })
+            .filter_map(|c| Some((c.get("id")?.as_str()?.to_owned(), at(c, "a")?, at(c, "b")?)))
+            .collect()
+    }
+
+    /// Whether the sketch line `line` is one of `lines` and no other lies in
+    /// line with it (within 1e-6 mm).
+    fn alone(lines: &[Line], line: &str) -> bool {
+        let Some((_, a, b)) = lines.iter().find(|(id, _, _)| id == line) else {
+            return false;
+        };
+        let off = |p: [f64; 2], s: [f64; 2], e: [f64; 2]| {
+            let (tx, ty) = (e[0] - s[0], e[1] - s[1]);
+            ((p[0] - s[0]) * ty - (p[1] - s[1]) * tx).abs() / tx.hypot(ty)
+        };
+        let along = |p: [f64; 2], q: [f64; 2], s: [f64; 2], e: [f64; 2]| {
+            off(p, s, e) < 1e-6 && off(q, s, e) < 1e-6
+        };
+        (b[0] - a[0]).hypot(b[1] - a[1]) > 1e-9
+            && lines
+                .iter()
+                .filter(|(id, _, _)| id != line)
+                .all(|(_, p, q)| !along(*p, *q, *a, *b) && !along(*a, *b, *p, *q))
+    }
+
+    /// The sheet of base flange `base` made from its sketch's `lines`, with
+    /// the design's `features` that bent it.
+    struct Sheet<'a> {
+        features: &'a [Value],
+        base: u64,
+        lines: Vec<Line>,
+    }
+
+    impl Sheet<'_> {
+        /// The model's names for the two faces that meet at the edge the
+        /// sheet named `name`, as the feature at `at` saved it: the rim
+        /// along it and its panel's cap on its side.
+        fn faces(&self, name: &str, at: usize, depth: usize) -> Option<(String, String)> {
+            let (edge, side) = name.rsplit_once(':')?;
+            if !matches!(side, "top" | "bottom") || depth > DEPTH {
+                return None;
+            }
+            let b = self.base;
+            if let Some(line) = edge.strip_prefix("base:") {
+                return alone(&self.lines, line)
+                    .then(|| (format!("F{b}:side:{line}"), format!("F{b}:{side}")));
+            }
+            let (tag, rim) = edge.split_once(':')?;
+            let (f, k) = tag.strip_prefix('F')?.split_once('.')?;
+            let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+            if !digits(f) || !digits(k) {
+                return None;
+            }
+            let (f, k): (u64, usize) = (f.parse().ok()?, k.parse().ok()?);
+            // The flange's end rims are named from its bend's anchor,
+            // which runs the edge the other way.
+            let rim = match rim {
+                "far" => "far",
+                "side0" => "end1",
+                "side1" => "end0",
+                _ => return None,
+            };
+            let made = self
+                .features
+                .get(..at)?
+                .iter()
+                .position(|x| id(x) == Some(f))?;
+            let feature = self.features.get(made)?;
+            if base_of(self.features, made).is_some_and(|x| id(x) != Some(b)) {
+                return None;
+            }
+            let edges = feature.get("edges").and_then(Value::as_array)?;
+            if k >= edges.len() {
+                return None;
+            }
+            let whole = |e: &Value| {
+                e.get("segments")
+                    .and_then(Value::as_array)
+                    .is_none_or(Vec::is_empty)
+            };
+            let one_each = match kind(feature) {
+                Some("sheet_hem") => true,
+                Some("sheet_flange") => edges.iter().take(k + 1).all(whole),
+                _ => false,
+            };
+            if !one_each {
+                return None;
+            }
+            let picked = feature.get("edge_names")?.get(k)?.as_str()?;
+            let (on, _) = self.faces(picked, made, depth + 1)?;
+            Some((format!("F{f}:{rim}:{on}"), format!("F{f}:{side}:{on}")))
+        }
+
+        /// The model's name for the edge the sheet named `name`.
+        fn renamed(&self, name: &str, at: usize) -> Option<String> {
+            let (rim, cap) = self.faces(name, at, 0)?;
+            let mut two = [rim, cap];
+            two.sort();
+            Some(two.join("|"))
+        }
+    }
+
+    pub(super) fn step(v: &mut Value) -> Result<(), String> {
+        let Some(features) = v.get("features").and_then(Value::as_array) else {
+            return Ok(());
+        };
+        // Every name is read as the design saved it before any is
+        // rewritten.
+        let mut renamed: Vec<(usize, usize, String)> = Vec::new();
+        for (at, f) in features.iter().enumerate() {
+            if !matches!(kind(f), Some("sheet_flange" | "sheet_hem")) {
+                continue;
+            }
+            let Some(names) = f.get("edge_names").and_then(Value::as_array) else {
+                continue;
+            };
+            let Some(base) = base_of(features, at) else {
+                continue;
+            };
+            let (Some(b), Some(sketch)) = (id(base), base.get("sketch").and_then(Value::as_u64))
+            else {
+                continue;
+            };
+            let sheet = Sheet {
+                features,
+                base: b,
+                lines: lines(features, sketch),
+            };
+            for (k, name) in names.iter().enumerate() {
+                if let Some(new) = name.as_str().and_then(|n| sheet.renamed(n, at)) {
+                    renamed.push((at, k, new));
+                }
+            }
+        }
+        for (at, k, new) in renamed {
+            if let Some(slot) = v.pointer_mut(&format!("/features/{at}/edge_names/{k}")) {
+                *slot = Value::String(new);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Format 62: a sheet's faces are named by the model; an older design's
+/// sheet names `sheet:<body>:base:<side>` of a face the design says what
+/// made become the model's names (SolidCraft's `v62/sheet-face-names.rs`).
+mod sheet_face_names {
+    use std::collections::BTreeMap;
+
+    use serde_json::Value;
+
+    /// What made the panel `base` of a sheet body: a base flange (its id
+    /// and its sketch's line ids), or a conversion with bend edges (its id
+    /// and the model's name for the face it fixed).
+    enum Base {
+        Flange { feature: u64, lines: Vec<String> },
+        Converted { feature: u64, face: String },
+    }
+
+    fn kind(f: &Value) -> Option<&str> {
+        f.get("type").and_then(Value::as_str)
+    }
+
+    fn id(f: &Value) -> Option<u64> {
+        f.get("id").and_then(Value::as_u64)
+    }
+
+    /// The ids of the lines of sketch feature `sketch` (construction lines
+    /// name no rim).
+    fn lines(features: &[Value], sketch: u64) -> Vec<String> {
+        let curves = features
+            .iter()
+            .find(|f| kind(f) == Some("sketch") && id(f) == Some(sketch))
+            .and_then(|f| f.pointer("/sketch/curves"));
+        curves
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|c| {
+                c.get("type").and_then(Value::as_str) == Some("line")
+                    && c.get("construction").and_then(Value::as_bool) != Some(true)
+            })
+            .filter_map(|c| c.get("id").and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    }
+
+    /// What made the panel `base` of each body the design says it of.
+    fn bases(v: &Value) -> BTreeMap<String, Base> {
+        let features = v
+            .get("features")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        let mut keepers: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+        let mut conversions: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+        for f in features {
+            for name in f
+                .get("body_names")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                keepers.entry(name).or_default().push(f);
+            }
+            if kind(f) == Some("sheet_convert")
+                && let Some(body) = f.get("body").and_then(Value::as_str)
+            {
+                conversions.entry(body).or_default().push(f);
+            }
+        }
+        let mut out = BTreeMap::new();
+        for (body, kept) in &keepers {
+            if let ([f], None) = (kept.as_slice(), conversions.get(body))
+                && kind(f) == Some("sheet_base")
+                && let (Some(feature), Some(sketch)) =
+                    (id(f), f.get("sketch").and_then(Value::as_u64))
+            {
+                out.insert(
+                    (*body).to_owned(),
+                    Base::Flange {
+                        feature,
+                        lines: lines(features, sketch),
+                    },
+                );
+            }
+        }
+        for (body, converted) in &conversions {
+            let flange = keepers
+                .get(body)
+                .is_some_and(|kept| kept.iter().any(|f| kind(f) == Some("sheet_base")));
+            if let [f] = converted.as_slice()
+                && !flange
+                && f.get("bends")
+                    .and_then(Value::as_array)
+                    .is_some_and(|b| !b.is_empty())
+                && let (Some(feature), Some(face)) =
+                    (id(f), f.pointer("/face_names/0").and_then(Value::as_str))
+                && !face.is_empty()
+                && !face.starts_with('?')
+            {
+                out.insert(
+                    (*body).to_owned(),
+                    Base::Converted {
+                        feature,
+                        face: face.to_owned(),
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    /// The body, panel and side of a sheet's own name for a face,
+    /// `sheet:<body>:<panel>:<side>`.
+    fn name_parts(name: &str) -> Option<(&str, &str, &str)> {
+        let rest = name.strip_prefix("sheet:")?;
+        let (head, side) = rest.rsplit_once(':')?;
+        let (body, panel) = head.rsplit_once(':')?;
+        (!body.is_empty() && !panel.is_empty() && !side.is_empty()).then_some((body, panel, side))
+    }
+
+    /// The model's name for the face the sheet's own name `name` names.
+    fn renamed(name: &str, bases: &BTreeMap<String, Base>) -> Option<String> {
+        let (body, "base", side) = name_parts(name)? else {
+            return None;
+        };
+        match bases.get(body)? {
+            Base::Flange { feature, lines } => match side.strip_prefix("rim.") {
+                None if matches!(side, "top" | "bottom") => Some(format!("F{feature}:{side}")),
+                Some(line) if lines.iter().any(|l| l == line) => {
+                    Some(format!("F{feature}:side:{line}"))
+                }
+                _ => None,
+            },
+            Base::Converted { feature, face } => match side {
+                "bottom" => Some(face.clone()),
+                "top" => Some(format!("F{feature}:bottom:{face}")),
+                _ => None,
+            },
+        }
+    }
+
+    fn rename_in(n: &mut Value, rename: &dyn Fn(&str) -> Option<String>) {
+        if let Value::String(s) = n
+            && let Some(r) = rename(s.as_str())
+        {
+            *s = r;
+        }
+    }
+
+    /// Each name of a face in `v` through `rename`: a feature's
+    /// `face_names`, and the `name` of every face reference (`"type":
+    /// "face"` with `at`).
+    fn faces(v: &mut Value, rename: &dyn Fn(&str) -> Option<String>) {
+        match v {
+            Value::Object(o) => {
+                let reference =
+                    o.get("type").and_then(Value::as_str) == Some("face") && o.contains_key("at");
+                for (key, x) in o.iter_mut() {
+                    if reference && key == "name" {
+                        rename_in(x, rename);
+                    } else if key == "face_names"
+                        && let Value::Array(names) = x
+                    {
+                        names.iter_mut().for_each(|n| rename_in(n, rename));
+                    } else {
+                        faces(x, rename);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| faces(x, rename)),
+            _ => {}
+        }
+    }
+
+    pub(super) fn step(v: &mut Value) -> Result<(), String> {
+        let made = bases(v);
+        if !made.is_empty() {
+            faces(v, &|name| renamed(name, &made));
+        }
+        Ok(())
+    }
+}
+
 /// Gives every feature input without a parameter name the next free `d<n>`
 /// (`Document::name_all_feature_inputs`): names of designs written before
 /// feature inputs had names, as SolidCraft fills them in when it opens
@@ -1480,13 +2453,452 @@ mod tests {
             assert!(!parts.is_empty(), "{n}");
             assert!(parts.windows(2).all(|w| w[0].name < w[1].name), "{n}");
         }
-        assert_eq!(PINNED, 57);
+        assert_eq!(PINNED, 63);
         assert!(parts(22).is_none());
         assert_eq!(parts(28).map(<[Part]>::len), Some(13));
         // SolidCraft 0.43.0's folders: 65 changes in formats 51 to 57.
         let later: usize = (51..=57).filter_map(parts).map(<[Part]>::len).sum();
         assert_eq!(later, 65);
+        // SolidCraft 0.45.0's folders: 42 changes in formats 58 to 63,
+        // seven of them with a step.
+        let newest: Vec<&Part> = (58..=63).filter_map(parts).flatten().collect();
+        assert_eq!(newest.len(), 42);
+        assert_eq!(newest.iter().filter(|p| p.step.is_some()).count(), 7);
         assert!(parts(PINNED + 1).is_none());
+    }
+
+    #[test]
+    fn saved_extrudes_from_an_object_keep_starting_at_its_level() {
+        let mut v = json!({"features": [
+            {"type": "extrude", "extent": {"distance": "5", "from": [1.0, 2.0, 3.0]}},
+            {"type": "extrude", "extent": {"distance": "5", "from": null}},
+            {"type": "extrude", "extent": {"distance": "5", "to": [1.0, 2.0, 3.0]}},
+            {"type": "revolve", "extent": {"from": [1.0, 2.0, 3.0]}}
+        ]});
+        extrude_from_slanted_face(&mut v).unwrap();
+        let marked: Vec<bool> = v["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["extent"]["from_level"] == json!(true))
+            .collect();
+        assert_eq!(marked, [true, false, false, false]);
+        let mut empty = json!({"name": "Untitled"});
+        extrude_from_slanted_face(&mut empty).unwrap();
+        assert_eq!(empty, json!({"name": "Untitled"}));
+    }
+
+    #[test]
+    fn saved_surface_sweeps_along_3d_curves_keep_their_sampled_walls() {
+        let mut v = json!({"features": [
+            {"id": 2, "type": "sketch", "sketch": {"wires": [{"id": "w1"}]}},
+            {"id": 3, "type": "sketch", "sketch": {"curves": [{"id": "l1"}]}},
+            {"id": 4, "type": "surface_sweep", "path_sketch": 2, "path": ["w1"]},
+            {"id": 5, "type": "surface_sweep", "path_sketch": 3, "path": ["l1"]},
+            {"id": 6, "type": "surface_sweep", "path_body": "Body1", "path_edges": [[0.0, 0.0, 0.0]]},
+            {"id": 7, "type": "sweep", "path_sketch": 2, "path": ["w1"]}
+        ]});
+        surface_sweep_exact_spline_path(&mut v).unwrap();
+        let marked: Vec<bool> = v["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["spline_as_samples"] == json!(true))
+            .collect();
+        assert_eq!(marked, [false, false, true, false, false, false]);
+        let mut empty = json!({"name": "Untitled"});
+        surface_sweep_exact_spline_path(&mut empty).unwrap();
+        assert_eq!(empty, json!({"name": "Untitled"}));
+    }
+
+    #[test]
+    fn saved_hem_gaps_double_and_a_rule_without_one_gets_twice_the_old_default() {
+        let mut v = json!({
+            "features": [
+                {"type": "sheet_hem", "edges": [[0, 0, 0]], "length": "10 mm", "gap": "0.5 mm"},
+                {"type": "sheet_hem", "edges": [[0, 0, 0]], "length": "10 mm"},
+                {"type": "extrude", "gap": "1 mm"},
+            ],
+            "sheet": {"rules": [{"name": "A", "hem_gap": "T / 4"}, {"name": "B"}]},
+        });
+        sheet_hem_gap(&mut v).unwrap();
+        assert_eq!(v["features"][0]["gap"], json!("2 * (0.5 mm)"));
+        assert!(
+            v["features"][1].get("gap").is_none(),
+            "a hem with no gap of its own takes its rule's"
+        );
+        assert_eq!(v["features"][2]["gap"], json!("1 mm"), "only hems");
+        assert_eq!(v["sheet"]["rules"][0]["hem_gap"], json!("2 * (T / 4)"));
+        assert_eq!(v["sheet"]["rules"][1]["hem_gap"], json!("0.02 mm"));
+    }
+
+    #[test]
+    fn a_plate_conversion_is_recognize_of_the_plate_and_one_with_bend_edges_stays() {
+        let tray = json!({
+            "id": 6, "name": "C3", "type": "sheet_convert", "body": "Tray", "face": [50, 30, 0],
+            "bends": [[50, 0, 0]], "face_names": ["F5:-z"],
+        });
+        let mut v = json!({
+            "features": [
+                {"id": 2, "name": "C1", "type": "sheet_convert", "body": "Plate", "face": [50, 30, 2], "rule": "R1"},
+                {"id": 4, "name": "C2", "type": "sheet_convert", "body": "Slab", "face": [0, 0, 1], "bends": []},
+                tray.clone(),
+                {"id": 7, "name": "C4", "type": "sheet_convert", "body": "Part", "face": [0, 0, 1], "faces": [[0, 0, 0]]},
+                {"id": 8, "name": "E1", "type": "extrude", "body": "Plate"},
+            ],
+        });
+        sheet_surface_convert(&mut v).unwrap();
+        assert_eq!(
+            v["features"][0],
+            json!({"id": 2, "name": "C1", "type": "sheet_recognize", "body": "Plate", "face": [50, 30, 2], "rule": "R1"})
+        );
+        // An empty list of bend edges is none: a plate too.
+        assert_eq!(
+            v["features"][1],
+            json!({"id": 4, "name": "C2", "type": "sheet_recognize", "body": "Slab", "face": [0, 0, 1]})
+        );
+        assert_eq!(v["features"][2], tray);
+        assert_eq!(v["features"][3]["type"], json!("sheet_convert"));
+        assert_eq!(
+            v["features"][4]["type"],
+            json!("extrude"),
+            "only conversions"
+        );
+    }
+
+    /// A design of two components, the second placed 100 along x, and a
+    /// sketch in the first whose plane and links read the second's
+    /// geometry.
+    fn foreign_references(plane: Value, author_path: Option<Value>) -> Value {
+        let mut placed = IDENTITY;
+        placed[3][0] = 100.0;
+        let mut sketch = json!({"id": 3, "name": "Drawn", "type": "sketch", "component": 1,
+        "plane": plane,
+        "sketch": {"links": [
+            {"id": "j1", "source": {"type": "sketch_point", "sketch": 2, "point": "p1"}},
+            {"id": "j2", "source": {"type": "intersection",
+                "a": {"type": "sketch_curve", "sketch": 4, "curve": "c1"},
+                "b": {"type": "sketch_curve", "sketch": 2, "curve": "c2"}}},
+            {"id": "j3", "source": {"type": "edge", "body": "B", "at": [0, 0, 0]}},
+            {"id": "j4", "source": {"type": "sketch_point", "sketch": 2, "point": "p1"},
+             "sketch_placements": []}
+        ]}});
+        if let Some(path) = author_path {
+            sketch["plane"]["anchor"]["author_path"] = path;
+        }
+        json!({
+        "components": [{"id": 1, "name": "A"}, {"id": 5, "name": "B"}],
+        "occurrences": [{"id": 10, "component": 5, "parent": 0, "name": "B:1", "transform": placed}],
+        "features": [
+            {"id": 2, "name": "Other", "type": "sketch", "component": 5},
+            {"id": 6, "name": "Plane", "type": "construction_plane", "component": 5},
+            sketch,
+            {"id": 4, "name": "Own", "type": "sketch", "component": 1},
+            {"id": 7, "name": "Root", "type": "sketch", "component": 0,
+             "plane": {"type": "construction", "feature": 6}}
+        ]})
+    }
+
+    #[test]
+    fn foreign_sketch_references_keep_the_placements_they_were_drawn_at() {
+        let plane = json!({"type": "offset", "distance": "5",
+            "base": {"type": "construction", "feature": 6}});
+        let mut v = foreign_references(plane, None);
+        sketch_reference_placements::step(&mut v).unwrap();
+        // Component A, never placed, stands at the identity; B 100 along x.
+        let mut relative = IDENTITY;
+        relative[3][0] = 100.0;
+        let sketch = &v["features"][2];
+        assert_eq!(sketch["plane"]["base"]["placement"], json!(relative));
+        assert!(sketch["plane"].get("placement").is_none());
+        let links = &sketch["sketch"]["links"];
+        assert_eq!(
+            links[0]["sketch_placements"],
+            json!([{"sketch": 2, "placement": relative}])
+        );
+        // An intersection reads both sketches; its own component's stays
+        // live.
+        assert_eq!(
+            links[1]["sketch_placements"],
+            json!([{"sketch": 2, "placement": relative}])
+        );
+        assert!(links[2].get("sketch_placements").is_none());
+        assert_eq!(links[3]["sketch_placements"], json!([]), "kept as saved");
+        // A root sketch's references stay live.
+        assert!(v["features"][4]["plane"].get("placement").is_none());
+    }
+
+    #[test]
+    fn a_face_attached_sketch_measures_from_its_author_path() {
+        let face = json!({"type": "face", "at": [0, 0, 0], "name": "F9:+z",
+            "anchor": {"component": 0, "path": [], "author_path": []}});
+        // No author path: the attachment's own error, nothing captured.
+        let mut v = foreign_references(face.clone(), Some(json!([])));
+        sketch_reference_placements::step(&mut v).unwrap();
+        assert!(
+            v["features"][2]["sketch"]["links"][0]
+                .get("sketch_placements")
+                .is_none()
+        );
+        // A path that no longer exists: likewise.
+        let mut v = foreign_references(face.clone(), Some(json!([99])));
+        sketch_reference_placements::step(&mut v).unwrap();
+        assert!(
+            v["features"][2]["sketch"]["links"][0]
+                .get("sketch_placements")
+                .is_none()
+        );
+        // Through B's occurrence the author frame is B's, so B's sketch is
+        // where the author stands; the path must lead to the author's own
+        // component, which B's does not.
+        let mut v = foreign_references(face, Some(json!([10])));
+        sketch_reference_placements::step(&mut v).unwrap();
+        assert!(
+            v["features"][2]["sketch"]["links"][0]
+                .get("sketch_placements")
+                .is_none()
+        );
+        let mut empty = json!({"name": "Untitled"});
+        sketch_reference_placements::step(&mut empty).unwrap();
+        assert_eq!(empty, json!({"name": "Untitled"}));
+    }
+
+    /// A sketch feature of straight lines between points saved where they
+    /// end.
+    fn lines_sketch(id: u64, lines: &[(&str, [f64; 2], [f64; 2], bool)]) -> Value {
+        let mut points = vec![json!({"id": "origin", "pos": [0.0, 0.0], "fixed": true})];
+        let mut curves = Vec::new();
+        for (line, a, b, construction) in lines {
+            points.push(json!({"id": format!("{line}.start"), "pos": a, "fixed": false}));
+            points.push(json!({"id": format!("{line}.end"), "pos": b, "fixed": false}));
+            curves.push(json!({"id": line, "type": "line", "a": points.len() - 2,
+                "b": points.len() - 1, "construction": construction}));
+        }
+        json!({"id": id, "name": format!("Sketch{id}"), "type": "sketch",
+            "plane": {"type": "origin", "name": "XY"},
+            "sketch": {"points": points, "curves": curves, "constraints": []}})
+    }
+
+    /// A 100 x 60 rectangle from the origin, `l1` along the front.
+    const RECTANGLE: [(&str, [f64; 2], [f64; 2], bool); 4] = [
+        ("l1", [0.0, 0.0], [100.0, 0.0], false),
+        ("l2", [100.0, 0.0], [100.0, 60.0], false),
+        ("l3", [100.0, 60.0], [0.0, 60.0], false),
+        ("l4", [0.0, 60.0], [0.0, 0.0], false),
+    ];
+
+    fn edge_names_after(features: Value) -> Vec<Value> {
+        let mut v = json!({"features": features});
+        sheet_edge_names::step(&mut v).unwrap();
+        v["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["edge_names"].clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_flanges_and_a_hems_edges_take_the_models_names() {
+        let mut lines = RECTANGLE.to_vec();
+        lines.push(("l5", [0.0, 30.0], [100.0, 30.0], true));
+        let split = json!({"point": [0, 30, 1], "segments": [{"from": 0, "to": 0.5},
+            {"from": 0.5, "to": 1, "height": "5"}]});
+        let names = edge_names_after(json!([
+            lines_sketch(1, &lines),
+            {"id": 2, "name": "BaseFlange1", "type": "sheet_base", "sketch": 1, "profiles": {"type": "all"}},
+            {"id": 3, "name": "EdgeFlange1", "type": "sheet_flange", "edges": [[50, 0, 1], [100, 30, 0]],
+             "edge_names": ["base:l1:top", "base:l2:bottom"]},
+            {"id": 4, "name": "Hem1", "type": "sheet_hem", "edges": [[50, 1, 20], [100, 0, 10], [100, 60, 10]],
+             "edge_names": ["F3.0:far:top", "F3.1:side0:bottom", "F3.1:side1:top"]},
+            {"id": 5, "name": "EdgeFlange2", "type": "sheet_flange", "edges": [[50, -3, 15]],
+             "edge_names": ["F4.0:far:bottom"]},
+            {"id": 6, "name": "EdgeFlange3", "type": "sheet_flange", "edges": [split, [50, 60, 1]],
+             "edge_names": ["base:l4:top", "base:l3:top"]},
+            {"id": 7, "name": "Hem2", "type": "sheet_hem", "edges": [[0, 0, 0], [0, 0, 0], [0, 0, 0],
+                [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
+             "edge_names": ["F6.1:far:top", "F6.0:far:top", "F3.0:bend:top", "F9.0:far:top",
+                "base:l5:top", "base:l9:top", "", "F2.0:far:top"]},
+            {"id": 8, "name": "Fillet1", "type": "fillet", "edge_names": ["base:l1:top"]},
+            {"id": 9, "name": "EdgeFlange4", "type": "sheet_flange", "edges": [[50, 0, 0]],
+             "edge_names": ["base:l1:bottom"]},
+        ]));
+        assert_eq!(
+            names[2],
+            json!(["F2:side:l1|F2:top", "F2:bottom|F2:side:l2"])
+        );
+        assert_eq!(names[8], json!(["F2:bottom|F2:side:l1"]));
+        assert_eq!(
+            names[3],
+            json!([
+                "F3:far:F2:side:l1|F3:top:F2:side:l1",
+                "F3:bottom:F2:side:l2|F3:end1:F2:side:l2",
+                "F3:end0:F2:side:l2|F3:top:F2:side:l2"
+            ])
+        );
+        assert_eq!(
+            names[4],
+            json!(["F4:bottom:F3:far:F2:side:l1|F4:far:F3:far:F2:side:l1"])
+        );
+        assert_eq!(names[5], json!(["F2:side:l4|F2:top", "F2:side:l3|F2:top"]));
+        assert_eq!(
+            names[6],
+            json!([
+                "F6.1:far:top",
+                "F6.0:far:top",
+                "F3.0:bend:top",
+                "F9.0:far:top",
+                "base:l5:top",
+                "base:l9:top",
+                "",
+                "F2.0:far:top"
+            ])
+        );
+        assert_eq!(names[7], json!(["base:l1:top"]));
+        assert_eq!(names[0], Value::Null);
+    }
+
+    #[test]
+    fn edge_names_on_a_sheet_the_design_does_not_say_or_along_a_notch_are_left() {
+        let base = |id: u64, sketch: u64, body: Option<&str>| {
+            let mut f = json!({"id": id, "name": format!("BaseFlange{id}"), "type": "sheet_base",
+                "sketch": sketch, "profiles": {"type": "all"}});
+            if let Some(body) = body {
+                f["body_names"] = json!([body]);
+            }
+            f
+        };
+        let flange = |id: u64, body: Option<&str>, name: &str| {
+            let mut f = json!({"id": id, "name": format!("EdgeFlange{id}"), "type": "sheet_flange",
+                "edges": [[50, 0, 1]], "edge_names": [name]});
+            if let Some(body) = body {
+                f["body"] = json!(body);
+            }
+            f
+        };
+        let names = edge_names_after(json!([
+            lines_sketch(1, &RECTANGLE),
+            base(2, 1, Some("Plate")),
+            lines_sketch(3, &RECTANGLE),
+            base(4, 3, None),
+            flange(5, Some("Plate"), "base:l1:top"),
+            flange(6, None, "base:l1:top"),
+            flange(7, Some("Body2"), "base:l1:top"),
+            flange(8, Some("Plate"), "F5.0:far:top"),
+        ]));
+        assert_eq!(names[4], json!(["F2:side:l1|F2:top"]));
+        assert_eq!(names[5], json!(["base:l1:top"]));
+        assert_eq!(names[6], json!(["base:l1:top"]));
+        assert_eq!(names[7], json!(["F5:far:F2:side:l1|F5:top:F2:side:l1"]));
+        // A mirror that may have copied the one base flange's body.
+        let names = edge_names_after(json!([
+            lines_sketch(1, &RECTANGLE),
+            base(2, 1, Some("Plate")),
+            {"id": 3, "name": "Mirror1", "type": "mirror", "bodies": ["Plate"]},
+            flange(4, None, "base:l1:top"),
+            flange(5, Some("Plate"), "base:l1:top"),
+        ]));
+        assert_eq!(
+            (&names[3], &names[4]),
+            (&json!(["base:l1:top"]), &json!(["F2:side:l1|F2:top"]))
+        );
+        // A front edge notched between x = 40 and 60: l1 and l5 lie in line.
+        let notched = [
+            ("l1", [0.0, 0.0], [40.0, 0.0], false),
+            ("l2", [40.0, 0.0], [40.0, 20.0], false),
+            ("l3", [40.0, 20.0], [60.0, 20.0], false),
+            ("l4", [60.0, 20.0], [60.0, 0.0], false),
+            ("l5", [60.0, 0.0], [100.0, 0.0], false),
+            ("l6", [100.0, 0.0], [100.0, 60.0], false),
+            ("l7", [100.0, 60.0], [0.0, 60.0], false),
+            ("l8", [0.0, 60.0], [0.0, 0.0], false),
+        ];
+        let names = edge_names_after(json!([
+            lines_sketch(1, &notched),
+            base(2, 1, None),
+            {"id": 3, "name": "EdgeFlange3", "type": "sheet_flange", "edges": [[80, 0, 1], [100, 30, 1], [50, 20, 1]],
+             "edge_names": ["base:l1:top", "base:l6:top", "base:l3:top"]},
+        ]));
+        assert_eq!(
+            names[2],
+            json!(["base:l1:top", "F2:side:l6|F2:top", "F2:side:l3|F2:top"])
+        );
+        // A converted sheet: no base flange's.
+        let names = edge_names_after(json!([
+            {"id": 1, "name": "Box1", "type": "box", "body_names": ["Tray"]},
+            {"id": 2, "name": "C1", "type": "sheet_convert", "body": "Tray", "face": [50, 30, 0],
+             "bends": [[50, 0, 0]], "edge_names": ["F1:-y|F1:-z"]},
+            flange(3, Some("Tray"), "F2.0:far:top"),
+            flange(4, None, "F2.0:far:top"),
+        ]));
+        assert_eq!(names[1], json!(["F1:-y|F1:-z"]));
+        assert_eq!(
+            (&names[2], &names[3]),
+            (&json!(["F2.0:far:top"]), &json!(["F2.0:far:top"]))
+        );
+    }
+
+    #[test]
+    fn the_faces_of_a_base_flanges_panel_and_a_converted_fixed_face_take_the_models_names() {
+        let face = |name: &str| -> Value {
+            json!({"type": "face", "plane": {}, "at": [0, 0, 0], "name": name})
+        };
+        let curves = json!([
+            {"id": "l1", "type": "line", "a": 1, "b": 2, "construction": false},
+            {"id": "l2", "type": "line", "a": 2, "b": 3, "construction": true},
+            {"id": "a1", "type": "arc", "a": 3, "b": 1},
+        ]);
+        let picked = json!([
+            "sheet:Plate:base:rim.l1",
+            "sheet:Plate:base:rim.l2",
+            "sheet:Plate:base:rim.edge0",
+            "sheet:Plate:F6.0:top",
+            ""
+        ]);
+        let mut v = json!({
+            "features": [
+                {"id": 1, "name": "Base", "type": "sketch", "plane": {"type": "origin", "name": "XY"},
+                 "sketch": {"curves": curves}},
+                {"id": 2, "name": "Flange1", "type": "sheet_base", "sketch": 1, "body_names": ["Plate"]},
+                {"id": 3, "name": "Top", "type": "sketch", "plane": face("sheet:Plate:base:top")},
+                {"id": 4, "name": "Below", "type": "sketch", "plane": {"type": "offset",
+                 "base": face("sheet:Plate:base:bottom"), "distance": "5"}},
+                {"id": 5, "name": "Hole1", "type": "hole", "face_names": picked},
+                {"id": 6, "name": "Flange2", "type": "sheet_flange", "edge_names": ["base:l1:top"]},
+                {"id": 7, "name": "Box1", "type": "box", "body_names": ["Tray"]},
+                {"id": 8, "name": "C1", "type": "sheet_convert", "body": "Tray", "face": [50, 30, 0],
+                 "bends": [[50, 0, 0]], "face_names": ["F7:-z"]},
+                {"id": 9, "name": "sheet:Plate:base:top", "type": "construction_plane",
+                 "plane": face("sheet:Tray:base:bottom")},
+                {"id": 10, "name": "Inside", "type": "sketch", "plane": face("sheet:Tray:base:top")},
+                {"id": 11, "name": "Flange3", "type": "sheet_base", "sketch": 1, "body_names": ["Twice"]},
+                {"id": 12, "name": "Join1", "type": "join", "body_names": ["Twice"]},
+                {"id": 13, "name": "Convert2", "type": "sheet_convert", "body": "Slab", "face": [0, 0, 1]},
+                {"id": 14, "name": "Late", "type": "sketch", "plane": face("sheet:Twice:base:top")},
+                {"id": 15, "name": "OnSlab", "type": "sketch", "plane": face("sheet:Slab:base:top")},
+            ],
+        });
+        sheet_face_names::step(&mut v).unwrap();
+        let f = &v["features"];
+        assert_eq!(f[2]["plane"]["name"], json!("F2:top"));
+        assert_eq!(f[3]["plane"]["base"]["name"], json!("F2:bottom"));
+        assert_eq!(
+            f[4]["face_names"],
+            json!([
+                "F2:side:l1",
+                "sheet:Plate:base:rim.l2",
+                "sheet:Plate:base:rim.edge0",
+                "sheet:Plate:F6.0:top",
+                ""
+            ])
+        );
+        assert_eq!(f[5]["edge_names"], json!(["base:l1:top"]));
+        assert_eq!(f[8]["plane"]["name"], json!("F7:-z"));
+        assert_eq!(f[8]["name"], json!("sheet:Plate:base:top"));
+        assert_eq!(f[9]["plane"]["name"], json!("F8:bottom:F7:-z"));
+        assert_eq!(f[7]["face_names"], json!(["F7:-z"]));
+        assert_eq!(f[13]["plane"]["name"], json!("sheet:Twice:base:top"));
+        assert_eq!(f[14]["plane"]["name"], json!("sheet:Slab:base:top"));
     }
 
     #[test]
@@ -1756,7 +3168,7 @@ mod tests {
         assert!(upgrade(&mut past, PINNED + 1, None).unwrap().is_empty());
         assert_eq!(past, two_sided());
         let said = newer(PINNED + 1, Some(&future[..])).unwrap();
-        assert_eq!((said.format, said.reads_up_to), (58, 57));
+        assert_eq!((said.format, said.reads_up_to), (64, 63));
         assert_eq!(said.unknown_changes, future);
         assert!(newer(PINNED, None).is_none());
         assert!(upgrade(&mut json!({}), 0, None).is_err());

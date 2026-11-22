@@ -319,6 +319,10 @@ pub const ITEM_CLASSES: &[(&str, &str)] = &[
     // `DerivedContext`, whose record it does not share): its base feature
     // holds the bodies.
     ("8ACBA2E5-5A4C-4438-8351-276DE96E6982", "ExternalDerived"),
+    // Sheet-metal Unfold and Refold (mitcad#2117): the bends a sheet body
+    // develops about a stationary face, and their refold.
+    ("EC187027-FF97-48A3-8031-F923807E630B", "UnfoldFeature"),
+    ("483D584F-29AA-46DA-ABA2-F139B0ED8100", "RefoldFeature"),
 ];
 
 /// A cylinder primitive (mitcad#154, mitcad#25): `u32 operation | u8 1 |

@@ -25,13 +25,8 @@ On the design's stored body before the item: each corner cut along the
 roundings' intersection, as the stored body's (its faces within 1e-6 mm),
 the item's 156 faces.
 
-Test: geometry/tests/test_fillet_groove_rim_corners.cpp (ctest
-geometry.fillet_groove_rim_corners): test_synthetic_leg, each corner of
-0.5 a piece of the ball's sphere (without this patch the leg's upper
-corner is filled with a plate 0.37 mm off the envelope), and
-test_reported_body on the stored case `groove-rim-corners` (156 faces; 157
-without it). It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1611.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
 index acebc51b..2caaeadf 100644

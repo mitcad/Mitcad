@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the joint conditions UI test (mitcad#2200; tools/ui-build-joints-test.sh): Sketch1 (F1) on XY, a rectangle 600 x 400 from the origin of four lines c5 (bottom), c6 (right), c7 (top) and c8 (left), and c11 from the middle of the bottom line to the middle of the top one (two T's). No BUILD part yet: the test library's 20 mm square profile is fetched by the runner. All geometry is synthetic."},
+  {"cmd": "add_feature", "name": "Sketch1", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [0, 0]},
+    {"id": "p2", "type": "point", "at": [600, 0]},
+    {"id": "p3", "type": "point", "at": [600, 400]},
+    {"id": "p4", "type": "point", "at": [0, 400]},
+    {"id": "c5", "type": "line", "start": "p1", "end": "p2"},
+    {"id": "c6", "type": "line", "start": "p2", "end": "p3"},
+    {"id": "c7", "type": "line", "start": "p3", "end": "p4"},
+    {"id": "c8", "type": "line", "start": "p4", "end": "p1"},
+    {"id": "p9", "type": "point", "at": [300, 0]},
+    {"id": "p10", "type": "point", "at": [300, 400]},
+    {"id": "c11", "type": "line", "start": "p9", "end": "p10"}]}},
+  {"expect": {"feature": "F1", "status": "ok"}}
+]

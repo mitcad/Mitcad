@@ -3,12 +3,13 @@
 # check-all sources: app/browser
 # Edit Parameters (U3) through the real UI on the demo block (60 x 40 x 20
 # mm: d1, d2, d3), with the volumes the model reports:
-#   - Add a user parameter (width = 30 mm).
+#   - Add a user parameter (width = 30 mm) in the table's empty row
+#     (mitcad#2202).
 #   - Expressions in place: d1 = width + 5 mm, d2 = d1 * 2.
 #   - What the model refuses stays in the cell with the reason: a cycle
 #     (width = d2 / 2), an angle for a length (d3 = 30 deg).
-#   - Rename width: the expressions that use it follow; deleting it is
-#     refused while d1 uses it; a comment.
+#   - Rename width: the expressions that use it follow; its delete button
+#     is disabled while d1 uses it; a comment.
 #   - A favourite (P9): the star lists width under Favorites, also after
 #     the rename.
 #
@@ -50,19 +51,18 @@ ui_expect_new "Parameters: d1 = 60 mm (60 mm); d2 = 40 mm (40 mm); d3 = 20 mm (2
   "the model's parameters listed"
 ui_expect_new "Parameters d1 expression at" "its cells are logged"
 
-echo "--- A user parameter"
+echo "--- A user parameter, typed in the empty row (mitcad#2202)"
 ui_focus_dialog '^Parameters$'
 ui_mark
-ui_step "User Parameter (+)"             ui_click_logged "Parameters add"
-ui_focus_dialog '^Add User Parameter$'
-ui_step "name, unit, expression, Enter"  xdotool type --delay 40 "width"
-ui_key Tab
-xdotool type --delay 40 "mm"
+ui_step "the empty row's name"           ui_click_logged "Parameters new name"
+ui_expect_new "Editing new parameter name" "its name is edited"
+ui_step "name, Tab, expression, Enter"   xdotool type --delay 40 "width"
 ui_key Tab
 xdotool type --delay 40 "30"
 ui_key Return
-ui_expect_new "Added parameter width = 30 mm" "width added"
+ui_expect_new "Created user parameter width = 30 mm (mm) in the new row" "width added"
 ui_expect_new "width = 30 mm (30 mm)" "and listed"
+ui_step "leave the new empty row (Esc)"  ui_key Escape
 
 echo "--- A favourite (P9)"
 ui_expect_new "Parameters width favorite at" "the star's place is logged"
@@ -98,10 +98,7 @@ ui_step "rename width to w"              edit_cell "width name" "w"
 ui_expect_new "Parameter width name: w = 30 mm" "renamed"
 ui_expect_new "d1 = w + 5 mm (35 mm)" "d1's expression follows the new name"
 ui_expect_new "Parameters favorites: w" "the favourite follows the new name"
-ui_mark
-ui_step "select w"                       ui_click_logged "Parameters w name"
-ui_step "Delete"                         ui_click_logged "Parameters delete"
-ui_expect_new "Delete parameter w refused: " "w is used by d1"
+ui_expect_log "Parameters in use: w (d1 of the feature " "w's delete button is disabled: d1 uses it"
 ui_mark
 ui_step "a comment on d3"                edit_cell "d3 comment" "Height of the block"
 ui_expect_new "Parameter d3 comment: Height of the block" "comment changed"

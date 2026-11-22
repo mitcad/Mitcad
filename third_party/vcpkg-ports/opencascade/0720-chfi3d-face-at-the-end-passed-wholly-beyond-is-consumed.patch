@@ -42,13 +42,8 @@ the number of rounded edges. No size comes from the case.
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_corner_cases.cpp,
-test_rounding_past_an_end_piece_it_consumes (ctest
-geometry.fillet_corner_cases): a bar with a tilted rod standing out of its
-end, its top front edge rounded with 14 past the end's corner piece: valid,
-the volume removed against the bar's and the rod's within the rounding's
-corner. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0720.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 6f92d33..c891277 100644

@@ -232,8 +232,8 @@ assistant indicator, or choose **Connect AI Assistant…** in
    | Ready to connect *assistant* | **Connect** | MitCad sets the connection up |
    | Approve MitCad in Claude Desktop, then start a new chat | **Open in Claude Desktop again** | Approve the extension in Claude Desktop; the button opens it again if needed |
    | Install Claude Desktop first, in red | **Get Claude Desktop** | No application on this computer took the extension and Claude Desktop was not found (also after **Open Claude Desktop** found it gone): install Claude Desktop, then choose it again |
-   | Installed in Claude Desktop, not connected: turn the MitCad extension off and on in Claude Desktop, or start a new chat | **Open Claude Desktop** | The extension is installed in Claude Desktop, but Claude Desktop is not connected to MitCad now. In Claude Desktop's **Settings › Extensions**, turn **MitCad** off and on again, or start a new chat; nothing needs to be installed again |
-   | Install the extension in Claude Desktop | **Show in Explorer** (**Show in Finder** on macOS), and **Open Claude Desktop** | Claude Desktop is installed but does not open the extension by itself (Claude Desktop from the Microsoft Store). The line below says where: **In Claude Desktop: Settings › Extensions › Advanced settings › Install Extension…, then choose** the saved `mitcad-desktop.mcpb`, which the button shows (do not double-click it). Approve and enable the extension, then start a new chat |
+   | Installed in Claude Desktop, not connected: turn the MitCad extension off and on in Claude Desktop, or start a new chat | **Open Claude Desktop** | The extension is installed in Claude Desktop, but Claude Desktop is not connected to MitCad now. In Claude Desktop, open **Extensions** in **Settings** (under **Desktop app** in newer versions), turn **MitCad** off and on again, or start a new chat; nothing needs to be installed again. When Claude Desktop's settings look different, Anthropic's article [Getting started with local MCP servers on Claude Desktop](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) shows where the Extensions page is now |
+   | Install the extension in Claude Desktop | **Show in Explorer** (**Show in Finder** on macOS), and **Open Claude Desktop** | Claude Desktop is installed but does not open the extension by itself (Claude Desktop from the Microsoft Store). The line below says where: **In Claude Desktop, open Extensions in Settings (under Desktop app in newer versions), then drag** the saved `mitcad-desktop.mcpb`, which the button shows selected, **onto that page or use Advanced settings › Install Extension…** (do not double-click the file). Both routes are on the Extensions page; when Claude Desktop's settings look different, Anthropic's article [Getting started with local MCP servers on Claude Desktop](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop) shows where that page is now. Approve and enable the extension, then start a new chat |
    | Start a new Claude Code session to use MitCad / Restart ChatGPT or start a new Codex session to use MitCad | none | Start a new conversation in the assistant |
    | Reconnect MitCad in Claude Code (/mcp › mitcad › Reconnect) or start a new session | none | After a disconnect, run `/mcp` in Claude Code, choose **mitcad**, then **Reconnect**, or start a new session |
    | Restart ChatGPT or Codex, or start a new session | none | After a disconnect, restart the assistant or start a new session |
@@ -584,6 +584,13 @@ connections (update checks, downloads) instead, and its log says
 `TLS: the system's OpenSSL configuration failed to load (…); using the
 AppImage's own`.
 
+In a Wayland session MitCad runs on X11 (XWayland) for now; the
+environment variable `MITCAD_WAYLAND=1` runs it natively on Wayland, so a
+scaled desktop (150 %, 200 %) shows a sharp window, but there the toolbar
+panel does not yet show (mitcad#2031). Elsewhere it runs on X11. The log's `Display platform:` line
+says which one runs and why. On Wayland the system does not let an
+application move the cursor, so an orbit stops at the edge of the screen.
+
 ### macOS
 
 MitCad needs Apple Silicon, macOS 14.4 or newer and OpenGL 4.1 core.
@@ -655,7 +662,8 @@ turn, pan and zoom the view.
   tutorials' sources and, when it is not installed yet, offers to
   download its web browser component, which shows the tutorial's pages.
   A tutorial is installed into your data folder; Open installs its newer
-  version when its source has one.
+  version when its source has one. A tutorial opened from the Start page
+  starts in an empty design of its own: your design stays as it is.
 - **Update** fetches the sources again. **Add Source…** adds a git
   repository of tutorials of your own (a course), by its address or its
   folder. The public repository of MitCad's tutorials is the default
@@ -926,7 +934,9 @@ of Windows and Linux has the same title bar row and toolbar panel):
   zoom).
 
   Only the boxes belong to the Browser. Its scroll bar is at the left,
-  beside the rows. The change applies at once. Card is the default.
+  beside the rows. The change applies at once. Rows is the default on
+  every platform. A Card you chose stays Card, and **Restore Defaults**
+  goes back to Rows.
 - **The Browser's width.** With **Rows**, the Browser widens to show the
   longest name in sight in full, and narrows again. It grows up to
   **Rows at most** (Preferences › Display, beside Browser background, a percentage of the
@@ -1109,9 +1119,14 @@ MitCad keeps your choice for the next start.
 ### MitCad on Discord
 
 To ask questions, share designs and talk with other MitCad users, click
-the speech bubble right of **Boost development** (it stays there when you
-hide Boost development), or choose Help › **MitCad on Discord**. It opens
-MitCad's Discord server in your web browser.
+the blue button with the Discord logo right of **Boost development**, or
+choose Help › **MitCad on Discord**. It opens MitCad's Discord server in
+your web browser.
+
+The small **×** on the Discord button hides it; hiding Boost development
+leaves it, and hiding it leaves Boost development. To show it again,
+select **Show the Discord button** in Tools › Preferences › Display.
+MitCad keeps your choice for the next start.
 
 ### View and navigation
 
@@ -1146,9 +1161,13 @@ default. Mouse drags, the wheel and a pinch keep their direction.
 
 An orbit with the mouse or the cube goes on past the edge of the screen:
 the cursor continues from the opposite edge of the same screen and the
-view keeps turning, so a long orbit needs no second drag. Where the
-system does not let an application move the cursor (Wayland), the orbit
-stops at the edge.
+view keeps turning, so a long orbit needs no second drag. With two
+screens side by side the edge between them counts too: the cursor stays
+on the screen the orbit began on. Where the system does not let an
+application move the cursor (Wayland), or puts it back (some virtual
+machines, remote desktops and pen tablets, and some Wayland desktops
+running the app through XWayland), the orbit stops at the edge; on the
+edge between two screens it goes on onto the next screen.
 
 **Orbit center** on the Navigation page of Tools › Preferences
 (MitCad › Settings… on macOS) sets what an orbit turns about:
@@ -1296,15 +1315,26 @@ display styles, the background, Grid and Snaps, and the named views. Its
 Timeline, Command (Docked), Chat and Comments…. Export Snapshot… is in the
 File menu, beside Export….
 The display styles are Shaded, Shaded with Visible Edges Only, Shaded
-with Hidden Edges, Wireframe and Wireframe with Hidden Edges. Named
-views are stored in the design. MitCad remembers the settings.
+with Hidden Edges, Wireframe, Wireframe with Hidden Edges and Wireframe
+with Visible Edges Only. The last one is for clean line pictures of the
+model: it draws only the edges in sight, with the faces in the
+background's color hiding what lies behind them, and no dashed hidden
+edges. In it and in Wireframe with Hidden Edges, the outlines of curved
+faces are drawn too, such as the two sides of a cylinder seen from the
+side (on solid bodies; a surface body and a body cut by Section Analysis
+show their edges only). Named views are stored in the design. MitCad
+remembers the settings.
 
 In every display style the view draws the edges where the shape changes:
 between two faces, also where they meet smoothly (a fillet and the face it
 rounds), and where one face turns sharply. It does not draw a seam, the
 line where a round face closes on itself (along a cylinder, rod or tube,
 over a ball), nor the line between two pieces of one face on one surface,
-where the surface runs on smoothly. Such a line is not highlighted under
+where the surface runs on smoothly. Pieces of one face on different
+surfaces keep their line: a circle swept along a line and an arc that
+joins it smoothly shows the circle where its straight part (a cylinder)
+turns into its curved part (a torus), on a mirrored or patterned copy as
+on the original. Such a line is not highlighted under
 the pointer and cannot be clicked either; the face on both sides of it can.
 A profile with a sharp corner extruded as one face (a teardrop drawn as one
 closed spline) keeps its line at the corner. The model keeps these edges:
@@ -1900,13 +1930,14 @@ submenus.
   - Hole ([Hole](#hole))
   - Thread ([Thread](#thread))
 - Primitives:
-  - Box, Cylinder, Sphere, Torus, Coil ([Placing a feature](#placing-a-feature))
+  - Box, Cylinder, Cone, Sphere, Torus, Coil ([Placing a feature](#placing-a-feature))
   - Pipe
 - Patterns ([Patterns](#patterns)):
   - Pattern › Rectangular Pattern, Circular Pattern, Pattern on Path,
     Pattern at Points
   - Mirror
   - Thicken ([Surface modeling](#surface-modeling))
+  - Boundary Fill ([Boundary Fill](#boundary-fill))
 - Curves ›
   - Helix ([Helix](#helix))
   - Intersection Curve ([Intersection Curve](#intersection-curve))
@@ -1927,7 +1958,7 @@ command search finds every command by its name, also the commands in the
 submenus.
 
 Some commands show in more than one place: New Component is also in
-Assemble, Thicken also on the Surface tab, Material and Appearance also
+Assemble, Thicken and Boundary Fill also on the Surface tab, Material and Appearance also
 on the Manage tab. It is the same command in each place, with the same
 shortcut.
 
@@ -2091,6 +2122,7 @@ corner square (or an end dot) and choose **Reset Size**.
 Annotations and Section
 Analysis](#inspect-measure-annotations-and-section-analysis)), Print
 Analysis ([Print Analysis](#print-analysis), also on the 3D Print tab),
+Draft Analysis ([Draft Analysis](#draft-analysis)),
 Physical Properties, Center of Mass ([Physical Properties and Center of
 Mass](#physical-properties-and-center-of-mass)), Add Comment. The Make
 tabs show the same group, and Measure is in the Inspect group of the
@@ -2098,7 +2130,7 @@ Sketch tab too. To flip or hide a section you made, right-click its row
 under *Analysis* in the Browser: **Flip Section Analysis**, or **Hide**.
 
 **Insert:** Insert Component, Insert from Library, then Insert Mesh,
-Insert DXF, Insert SVG, From an Open Design, Component from Web, Import
+Insert DXF, Insert SVG, Insert Points, From an Open Design, Component from Web, Import
 and Image Reference. The toolbar has buttons for Insert Component,
 Insert Mesh and Insert DXF. To calibrate an image reference, right-click
 its row in the Browser: **Calibrate Image Reference**.
@@ -2121,15 +2153,17 @@ choose what to select without going back to Solid.
   Ruled Surface, Boundary Surface, Blend Surface; Offset Surface. Buttons:
   Create Sketch, Surface Extrude and Patch.
 - **Modify:** Trim, Untrim, Extend; Stitch, Unstitch, Reverse Normal;
-  Match Surface, Fair Surface; Thicken. Buttons: Trim and Thicken.
+  Match Surface, Fair Surface; Thicken, Boundary Fill. Buttons: Trim and
+  Thicken.
 
 **Sheet Metal** ([Sheet metal](#sheet-metal)):
 
 - **Create:** Create Sketch; Face, Flange, Hem, Convert to Sheet Metal; Bend,
-  Fold; Sheet Cut. Buttons: Create Sketch, Face, Flange and Bend.
-- **Modify:** Corner Relief, Corner Round, Corner Chamfer; Unfold,
-  Refold, Flat Pattern, Show Flat Pattern; Export Flat Pattern (also on
-  the Laser tab). Buttons: Unfold and Flat Pattern.
+  Fold. Buttons: Create Sketch, Face, Flange and Bend.
+- **Modify:** Sheet Cut, Perforate; Corner Relief, Corner Round, Corner
+  Chamfer; Unfold, Refold, Flat Pattern, Show Flat Pattern; Export Flat
+  Pattern and Export Bend Table (also on the Laser tab). Buttons: Unfold
+  and Flat Pattern.
 - **Rules:** Sheet Rules (a button) and Edit Sheet Rules, also on the
   Manage tab.
 
@@ -2214,7 +2248,7 @@ machine.
 | Tab | Groups and commands |
 |---|---|
 | **3D Print** | **Slice**: **Send to Slicer** ([Sending bodies to a slicer](#sending-bodies-to-a-slicer)), first on the tab. **Printers**: **Printers…**, **Processes…** ([Print settings](#print-settings)) and **Plates…** ([Print plates](#print-plates)). **Prepare**: **Print Analysis** ([Print Analysis](#print-analysis)). Every one a button of its own |
-| **Laser** | **Export**: **Export Flat Pattern…** ([Sheet metal](#sheet-metal)) and **Export Face as DXF…** ([Laser cutting](#laser-cutting)), both buttons |
+| **Laser** | **Export**: **Export Flat Pattern…**, **Export Bend Table…** ([Sheet metal](#sheet-metal)) and **Export Face as DXF…** ([Laser cutting](#laser-cutting)), each a button |
 | **CNC** | **Setup**: **New Setup**, **Machines and Tools…**. **2D Milling**: **Facing**, **Contour**, **Pocket**, **Adaptive Clearing**, **Rest Machining**, **Drill**. **3D Milling**: **3D Roughing**, **Raster Finishing**, **Waterline Finishing**. **Turning**: **Turn Facing**, **Turn Roughing**, **Turn Finishing**, **Grooving**, **Parting Off**, **Threading**. **Toolpath**: **Generate**, **Simulate**, **Post Process…** ([CNC machining](#cnc-machining)) |
 
 On every Make tab, after the method's groups:
@@ -2524,12 +2558,53 @@ and Wrap Onto](#emboss-and-wrap-onto)). For an Extrude with **Operation:
 Cut** in an assembly, refer to [Cutting across
 components](#cutting-across-components).
 
+**The profiles it starts with.** When you start Extrude or Revolve with
+no profile selected, the Profiles of the newest sketch that has unused
+areas are already filled with its outline: the outer shapes less the
+shapes inside them. A plate drawn with round holes extrudes as the plate
+with the holes; a small square drawn inside a hole is added, as an
+island; separate shapes are all taken; areas side by side, such as a
+rectangle split by a line, are taken together, so the whole rectangle.
+Click an area to take it out or add it, as usual. When the plate is
+used already, the next Extrude starts with one hole's area, so that you
+can extrude it on its own, for example as a boss. If closed curves of
+the sketch cross each other (two overlapping circles), it is not clear
+which areas you mean: Extrude starts with one area and the panel says
+that the sketch's closed curves cross, so click the areas you want. To
+take a whole sketch, click it in the Browser or in the timeline, before
+you start Extrude or Revolve or while the panel is open: its outline
+goes into Profiles, without the areas that you used already. A sketch
+whose closed curves cross adds nothing, and the panel says why.
+
 While you make a new extrusion, MitCad selects the Operation from where
 the solid lies: Join where it touches a body, Cut where it goes into one,
 New Body where it touches none, until you select one yourself. When you
 edit an extrusion, its Operation stays as it was saved, also when Flip,
 Start or a distance moves the solid into a body or out of it; select
 another Operation yourself to change it.
+
+If you want each new extrusion to start as a new body, set
+**Preferences › General › Extrude starts with** to **New Body**. A new
+Extrude then always starts with New Body, also on a body's face, outward
+and inward, and MitCad does not select another Operation for you. Select
+Join, Cut, Intersect or New Component yourself when you need one. The
+default, **Operation from the bodies it touches**, selects the Operation
+as described above. The setting applies from the next Extrude. When you
+edit an extrusion it keeps its saved Operation, and Repeat keeps an
+Operation that you selected yourself before the last OK.
+
+**Flipping into a body or out of it.** While you make a new extrusion,
+also after you selected the Operation yourself and with the New Body
+setting, a flip of its direction can change the Operation. A flip is
+Flip, or the direction arrow dragged through the start to a negative
+distance. If the flipped extrusion fails with your Operation, MitCad
+tries the other one: Cut when the solid now goes into a body (from Join
+or New Body), Join when it now comes out of one (from Cut). If that
+works, Operation and Objects in the panel change to it. If it fails too,
+your Operation stays and the panel shows its failure. A flip whose
+result works keeps your Operation, so New Body pointed into a body stays
+New Body. When you edit an extrusion, a flip never changes its
+Operation.
 
 **Join that makes a body of its own.** A part of the solid that touches
 the bodies only along an edge or at a point (two cylinders side by
@@ -2573,6 +2648,13 @@ Only when the whole profile closes before the end does the extrusion
 fail, with the message "The taper closes the whole profile before the
 end of the extrusion; make the angle or the distance smaller"; the
 profile is shown in the view while the pointer is over the message.
+
+**To Object goes toward the object.** A one-sided extrusion up to an
+object goes the way the object lies, whichever way Flip points: a cut
+sketched on the top face of a plate goes down to the plate's bottom face
+although the sketch's normal points up, out of the plate. Flip matters
+only for an object that lies on both sides of the profile. An object in
+the profile's own plane is not reached either way, and the panel says so.
 
 **To Object in another component.** The object of To Object or of
 Start: Object can be a face or a body of another component, picked
@@ -2980,6 +3062,18 @@ The condition is one of these:
 
 A face with holes lofts from its outer edges. The loft is solid across
 the holes.
+
+**Tangent Edges** says what the loft does with the edges of a profile
+that meet smoothly, such as the lines and arcs of a slot:
+
+- **Merge** (the default for a new loft): those edges become one smooth
+  edge, so the side between two such profiles is one smooth face, without
+  edges or creases where the lines met the arcs. Edges that meet at a
+  corner, such as a rectangle's, still make a face each.
+- **Keep**: every edge of a profile makes a face of its own. A loft made
+  before this choice existed keeps its edges, so it looks as it did.
+
+Surface Loft has the same choice.
 
 ### Rib
 
@@ -3727,6 +3821,18 @@ message says that it is wider than the face beside its edge, which it
 would take away; the edge and the faces are highlighted when you point
 at the message.
 
+The end of a shallow round groove (a circle swept along a line or an
+arc, ending in a flat end cap) rounded with a ball-mill radius is such a
+case: the edge between the end cap and the groove's floor, rounded wider
+than the end cap is high, takes the end cap away, and the groove ends in
+a ball shape cut by the top face. Below the radius of the groove's
+circle the rounding is a ring round the groove's axis; at exactly that
+radius (within a millionth of a millimeter) it is a piece of a sphere of
+that radius, its center on the groove's axis (or its path, along an
+arc) that radius from the end cap. A larger radius fails: no ball of
+that radius fits in the groove, and the message says so, the edge
+highlighted.
+
 Where the roundings of two edges of a narrow face together are wider
 than the face, they would meet beyond each other and the face would
 vanish under them. The geometry kernel can build that only in some
@@ -3855,6 +3961,13 @@ thinner than given somewhere, the warning says where and how thin. If
 the wall fits under no face at all, the feature fails with that message.
 Make the wall thinner to hollow more of the body.
 
+A body whose faces meet at a crease that fades out to a smooth join, such
+as the crotch of a Y-shaped tube where its arms leave the common straight
+part, shells too, with the crease sharp or rounded. Where the geometry
+kernel still cannot hollow a body, the message says why in words, for
+example where two faces meet at such a fading crease, and the edges it is
+about are painted when you move the pointer over it.
+
 ### Dogbone
 
 **Dogbone** cuts reliefs at the inside corners of a body, for parts cut
@@ -3973,7 +4086,10 @@ include their assembly paths. Bodies that the root owns show under the
 root. Uncheck a component to keep all its bodies unchanged. Or expand
 its row to exclude single bodies. Hover over a row, or give it the
 focus, to identify its geometry. The list scrolls independently of the
-other command fields.
+other command fields. While the preview is computed, the line over the
+list says **Updating affected components…**. When the cut cannot be
+computed at all, the line says why, as the message under the fields
+does.
 
 The preview obeys the checked targets. Exclusions stay when you change
 the distance, the start, the direction or the profile. They also stay
@@ -4005,6 +4121,14 @@ components, and new components that the cut reaches are no longer
 checked automatically. Older
 cuts keep their **Local bodies** scope when you edit them. When you open
 an existing cut, MitCad does not add other component targets.
+
+**Mirror** and the patterns repeat such a cut only in its own component.
+Other components do not stop them while neither the cut nor a copy
+reaches them. When the cut also cuts another component, the mirror or
+pattern fails and names that component: uncheck it in the cut's
+**Affected components** to repeat the cut. When a copy would reach
+another component's body, it fails too, instead of leaving that body
+uncut.
 
 ### Inspect: Measure, Annotations and Section Analysis
 
@@ -4339,6 +4463,47 @@ visual style. They also stay when MitCad draws the bodies in Component
 Colors, by appearance or rendered. Small caps get fewer lines, closer
 together. MitCad does not fill large caps with lines.
 
+#### Draft Analysis
+
+**Draft Analysis** (Inspect group, after Print Analysis) checks a part
+before it is molded or cast. It colors each face by its draft: the angle
+between the face and the direction the mold opens, the pull direction.
+It changes no body and no feature.
+
+The panel starts with the selected bodies, or with every visible solid
+body and mesh body. These are the options:
+
+- **Pull Direction:** optional. Select a construction plane or a planar
+  face (the pull is its normal), or a construction axis, a straight
+  edge or a sketch line (the pull is along it). Without one, the pull is
+  the +Z direction of the design.
+- **Flip:** the pull goes the other way.
+- **Angle** (1 degree, from 0 to less than 90): the least draft a face
+  needs to come out of the mold.
+
+In the view and in the panel's legend, each face has one of three
+colors, lighter on a dark view background:
+
+- **blue:** the face has the angle or more towards the pull. It comes
+  out when the mold half moves along the pull.
+- **raspberry:** the face has less draft than the angle, either way. It
+  needs more draft.
+- **violet:** the face has the angle or more against the pull. It comes
+  out only when the other mold half moves the opposite way.
+
+A curved face is colored where it is steep, not as a whole. The panel
+shows, for each body and in total, the area of each color and its share
+of the area. Draft Analysis does not look for undercuts: a face that
+another part of the body hides along the pull gets the color of its own
+draft.
+
+**OK** keeps the analysis in the **Analysis** folder of the browser as
+`Draft1`. Use the light bulb to show or hide it; one analysis is shown
+at a time. Double-click it to edit it. You can rename and delete it like
+a section analysis. The pull direction follows the face or edge when
+the model changes. If a body or the pull direction is gone, the analysis
+is red and its tooltip tells why.
+
 ### Physical Properties and Center of Mass
 
 **Physical Properties** (Inspect group) opens the Properties window.
@@ -4516,6 +4681,20 @@ useful when you need a sketch curve to constrain or offset. Construction
 curves do not bound profiles, and closed regions drawn outside the face
 remain available. The whole face can still be selected as a face.
 
+The face's edges, and the outline the sketch got when you created it,
+never split what you drew. A shape you close yourself is one profile even
+where it crosses the face's edge: a circle drawn across the edge is one
+disc, and one click in Extrude takes the whole cylinder. A rectangle
+reaching past the face is one profile with the circles inside it as its
+holes, and a hole of the face inside your shape makes no hole in it.
+Outside your shapes the face's edges bound profiles as before: the face
+around your shapes, or an area your lines close against the face's edge.
+An edge or a face you project yourself is your choice and splits
+profiles as your other curves do; so does the outline once you convert
+it to sketch geometry. Designs made with an earlier version keep their
+bodies: a profile picked there that the face's edge cut off your shape
+still means that piece.
+
 This also works on a planar Patch made from sketch profiles. Its free
 edges bound profiles without adding projected curves to the new sketch.
 For example, a circle inside a square Patch gives a disc and the square
@@ -4591,7 +4770,12 @@ decides again; when you finish it, the sketch's own setting applies.
 3D sketches do not have this setting.
 
 *Show profiles* shades the closed regions of the sketch, which Extrude
-and Revolve take. Each sketch opens with it on. To have sketches open
+and Revolve take. A shape inside another, such as a hole in a plate, is
+drawn as an outline without shading: the plate around it is shaded, not
+the hole. You can still point at a hole and click it, for example to
+extrude it on its own. When closed curves of the sketch cross each
+other, all of its regions are shaded. The sketches shown in the design
+are shaded the same way. Each sketch opens with it on. To have sketches open
 with it off, turn off **Show profiles when a sketch opens** in
 Preferences › Sketch. *Show profiles* in the palette still turns the
 shading on or off, for the sketch that is open only.
@@ -5019,6 +5203,32 @@ twice to close the gap between its two ends. Circles, ellipses and
 closed splines have no end to blend, and MitCad says so, as it does when both
 picks are at the same end or the ends already meet.
 
+**Extend to Meet** (Modify) extends or shortens two curves to the point
+where they meet, so that they end in one shared corner: two lines, a
+line and an arc, or two arcs. Click the first curve, then the second,
+each on the part you want to keep. While the pointer is over the second
+curve, the preview shows both curves as they will be and marks the
+corner. The tool stays on for the next pair; Esc drops the first pick,
+then ends the tool.
+
+- The curves meet where their whole lines and circles meet, also beyond
+  their ends: a line that is too short is extended, and a line that
+  crosses the other curve is cut back to it. The part you clicked stays.
+- A line and an arc, or two arcs, can meet at two points, and an arc can
+  reach a point in its gap either way round. The preview first shows the
+  result nearest your clicks; press Tab to see the next one and
+  Shift+Tab to go back, then click the second curve to make the one
+  shown.
+- The two ends become one point. Constraints on the curves stay, and a
+  length dimension takes the new length. A midpoint constraint on either
+  curve is removed, because the middle moves. Where a line touches an
+  arc's circle, the two are held tangent.
+- Curves that never meet are refused: parallel lines, lines on one line,
+  a line that misses an arc's circle, and arcs whose circles do not reach
+  each other or share a center. A projected curve must be converted to
+  sketch geometry first. An offset's or a pattern's curve becomes
+  ordinary sketch geometry first, as with Trim.
+
 **Offset** (Modify) copies a chain of curves at a distance. With Chain
 Selection, a click on one curve also takes the curves that are joined
 to it end to end. Sometimes a curve lies on another curve, for example
@@ -5124,7 +5334,11 @@ an axis as Direction 2 (empty, it keeps the pattern's own), or turn At
 Right Angles on to make the rows square to Direction again.
 
 To leave one copy of a pattern out, select it and delete it: the
-pattern no longer makes that copy, and Edit Pattern still works. Trim,
+pattern no longer makes that copy, and Edit Pattern still works. Deleting
+every copy removes the pattern itself, as the status line says: the
+originals stay as plain sketch geometry, and the pattern's spacing or
+angle parameters go from the Parameters dialog unless something else
+uses them. Trim,
 Extend, Sketch Fillet and Chamfer on a curve of a pattern first turn the
 whole pattern into plain sketch geometry, as the status line says, so
 that you can cut and round its curves like any others. To do that
@@ -5512,8 +5726,16 @@ changes. This works when that dimension cannot change what `d7`
 measures: the measured geometry is separate, or fully constrained by the
 other constraints and dimensions. If the dimension would change what it
 uses (a circular dependency), MitCad refuses it and names both
-dimensions. Patterns, offsets and texts of the same sketch cannot use
-it.
+dimensions.
+
+A pattern's spacing or angle can use it too: type `d7` into the
+pattern's Spacing, or use it in an expression. The copies are then
+placed by the measured value and follow it when the measured geometry
+changes; the originals need not be fully constrained. If the copies
+could change what `d7` measures (`d7` measures a copy, or a copy is
+constrained or dimensioned to the measured geometry), MitCad refuses it
+and names the pattern and the dimension. Offsets, texts and the sketch's
+placement cannot use it; the message names the value that tried to.
 
 **Dimension names:** when you hover a dimension, MitCad shows its
 parameter (`d3 = d1 / 2 → 20 mm (Sketch1 distance)`). The value editor
@@ -5570,6 +5792,15 @@ selected entity with each of the others. For example, you can make
 several circles equal to a dimensioned one. Horizontal/Vertical on
 several lines makes each line horizontal or vertical. The constraints
 are one undo step.
+
+Horizontal/Vertical makes a line horizontal or vertical, or two points
+level or plumb, whichever they are nearer to. When that direction is
+already given by other constraints, or cannot hold with them, and the
+other direction can, it adds the other direction instead. For example,
+a point whose height is held and a point on a fixed horizontal line are
+made plumb, even when they are nearer to level. Before you click, the
+symbol by the pointer shows the direction the click adds. When neither
+direction can be added, MitCad says why.
 
 If the selection is only part of what the constraint takes, the button
 uses it as the first selections and lets you select the rest. For
@@ -5963,6 +6194,28 @@ one.
 A double-click on the code opens Edit QR Code (content, module size,
 error correction). This also applies to a double-click inside a dark
 module or a light square of the code, and to its context menu.
+
+**Explode Text** (the context menu of a text or a QR code, or of a
+region inside a letter) turns the text into ordinary sketch curves where
+it is: a line for each straight piece of its outlines and a spline for
+each curved piece. The letters stay closed and bound the same profiles.
+After that, Trim, Offset and the other sketch tools take the curves, but
+the text can no longer be edited as a text. A text that follows a text
+parameter is exploded with its current text, and the parameter stays.
+Explode Text is one step of Undo. Features made from the letters before
+(an extrusion, a fillet on a letter's edge) keep working: MitCad gives
+them the new curves. If it cannot find a piece that a feature uses, the
+message says which feature to check.
+
+A stencil for cutting needs bridges that hold the islands of letters
+such as "O" and "A". A stencil font has them already, so its text needs
+no change. With another font, draw lines across the letters where the
+bridges go, explode the text and trim the pieces between the lines. The
+bridges split the letters into separate profiles.
+
+A sketch's **Export DXF** writes its texts and QR codes as their
+outlines (lines and splines), so the file has the letters for a laser
+or a router.
 
 ### Selection in sketch mode
 
@@ -6934,6 +7187,8 @@ these entries:
 - Delete (for a body: **Delete Body**, or **Delete Bodies** for the
   bodies that are selected with the row)
 - Find in Timeline
+- Create Selection Set (for bodies, components, sketches, construction
+  geometry, joints and features; refer to **Selection sets** below)
 - Save as Mesh… (for bodies and components)
 
 **Delete Body** in the menu of a body's row deletes only that body. The
@@ -6984,6 +7239,40 @@ change is one Undo step, and the design keeps the folders. A component
 that you move into another component (**Move to Component…**) comes out
 of its folder. A folder cannot be in another folder.
 
+**Selection sets.** A selection set keeps a few items that you use often
+at hand: bodies, components, sketches, construction geometry, joints and
+features, also from different components. A set only links to its items.
+The items stay where they are, and the set changes no geometry,
+timeline, bill of materials or export.
+
+1. Select the items, in the Browser or in the view.
+2. Right-click one of them and choose **Create Selection Set**. In the
+   view, the menu has the entry when everything that you selected can be
+   in a set (not faces, edges or vertices).
+3. Type the name of the set (MitCad proposes SelectionSet1,
+   SelectionSet2, …) and press Enter.
+
+The sets are in the **Selection Sets** folder, under **Named Views**. The
+folder shows while the design has a set, and lists the sets by name.
+Open the row of a set to see its items. The row of an item has the icon
+of the item with a small link, and the current name of the item: when you
+rename the item, the set shows the new name. The row is gray while the
+item is suppressed or after the timeline marker.
+
+- Click the row of a set to select all its items in the view and in the
+  Browser.
+- The menu of a set's row has **Select**, **Add Selection** (adds what is
+  selected now), **Replace with Selection**, **Rename** and **Delete**.
+  **Delete** deletes only the set, never its items.
+- Click the row of an item to select the item. Its menu is the menu of
+  the item's own row, with **Find in Browser** (selects the item's own
+  row) and **Remove from Set**. For sketches and features, **Find in
+  Timeline** selects the feature in the timeline. **Delete** in that menu
+  deletes the item itself, as on its own row.
+
+When you delete an item, it leaves every set. Each change of a set is one
+Undo step, and the design keeps its sets.
+
 **The order of the components.** The components of a component are in
 the order in which you made them. To change it, drag the row of a
 component onto the row of another component of the same parent. Drop it
@@ -7001,8 +7290,8 @@ joint or timeline feature. To put a component into another component, use
 possible, and its frame is red.
 
 In the floating layout (the default), the **Browser background**
-setting in Preferences › Display selects between the Browser's card
-and **Rows**. Refer to [Layouts](#layouts).
+setting in Preferences › Display selects between **Rows** (the
+default) and the Browser's **Card**. Refer to [Layouts](#layouts).
 
 **When a design opens.** A design that opens from a file opens with
 the component that was active when the design was saved. Thus, if you
@@ -7059,7 +7348,8 @@ Every length that you type is read in the unit of the design: the value
 fields of the sketch tools (a rectangle's width, a circle's diameter), a
 dimension's value, the values of a command panel and of Edit Parameters.
 In a design in inches, a rectangle typed as 0.875 by 12.125 is 0.875 in
-by 12.125 in (22.225 mm by 307.975 mm). **Add User Parameter**, and Add
+by 12.125 in (22.225 mm by 307.975 mm). The empty row of Edit
+Parameters, **Add User Parameter**, and Add
 Option and Add Column of Configurations, start with the unit of the
 design. A dimension that was made while the design had another unit
 takes the unit of the design when you type a new value into it: `0.25 *
@@ -7370,6 +7660,36 @@ unit. The refused change stays in the cell in red with the reason.
 When you rename a parameter, MitCad updates the expressions that use
 it.
 
+**Add and delete user parameters.** The last row of **User
+Parameters** is empty and says *New parameter*. Click it, type a name,
+press Tab, type the value or an expression, and press Enter. The row
+becomes a user parameter, and a new empty row below it is ready for the
+next one: type the name, Tab, the value, Enter, and so on. Tab goes from
+the name to the expression, then to the comment and the unit;
+Shift+Tab goes back. The unit starts with the unit of the design;
+choose **Number** for a number without a unit or **Text** for a text.
+If you click another row, the parameter is also made when it has a name
+and an expression. If MitCad cannot make it, for example because the
+name is taken, the row keeps what you typed, and the line below the
+table tells you why. Each new parameter is one undo step. The empty row
+stays last when you sort the table, and it is hidden while you search
+or show only limited parameters. To delete a user parameter, click the
+delete button at the end of its row. The button is gray while something
+uses the parameter; point at it to see what. Undo brings the parameter
+back. **Import…**, **Export…**, **Edit Formula…** and **OK** are in one
+row at the bottom of the window.
+
+**Long expressions.** While you edit an expression in its cell, the
+editor grows with the text over the next columns, up to the width of
+the table, so that you see the whole expression. An expression longer
+than the table is wide shows whole, wrapped, under the editor. The
+**fx** button in the cell opens **Edit Formula** with what you typed
+in the cell so far. **OK** applies the formula, and its limits, as one
+step that Undo takes back; **Cancel** leaves the parameter as it was.
+While you type an expression in the empty row, the line below the table
+tells you at once what is wrong with it, for example a name that no
+parameter has.
+
 **Sort the parameters.** Click a column's header to sort the rows by
 that column. Click it again for the reverse order, and a third time to
 go back to the order in which you made the parameters. The arrow in the
@@ -7383,6 +7703,29 @@ Strict and Slider put the rows that have them on first. Empty cells
 come last. When you change or add a parameter, its row moves to its
 place in the sort and stays selected. Edit Parameters opens with the
 sort that you chose last.
+
+**Groups of parameters.** When a design has many user parameters, put
+them in groups by what they belong to, for example **Table**,
+**Cabinet** and **Material**. Click **New Group…**, type a name and click
+OK. The group is a row under User Parameters, and you can open and close
+it. To make a group inside another group, select the group first, or type
+a path such as `Cabinet/Doors`. To put parameters in a group, select them
+(hold Shift or Ctrl to select more than one) and drag them onto the
+group's row, or right-click them and choose **Move to Group** and the
+group. **Move to Group › New Group…** makes a new group with the
+selected parameters in it. To take parameters out of their group, drag
+them onto **User Parameters** or choose **Move to Group › User
+Parameters**. A parameter that you type in the empty row comes directly
+under User Parameters; move it into a group in the same way. To rename
+a group, double-click its row or press F2. To delete a group,
+right-click its row and choose **Delete**. The parameters of the group
+are not deleted: they move up one level, into the parent group or back
+under User Parameters. MitCad asks before it deletes a group that has
+parameters. A favorite parameter shows both in Favorites and in its
+group. The search field finds groups by their names too, with all their
+parameters. Each change of the groups is one undo step, and the groups
+are saved with the design. A design that was saved before groups existed
+opens with all its parameters directly under User Parameters.
 
 **Edit Parameters while you edit.** You do not have to finish a
 sketch or close a feature panel to change the parameters. In a sketch,
@@ -7432,7 +7775,9 @@ Select **Strict** if a value outside the limits is an error: MitCad
 then refuses such a value, as it refuses a wrong unit, and tells you
 why. A parameter with a minimum and a maximum has a slider in the
 **Slider** column. Drag it, or click its handle and use the arrow keys,
-Home or End. Each change is one undo step.
+Home or End. While you drag the handle, the row's expression and value
+and a tip at the handle show the value; MitCad computes the design when
+you release it. Each change is one undo step.
 
 If a feature limits the value that a parameter gives it, for example
 the quantity of a pattern (1 to 10000, whole), the Min, Max and Step
@@ -7512,7 +7857,7 @@ The function names are in English in all languages.
 
 **Text parameters.** A parameter with the unit `Text` has a text as its
 value instead of a number, for example the label `6qt` on a lid. In
-**Add User Parameter**, choose the unit **Text**, or type a text
+the empty row of Edit Parameters or **Add User Parameter**, choose the unit **Text**, or type a text
 expression and leave the unit empty. Write a text in single or double
 quotes: `'6qt'` or `"6qt"`. To put a quote of the same kind into the
 text, type it twice: `'It''s'`. A text can use other parameters:
@@ -7597,7 +7942,16 @@ first, in every value field, so Enter makes a new user parameter. It is
 independent of the field's own parameter. Give its value or expression
 and its unit. MitCad refuses a name that exists already, an invalid
 name, a wrong unit or an expression that the design refuses. The editor
-then stays open with the reason. When the parameter is made, MitCad puts
+then stays open with the reason. The expression is checked while you
+type it: what is wrong shows under the field in words, for example
+"table_lenght is not a parameter. Did you mean table_length?", the
+unknown name is underlined in the field, and Create (OK in Edit
+Parameters' Add User Parameter) stays disabled until the expression is
+right. The Expression cells of Edit Parameters are checked the same way
+while you edit them. When the cause of an error in the message band is
+put right, for example the missing parameter added or the failed feature
+computing again, the error goes from the band; the message history
+keeps it, marked *(put right)*. When the parameter is made, MitCad puts
 its name into the field where you typed it. The new parameter is in
 Edit Parameters and in the lists at once. In a sketch, Undo takes it
 back. In a feature panel it stays when you cancel the panel. In a
@@ -7716,13 +8070,22 @@ and unit. Formula errors identify the part that failed.
 
 Choose **Edit Formula…** in the fx list or a value field's context menu for a
 larger, multiline editor. In **Edit Parameters**, select a parameter and
-choose **Edit Formula…**. The function search includes names, descriptions
+choose **Edit Formula…**, or click the **fx** button in an expression
+cell. The function search includes names, descriptions
 and examples. **Indent LET** adds whitespace to make a long formula easier
 to read; it does not change the formula's meaning. As you type a name, the
-editor lists the parameters, tables and functions that start with it, and
-after a table's name and a dot its columns: Up and Down choose, Enter or
-Tab puts the choice in, Esc closes the list. Ctrl+Enter is the same as
-**OK**.
+editor lists the parameters (with their values), tables and functions
+(with their arguments) that start with it, after a table's name and a
+dot its columns, and after a number the units (`mm`, `deg`, …): Up and
+Down choose, Enter or Tab puts the choice in, Esc closes the list.
+Ctrl+Enter is the same as **OK**; line breaks are only spacing.
+
+The editor colors the formula as you type: parameter names, functions,
+`LET` and the constants, numbers, units, operators and texts each have
+their own color, in the light and the dark theme. A name that no
+parameter has is red with a wavy underline. The line with the caret is
+shaded, and with the caret at a bracket the bracket and its partner are
+highlighted.
 
 Templates insert ordinary formula text: **How many fit** inserts
 `FLOOR(length / pitch)`, **Spacing for N items** inserts `length / (count - 1)`,
@@ -8360,7 +8723,8 @@ columns' checks, and Space checks or unchecks one.
 ## Appearances and rendering
 
 An appearance gives a body or a face its color and its surface values.
-The shaded view shows only the base color of an appearance. The
+The shaded view shows the base color of an appearance, and the image of
+its texture where it has one. The
 rendered view uses all of its values and the texture with all its maps.
 This chapter describes the appearance library, the texture sources, the
 rendered view, its lights, Render Image and the render device.
@@ -8452,6 +8816,20 @@ appearance you make is Other until you choose its class, and a
 filament's color is FDM Plastic. A design whose appearances have a class
 does not open in MitCad versions from before the classes.
 
+The woods, plywoods and panels of the library (Wood - Birch to Wood -
+Teak, Chipboard, MDF, OSB, Plywood - Birch to Plywood - Spruce) have
+textures: the grain of the wood, the strands of OSB, the speckle of
+chipboard and the fine, almost plain face of MDF, with a normal map
+and a roughness map, at their real size (a plywood face repeats every
+meter). The grain runs along the longest side of each face, so it
+follows the length of each panel of a cabinet however the panel lies.
+The shaded view, the rendered view, Render Image and the previews of
+the library show them. A design that uses one of these appearances
+shows the textures when you open it; the file does not change, and its
+color stays the appearance's color in exports and drawings. A copy you
+made of one before keeps its plain look. The images are MitCad's own,
+made for it, under MitCad's license.
+
 The library has these buttons:
 
 - **New** copies the selected appearance into the design. Then you can
@@ -8462,8 +8840,8 @@ The library has these buttons:
 A face can have an appearance of its own. The face appearance overrides
 the appearance of the body. It follows the face as other face
 references do. The shaded view shows the base color of bodies and
-faces. The rendered view uses every value of the appearance and the
-texture with all its maps.
+faces, and the image of a texture. The rendered view uses every value
+of the appearance and the texture with all its maps.
 
 **View › Component Colors** gives each component one color of its own
 in the shaded and wireframe views: the color of its band in the timeline
@@ -9555,6 +9933,17 @@ These commands make a component:
 Paste makes an occurrence. Paste New makes a new component. Activate a
 component with its radio button. Then new features go into it.
 
+**Changing an extrusion's Operation later.** When you edit an extrusion
+that joined a body and select New Component, the fillets and other
+features that work only on its edges and faces go with it: they now
+round the extrusion's own body, in the new component. With New Body they
+stay in their component and round the extrusion's body. Select Join again
+and they go back onto the body it joins. A feature that also uses the
+other body's own edges stays where it is and shows which edge it no longer
+finds. In the timeline, the extrusion and the features that went with it
+are marked in the new component's color at once. Undo takes the edit and
+the moves back in one step.
+
 **Find Repeated Parts** is in the browser's menu of a body of an imported
 file. Some files hold every copy of a part as a body of its own, already
 moved into its place. Find Repeated Parts finds the bodies that are the
@@ -9607,10 +9996,35 @@ message band says "board.mitcad changed" with **Update**. Nothing is
 updated on its own; the message stays until you press Update or close it.
 In the Docked layout the message and its button are in the status bar.
 
+**A linked design with components.** When you link a whole design that
+has components, such as a key that slides on its base, the linked
+component keeps them. The Browser shows its components under it, placed
+as the design places them, with the design's joints, rigid groups and
+grounding. They are read only, like the linked component: they change
+only with the design's file. Right-click the linked component's row and
+select **Flexible** to let its parts move in your assembly, as in a
+[flexible subassembly](#flexible-subassemblies): drag the key along the
+design's own slider, join it to a part of your assembly, or animate the
+slider. Each flexible placement keeps its own joint values. Update Link
+and Update All Links take the design's changes into its components and
+joints and keep those values, within the joints' new limits. If the
+design no longer has a joint, a placement's own value of it is dropped
+and the message band says so ("Slider:1: its own value of Joint1 is
+dropped, as slider.mitcad no longer has the joint"). If the design no
+longer has a part that a joint of your assembly uses, the part stays
+where it was ("Key:1 is no longer in slider.mitcad; it stays where it
+was, as this design uses it"). A design without components, and a
+design linked in an earlier version of MitCad, keep its bodies as one
+component. Choose Linked Parts… and Show as Envelope… are not available
+for a design linked with its components; to link only some of its parts,
+insert it again with **Choose parts…**.
+
 **Link part of a design.** You can link only some components or bodies
 of a design, for example one bracket of a board. In Insert Component,
 select **Linked**, then **Choose parts…** instead of **Whole design**,
-and click **OK**. The list shows the design's components as its browser
+and click **OK**. For a design outside the project, select **Choose
+parts…** in the question that offers **Copy into the Project and Link**.
+The list shows the design's components as its browser
 shows them and the bodies of its root, each with a check box. Tick what
 you want. A ticked component comes with the components in it, where the
 design places it. If the design places a component twice, tick the
@@ -10071,7 +10485,10 @@ a joint of the assembly moves the whole subassembly.
 Make one placement **Flexible** to let its parts move in the assembly.
 Right-click its row in the Browser and select **Flexible**. The entry is
 there when the component has components in it or joints of its own.
-Select it again to make the placement rigid.
+Select it again to make the placement rigid. A linked design that has
+components can be flexible too: it keeps its components and joints,
+read only (see "A linked design with components" under
+[Components](#components)).
 
 In a flexible placement:
 
@@ -10160,6 +10577,17 @@ source column then says *edited*, and the tooltip shows the original.
 Add… adds a property to one of the levels. Remove removes one. Type
 a value as in the table, and a date as `YYYY-MM-DD`. Each change is
 one undo step.
+
+A component always has the rows **Part number** and **Description** in
+the set `Identity`, empty until you type a value: double-click the value
+or press F2, no key or level to choose. Nothing is saved while a row is
+empty, and emptying a value removes it again. A Part number or
+Description you added under another set shows in its own row instead.
+These two rows fill a bill of materials' Part Number and Description
+columns. A component's own Part number comes before the number its
+library or Build entry gives; the *Library* row keeps showing the
+library's number. The occurrence and body levels and the design's root
+have no such rows.
 
 The design calculates some values when they are shown: a body's volume,
 area, mass and material, a component's volume and mass, and a Build
@@ -10514,13 +10942,44 @@ existing profile or only the new one.
 **Rotate** turns the profile about its axis in 90 degree steps. **Flip**
 puts its other end first.
 
-**Placement** has four buttons. They show once there is a profile to go
+**Placement** has five buttons. They show once there is a profile to go
 on:
 
 - *Automatic*: where the click is (the default)
 - *On a profile's side*
 - *On a profile's end*
 - *On a plane*: to place a profile as the first one again
+- *Parallel*: along a profile, long faces in contact
+
+**Parallel** places a profile along another one, for a reinforcement or
+a stacked frame member. Their length axes are parallel, and a long face
+of the new profile rests on the side you click. Click the top side to
+place it on top, the bottom side to hang it below, or a side face to
+place it beside. It rests on the side's outer plane, across the slot
+opening. The side you click stays highlighted, and the preview shows the
+new profile before you click **Place**.
+
+- **Across** centers the new profile on the side (the default). On a side
+  with two or more slots, *On the slot nearest the click* puts the new
+  profile's center on that slot instead.
+- **Rotate** turns the new profile about its length in 90 degree steps.
+  The face that then faces the side rests on it. A 20x40 profile rests on
+  its 40 mm face at 0°, and on its 20 mm face at 90°.
+- **Length** is *Match target* by default: the new profile is as long as
+  the profile it lies along, and stays so when that profile changes
+  length. *Typed length* takes the length you type, or drag the handle at
+  the free end.
+- **From** (End A, End B or Middle) and **Offset** place it along the
+  profile. End A and 0 are the default: with a matched length both ends
+  are flush. A longer profile may stick out past the ends. For example, a
+  600 mm profile on a 400 mm crossmember from End A at 0 is flush with
+  end A and sticks out 200 mm past end B.
+
+The new profile stays attached to the one it lies on. It moves and turns
+with it. A matched length follows its length, and a profile placed from
+End B or the Middle keeps that place when it gets longer. Afterwards,
+**Placement** (Modify) changes its Offset, From, Across and Rotate, and
+**Length** switches between *Match target* and a typed length.
 
 **Along sketch lines** makes a whole frame from a sketch. Draw the
 frame's lines in a sketch (a planar sketch or a 3D sketch). In Profile,
@@ -10536,14 +10995,25 @@ length. **Place** places them all as one step.
   default), on top of the sketch's plane or under it, or with a corner
   on the line. **Rotate** turns each profile about its line in 90
   degree steps. **Flip** runs each one from the line's other end.
-- With **Corners** on (the default), MitCad treats the corners. Where
-  two lines meet at their ends (an L), both profiles get a shared miter,
-  and their outer corners meet. Where a line ends on another line (a T),
-  the profile on it stops at the other profile's side (a butt). Where
-  three or more lines meet at one point, the ends stay square. You can
-  change each corner afterwards with **Ends** and the **Miter** tools. To
-  end a profile at a face instead, use **Length** with *To a face you
-  pick*.
+- **Corners** sets how the profiles meet where two lines meet at their
+  ends (an L). Its buttons:
+  - *Miter* (the default): both profiles get a shared miter, and their
+    outer corners meet.
+  - *Butt*: the profile of the line you picked first runs on to the
+    outer corner, and the other one stops square at its side. Lines that
+    Chain adds come after the ones you picked, in the order of the chain.
+    The preview marks the profile that runs through at each corner.
+  - *Square*: every end stays where its line ends.
+
+  Where a line ends on another line (a T), the profile on it stops at
+  the other profile's side, unless you choose *Square*. Where three or
+  more lines meet at one point, the profile of the line you picked first
+  runs on to the outer corner, and the others stop at its side. Two of
+  them that would still overlap stay square, and MitCad says so.
+- MitCad keeps each corner's treatment with the corner. When you move a
+  line in the sketch, the ends at its corners follow it. Change a
+  corner's treatment afterwards with **Ends** (below). To end a profile
+  at a face instead, use **Length** with *To a face you pick*.
 - Construction lines are left out when you select a whole sketch.
   MitCad places profiles along straight lines only: a selection with an
   arc, a circle or a spline is refused, and the panel says why.
@@ -10671,6 +11141,29 @@ A length can be bound only to a profile placed before it. So you cannot
 run the first profile on to the second one's face when the second was
 placed later. MitCad refuses it and says to miter the corner in one of
 the two ways above.
+
+**Corners of profiles along sketch lines.** For profiles placed *Along
+sketch lines*, **Ends** shows and changes the treatment of the corner an
+end is in. Pick a profile near the end. The panel says what the corner
+is and how it is treated now. Choose the new treatment with the
+**Joint** buttons:
+
+- At an L (two ends that meet): *Miter*, *Butt* or *Square*. With
+  *Butt*, **Runs Through** chooses the profile that runs on to the outer
+  corner: this one or the one it meets. *As it is* keeps the one that
+  runs through now, else the one placed first.
+- At a T (an end at another profile's side, touching it, into it or up
+  to 5 mm short of it): *Near Side* stops the end at the side that faces
+  it, *Far Side* runs it through to the other side, and *Square* leaves
+  it where its line ends.
+
+OK changes both profiles in one step. MitCad keeps the treatment with
+the corner, so the ends follow when either line moves. The order in
+which the profiles were placed does not matter. The Joint choice stays
+for the next end you pick, and the panel stays open. **Shift + click**
+on a profile picks the end and applies the panel's choice at once.
+*As it is* leaves the corner's treatment alone; then OK cuts the end as
+Angle and About say.
 
 **Flip** and **Rotate 90°** apply to the components you select. Enter turns
 them again.
@@ -10801,7 +11294,15 @@ choice stays with the design:
 **Structured** (each component under the one that holds it, numbered
 `2`, `2.1`, with how many its parent holds) or **Parts only** (each part
 once, with how many the whole design needs). Both views add the item
-number and each row's mass, an assembly's with what it holds. A drawing's
+number and each row's mass, an assembly's with what it holds.
+**Group identical parts** works in both views too: in **Parts only** equal
+parts are one row across the whole design (twenty profiles of the library
+in three lengths are three rows, and a bar you made yourself to the same
+size and material joins its length's row); in **Structured** equal
+components under the same parent are one row, and what an assembly holds
+is shown once below it. Rows of different BOM Structures stay apart, and
+a Reference never joins a counted row. The item numbers, quantities and
+totals follow the grouped rows. A drawing's
 Bill of Materials follows the structures too, at **First Level** and at
 **Components Only**: a Phantom's components are listed and numbered at
 its level, Purchased and Inseparable components are one item among the
@@ -11034,7 +11535,8 @@ The Surface tab makes surface bodies. A surface body
 has faces but no volume. Later features fill, sew, trim and thicken
 surface bodies. [Patch, Stitch and Thicken](#patch-stitch-and-thicken)
 describes three of the group's features. This section describes the
-other features of the group.
+other features of the group. To make a solid of surfaces that overlap
+without trimming them first, use [Boundary Fill](#boundary-fill).
 
 **Surface Extrude**, **Surface Revolve**, **Surface Sweep** and
 **Surface Loft** are Extrude, Revolve, Sweep and Loft that make
@@ -11073,7 +11575,13 @@ other options keep the edge tangent to the surface, or also keep its
 curvature. Extend works on a face that is bounded by the natural
 sides of its surface, that is, four sides and no holes. A flat face of
 any outline, for example a wall cut at a slant, extends past its
-straight open edges: the plane continues square to each edge.
+straight open edges. The new end edge lies the distance from the edge
+and parallel to it. The plane continues along the face's neighboring
+edges, so an end cut at a slant keeps its slant. Where two picked
+edges meet, their extensions meet in a mitered corner. Where a
+neighboring edge cannot be continued, the plane continues square to
+the edge: the neighbor turns back into the face, or it meets the new
+end edge at less than 15 degrees.
 
 The open edges of a surface body are edges of one face only. You select
 them as other edges: click an open edge with no command, or in Patch,
@@ -11126,9 +11634,13 @@ continuity:
 A bulge makes the blend fuller or flatter. With Stitch, MitCad sews the
 blend onto both bodies.
 
-**Boundary Surface** fills a loop of sketch curves and open edges. If
-you ask, the surface is tangent to the plane of the sketch or to the
-faces beside the edges. Boundary Surface can also run through a
+**Boundary Surface** fills a loop of sketch curves and open edges. The
+curves can come from several sketches, 3D sketches too, in any order:
+MitCad joins them end to end round the loop and tells you if the loop
+does not close. If you ask, the surface is tangent to the plane of each
+planar sketch (Tangent to Sketch Plane, shown when you picked curves of
+a planar sketch) or to the faces beside the edges (Edge Continuity,
+shown when you picked edges). Boundary Surface can also run through a
 network. The network has curves one way, lofted through in order, and
 curves that cross them.
 
@@ -11256,10 +11768,19 @@ model's definitions are in
 
 ### Placing a feature
 
-Box, Cylinder, Sphere, Torus, Coil, Hole, Gear, Pulley and Bearing are
+Box, Cylinder, Cone, Sphere, Torus, Coil, Hole, Gear, Pulley and Bearing are
 placed by what you select in the view, in **Place On**. You never type
 coordinates. Until you select something, the feature is not placed and
 there is nothing to see.
+
+**Cone** (Create, after Cylinder) makes a cone or a frustum. **Radius**
+is the radius of its base, where you place it; **Top Radius** is the
+radius at its height. Leave Top Radius at 0 for a cone that ends in a
+point, or give it a value for a frustum (a cone with its tip cut off).
+A negative **Height** turns the cone the other way, with its base where
+it was. A cone with the same radius at both ends is a cylinder: MitCad
+asks you to use Cylinder for that. A fillet on the base edge stays when
+you change the radii.
 
 - **A shaft or a hole:** the end edge (a round edge) or the side face.
   The feature goes on the shaft, or into the hole, along its axis. When you
@@ -11684,14 +12205,42 @@ The model's definition is in
 
 ### Boundary Fill
 
-**Boundary Fill** makes solids of the spaces that bodies enclose
-together. The tool bodies divide space into cells. Each cell lies inside
-some of the tools and outside the others. Examples of a cell are the
-space that two bodies share where they overlap, and the part of one body that
-another body does not reach. You select a cell by a point inside it. You
-can select as many cells as you want. When the tools cut the space of a
-cell apart, the cell is several separate pieces. MitCad fills the whole
-cell.
+**Boundary Fill** (*Solid › Create*, also *Surface › Modify* after
+Thicken) makes solids of the spaces that solids, surfaces and planes
+close off together. Use it to turn overlapping surfaces into a solid in
+one step, without trimming and stitching them first.
+
+- *Tools*: solids, surface bodies and planes (origin planes and
+  construction planes), picked in the view or in the browser. Surfaces
+  may overlap and run past each other; they need no trimming. A plane is
+  unbounded: MitCad cuts it to the space the other tools take up.
+- *Cells*: the closed regions to fill. As soon as the tools close off
+  regions, a dot shows inside each region in the view. Click a dot to add
+  its region, click it again to take it out. The field lists the regions
+  by number, for example `1, 3`. When the tools close off exactly one
+  region, MitCad takes it at once, so you need no click.
+- *Operation* and *Objects*: as for an extrusion (see below).
+- *Remove Tools*: takes the tool bodies out of the design.
+
+The preview shows every closed region see-through and the result of the
+operation. When you edit a Boundary Fill, its panel opens with its cells
+picked.
+
+With surfaces or planes among the tools, a cell is a closed region: a
+part of space that the faces of the tools close off all round. Faces
+that close nothing off, such as the parts of surfaces that run past the
+region, are left out. If a cell is not closed off, the feature fails with
+a message that says so. The message names no faces: move the pointer
+over the message to see where the region is open (where the surfaces
+end). Extend a surface there, or add a surface or a plane across the
+gap.
+
+With solids only, the tool bodies divide space into cells. Each cell
+lies inside some of the tools and outside the others. Examples of a cell
+are the space that two bodies share where they overlap, and the part of
+one body that another body does not reach. When the tools cut the space
+of a cell apart, the cell is several separate pieces. MitCad fills the
+whole cell. A dot of the panel picks the cell that holds it.
 
 The operations of Boundary Fill are:
 
@@ -11710,16 +12259,16 @@ The faces of the cells keep the names of the tool faces they lie on.
 Thus fillets, sketches and other features on the faces of a cell follow
 when the tools change.
 
-If a point lies outside every tool, the feature fails with a message
-that says so. If a point lies on the surface of a tool, the feature also
-fails with a message that says so. Two points in one cell fill that
-cell once.
+The definition keeps a point inside each cell. If a point lies outside
+every tool, the feature fails with a message that says so. If a point
+lies on the surface of a tool, the feature also fails with a message that
+says so. Two points in one cell fill that cell once.
 
-Note: Boundary Fill has no panel yet. You make it through the model's
-commands: scripts, `mitcad-cli run` or MCP
-([commands.md](../core/model-api/src/commands.md#boundary-fill)). The
-`.solidcraft` import also makes it. You edit, suppress and undo it in
-the timeline like any feature.
+Scripts, `mitcad-cli run` and MCP make the feature through the model's
+commands too
+([commands.md](../core/model-api/src/commands.md#boundary-fill)), and
+the `.solidcraft` import makes it. You edit, suppress and undo it in the
+timeline like any feature.
 
 ### Bounding Solid
 
@@ -12014,19 +12563,29 @@ Scripts, `mitcad-cli run` and MCP use the same features and the
 The Sheet Metal tab holds the commands for sheet metal bodies: Face, Flange,
 Hem, Bend, Fold, corners, cuts, reliefs, Unfold, Refold and the Flat Pattern
 ([app/COMMANDS.md](../app/COMMANDS.md#sheet-metal)). This section
-describes the sheet rules, the Flat Pattern export, and the options of
-Flange, Hem, Bend, Corner Relief and Sheet Cut. It also describes three sheet
-features that have no panel yet.
+describes the sheet rules, the Flat Pattern exports, and the options of
+Flange, Hem, Bend, Corner Relief, Sheet Cut and Perforate.
 
 **Edit Sheet Rules** edits the thickness, the bend radius, the K-factor
 and the reliefs. Open it from the context menu of a sheet metal body, or
 double-click the rules row under the sheet metal body in the browser. Every
-sheet that uses those rules follows the change.
+sheet that uses those rules follows the change. **Bend Relief** supplies
+the default at ends of flanges, bends and folds that stop inside the sheet.
+**Corner Relief** supplies the default for the Corner Relief command at
+a junction of two bends. Corners of flanges on several edges use the
+flange's miters and corner gaps.
 
 **Export Flat Pattern** writes the Flat Pattern of the selected sheet to
 a DXF file. The file has the cut contours and the bend lines of the
 sheet, in the design's length unit or in the unit you choose as the file
 type ([The unit of a DXF file](#the-unit-of-a-dxf-file)).
+
+**Export Bend Table…** in Sheet Metal › Modify or Laser › Export writes the
+selected sheet's bends to CSV or JSON. The rows use the Flat Pattern's
+viewing side and coordinates. Each row gives the bend angle, direction,
+inside radius, K-factor, allowance, and the start and end of its center line.
+A cut-out that splits a bend gives a row for each segment. The file uses
+millimeters and degrees.
 
 The Length of a **Flange** is *Measured* from one of two lines. The
 first is the tangent line of the bend. The second is the virtual sharp
@@ -12034,6 +12593,13 @@ corner of the inner or the outer surfaces. *Outer Tangent Length* measures
 from the plane that touches the outside of the bend. The Angle can be
 more than 180 degrees. A Length of 0 makes the bend alone, without a wall:
 a rolled hem.
+
+At an end inside an edge, a **Flange** uses the rules' bend relief or the
+selected **Own Bend Relief**. Rectangular and Round remove material around
+the end of the bend. A tear would slit through the bend zone and keep the
+material on both sides. New bend reliefs offer Rectangular and Round.
+Saved Tear bend reliefs keep their original rectangular cut and appear
+as **Legacy Tear Slot** when edited.
 
 **Hem** makes the flange a Teardrop, Rope or Double hem, or a Flat, Open
 or Rolled one. Type the hem's **Gap**, and for a double hem its
@@ -12188,19 +12754,21 @@ that adds material across a bend makes the body an ordinary solid; the
 sheet tools after it and the Flat Pattern row in the Browser say which
 feature did so.
 
-Two sheet features have no panel yet. You make them through the
-model's commands (scripts, `mitcad-cli run`, MCP) and by the
-`.solidcraft` import:
+**Perforate** in Sheet Metal › Modify cuts a field of round holes. Pick
+the Body, enter Diameter and Pitch, and choose Staggered or Square. The
+Margin keeps the holes clear of sheet edges, cutouts and bends. Leave
+it blank to use Diameter. Pick a Fixed Panel to set the grid axes, or
+use the default panel. An Outline limits the holes to closed profiles
+of a sketch on a flat face of the sheet and keeps them away from inner
+loops. The preview shows the holes and their count. The holes are cut
+through the sheet and appear in the Flat Pattern and its DXF file.
 
-- **Contour Flange** bends a sheet along an open chain of sketch lines.
-  The lines are one surface of the sheet. Every corner becomes a bend of
-  the radius of the rules. The sheet is as wide as you say along the
-  normal of the sketch. Select the side on which the material lies and
-  the direction of the width.
-- **Perforate** cuts a field of round holes over a whole sheet, on a
-  staggered or a square grid. A margin keeps the holes clear of the
-  edges, the cut-outs and the bends of the sheet. The holes are real:
-  the Flat Pattern, its DXF file and every measurement have them.
+**Contour Flange** is available through the model's commands (scripts,
+`mitcad-cli run`, MCP) and the `.solidcraft` import. It bends a sheet
+along an open chain of sketch lines. The lines are one surface of the
+sheet. Every corner becomes a bend of the radius of the rules. The sheet
+is as wide as you say along the normal of the sketch. Select the side on
+which the material lies and the direction of the width.
 
 **Convert to Sheet Metal** (SHEET METAL group) makes a body a sheet.
 Model the part as a solid, for example a tray: a base and four walls,
@@ -12323,6 +12891,23 @@ first. If another program changed the file after you opened it, **Save**
 asks before it writes over the file. If you open a file that is not a
 valid design, MitCad names the place of the error.
 
+**Save of a new design.** When you have a Cloud project (refer to
+[Sharing a project](#sharing-a-project)), **Save** (Ctrl+S) of a design
+that has no file yet asks where to save it:
+
+- **Save on This Computer…** opens the file dialog, as **Save As** does.
+- **Save to Project…** opens the project picker of **File › Save to
+  Project…**, so that every save of the design records a version.
+- **Cancel** or Esc saves nothing.
+
+Select **Remember my choice** to save new designs the same way from now
+on, without the question. To get the question back, set **Save of a new
+design** to **Ask** on the General page of **Tools › Preferences**
+(**MitCad › Settings** on macOS). There you can also choose **On this
+computer** or **To a project** yourself. Without a Cloud project, Save
+of a new design works as Save As. Save As, Save to Project and the Save
+of a design that has a file do not change.
+
 ### Several designs at once
 
 New Design and Open keep your current design open. They reuse an empty,
@@ -12332,10 +12917,17 @@ own selection, running command, undo history and save questions.
 
 **Window › New Window** (Ctrl+Shift+N, Cmd+Shift+N on macOS) opens a separate
 window. The Window menu also lists the open designs, checks the active
-one and offers **Minimize**. **Close** closes just that document; with only
-one design open it starts an empty Untitled design as before. **Quit**
-asks about changed designs one by one; Cancel stops quitting. Closing the
-last document ends MitCad.
+one and offers **Minimize**. **Close** (Ctrl+W, Cmd+W on macOS), a design
+tab's × and the tab's Close close just that design. When it is the last
+design, MitCad asks about unsaved changes and then shows the **Start page**
+with no design open: the window stays, and New Design, Open or a design on
+the Start page carries on from there. **Quit** asks about changed designs
+one by one; Cancel stops quitting. Closing the window itself (its close
+button, File › Exit) ends MitCad.
+
+To quit MitCad when you close the last design, as closing its window does,
+turn on **Quit MitCad when the last design is closed** in **Preferences ›
+General** (on macOS, **Settings › General**). It is off by default.
 
 In **Preferences › General**, **Open in the current window** restores the
 previous replacement behavior. **Open designs in: Tabs / Windows** chooses
@@ -13380,6 +13972,16 @@ quantity, library, version and license. It copies the list as CSV. MitCad
 records the license, the library, its URL and the version with each component
 in the design, also with a copied component.
 
+Some suppliers do not allow their parts to be printed as a service. Their
+libraries mark such components **Not for print services**. The details in
+**Insert from Library**, the Build tab's pickers and the component's
+properties (the row **Print service** in the **Library** set) show it. The
+mark goes with the component into the design, also when you open the
+design without the library or copy the component. It applies only to the
+bodies of that component, wherever it is placed. The rest of the design
+stays printable. The mark is for print services only: your own export and
+**Send to Slicer** work as before.
+
 A design from another computer can use libraries that are not on this
 computer. Then the design keeps the saved bodies of its components and says
 so. **Get Missing Libraries** in **Components in This Design** shows the addresses of
@@ -13566,7 +14168,7 @@ file's history.
 | OBJ | Meshes | Meshes | None |
 | DXF | Into a sketch | From a sketch. A drawing | None |
 | SVG | Into a sketch: paths, shapes and texts, filled regions by their fill rule, strokes as bands | None | None |
-| 3MF | None | For slicers | None |
+| 3MF | Open, Import. Meshes become mesh bodies, a part placed more than once becomes a component with its occurrences, colors become appearances. Slicer projects too | For slicers | None |
 | USDZ | None | For AR and 3D viewers: meshes with appearances, components kept | None |
 | Web page (`.html`) | None | The design in one HTML file with its viewer, for any browser | None |
 | glTF (`.glb`, `.gltf`) | Open, Import. Meshes become mesh bodies, nodes with children become components with their occurrences, materials become appearances | Meshes with appearances and textures, components kept, for the web and 3D viewers | None |
@@ -13600,6 +14202,16 @@ Each format is imported in its own way:
 - STL and OBJ are imported as mesh bodies. Insert Mesh asks for the
   unit, and whether to convert the mesh to a solid ([Convert
   Mesh](#convert-mesh)).
+- 3MF is imported as mesh bodies too, also a project saved by a slicer.
+  Each part of the file becomes a mesh body named after the part (a
+  slicer's project names its objects in its settings, and MitCad takes
+  those names). A part that the file places more than once becomes a
+  component with an occurrence in each place. Each color becomes an
+  appearance. The file says its unit, so Insert Mesh asks only whether
+  to convert the meshes to solids. A mesh that is not closed comes in as
+  a mesh body, and a warning says so: Convert Mesh cannot make a solid
+  of it. The print settings in a slicer's project are not imported here:
+  Import from Slicer reads them ([Print settings](#print-settings)).
 - glTF (`.glb` and `.gltf`) is imported as mesh bodies and components:
   [glTF for the web and 3D viewers](#gltf-for-the-web-and-3d-viewers).
   When the design already has content, MitCad asks **Where to Import**,
@@ -13631,7 +14243,11 @@ Each format is imported in its own way:
   the design) and link the copy. The designs that the file links from
   outside the project are copied too, and a name that is taken gets a
   number (*plate_2.mitcad*). The component keeps the file's name. Later
-  changes to the copy come in with Update Link. Select **Insert as a
+  changes to the copy come in with Update Link. To link only some
+  components or bodies of the copy, select **Choose parts…** before you
+  click **Copy into the Project and Link**, then tick them in the list
+  (see *Link part of a design*); **Cancel** in the list copies nothing.
+  Select **Insert as a
   Copy** to make the design a component that you can edit here, or
   **Cancel**.
 - If a linked component's file is outside the project already, the
@@ -13650,6 +14266,42 @@ Insert SVG asks for these values:
 Curves are imported exactly. Texts are imported as sketch texts. The
 regions that the drawing fills are selected after the import. Thus
 Extrude makes a logo with its holes in one step.
+
+#### Insert Points
+
+Insert Points (Insert group, and in sketch mode the sketch's Insert
+group) brings the x y coordinates of a `.csv`, `.txt` or `.dat` file
+into a sketch, as one smooth spline or as points: measured curves, cam
+profiles, airfoils.
+
+- Each line that starts with two numbers is a point. The numbers are
+  separated by spaces, tabs, commas or semicolons and use a decimal
+  point. Other lines, such as a header or an airfoil's name, are
+  skipped. A third column is ignored, and a warning tells you so.
+- Up to 30 points become one Fit Point Spline through every point. More
+  points become one spline that is fitted to them within a small
+  tolerance (0.01 mm, or more for a file with few decimals), with at most
+  60 control points. Such a spline is smooth: a spline forced through
+  hundreds of rounded coordinates has small wiggles that show on the
+  extruded surface, and it would have hundreds of points to drag.
+- An airfoil file (x from 0 to 1, in the Selig or the Lednicer layout of
+  the public airfoil databases) is found by its contents, and its name
+  is shown. With **Airfoil** checked you give the **Chord length**
+  (default 100 mm), the **Angle of attack** (turned about the leading
+  edge; a positive angle raises the leading edge) and where the leading
+  edge goes. The airfoil is one spline from the trailing edge round the
+  leading edge back to the trailing edge, with the chord along the
+  sketch's X axis. A blunt trailing edge is closed by a line (**Close
+  trailing edge**), so the profile can be extruded at once; a sharp one
+  ends in one point. A sketch point marks the leading edge. Clear
+  **Airfoil** to read the file as plain points.
+- Without **Airfoil**, **Scale** multiplies the file's numbers, which
+  are in the design's length unit, and you give where the file's origin
+  goes.
+
+Outside sketch mode the points go into a new sketch on the plane that
+you select, and a closed profile comes selected for Extrude. The insert
+is one undo step, named after the file.
 
 Design files open as new designs:
 
@@ -14587,6 +15239,16 @@ The import does this:
   folds, unfolds, refolds, conversions to sheet metal and perforations
   are imported as MitCad's sheet metal features. A conversion's
   thickness is the one that the design takes from the body.
+- A sketch's 3D curves are imported as a 3D sketch: the sketch itself
+  when it holds nothing else, else a 3D sketch named `<name> 3D` right
+  after it. Curves that meet share their end point. The 3D relations and
+  dimensions of newer designs are imported with it, and a dimension keeps
+  its parameter; older designs have none, so their points are fixed.
+- Frame members are imported as one Pipe per line for a round bar or
+  tube whose line runs through its center, and otherwise as one Sweep per
+  line of the profile, sketched on a plane at the start of the line. Each
+  member follows its line when the line changes and keeps the body name
+  that the design gives it. End caps are not imported.
 - Bounding solids are imported as MitCad's own ([Bounding
   Solid](#bounding-solid)), around the same bodies by the same margin,
   with the names that the design gives their boxes.
@@ -15185,8 +15847,10 @@ texture images as image files beside it. Keep these files together.
   bodies with *Selected bodies*. The components go in as a tree: each
   placed component is a group named after the component, with its
   placement, and it holds its bodies, named after the bodies. A
-  component placed twice is in the file twice. Hidden bodies and hidden
-  components stay out.
+  component placed several times has one set of triangles in the file:
+  each copy is a group with its own placement that uses the same
+  triangles, so the file does not grow with every copy. Hidden bodies
+  and hidden components stay out.
 - **How it looks.** Each appearance becomes a material with its name,
   color, metal or not, roughness, emission and see-through. Faces with
   appearances of their own keep them. Textures go into the file with the
@@ -15200,7 +15864,13 @@ texture images as image files beside it. Keep these files together.
   triangles, as for STL.
 
 The web page export ([Web viewer](#web-viewer)) uses the same file
-inside its page.
+inside its page. The command line writes the same file as File ›
+Export, for scripts ([Command line](#command-line)):
+
+```
+mitcad-cli export design.mitcad design.glb
+mitcad-cli export design.mitcad design.gltf --refinement high
+```
 
 **Import.** File › Open and File › Import read `.glb` and `.gltf`
 files, also those whose data and images are in other files beside them.
@@ -15496,6 +16166,7 @@ tools, as icons:
 | Edge Extension | Thin lines that run straight edges on: two edges to where their lines meet (a corner rounded or chamfered away), or one edge beyond both its ends (*Edges: One, Both Ways*; how far, in millimeters of paper, is its *Length* in the panel: 10 unless set). |
 | Text | Text on the sheet, or in the view clicked (*Drawn*). Click where it goes. |
 | Note | Text on a leader. Click the edge or point it points at, then where the text goes. |
+| Hole Callout | A hole's sizes on a leader: its count, Ø or thread, THRU or depth, and its counterbore or countersink (`4x Ø6.6 ↧ 20`, `⌴ Ø11 ↧ 6.8`). Click the hole's rim where the view looks into it, or its wall seen from the side, then where the text goes. The lines follow the hole when you change it. See *Hole callouts* below. |
 | Datum Label | A datum label (A, B, …) on a face or an axis. The letters of the design's datum labels and the drawings' are one set: a new label takes the first letter no other has. |
 | Feature Control Frame | A geometric tolerance on a face or an axis. A dialog asks for it; its datums are the letters of the design's and the drawings' datum labels. |
 | Surface Finish | A surface finish symbol on a face, with its requirement (`Ra 1.6`). |
@@ -15603,6 +16274,27 @@ Radius and diameter values and leader notes are horizontal on a shoulder
 under both. The exports (PDF, SVG, DXF, DWG) write the dimensions as the
 sheet shows them.
 
+**Hole callouts.** On a hole the view looks into, a hole callout's
+leader points at the hole's center, as a diameter's does: its arrow
+sits where the leader meets the rim, on the side of the hole its text
+is on. Place the text left of the hole and the arrow is on the left;
+drag the text round the hole and the arrow goes round with it (the
+leader snaps to 45° unless you hold **Alt**). On a hole seen from the
+side, the arrow stays on the wall where you clicked. Select the callout
+for its panel:
+
+- *Text Before* goes in front of the first line, *Text After* after the
+  last, a space between (`TYP 4x Ø6.6 ↧ 20`). Each is a box of a few
+  lines: press **Enter** to start a line. A line break at the end of
+  *Text Before* puts its text on lines of its own above the hole's
+  lines (`TYP`, then `4x Ø6.6 ↧ 20` below it); one at the start of *Text
+  After* puts its text below the last line. Leaving the box (**Tab**)
+  applies it.
+- *Replace Value* writes your own lines in place of the hole's; *Text
+  Before* and *Text After* stay. While it is set, the callout no longer
+  follows the hole: *Measured* under it shows the hole's lines as they
+  are now. Clear it to write the hole's lines again.
+
 An annotation whose edge or face is gone (the feature deleted or
 suppressed, the body no longer in the view) is not drawn. A small red
 box beside its view marks it; select it to see why, and delete it or
@@ -15657,6 +16349,20 @@ under *More Columns*, such as `Vendor`), **Sort By** and
 **Descending**, a hole table's **Origin** and **Tags**, a bill of materials's
 **Rows** and **Group identical parts**, and its **Title**. The numbers of a
 bill of materials follow its sort.
+
+The columns of a bill of materials:
+
+| Column | What it shows |
+|---|---|
+| Name | A library part's designation, else the component's name. |
+| Part Number | The component's own Part number; without one, the number its library or Build entry gives. |
+| Description | The component's Description. |
+| Material | The material of the component's bodies. |
+
+Set Part number and Description in the component's **Property Sets…**
+(its browser menu): they are standing rows there (see Properties). While
+a shown Part Number or Description cell is empty, the table's panel says
+so under Columns.
 
 #### Sheets
 
@@ -15892,6 +16598,14 @@ drawing:
 mitcad-cli export-drawing design.mitcad design.pdf --sheet A3
 ```
 
+It draws each shown body at every place the design shows it: a
+component placed 100 times is drawn 100 times, and a hidden occurrence
+is left out. The line it prints counts both, for example `Exported
+design.pdf: drawing, 3 views, 12 bodies in 140 placements, A3, 1:10`.
+The views it lays out show the bodies: an imported item MitCad has no
+counterpart for (a placeholder in the timeline, such as a frame member)
+has no body and draws nothing.
+
 #### Printing
 
 File › Print… (Ctrl+P) prints what is open:
@@ -16090,12 +16804,23 @@ automatically. There is no OK. After each change the note *Changes are
 saved automatically* shows under the page for a few seconds. The
 background can follow the system's appearance.
 
+**Environment** (Display page; **View background** in the macOS Settings
+window) sets the background of the 3D view. Its default on every
+platform is **Follow System** (in the list: *Automatic Background (follow
+system)*). Follow System follows MitCad's theme, the same as the window
+does: a dark blue-gray gradient when the window is dark and a light gray
+one when the window is light. This is so with the **Theme** set to
+System (your computer in dark or light mode), Dark or Light, and after
+**Restore Defaults**. When the theme changes while MitCad runs, the view
+changes with it at once. The other backgrounds (Gradient, Light, White,
+Dark, Custom) stay as you choose them, whatever the theme.
+
 The table that follows lists the pages. Each page has a chapter in this
 guide that explains its settings.
 
 | Page | What it sets | Refer to |
 |---|---|---|
-| **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
+| **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). **Extrude starts with**: Operation from the bodies it touches (the default) or New Body (see [Extrude](#extrude)). **Save of a new design**: Ask (the default), On this computer or To a project (see [Saving and recovery](#saving-and-recovery)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts), [Extrude](#extrude) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
 | **Display** | **Camera**, **Orientation cube** (with its **Size**), **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Browser background** (with **Rows at most**), **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
@@ -16491,6 +17216,12 @@ report) offers the latest log and the newest lines kept in memory. Both
 are left out unless you tick them. A ticked log file is not sent, but
 its place is shown. Drag it into the issue form.
 
+**In a terminal.** When you start MitCad from a terminal on Linux or
+macOS, the terminal shows only its warnings and errors. The session log
+and the debug log still get every line. To see every line in the
+terminal too, start MitCad with the variable `MITCAD_LOG_STDERR=1`. When
+you redirect MitCad's output to a file or a pipe, every line goes there.
+
 ### Troubleshooting
 
 When MitCad stops responding or quits, its logs tell afterwards what it
@@ -16564,6 +17295,7 @@ Environment variables:
 |---|---|
 | `MITCAD_NO_UPDATE_CHECK=1` | Sets update checks to off |
 | `MITCAD_DEBUG_LOG` | `1`, or a file's path: writes a debug log as `--debug-log` does |
+| `MITCAD_LOG_STDERR=1` | A terminal MitCad was started from shows every line of its log, not only warnings and errors ([Debug log](#debug-log)) |
 | `MITCAD_LANGUAGE` | `en`, `fi`: the language of the interface, over Preferences; `--language` comes first |
 | `MITCAD_PROJECTS_DIR` | Where New Project puts projects, instead of Documents/Mitcad |
 | `MITCAD_GIT` | The git program when it is not on `PATH`. Preferences › Cloud sets it for the application |
@@ -16631,7 +17363,18 @@ AppImage, `MitCad.AppImage cli <command>` runs it.
   [--unit mm|in|…] [--refinement low|medium|high] [--ascii]`: exports a
   design. A `.3mf` file holds the solid and mesh bodies as the parts of
   one object. A `.usdz` file holds the shown bodies with their
-  appearances, with the textures relative to the design's folder.
+  appearances, with the textures relative to the design's folder. A
+  `.glb` or `.gltf` file is the file File › Export writes
+  ([glTF](#gltf-for-the-web-and-3d-viewers)): the visible bodies (or
+  those of `--bodies`, every placement of each) in the component tree,
+  one set of triangles per body that all its placements use, with the
+  appearances and textures, in meters, Y up. A `.gltf` file has its
+  `.bin` file and images beside it. `--refinement` or `--deviation` and
+  `--angle` work as for STL; `--unit`, `--schema`, `--ascii`,
+  `--coordinates` and `--occurrence` do not apply to glTF and are
+  refused. The line printed gives the bodies written (a body placed
+  twice counts twice), the triangles, the files and their bytes;
+  `--json` prints them as JSON.
 - `export-sketch part.mitcad Sketch1 sketch.dxf [--unit in] [--r12]
   [--construction] [--no-points]`: exports a sketch, in the design's
   length unit unless `--unit` gives another. Construction curves and

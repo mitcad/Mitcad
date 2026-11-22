@@ -12,7 +12,7 @@ enum class FileKind {
   F3d,     // .f3d, .f3z: a new document with the design's history
   FreeCad, // .FCStd: a new document with the document's stored bodies
   Cad,     // .step, .stp, .iges, .igs, .brep, .brp: bodies without history
-  Mesh,    // .stl, .obj: mesh bodies
+  Mesh,    // .stl, .obj, .3mf: mesh bodies (a 3MF part placed more than once as a component, mitcad#2156)
   Drawing, // .dxf, .svg (mitcad#473): a sketch
   Ipt,     // .ipt or .iam: a new document with the part or the assembly (mitcad#60)
   Ifc,     // .ifc, .ifczip: a new document with the building model (mitcad#273)
@@ -28,6 +28,9 @@ FileKind fileKind(const QString& path);
 // its history (.ipt, .iam, .f3d, .f3z, .FCStd): File › Import offers it
 // into the open design as a component, or as a new design (mitcad#1894).
 bool importsAsComponent(FileKind kind);
+// A mesh file that says its unit itself (.3mf, mitcad#2156): Insert Mesh
+// does not ask for it.
+bool meshFileHasUnit(const QString& path);
 // A drawing that is an SVG one, not DXF (mitcad#473).
 bool isSvgDrawing(const QString& path);
 

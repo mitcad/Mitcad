@@ -58,14 +58,8 @@ mitcad#1986). Only the sizes come from the case: the strip narrower than a
 tenth of the radius, where the ball's turn about its contact's end stays
 within the strip's width.
 
-Test: geometry/tests/test_fillet_step_end.cpp (ctest
-geometry.fillet_step_end): a block's edge rounded up to a vertex where its
-wall steps back by micrometres, the step below or above the edge, one rim
-or both, as built or mirrored: valid, one quarter torus per rounding's
-end, the material taken that of the rim's section. These fail without the
-patch (invalid, or 2100 taken) and pass with it; the cases with the
-body's faces in the reverse order and the second rounding run on across
-the step pass only with 0962 (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0951.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

@@ -230,10 +230,10 @@ impl FormatEdit {
             format.prefix.clone_from(prefix);
         }
         if let Some(before) = &self.before {
-            before.trim().clone_into(&mut format.before);
+            format.before = trimmed_keeping_break(before, Side::End);
         }
         if let Some(after) = &self.after {
-            after.trim().clone_into(&mut format.after);
+            format.after = trimmed_keeping_break(after, Side::Start);
         }
         if let Some(replace) = &self.replace {
             format.replace = replace
@@ -242,6 +242,32 @@ impl FormatEdit {
                 .filter(|r| !r.is_empty())
                 .map(str::to_owned);
         }
+    }
+}
+
+/// Which end of a text a line break is kept at.
+#[derive(Clone, Copy, PartialEq)]
+enum Side {
+    Start,
+    End,
+}
+
+/// A text before or after a value, trimmed, with a line break kept at its
+/// end next to the value (`Side::End` of a text before, `Side::Start` of
+/// one after; mitcad#2212): a hole callout's own lines then stand above or
+/// below the hole's, not joined to them. Spaces around that line break
+/// and further empty lines are trimmed; a line break alone is nothing.
+fn trimmed_keeping_break(text: &str, side: Side) -> String {
+    let spaces = |c: char| c.is_whitespace() && c != '\n' && c != '\r';
+    let trimmed = text.trim();
+    let breaks = match side {
+        Side::End => text.trim_end_matches(spaces).ends_with(['\n', '\r']),
+        Side::Start => text.trim_start_matches(spaces).starts_with(['\n', '\r']),
+    };
+    match (breaks && !trimmed.is_empty(), side) {
+        (true, Side::End) => format!("{trimmed}\n"),
+        (true, Side::Start) => format!("\n{trimmed}"),
+        (false, _) => trimmed.to_owned(),
     }
 }
 
@@ -3213,6 +3239,27 @@ fn note_label(annotation: &Annotation) -> Label {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_format_edit_keeps_a_line_break_next_to_the_value() {
+        // mitcad#2212: a hole callout's own lines above or below the
+        // hole's; spaces and empty lines trimmed as before.
+        let edit: FormatEdit = serde_json::from_value(json!({
+            "before": "  TYP \n\n ", "after": " \r\n 2 PLACES  \n"
+        }))
+        .unwrap();
+        let mut format = AnnotationFormat::default();
+        edit.apply(&mut format);
+        assert_eq!(format.before, "TYP\n");
+        assert_eq!(format.after, "\n2 PLACES");
+        let edit: FormatEdit = serde_json::from_value(json!({
+            "before": " TYP ", "after": "\n"
+        }))
+        .unwrap();
+        edit.apply(&mut format);
+        assert_eq!(format.before, "TYP");
+        assert_eq!(format.after, "");
+    }
 
     fn near(a: f64, b: f64) {
         assert!((a - b).abs() < 1e-9, "{a} instead of {b}");

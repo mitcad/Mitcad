@@ -1,0 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. A new profile lying along a lying one, long faces in contact. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+  <rect x="2.5" y="14" width="19" height="5" fill="#9cc0ec"/>
+  <rect x="2.5" y="6.5" width="19" height="7.5" fill="#c9ddf6" stroke="#e07b1a" stroke-width="1.6"/>
+</svg>

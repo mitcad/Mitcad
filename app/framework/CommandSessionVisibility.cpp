@@ -242,6 +242,12 @@ void CommandSession::visibilityChanged(bool sketchPreviewTakenBack) {
   if (const InputDef* input = activeInput()) {
     showActiveKinds(input);
   }
+  // The inputs that show what is shown follow it
+  // (CommandDef::followsVisibility, mitcad#2222: a body hidden leaves the
+  // Plates panel's first plate).
+  if (m_def.followsVisibility) {
+    refreshInputs();
+  }
 }
 
 bool CommandSession::redrawPreview() {

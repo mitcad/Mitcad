@@ -8,6 +8,7 @@ Usage: ui-image-stats.py dump.xwd x y width height [other.xwd]
        ui-image-stats.py --silhouettes a.xwd b.xwd x y width height
        ui-image-stats.py --image-silhouette shot.xwd x y width height image.png fx fy fwidth fheight
        ui-image-stats.py --png-changed a.png b.png x y width height
+       ui-image-stats.py --vertical-lines dump.xwd x y width height length
 
 Prints JSON with pixel counts in the region:
   pixels   all of them
@@ -64,6 +65,15 @@ height.
 app's --screenshot of the view, tools/ui-version-watermark-test.sh) and
 prints JSON: pixels, the region's, and changed, those that differ by more
 than 24 in a channel.
+
+--vertical-lines finds the lines down the region at least `length`
+pixels long (a cylinder's outlines seen from its side, mitcad#2155,
+tools/ui-view-outline-test.sh): a column's run is its longest run of dark
+pixels (luminance below 150, on a light background), gaps of up to 2
+pixels bridged; the columns whose run is that long, within 2 pixels of
+each other, are one line. Prints JSON:
+  lines    how many lines
+  places   each line's middle column in the region and its longest run
 """
 
 import json
@@ -308,7 +318,41 @@ def png_changed(a_path, b_path, region):
     return stats
 
 
+def vertical_lines(path, region, length):
+    """--vertical-lines: the dark lines down the region at least `length` long."""
+    rows = region_rows(path, *region)
+    width = len(rows[0]) if rows else 0
+    runs = []
+    for x in range(width):
+        best = run = gap = 0
+        for row in rows:
+            r, g, b = row[x]
+            if 0.299 * r + 0.587 * g + 0.114 * b < 150:
+                run += gap + 1
+                gap = 0
+                best = max(best, run)
+            elif run and gap < 2:
+                gap += 1
+            else:
+                run = gap = 0
+        runs.append(best)
+    places, start = [], None
+    for x in range(width + 3):
+        long_run = x < width and runs[x] >= length
+        if long_run and start is None:
+            start = end = x
+        elif long_run:
+            end = x
+        elif start is not None and x - end > 2:
+            places.append({"x": (start + end) // 2, "run": max(runs[start:end + 1])})
+            start = None
+    return {"lines": len(places), "places": places}
+
+
 def main():
+    if len(sys.argv) == 8 and sys.argv[1] == "--vertical-lines":
+        print(json.dumps(vertical_lines(sys.argv[2], [int(v) for v in sys.argv[3:7]], int(sys.argv[7]))))
+        return
     if len(sys.argv) == 12 and sys.argv[1] == "--image-silhouette":
         print(json.dumps(image_silhouette(sys.argv[2], [int(v) for v in sys.argv[3:7]], sys.argv[7],
                                           [int(v) for v in sys.argv[8:12]])))

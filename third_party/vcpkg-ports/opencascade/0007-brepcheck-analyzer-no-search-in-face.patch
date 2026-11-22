@@ -9,12 +9,8 @@ a second to check). The analyzer calls the new InContextOfAncestor, which
 skips the search (the vertex or edge is one of the face's); other callers
 keep InContext, and the checks and their statuses are unchanged.
 
-Test: geometry/tests/port/p0007-checker-no-search-in-face.cpp (ctest
-geometry.port.0007), test_small_face_is_valid and
-test_face_of_forty_thousand_edges_within_eight_seconds: a face of one wire
-of 40 000 edges is valid and checked without geometric controls within 8 s
-(tens of seconds with the search). It fails without the patch (shown
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0007.
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
 @@ -137,7 +137,17 @@

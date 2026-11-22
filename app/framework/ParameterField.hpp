@@ -99,6 +99,12 @@ struct ParameterFieldOptions {
   bool steps = false;
   // The smallest value a step goes to (a pattern's quantity: 1).
   ValueStepLimit stepLimit;
+  // The fx button opens Edit Formula through the field's owner with the
+  // field's text as it is now, instead of listing the parameters
+  // (mitcad#2179): Edit Parameters' Expression cells, which end their
+  // editing first, and Add User Parameter's Expression field. Typing still
+  // lists the parameters, and the right-click menu keeps Insert Parameter….
+  std::function<void(const QString& text)> formula;
 };
 
 // The parameter suggestions of an expression field (mitcad#567): typing
@@ -238,6 +244,7 @@ private:
   void insert(const QString& name, const QString& how, const Anchor& where);
   void showMenu(const QPoint& at);
   void updateIcon();
+  void updateFxTip(); // what fx does: the list, or Edit Formula (mitcad#2179)
   // The value stepped by `by` in the unit it shows (mitcad#1254), logged
   // with what stepped it ("Up", "Shift+Up", "wheel").
   void stepValue(double by, const QString& how);

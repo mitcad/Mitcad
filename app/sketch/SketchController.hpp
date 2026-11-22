@@ -408,6 +408,16 @@ public:
   // its originals and copies stay where they are as plain sketch geometry,
   // one undo step. Logged "Freed pattern k5".
   void freePattern(const QString& id);
+  // Explode Text (mitcad#2163): the selected text or QR code, or the one a
+  // selected region's contours bound, becomes plain lines and splines in
+  // its place (`sketch.explode_text`), one undo step; what the model could
+  // not carry over to later features is shown in words. Logged "Exploded
+  // text t2 in Sketch1: 46 curves".
+  void explodeText();
+  // The text the single selection of this sketch stands for: a picked text
+  // or QR code, or the one a picked region's contours bound; null
+  // otherwise.
+  const TextData* selectedText() const;
   // The selected constraints and dimensions of this sketch that are
   // inactive (`active` false) or active.
   QStringList selectedItems(bool active) const;

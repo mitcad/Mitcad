@@ -31,12 +31,8 @@ approximation's kinks of 0.02 to 0.2 degrees (bugs/modalg_7 bug32445,
 whose result became invalid, and bug32447_1, whose faces changed): the
 mode alone keeps OCCT's angles since mitcad#1899.
 
-Test: geometry/tests/test_pipe_square_section.cpp (ctest
-geometry.pipe_square_section): test_four_lines and test_kink (with 1661),
-and test_stirrup, whose kink of 0.12 degrees is a mitred corner since this
-patch: a valid solid within 0.2 % of the circle's area times the path's
-length. It fails without the patch: the test does not build without it
-(shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1662.
 
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffsetAPI/BRepOffsetAPI_MakePipeShell.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffsetAPI/BRepOffsetAPI_MakePipeShell.cxx
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffsetAPI/BRepOffsetAPI_MakePipeShell.cxx

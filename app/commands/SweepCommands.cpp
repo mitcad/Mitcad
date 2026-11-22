@@ -483,6 +483,13 @@ const Choices kPointEnds = {{QStringLiteral("point_sharp"), QStringLiteral("Poin
 
 const QString kRails = QStringLiteral("rails");
 
+// Tangent Edges (mitcad#2162): a section's edges that meet tangentially
+// joined into one smooth face (Merge, a new loft's default) or each its own
+// face (Keep, a loft saved before the choice).
+const QString kTangentEdges = QStringLiteral("tangent_edges");
+const Choices kTangentEdgesChoices = {{QStringLiteral("merge"), QStringLiteral("Merge")},
+                                      {QStringLiteral("keep"), QStringLiteral("Keep")}};
+
 QString endKey(bool last, const char* field) {
   return QStringLiteral("%1_%2").arg(last ? QStringLiteral("end") : QStringLiteral("start"),
                                      QLatin1String(field));
@@ -591,6 +598,8 @@ CommandDef loftCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("From the last section back to the first")),
       checkInput(QStringLiteral("ruled"), QObject::tr("Ruled"), false)
           .withTooltip(QObject::tr("Straight between neighboring sections")),
+      choiceInput(kTangentEdges, QObject::tr("Tangent Edges"), kTangentEdgesChoices, QStringLiteral("merge"))
+          .withTooltip(QObject::tr("Merge: a section's smoothly joined edges make one face; Keep: a face per edge")),
   };
   def.inputs += operationInputs();
   def.enabled = [&context] { return hasProfiles(context) || hasBodies(context); };
@@ -667,6 +676,10 @@ CommandDef loftCommand(const CommandContext& context) {
     if (state.checked(QStringLiteral("ruled"))) {
       result.def.insert(QStringLiteral("ruled"), true);
     }
+    // Keep is the field left out (mitcad#2162).
+    if (state.choice(kTangentEdges) == QStringLiteral("merge")) {
+      result.def.insert(kTangentEdges, QStringLiteral("merge"));
+    }
     addOperation(result.def, state);
     return result;
   };
@@ -723,6 +736,10 @@ CommandDef loftCommand(const CommandContext& context) {
     }
     state.setChecked(QStringLiteral("closed"), feature.value(QStringLiteral("closed")).toBool());
     state.setChecked(QStringLiteral("ruled"), feature.value(QStringLiteral("ruled")).toBool());
+    // A loft without the field keeps its tangent edges, as it was built.
+    state.setChoice(kTangentEdges, feature.value(kTangentEdges).toString() == QStringLiteral("merge")
+                                       ? QStringLiteral("merge")
+                                       : QStringLiteral("keep"));
     loadOperation(feature, state);
     // The frame and the orientation along the centre line, kept for
     // `build` (mitcad#547).

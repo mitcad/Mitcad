@@ -3,7 +3,8 @@
 # The Browser's width in the Floating layout (mitcad#1932) in the build VM,
 # as tools/ui-browser-widths-test.sh on Linux: the shared steps
 # tools/ui-scripts/browser-widths.mitcad-ui on the design that mitcad-cli
-# makes (tools/ui-scripts/browser-widths.json): with Rows a long component
+# makes (tools/ui-scripts/browser-widths.json): Rows at the start without a
+# saved choice (mitcad#2144); with Rows a long component
 # name widens the rows and the card, a longer one stops at a third of the
 # view and is elided, a limit changed in Preferences takes effect, the card
 # shrinks back and a click beside the rows reaches the view; with Card the

@@ -39,9 +39,8 @@ shape's maps, which do not hold that face (FindFromKey).
   geometry.fillet_three_face_corner) and on a design's rounding in
   f3d.corpus_designs.
 
-Test: geometry/tests/test_fillet_results.cpp (ctest
-geometry.suite.fillet_results), test_extension_rolling_on_past_a_seam: It
-fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0240.
 
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

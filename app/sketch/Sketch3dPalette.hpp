@@ -187,9 +187,15 @@ private:
   QString m_itemsSketch;      // the sketch the list was built for (an edit's rebuild reveals it)
   bool m_refsQueued = false;
   // A new selection's description is scrolled into the card's sight
-  // (mitcad#1592: below the lists of a long card it was out of it).
+  // (mitcad#1592: below the lists of a long card it was out of it). The
+  // reveal holds while the card settles (mitcad#2189): a later layout pass
+  // that moves the description out of sight scrolls it back, until the
+  // card is scrolled by something else, a list edit is revealed or the
+  // selection changes.
   QString m_selectionShown;
   bool m_revealSelection = false;
+  bool m_selectionRevealed = false; // the held reveal has scrolled once
+  bool m_scrollingCard = false;     // the palette's own scroll of the card
 };
 
 } // namespace sketch

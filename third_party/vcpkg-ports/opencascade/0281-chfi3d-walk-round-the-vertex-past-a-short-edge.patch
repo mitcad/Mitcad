@@ -25,11 +25,8 @@ a rim's torus), that common edge does not hold the vertex.
   the vertex where the walk reached the edge, and the short edge lies in
   the removed corner (as 0071's prolongation from an edge's end does).
 
-Test: geometry/tests/test_fillet_corners.cpp (ctest
-geometry.suite.fillet_corners),
-test_walk_round_the_corner_past_a_short_edge: It fails without the patch
-(shown 2026-11-20 by tools/occt-port-proof.py, reverted together with
-0290, 0720, 1580, 1581, which change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0281.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

@@ -107,6 +107,9 @@ pub struct ParameterState {
     /// The feature whose dimension a model parameter is.
     pub owner: Option<FeatureUid>,
     pub favorite: bool,
+    /// A user parameter's group (mitcad#2180); `""` for none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 /// A parameter that differs.
@@ -124,7 +127,7 @@ pub struct ParameterChange {
     pub from: Option<ParameterState>,
     pub to: Option<ParameterState>,
     /// What differs: `name`, `expression`, `unit`, `value`, `comment`,
-    /// `kind`, `owner`, `favorite`.
+    /// `kind`, `owner`, `favorite`, `group`.
     pub fields: Vec<&'static str>,
     pub text: String,
 }
@@ -550,6 +553,11 @@ impl<'a> Side<'a> {
                     kind: p.kind().as_str(),
                     owner: parameters.owner(p.id()),
                     favorite: state.favorites.contains(&p.id()),
+                    group: state
+                        .parameter_groups
+                        .group_of(p.id())
+                        .unwrap_or_default()
+                        .to_owned(),
                 },
             })
             .collect();
@@ -812,6 +820,9 @@ fn parameter_changes(
                 }
                 if x.favorite != y.favorite {
                     fields.push("favorite");
+                }
+                if x.group != y.group {
+                    fields.push("group");
                 }
                 if fields.is_empty() {
                     continue;

@@ -512,6 +512,11 @@ struct InputDef {
   // in the text ("2, 5": the suppressed ones).
   std::function<std::vector<Manipulator>(const CommandState&, const CommandContext&, const QJsonObject&)>
       toggles;
+  // Text with toggles: they are shown also while no preview is (called
+  // with an empty report then), as Boundary Fill's dots of the closed
+  // regions before any is picked (mitcad#2149): what they stand for comes
+  // from the model's queries, not from the preview.
+  bool togglesUnpreviewed = false;
 
   // Choice: (value, label) pairs.
   QVector<QPair<QString, QString>> choices;
@@ -706,6 +711,11 @@ struct InputDef {
   // (mitcad#656: Check Belt's belt length, nearest belt and travel, one
   // per line); none when empty.
   std::function<QString(const CommandState&, const CommandContext&)> rowNote;
+  // Selection: what the panel says while the input still needs items, in
+  // place of "Select <label>." when it gives a text (mitcad#2194:
+  // Profiles emptied by a whole sketch whose closed curves cross, which
+  // says to click its areas).
+  std::function<QString(const CommandState&, const CommandContext&)> missingText;
   // Value: may be left empty, which means the model works it out (mitcad#656:
   // "0 means automatic" made explicit); the empty field shows this text as
   // its placeholder, read after each preview that succeeded ("Auto (24.5
@@ -979,6 +989,10 @@ struct InputDef {
   }
   InputDef& withRowNote(std::function<QString(const CommandState&, const CommandContext&)> note) {
     rowNote = std::move(note);
+    return *this;
+  }
+  InputDef& withMissingText(std::function<QString(const CommandState&, const CommandContext&)> text) {
+    missingText = std::move(text);
     return *this;
   }
   InputDef& withAuto(std::function<QString(const CommandState&, const CommandContext&)> text) {
@@ -1366,6 +1380,12 @@ struct CommandDef {
   // An automatic operation transition may initialize command-specific
   // state (Extrude's Cut scope), without recording a deliberate user choice.
   std::function<void(CommandState&, const CommandContext&)> autoOperationApplied;
+  // The tool's direction (+1 or -1; 0 when it has none to flip, as a
+  // two-sided extrusion): a change is a direction flip (Flip, or the arrow
+  // dragged through the start to a negative distance). A new feature's flip
+  // whose preview fails with an operation chosen by hand tries the model's
+  // other one (mitcad#2216, AutoOperationPolicy).
+  std::function<int(const CommandState&)> toolDirection;
   // Sketch commands (U2): `build` gives a `sketch.*` command (or
   // {"commands": [...]}) instead of a feature definition; the preview runs
   // it and takes it back, OK keeps it as one undo step.
@@ -1475,6 +1495,11 @@ struct CommandDef {
   // Print's Printer and Process follow the design's), before the panel
   // shows the inputs again: the inputs that show the model follow it.
   std::function<void(CommandState&, const CommandContext&)> modelChanged;
+  // A light bulb or an eye changed while the panel is open (the Browser's,
+  // a visibility command) counts as such a change: modelChanged is called
+  // and the inputs are shown again (mitcad#2222: the Plates panel, where a
+  // hidden body leaves the first plate).
+  bool followsVisibility = false;
   // Called once when the command ends (OK, Cancel, Close or discarded),
   // with whether it was committed: what it opened beside its panel goes
   // with it (BUILD's part picker, mitcad#418).

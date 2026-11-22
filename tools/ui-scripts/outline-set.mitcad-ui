@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: MIT
+# The outline set (mitcad#2194, GitHub mitcad/Mitcad#545) on outline-set.json:
+# Sketch1 (F1) a plate with two round holes and an island in the first,
+# Sketch2 (F2, the newest) two overlapping circles, whose closed curves
+# cross.
+#   1. Show profiles fills the plate and the island, not the holes' discs
+#      ("Profiles without fill": two of F1, none of the crossing sketch);
+#      a hole still hovers and picks with no command.
+#   2. Extrude on the crossing sketch starts with one of its regions and
+#      the panel says that its closed curves cross.
+#   3. With the timeline marker before Sketch2, Extrude starts with the
+#      plate and the island (2 profiles, no hole) and previews them; with
+#      the plate clicked away, a click on Sketch1's timeline cell and then
+#      on its Browser row brings it back (the outline set's unused member).
+#   4. Sketch1 selected on its Browser row before Extrude: Profiles are its
+#      outline set; Sketch2's Browser row then adds nothing and the panel
+#      says that its closed curves cross.
+# Run by tools/ui-outline-set-test.sh (Linux) and
+# tools/ui-windows-outline-set-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The holes unfilled; one hovered and picked.
+expect-ever '^Profiles without fill: 2 \[F1 r[{]c[0-9]+[}], F1 r[{]c[0-9]+[}]\]$' 20
+expect-never '^Profiles without fill: .*F2 '
+mark
+idle-pick-places
+wait-log '^Pick profile F1/r[{]c[0-9]+[}] at ' 20
+hover-logged '^Pick profile F1/r[{]c[0-9]+[}] at '
+wait-log '^Idle hover: profile r[{]c[0-9]+[}] of F1' 20
+mark
+click-pick 'profile F1/r[{]c[0-9]+[}] at '
+wait-log '^Selected: 1 profile [[]profile r[{]c[0-9]+[}] of F1' 20
+wait-idle
+mark
+key Escape
+wait-log '^Selected: nothing'
+wait-idle
+
+# 2. The crossing sketch: one region, and why no more.
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile [[]profile r[{].* of F2[]]$'
+wait-log '^Panel Extrude note: The closed curves of Sketch2 cross each other' 30
+wait-log '^Preview Extrude: ok' 30
+mark
+key Escape
+expect-log '^Command Extrude cancelled'
+wait-idle
+
+# 3. The plate with its holes as the newest sketch; Sketch1 picked on the
+# timeline and in the Browser while Extrude is open.
+model-command '{"cmd":"set_marker","position":1}'
+wait-idle
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 2 profiles [[]profile r[{]c1[[].* of F1; profile r[{]c[0-9]+[[].* of F1[]]$'
+expect-no-log '^Extrude Profiles: .*profile r[{]c[0-9]+[}] of F1'
+expect-no-log '^Panel Extrude note: '
+wait-log '^Preview Extrude: ok' 30
+wait-log '^Pick profile F1/r[{]c1[[]' 20
+screenshot '${MITCAD_TEST_WORK}/outline-set-plate.png'
+mark
+click-pick 'profile F1/r[{]c1[[]'
+wait-log '^Extrude Profiles: 1 profile [[]profile r[{]c[0-9]+[[].* of F1[]]$'
+mark
+click-logged '^Timeline Sketch1 at '
+wait-log '^Profiles: the whole sketch Sketch1 taken as 1 of its outline set$'
+wait-log '^Extrude Profiles: 2 profiles '
+expect-no-log '^Extrude Profiles: .*profile r[{]c[0-9]+[}] of F1'
+mark
+click-pick 'profile F1/r[{]c1[[]'
+wait-log '^Extrude Profiles: 1 profile '
+mark
+click-logged '^Browser Root/Sketches/Sketch1 at '
+wait-log '^Profiles: the whole sketch Sketch1 taken as 1 of its outline set$'
+wait-log '^Extrude Profiles: 2 profiles '
+wait-log '^Preview Extrude: ok' 30
+mark
+key Escape
+expect-log '^Command Extrude cancelled'
+wait-idle
+model-command '{"cmd":"set_marker","position":2}'
+wait-idle
+
+# 4. Sketch1 selected before Extrude; Sketch2 picked while it is open.
+mark
+click-logged '^Browser Root/Sketches/Sketch1 at '
+wait-log '^Selected: 1 sketch'
+wait-idle
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Profiles: the whole sketch Sketch1 taken as 2 of its outline set$'
+wait-log '^Extrude Profiles: 2 profiles [[]profile r[{]c1[[].* of F1; profile r[{]c[0-9]+[[].* of F1[]]$'
+wait-log '^Preview Extrude: ok' 30
+mark
+click-logged '^Browser Root/Sketches/Sketch2 at '
+wait-log '^Profiles: the whole sketch Sketch2 taken as 0 of its outline set: none, its closed curves cross$'
+wait-log '^Panel Extrude note: The closed curves of Sketch2 cross each other' 30
+expect-no-log '^Extrude Profiles: .* of F2'
+mark
+key Escape
+expect-log '^Command Extrude cancelled'
+expect-never 'TestDriver: FAIL|OCCT view event failed|Recompute failed'

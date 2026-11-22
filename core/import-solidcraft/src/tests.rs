@@ -192,10 +192,12 @@ fn unmapped_features_are_placeholders() {
 }
 
 /// A design of the newest format opens (mitcad#1331): the kinds of the
-/// later formats MitCad has no feature for (a cone, frame members, a path
-/// flange, Repair Part) and the options it has not (a hole placed by edge
-/// distances, a coil of a sketch's profile) are placeholders with their
-/// reasons, and the timeline goes on; a pattern names its seed by id.
+/// later formats MitCad has no feature for (a path flange, Repair Part;
+/// a cone comes in as a Cone since mitcad#2239) and the options it has not (a hole placed by edge distances, a
+/// coil of a sketch's profile) are placeholders with their reasons, and
+/// the timeline goes on; a pattern names its seed by id. A frame member
+/// is one Pipe or Sweep per line (mitcad#2157): this one's lines' sketch
+/// is not in the file, so it fails with that reason.
 #[test]
 fn a_format_50_design_opens_with_placeholders_for_what_has_no_counterpart() {
     let v = json!({"format": "solidcraft/50", "name": "N50", "params": [], "features": [
@@ -235,17 +237,22 @@ fn a_format_50_design_opens_with_placeholders_for_what_has_no_counterpart() {
         &SolidcraftOptions::default(),
     )
     .unwrap();
-    for name in ["Cone1", "Frame1", "Repair1", "Path1", "Hole1", "Coil1"] {
+    for name in ["Repair1", "Path1", "Hole1", "Coil1"] {
         assert_eq!(outcome(&report, name), Outcome::Unmapped, "{name}");
     }
+    assert_eq!(outcome(&report, "Frame1"), Outcome::Failed);
+    let frame = doc.features().find(|f| f.name == "Frame1").unwrap();
+    assert!(
+        doc.import_note(frame.uid)
+            .unwrap()
+            .contains("the lines' sketch did not come in"),
+        "{:?}",
+        doc.import_note(frame.uid)
+    );
     assert_eq!(outcome(&report, "Box1"), Outcome::Parametric);
     assert_eq!(outcome(&report, "Copies"), Outcome::Parametric);
-    let cone = doc.features().find(|f| f.name == "Cone1").unwrap();
-    assert!(
-        doc.import_note(cone.uid)
-            .unwrap()
-            .contains("no cone primitive")
-    );
+    // A cone is MitCad's Cone since mitcad#2239.
+    assert_eq!(outcome(&report, "Cone1"), Outcome::Parametric);
 }
 
 /// A SolidCraft drawing is a file of its own: refused as a drawing.
@@ -269,6 +276,49 @@ fn the_check_compares_with_expected_values() {
     let check = report.check.unwrap();
     assert!(!check.passed);
     assert_eq!(check.failures.len(), 2, "{:?}", check.failures);
+}
+
+/// `"valid": true` checks every body with the kernel's checker
+/// (mitcad#2175): only then is validity measured; a body the kernel finds
+/// not valid, or cannot check (the mock kernel), fails the check.
+#[test]
+fn the_check_asks_for_valid_bodies() {
+    let (_, plain) = import(
+        "box-fillet-hole.solidcraft.json",
+        &SolidcraftOptions::default(),
+    );
+    assert!(!plain.bodies.is_empty());
+    assert!(plain.bodies.iter().all(|b| b.valid.is_none()));
+    let options = SolidcraftOptions {
+        expected: Some(json!({"valid": true})),
+        ..SolidcraftOptions::default()
+    };
+    let (_, report) = import("box-fillet-hole.solidcraft.json", &options);
+    let asked = report.check.clone().unwrap();
+    assert!(!asked.passed);
+    assert!(
+        asked
+            .failures
+            .iter()
+            .all(|f| f.contains("validity was not checked")),
+        "{:?}",
+        asked.failures
+    );
+    // Measured by a kernel that checks: one body not valid fails, all
+    // valid pass.
+    let mut measured = report.clone();
+    for b in &mut measured.bodies {
+        b.valid = Some(true);
+    }
+    assert!(check(&measured, &json!({"valid": true})).passed);
+    measured.bodies[0].valid = Some(false);
+    let failed = check(&measured, &json!({"valid": true}));
+    assert!(!failed.passed);
+    assert_eq!(
+        failed.failures,
+        [format!("{}: not valid", measured.bodies[0].name)]
+    );
+    assert!(measured.text().contains(", not valid"));
 }
 
 /// Expressions keep their meaning in MitCad's language.
@@ -828,8 +878,9 @@ fn def_of(doc: &Document<MockKernel>, name: &str) -> String {
     format!("{:?}", entry.def)
 }
 
-/// A design SolidCraft 0.43.0 saves (format 57, mitcad#1994) opens as it
-/// is, with nothing to upgrade and no warning: a two-sided extrude of
+/// A design SolidCraft 0.43.0 saves (format 57, mitcad#1994) opens with
+/// only the steps of formats 58 to 63 to run (none of which changes it)
+/// and no warning: a two-sided extrude of
 /// entered distances is MitCad's signed one (Direction fixes the sides, a
 /// sign turns its own side over), a revolve's fixed axis whose origin is a
 /// parameter is fixed where it puts it now, a revolve about another
@@ -844,7 +895,20 @@ fn a_format_57_design_opens_as_it_is() {
     );
     assert_eq!(report.format, 57);
     assert!(report.newer.is_none());
-    assert!(report.upgrades.is_empty(), "{:?}", report.upgrades);
+    assert_eq!(
+        report.upgrades,
+        [
+            "extrude-from-slanted-face",
+            "sketch-reference-placements",
+            "surface-sweep-exact-spline-path",
+            "sheet-edge-names",
+            "sheet-face-names",
+            "sheet-hem-gap",
+            "sheet-surface-convert"
+        ],
+        "{:?}",
+        report.upgrades
+    );
     assert_eq!(outcome(&report, "Slab"), Outcome::Parametric);
     let slab = doc.features().find(|f| f.name == "Slab").unwrap();
     let FeatureDef::Extrude(extrude) = &slab.def else {
@@ -922,24 +986,25 @@ fn an_older_two_sided_extrude_keeps_its_sides() {
     );
 }
 
-/// A design a newer SolidCraft saved (format 58) opens with a warning that
-/// names its format and says features may build differently; a feature of
-/// a kind this import does not know keeps its place as a placeholder with
-/// the reason, and the section and the parameter it cannot read are left
-/// out and named (mitcad#1994).
+/// A design a newer SolidCraft saved (format 64, past 0.45.0's 63) opens
+/// with a warning that names its format and says features may build
+/// differently; a feature of a kind this import does not know keeps its
+/// place as a placeholder with the reason, and the section and the
+/// parameter it cannot read are left out and named (mitcad#1994,
+/// mitcad#2153).
 #[test]
 fn a_newer_design_opens_with_a_warning() {
     let (doc, report) = import(
-        "format-58-newer.solidcraft.json",
+        "format-64-newer.solidcraft.json",
         &SolidcraftOptions::default(),
     );
-    assert_eq!(report.format, 58);
+    assert_eq!(report.format, 64);
     let newer = report.newer.as_ref().expect("a newer design");
-    assert_eq!((newer.format, newer.reads_up_to), (58, 57));
+    assert_eq!((newer.format, newer.reads_up_to), (64, 63));
     assert!(
         newer
             .warning
-            .starts_with("Saved by a newer SolidCraft (format 58;"),
+            .starts_with("Saved by a newer SolidCraft (format 64;"),
         "{}",
         newer.warning
     );
@@ -1096,4 +1161,258 @@ fn format_57_options_come_in() {
     assert_eq!(turn.outcome, Outcome::Partial, "{:?}", turn.notes);
     let rotate = def_of(&doc, "Turn (turn)");
     assert!(rotate.contains("[5.0, 0.0, 0.0]"), "{rotate}");
+}
+
+/// A design SolidCraft 0.45.0 saves (format 63, mitcad#2153) opens without
+/// the newer-format warning and with nothing to upgrade. A bounding solid
+/// whose six side margins are one expression is MitCad's of that margin;
+/// one with a margin of its own on each side is a placeholder with the
+/// reason.
+#[test]
+fn a_format_63_design_opens_without_a_warning() {
+    let (doc, report) = import(
+        "format-63-hem-slanted-fillet-bounding.solidcraft.json",
+        &SolidcraftOptions::default(),
+    );
+    assert_eq!(report.format, 63);
+    assert!(report.newer.is_none());
+    assert!(report.upgrades.is_empty(), "{:?}", report.upgrades);
+    assert!(
+        !report.notices().iter().any(|n| n.message.contains("newer")),
+        "{:?}",
+        report.notices()
+    );
+    let names: Vec<&str> = report.features.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Outline",
+            "Base",
+            "Hem1",
+            "Hem2",
+            "Block",
+            "Bevel",
+            "PegSketch",
+            "Peg",
+            "Cube",
+            "Round",
+            "Envelope",
+            "Even"
+        ]
+    );
+    assert_eq!(outcome(&report, "Envelope"), Outcome::Unmapped);
+    let envelope = doc.features().find(|f| f.name == "Envelope").unwrap();
+    assert!(envelope.suppressed);
+    assert!(
+        doc.import_note(envelope.uid)
+            .unwrap()
+            .contains("a margin of its own on each side")
+    );
+    assert_eq!(outcome(&report, "Even"), Outcome::Parametric);
+    let even = doc.features().find(|f| f.name == "Even").unwrap();
+    let FeatureDef::BoundingSolid(def) = &even.def else {
+        panic!("Even is not a bounding solid: {:?}", even.def)
+    };
+    assert_eq!(doc.parameters().value(def.margin), Some(1.0));
+}
+
+/// The kinds and options of formats 58 to 63 without a MitCad counterpart
+/// are placeholders with their reasons, and the timeline goes on: a
+/// conversion of a whole body from its faces, a recognition from the
+/// body's largest face, a conversion of several faces or with engravings,
+/// an import kept as B-rep records, a pattern of bodies where a placement
+/// shows them, a component's
+/// envelope that has subcomponents (mitcad#2153). Drawings and rigid
+/// groups are named in the report.
+#[test]
+fn format_63_kinds_without_a_counterpart_are_placeholders() {
+    let v = json!({"format": "solidcraft/63", "name": "K", "params": [],
+        "components": [{"id": 20, "name": "Sub"}],
+        "assembly": {"rigid_groups": [{"id": 41, "name": "Board", "component": 20, "members": [21]}]},
+        "drawings": [{"format": "solidcraft-drawing/1", "sheets": []}],
+        "features": [
+        {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "40", "width": "40", "height": "10",
+         "body_names": ["B"]},
+        {"id": 2, "name": "Whole", "type": "sheet_surface_convert", "body": "B"},
+        {"id": 3, "name": "Largest", "type": "sheet_recognize", "body": "B"},
+        {"id": 4, "name": "Bent", "type": "sheet_recognize", "body": "B", "face": [20, 20, 10],
+         "bends": [[0, 20, 10]]},
+        {"id": 5, "name": "Several", "type": "sheet_convert", "body": "B", "face": [20, 20, 10],
+         "faces": [[20, 0, 5]], "bends": [[20, 0, 10]]},
+        {"id": 6, "name": "Engraved", "type": "sheet_convert", "body": "B", "face": [20, 20, 10],
+         "engrave": [[20, 20, 9]], "bends": [[20, 0, 10]]},
+        {"id": 7, "name": "Outside", "type": "sheet_convert", "body": "B", "face": [20, 20, 10],
+         "direction": "outside", "bends": [[20, 0, 10]]},
+        {"id": 8, "name": "Records", "type": "import", "file": "part.rec", "step": "",
+         "records": {"bodies": []}},
+        {"id": 9, "name": "Placed", "type": "pattern", "features": [], "bodies": ["B"],
+         "placements": [[21]], "pattern": {"type": "rectangular", "dir1": [1, 0, 0], "count1": "2", "spacing1": "50"}},
+        {"id": 12, "name": "Contents", "type": "bounding_solid", "bodies": [], "contents": true},
+        {"id": 13, "name": "Box2", "type": "box", "corner": [60, 0, 0], "length": "5", "width": "5", "height": "5"}]});
+    let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+    assert!(file.newer.is_none());
+    let mut doc = Document::new(MockKernel::default());
+    let report = import_solidcraft_file(
+        &mut doc,
+        file,
+        "k.solidcraft",
+        &SolidcraftOptions::default(),
+    )
+    .unwrap();
+    for (name, why) in [
+        ("Whole", "whole body to sheet metal"),
+        ("Largest", "largest face"),
+        ("Bent", "bent walls"),
+        ("Several", "several picked faces"),
+        ("Engraved", "engravings"),
+        ("Outside", "`outside`"),
+        ("Records", "B-rep records"),
+        ("Placed", "where a placement of their component shows them"),
+        ("Contents", "subcomponents"),
+    ] {
+        assert_eq!(outcome(&report, name), Outcome::Unmapped, "{name}");
+        let feature = doc.features().find(|f| f.name == name).unwrap();
+        let note = doc.import_note(feature.uid).unwrap();
+        assert!(note.contains(why), "{name}: {note}");
+    }
+    assert_eq!(outcome(&report, "Box2"), Outcome::Parametric);
+    assert!(
+        report.notes.iter().any(|n| n == "a drawing: not mapped"),
+        "{:?}",
+        report.notes
+    );
+    assert!(
+        report.notes.iter().any(|n| n.starts_with("a rigid group")),
+        "{:?}",
+        report.notes
+    );
+}
+
+/// A fillet that rounds each picked edge at its own radius (format 60) is
+/// one MitCad fillet per body, a set per edge with its radius's slot; one
+/// whose other options SolidCraft refuses edge radii with fails as it does
+/// there (mitcad#2153).
+#[test]
+fn a_fillet_of_edge_radii_comes_in_as_a_set_per_edge() {
+    let v = json!({"format": "solidcraft/63", "name": "R", "params": [{"name": "r2", "expr": "3 mm", "unit": "mm"}],
+        "features": [
+        {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "20", "width": "20", "height": "20",
+         "body_names": ["B"]},
+        {"id": 2, "name": "Round", "type": "fillet", "edges": [[10, 0, 20], [10, 20, 20]],
+         "edge_names": ["F1:+z|F1:-y", "F1:+y|F1:+z"], "radius": "2", "edge_radii": ["2", "r2"],
+         "tangent_chain": false},
+        {"id": 3, "name": "Chained", "type": "fillet", "edges": [[0, 10, 20]],
+         "radius": "1", "edge_radii": ["1"]}]});
+    let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().box_faces.set(true);
+    let report = import_solidcraft_file(
+        &mut doc,
+        file,
+        "r.solidcraft",
+        &SolidcraftOptions::default(),
+    )
+    .unwrap();
+    // The mock kernel finds a box's edges only as far as its faces go: where
+    // it finds both, the fillet is one feature of a set per edge.
+    let round = report.features.iter().find(|f| f.name == "Round").unwrap();
+    if round.outcome == Outcome::Parametric {
+        let def = def_of(&doc, "Round");
+        assert_eq!(def.matches("Constant").count(), 2, "{def}");
+    } else {
+        assert_eq!(round.outcome, Outcome::Failed, "{:?}", round.notes);
+    }
+    // Tangent chains (the default) with edge radii: SolidCraft refuses it.
+    let chained = report
+        .features
+        .iter()
+        .find(|f| f.name == "Chained")
+        .unwrap();
+    assert_eq!(chained.outcome, Outcome::Failed);
+    assert!(
+        chained
+            .notes
+            .iter()
+            .any(|n| n.contains("SolidCraft refuses it too")),
+        "{:?}",
+        chained.notes
+    );
+}
+
+/// Cones and frustums (format 40) are MitCad's Cone (mitcad#2239), each on
+/// the plane across its axis through its base point: a full cone ending in
+/// an apex (no top face), a frustum along X sized by a parameter and
+/// standing against its axis (a negative height), a frustum cut into a
+/// block from its top face down; each parametric, its inputs the file's.
+#[test]
+fn cones_come_in_as_cones() {
+    let (doc, report) = import(
+        "format-50-cone.solidcraft.json",
+        &SolidcraftOptions::default(),
+    );
+    for name in ["Point", "Frustum", "Block", "Countersink"] {
+        assert_eq!(outcome(&report, name), Outcome::Parametric, "{name}");
+    }
+    let p = doc.parameters();
+    let cone = |name: &str| {
+        let feature = doc.features().find(|f| f.name == name).unwrap();
+        let FeatureDef::Cone(def) = &feature.def else {
+            panic!("{name} is not a cone: {:?}", feature.def)
+        };
+        assert_eq!(
+            doc.status(feature.uid),
+            Some(&mitcad_model::FeatureStatus::Ok),
+            "{name}"
+        );
+        (feature.uid, def.clone())
+    };
+    let values = |def: &mitcad_model::features::ConeDef| {
+        (
+            p.value(def.radius),
+            def.top_radius.and_then(|t| p.value(t)),
+            p.value(def.height),
+        )
+    };
+    // The body's faces of the cone itself: the mock kernel's cut adds the
+    // countersink's faces to every body, which a real cut does not.
+    let faces = |body: &str, of: mitcad_model::FeatureUid| -> Vec<String> {
+        let view = doc.bodies().into_iter().find(|b| b.name == body).unwrap();
+        let own = format!("{of}:");
+        view.shape
+            .faces
+            .iter()
+            .map(ToString::to_string)
+            .filter(|face| face.starts_with(&own))
+            .collect()
+    };
+
+    // The full cone on XY: its base and its side, no top.
+    let (point, def) = cone("Point");
+    assert!(matches!(def.plane, Some(mitcad_model::GeomRef::Origin(_))));
+    assert_eq!(values(&def), (Some(5.0), Some(0.0), Some(10.0)));
+    assert_eq!(
+        faces("Point", point),
+        [format!("{point}:bottom"), format!("{point}:side0")]
+    );
+
+    // The frustum on YZ by the parameter r, against the X axis.
+    let (frustum, def) = cone("Frustum");
+    assert!(matches!(def.plane, Some(mitcad_model::GeomRef::Origin(_))));
+    assert_eq!(values(&def), (Some(8.0), Some(4.0), Some(-12.0)));
+    let radius = p.get(def.radius).unwrap();
+    assert_eq!(radius.expression(), "r");
+    assert_eq!(
+        faces("Frustum", frustum),
+        [
+            format!("{frustum}:bottom"),
+            format!("{frustum}:top"),
+            format!("{frustum}:side0")
+        ]
+    );
+
+    // The countersink cuts the block: no body of its own.
+    let (_, def) = cone("Countersink");
+    assert_eq!(def.operation, mitcad_model::features::Operation::Cut);
+    assert_eq!(values(&def), (Some(4.0), Some(1.0), Some(3.0)));
+    assert_eq!(doc.bodies().len(), 3);
 }

@@ -386,8 +386,13 @@ DocumentFrame::DocumentFrame(WindowManager& manager)
     m_stack->setCurrentIndex(m_tabs->currentIndex());
     updateActiveDocument();
   });
+  // A tab's × (or a middle click) closes its design: the last one to the
+  // Start page or by quitting, as Preferences › General says (mitcad#2142).
   connect(m_tabs, &QTabBar::tabCloseRequested, this, [this](int index) {
-    if (auto* document = qobject_cast<MainWindow*>(m_stack->widget(index)); document && m_manager) m_manager->closeWindow(document);
+    if (auto* document = qobject_cast<MainWindow*>(m_stack->widget(index)); document && m_manager) {
+      qInfo().noquote() << QStringLiteral("Document tab closed: %1").arg(m_tabs->tabText(index));
+      m_manager->closeDesign(document);
+    }
   });
   m_tabs->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(m_tabs, &QWidget::customContextMenuRequested, this, [this](const QPoint& point) {
@@ -572,7 +577,17 @@ bool DocumentFrame::tabsInTitleRow() const {
   return row && row->isFloatingRow();
 }
 bool DocumentFrame::showsTabs() const {
+  // No tab for a window on the Start page with no design open (mitcad#2142).
+  if (m_stack->count() == 1) {
+    const MainWindow* only = activeDocument();
+    if (only != nullptr && !only->hasDesign()) return false;
+  }
   return tabsInTitleRow() ? m_stack->count() >= 1 : showsDocumentTabs(int(m_stack->count()));
+}
+void DocumentFrame::documentShownChanged(MainWindow* document) {
+  if (m_stack->indexOf(document) < 0) return;
+  updateDocument(document);
+  updateChrome();
 }
 void DocumentFrame::placeTabs(MainWindow* host) {
   auto* tabs = static_cast<DocumentTabs*>(m_tabs);
@@ -695,7 +710,7 @@ void DocumentFrame::showTabMenu(int index, const QPoint& point) {
   QAction* detach = menu.addAction(tr("Move to New Window"));
   QAction* chosen = execMenu(&menu, point);
   if (!frame || !guard) return;
-  if (chosen == close) { if (m_manager) m_manager->closeWindow(document); }
+  if (chosen == close) { if (m_manager) m_manager->closeDesign(document); }
   else if (chosen == others) { auto pages = documents(); pages.removeAll(document); closeDocuments(pages); }
   else if (chosen == all) closeDocuments(documents());
   else if (chosen == folder) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(document->documentFilePath()).absolutePath()));
@@ -712,7 +727,8 @@ bool DocumentFrame::eventFilter(QObject* watched, QEvent* event) {
   }
   if (m_manager && event->type() == QEvent::WindowActivate && watched == this && activeDocument()) m_manager->setActiveWindow(activeDocument());
   // Ctrl+Tab and Ctrl+W act on the tabs only while they are shown: with one
-  // document Ctrl+W is File › Close (an empty Untitled design stays).
+  // document Ctrl+W is File › Close. Either closes the design as its tab's
+  // × does (WindowManager::closeDesign, mitcad#2142).
   if ((event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride) &&
       showsDocumentTabs(int(m_stack->count()))) {
     auto* widget = qobject_cast<QWidget*>(watched);
@@ -723,7 +739,7 @@ bool DocumentFrame::eventFilter(QObject* watched, QEvent* event) {
     if (widget && widget->window() == this && (modifiers & Qt::ControlModifier) &&
         !(modifiers & (Qt::AltModifier | Qt::MetaModifier)) && (tab || close)) {
       if (event->type() == QEvent::KeyPress) {
-        if (close) { if (auto* document = activeDocument(); document && m_manager) m_manager->closeWindow(document); }
+        if (close) { if (auto* document = activeDocument(); document && m_manager) m_manager->closeDesign(document); }
         else if (m_tabs->count()) {
           const int delta = modifiers & Qt::ShiftModifier ? -1 : 1;
           m_tabs->setCurrentIndex((m_tabs->currentIndex() + delta + m_tabs->count()) % m_tabs->count());

@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <optional>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -29,6 +31,7 @@
 #include <gp_Ax2.hxx>
 
 #include "history.hpp"
+#include "loft_merge.hpp"
 #include "loft_skin.hpp"
 #include "spine.hpp"
 #include "sweep.hpp"
@@ -48,6 +51,9 @@ struct Prepared {
   std::optional<gp_Dir> normal;
   ShapePtr body;
   TopoDS_Face face;
+  // Tangent Edges: Merge (mitcad#2162): each joined edge with the section's
+  // edges it joins.
+  std::vector<std::pair<TopoDS_Edge, std::vector<TopoDS_Edge>>> sources;
 };
 
 int wire_count(const TopoDS_Face& face) {
@@ -241,6 +247,27 @@ ShapePtr loft(const LoftSpec& spec) {
     for (std::size_t i = 0; i < count; ++i) {
       sections.push_back(prepare(spec.feature, spec.sections[i], i));
     }
+    // Tangent Edges: Merge (mitcad#2162): the sections' tangent edges
+    // joined; sections that each became one smooth closed edge start at
+    // corresponding points and loft edge for edge as they are.
+    bool aligned = false;
+    if (spec.merge_tangent) {
+      std::vector<detail::MergeSection> merging;
+      for (const Prepared& section : sections) {
+        detail::MergeSection one;
+        one.point = section.point;
+        one.named = section.named;
+        merging.push_back(std::move(one));
+      }
+      aligned = detail::merge_tangent_edges(merging);
+      for (std::size_t i = 0; i < count; ++i) {
+        if (!sections[i].point) {
+          sections[i].named = merging[i].named;
+          sections[i].shape = merging[i].named.wire;
+          sections[i].sources = merging[i].sources;
+        }
+      }
+    }
     const auto named = std::find_if(sections.begin(), sections.end(), [](const Prepared& s) { return !s.point; });
     if (named == sections.end()) {
       throw std::invalid_argument("a loft needs a section that is not a point");
@@ -257,23 +284,43 @@ ShapePtr loft(const LoftSpec& spec) {
       // them; free ends without rails keep its results.
       std::vector<detail::SkinSection> skin;
       for (const Prepared& section : sections) {
-        skin.push_back({section.shape, section.point, section.normal, section.body, section.face});
+        skin.push_back({section.shape, section.point, section.normal, section.body, section.face, section.sources});
       }
       result = detail::skinned_loft(skin, spec.start, spec.end, spec.rails, named->named, first, last, spec.closed,
-                                    spec.solid);
+                                    spec.solid, false, aligned && spec.rails.empty());
     } else if (!spec.centerline.empty()) {
       result = along_centerline(spec, sections, named->named, first, last);
     } else {
-      std::vector<TopoDS_Shape> shapes;
-      for (const Prepared& section : sections) {
-        shapes.push_back(section.shape);
+      // (mitcad#2141, mitcad#2143) Two sections ruled face by face: where
+      // both run on smoothly through matched vertices (a circle and a
+      // slot), OCCT's faces meet at a crease between them that no offset
+      // closes; skinned with the faces tangent there instead. Ruled and
+      // smooth alike (mitcad#2191): two sections are straight either way,
+      // and the eased faces are still straight between them. Sections
+      // merged into one smooth edge each (mitcad#2162) have no such
+      // vertices: their one face is tangent-continuous as it is.
+      if (count == 2 && !spec.closed && !aligned) {
+        std::vector<detail::SkinSection> skin;
+        for (const Prepared& section : sections) {
+          skin.push_back({section.shape, section.point, section.normal, section.body, section.face, section.sources});
+        }
+        result = detail::skinned_loft(skin, spec.start, spec.end, {}, named->named, first, last, false, spec.solid,
+                                      true);
       }
-      if (spec.closed) {
-        shapes.push_back(sections.front().shape);
+      if (!result) {
+        std::vector<TopoDS_Shape> shapes;
+        for (const Prepared& section : sections) {
+          shapes.push_back(section.shape);
+        }
+        if (spec.closed) {
+          shapes.push_back(sections.front().shape);
+        }
+        // Matching the wires' starts would turn the repeated first section
+        // of a closed loft on its own, twisting the last piece. Sections
+        // merged into one smooth edge each are matched already.
+        result = detail::through_sections(shapes, named->named, first, last, spec.ruled, !spec.closed && !aligned,
+                                          spec.solid);
       }
-      // Matching the wires' starts would turn the repeated first section of
-      // a closed loft on its own, twisting the last piece.
-      result = detail::through_sections(shapes, named->named, first, last, spec.ruled, !spec.closed, spec.solid);
     }
     return detail::finished(*result, "the loft");
   });

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Export the bend table of the flanged plate from sheet-flange-remembered.json.
+expect-ever 'View area'
+wait-idle
+
+mark
+command sheet.export_bend_table
+focus-dialog '^Export Bend Table$'
+key Ctrl+A
+type '${MITCAD_TEST_WORK}/bends.csv'
+key Return
+focus-main
+wait-log '^Exported bend table: csv, 1 bend[(]s[)], 1 row[(]s[)]$' 30
+expect-file '${MITCAD_TEST_WORK}/bends.csv'
+
+mark
+command sheet.export_bend_table
+focus-dialog '^Export Bend Table$'
+key Ctrl+A
+type '${MITCAD_TEST_WORK}/bends.json'
+key Return
+focus-main
+wait-log '^Exported bend table: json, 1 bend[(]s[)], 1 row[(]s[)]$' 30
+expect-file '${MITCAD_TEST_WORK}/bends.json'

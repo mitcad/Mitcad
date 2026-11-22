@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: MIT
+# Draft Analysis (mitcad#2166, GitHub mitcad/Mitcad#535), the shared input
+# script of tools/ui-draft-analysis-test.sh (Linux),
+# tools/ui-windows-draft-analysis-test.ps1 (Windows) and
+# tools/ui-macos-draft-analysis-test.sh (macOS), on draft-analysis.json
+# saved as draft-part.mitcad in the work folder: a 40 x 30 mm base (Body1)
+# extruded 10 mm with a 2 degree taper (walls at -2 degrees of draft from
+# +Z), a 20 x 10 mm boss on it with square walls (0 degrees), and Plane1,
+# the XZ plane moved 5 mm. With t = 10 tan 2 degrees and s = 10 / cos 2
+# degrees: the top faces (40 + 2t)(30 + 2t) = 1249.38 mm2, the boss' walls
+# 600 mm2, the base's walls (140 + 4t) s = 1414.83 mm2, the bottom 1200 mm2;
+# 4464.21 mm2 in all. ASCII only: the Windows runner copies it as ASCII.
+#   1. Inspect > Draft Analysis with the shown body, pulled along +Z at 1
+#      degree: along 1249.4, under 600.0 (the boss' walls), against 2614.8
+#      (the bottom and the base's walls); the view draws the three classes
+#      with the legend.
+#   2. Angle 3 degrees: the base's walls need more draft too. Flip: along
+#      and against trade places.
+#   3. Pull Direction: Plane1 from the browser (along Y, flipped): the
+#      walls square to Y release, everything else needs draft.
+#   4. OK keeps it as Draft1, shown; its light bulb hides and shows it; a
+#      double-click edits it with its settings; saved (the runner checks
+#      the file); deleted from its context menu and undone.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+
+# --- 1. The panel with the shown body, pulled along +Z.
+mark
+command inspect.draft_analysis
+wait-log '^Command Draft Analysis started' 20
+wait-log '^Draft Analysis Bodies: 1 body' 20
+wait-log '^Inspect Draft Analysis: pull [(]0, 0, 1[)], angle 1: Body1 along 1249[.]4 mm\^2 [(]28[.]0 %[)], under 600[.]0 mm\^2 [(]13[.]4 %[)], against 2614[.]8 mm\^2 [(]58[.]6 %[)]$' 60
+wait-log '^Print overlay: 0 overhang triangle[(]s[)] #[0-9a-f]{6}, 0 thin triangle[(]s[)] #[0-9a-f]{6} [(]0[.]0 mm\^2[)], no marker, draft [1-9][0-9]* along #[0-9a-f]{6}, [1-9][0-9]* under #[0-9a-f]{6}, [1-9][0-9]* against #[0-9a-f]{6}; legend Draft Analysis: ' 30
+expect-ever 'Needs more draft, under 1' 10
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/draft-analysis-z.png'
+
+# --- 2. Angle 3 degrees, then Flip.
+mark
+type-in '^Panel Draft Analysis input angle at ' '3 deg'
+wait-log '^Inspect Draft Analysis: pull [(]0, 0, 1[)], angle 3: Body1 along 1249[.]4 mm\^2 [(]28[.]0 %[)], under 2014[.]8 mm\^2 [(]45[.]1 %[)], against 1200[.]0 mm\^2 [(]26[.]9 %[)]$' 60
+wait-idle 60
+mark
+click-logged '^Panel Draft Analysis input flip at '
+wait-log '^Inspect Draft Analysis: pull [(]0, 0, -1[)], angle 3: Body1 along 1200[.]0 mm\^2 [(]26[.]9 %[)], under 2014[.]8 mm\^2 [(]45[.]1 %[)], against 1249[.]4 mm\^2 [(]28[.]0 %[)]$' 60
+wait-idle 60
+
+# --- 3. Plane1 as the pull direction, from the browser.
+mark
+click-logged '^Panel Draft Analysis input pull at '
+wait-idle
+expect-ever '^Browser Root/Construction/Plane1 at ' 30
+click-logged '^Browser Root/Construction/Plane1 at '
+wait-log '^Draft Analysis Pull Direction: 1 plane' 20
+wait-log '^Inspect Draft Analysis: pull [(]0, -?1, 0[)], angle 3: Body1 along 603[.]7 mm\^2 [(]13[.]5 %[)], under 3256[.]7 mm\^2 [(]73[.]0 %[)], against 603[.]7 mm\^2 [(]13[.]5 %[)]$' 60
+wait-log '^Print overlay: .* draft [1-9][0-9]* along #[0-9a-f]{6}, [1-9][0-9]* under #[0-9a-f]{6}, [1-9][0-9]* against #[0-9a-f]{6}; legend Draft Analysis: ' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/draft-analysis-plane.png'
+
+# --- 4. Kept as Draft1 in the Analysis folder, shown.
+capture-undo-depth before_ok
+mark
+button '^OK$'
+wait-log '^Kept Draft Analysis as Draft1' 30
+wait-log '^Browser Root/Analysis/Draft1 at ' 30
+wait-log '^Draft analysis Draft1: pull [(]0, -?1, 0[)], angle 3: Body1 along 603[.]7 mm\^2 [(]13[.]5 %[)], under 3256[.]7 mm\^2 [(]73[.]0 %[)], against 603[.]7 mm\^2 [(]13[.]5 %[)]$' 60
+wait-log 'legend Draft1: ' 30
+wait-idle 60
+expect-undo-depth ${before_ok} 1
+expect-no-log '^Section analysis at '
+
+# The light bulb hides and shows it.
+mark
+click-logged '^Browser eye Root/Analysis/Draft1 at '
+wait-log '^Visibility Root/Analysis/Draft1: hidden' 20
+wait-log '^Print overlay: none' 30
+wait-idle 60
+mark
+click-logged '^Browser eye Root/Analysis/Draft1 at '
+wait-log '^Visibility Root/Analysis/Draft1: shown' 20
+wait-log 'legend Draft1: ' 60
+wait-idle 60
+
+# A double-click edits it with its settings; Esc leaves it as it was.
+mark
+dblclick-logged '^Browser Root/Analysis/Draft1 at '
+wait-log '^Editing analysis Draft1 with Draft Analysis' 20
+wait-log '^Inspect Draft Analysis: pull [(]0, -?1, 0[)], angle 3: Body1 along 603[.]7 mm\^2' 60
+wait-idle 60
+key escape
+wait-log '^Command Draft Analysis cancelled' 20
+wait-log '^Draft analysis Draft1: pull [(]0, -?1, 0[)], angle 3: ' 60
+wait-idle 60
+
+# Saved: the runner finds the analysis in the file.
+mark
+command file.save
+wait-log 'Saved .*draft-part[.]mitcad' 30
+wait-idle
+
+# Deleted from its context menu, and undone.
+mark
+context-menu-logged '^Browser Root/Analysis/Draft1 at ' 'Delete'
+wait-log '^Context menu: Edit Draft Analysis [|] Hide [|] Rename [|] Delete' 20
+wait-log '^Deleted analysis Draft1' 20
+wait-log '^Print overlay: none' 30
+wait-idle 60
+mark
+key ctrl+z
+wait-log '^Undo: Delete Draft1' 20
+wait-log 'legend Draft1: ' 60
+wait-idle 60
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

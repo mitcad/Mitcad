@@ -33,18 +33,8 @@ into singular sections meets it, whatever the faces there.
 
 Upstream: new.
 
-Test: none, because no synthetic body reaches a case where the patch
-changes the result (mitcad#1986). Its condition (an end of the walk cut by
-0077, on no arc) is reached at the walk's start by
-test_fillet_lens_overflow's key rounded on both edges of its lens, and by a
-plate whose top runs tangentially into a cylinder, cut by a plane 1.7 to 8
-degrees from the top and the cut's edges rounded with 0.5; there the walk
-is not taken up again, and the results are the same without the patch (56
-sizes compared). A probe found no walk cut at its last end with that end
-open (the design's case) in the geometry tests, in OCCT's blend and chamfer
-DRAW groups, or in 81 sizes of a boss on a plate with a rod at its foot
-whose own foot is rounded (the design's small torus). Verified on the
-design's replayed body only.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0932.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 index 1b114baa..e70b1f13 100644

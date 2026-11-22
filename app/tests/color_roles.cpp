@@ -18,6 +18,7 @@
 #include <QString>
 
 #include "framework/BoostButton.hpp"
+#include "framework/DiscordButton.hpp"
 #include "framework/NoticeLevel.hpp"
 #include "framework/Theme.hpp"
 
@@ -62,7 +63,7 @@ void tableTests() {
     CHECK_ROLE(names.insert(name).second, roles[i]);
     CHECK_ROLE(themeColor(roles[i], false).isValid() && themeColor(roles[i], true).isValid(), roles[i]);
   }
-  CHECK(roles.back() == ColorRole::Support);
+  CHECK(roles.back() == ColorRole::FormulaBracket);
   // A palette's lightness picks the value; the 3D view's by its background.
   QPalette night;
   night.setColor(QPalette::Window, QColor(0x14, 0x15, 0x18));
@@ -160,6 +161,55 @@ void boostTintTests() {
   }
 }
 
+// The Discord pill (mitcad#2159): one blurple on both themes, its white
+// mark and × at least 4.5:1 on it, also on its darker shades under the
+// pointer and pressed; a blue apart from the accent's.
+void discordPillTests() {
+  const QColor fill = themeColor(ColorRole::DiscordFill, false);
+  CHECK(fill == themeColor(ColorRole::DiscordFill, true));
+  CHECK(colorRolePartner(ColorRole::DiscordFill) == ColorRole::DiscordMark);
+  CHECK(kDiscordHoverDarker > 100 && kDiscordHoverDarker < kDiscordPressedDarker);
+  for (const bool dark : {false, true}) {
+    const QColor mark = themeColor(ColorRole::DiscordMark, dark);
+    CHECK(contrastRatio(mark, fill) >= 4.5);
+    CHECK(contrastRatio(mark, fill.darker(kDiscordHoverDarker)) >= 4.5);
+    CHECK(contrastRatio(mark, fill.darker(kDiscordPressedDarker)) >= 4.5);
+    CHECK(fill != themeColor(ColorRole::Action, dark));
+  }
+}
+
+// The formula editor's token colours (mitcad#2179): each at least 4.5:1
+// also on the current line's and the matching bracket's fills (the window
+// colour is the field's, checked with the surfaces), as is an unknown
+// name's error text; the hues away from the error's red and the warning's
+// yellow.
+void formulaSyntaxTests() {
+  const ColorRole tokens[] = {ColorRole::FormulaName,    ColorRole::FormulaFunction, ColorRole::FormulaKeyword,
+                              ColorRole::FormulaNumber,  ColorRole::FormulaUnit,     ColorRole::FormulaOperator,
+                              ColorRole::FormulaString,  ColorRole::ErrorText,       ColorRole::Text};
+  const QColor red = themeColor(ColorRole::ErrorBadge, false);
+  const QColor yellow = themeColor(ColorRole::WarningBadge, false);
+  for (const bool dark : {false, true}) {
+    for (const ColorRole fill : {ColorRole::FormulaLine, ColorRole::FormulaBracket}) {
+      for (const ColorRole role : tokens) {
+        CHECK_ROLE(contrastRatio(themeColor(role, dark), themeColor(fill, dark)) >= 4.5, role);
+      }
+    }
+    for (const ColorRole role : tokens) {
+      if (role == ColorRole::ErrorText || role == ColorRole::Text) {
+        continue;
+      }
+      const QColor value = themeColor(role, dark);
+      const bool grey = value.hsvSaturationF() < 0.35;
+      const double hueRed = std::min(std::abs(value.hsvHueF() - red.hsvHueF()) * 360.0,
+                                     360.0 - std::abs(value.hsvHueF() - red.hsvHueF()) * 360.0);
+      const double hueYellow = std::min(std::abs(value.hsvHueF() - yellow.hsvHueF()) * 360.0,
+                                        360.0 - std::abs(value.hsvHueF() - yellow.hsvHueF()) * 360.0);
+      CHECK_ROLE(grey || (hueRed >= 12.0 && hueYellow >= 12.0), role);
+    }
+  }
+}
+
 // A hidden Browser row's name (mitcad#1101): TextHidden at least 4.5:1 on
 // every card a row is drawn on, Docked and Floating, light and dark, and
 // still dimmer than a shown row's name (Text): less contrast on each card,
@@ -227,10 +277,10 @@ void reservedHueTests() {
       ColorRole::Component4, ColorRole::Component5, ColorRole::Component6, ColorRole::Component7,
       ColorRole::RuleFrame,  ColorRole::RuleName,   ColorRole::RuleLiteral, ColorRole::RuleFormula,
       ColorRole::RuleLogic,  ColorRole::RuleAction, ColorRole::PrintOverhang, ColorRole::PrintThin,
-      ColorRole::PrintGap,
+      ColorRole::PrintGap,    ColorRole::DraftPositive, ColorRole::DraftUnder, ColorRole::DraftNegative,
       ColorRole::SearchMatch, ColorRole::JointA,    ColorRole::JointB,     ColorRole::JointOrigin,
       ColorRole::CamStock,    ColorRole::CamLeftThin, ColorRole::CamLeftThick, ColorRole::CamGouge,
-      ColorRole::Support,
+      ColorRole::Support,     ColorRole::DiscordFill,
   };
   for (const ColorRole role : domain) {
     for (const bool dark : {false, true}) {
@@ -257,6 +307,16 @@ void reservedHueTests() {
   const QColor green = themeColor(ColorRole::SuccessBadge, false);
   CHECK(hueDistance(themeColor(ColorRole::RuleLiteral, false), green) >= 40.0);
   CHECK(hueDistance(themeColor(ColorRole::RuleAction, false), yellow) >= 20.0);
+  // Draft Analysis' three classes (mitcad#2166) tell apart at a glance, on
+  // either background.
+  for (const bool dark : {false, true}) {
+    const QColor positive = themeColor(ColorRole::DraftPositive, dark);
+    const QColor under = themeColor(ColorRole::DraftUnder, dark);
+    const QColor negative = themeColor(ColorRole::DraftNegative, dark);
+    CHECK(hueDistance(positive, under) >= 40.0);
+    CHECK(hueDistance(positive, negative) >= 40.0);
+    CHECK(hueDistance(under, negative) >= 40.0);
+  }
 }
 
 } // namespace
@@ -267,6 +327,8 @@ int colorRoleTests() {
   contrastTests();
   hiddenRowTests();
   boostTintTests();
+  discordPillTests();
+  formulaSyntaxTests();
   reservedHueTests();
   return failures;
 }

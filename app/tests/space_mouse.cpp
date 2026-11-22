@@ -81,7 +81,9 @@ public:
     }
     return m_present;
   }
+  void windowPlaced() override { ++placed; }
   int starts = 0;
+  int placed = 0;
 
 private:
   bool m_present;
@@ -1786,6 +1788,38 @@ void driverReportTests() {
   CHECK(magellanMotion(message) == expected);
 }
 
+// The design's window shown in its frame (mitcad#2152): the controller
+// passes it to its backend, which may then find the native window it found
+// none of at start; nothing before a backend runs.
+void windowPlacedTests() {
+  using namespace mitcad;
+  FakeBackend* backend = nullptr;
+  SpaceMouseController::Hooks hooks;
+  hooks.settings = [] { return SpaceMouseSettings(); };
+  hooks.nativeWindow = [] { return std::uintptr_t{0}; };
+  const auto factory = [&backend]() -> std::unique_ptr<SpaceMouseBackend> {
+    auto made = std::make_unique<FakeBackend>(false);
+    backend = made.get();
+    return made;
+  };
+  const QtMessageHandler previous = qInstallMessageHandler(catchMessage);
+  caught().clear();
+  {
+    SpaceMouseController controller(hooks, factory);
+    controller.windowPlaced();
+    CHECK(backend == nullptr);
+    controller.refresh();
+    CHECK(backend != nullptr && backend->placed == 0 && backend->nativeWindow && backend->nativeWindow() == 0);
+    controller.windowPlaced();
+    CHECK(backend->placed == 1);
+    // A start tried again that finds the device reports it as a device
+    // that comes later.
+    backend->connection(true, QStringLiteral("Placed device"));
+    CHECK(caught().contains(QStringLiteral("3D mouse: Fake connected (Placed device)")));
+  }
+  qInstallMessageHandler(previous);
+}
+
 } // namespace
 
 int spaceMouseTests() {
@@ -1807,6 +1841,7 @@ int spaceMouseTests() {
   timingTests();
   rotationLockTests();
   deviceButtonTests();
+  windowPlacedTests();
   return failures;
 }
 MITCAD_UNIT_TEST(spaceMouseTests);

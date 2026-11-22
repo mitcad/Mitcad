@@ -72,6 +72,18 @@ struct GeneralSettings {
 #else
   QString openDesignsIn = QStringLiteral("tabs");
 #endif
+  // Quit MitCad when the last design is closed (mitcad#2142; the setting
+  // documents/quitOnLastClose): its tab's ×, File › Close and Ctrl+W on the
+  // last design quit MitCad. Off by default: the window stays on the Start
+  // page with no design open (WindowManager::closeDesign).
+  bool quitOnLastClose = false;
+  // Save of a design that has no file yet (mitcad#2183; the setting
+  // documents/newDesignSave): "ask" (the default: the question On this
+  // computer or To a project when a remote project is known, else Save As
+  // as before), "computer" (the file dialog) or "project" (Save to
+  // Project's picker); Remember my choice in the question sets it
+  // (app/files/NewDesignSave.hpp).
+  QString newDesignSave = QStringLiteral("ask");
   // The units to choose from, millimetres first: mm, cm, m, in, ft (the
   // choices of Change Active Units).
   static QStringList newDesignUnitChoices();

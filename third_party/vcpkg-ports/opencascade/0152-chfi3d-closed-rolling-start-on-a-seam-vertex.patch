@@ -16,11 +16,8 @@ the faces above (an unorientable shape of three faces).
   obstacle's end at that vertex is handled by CutEdge, as at the last
   surface data's end, which already skipped such points.
 
-Test: geometry/tests/test_fillet_results.cpp (ctest
-geometry.suite.fillet_results),
-test_closed_rounding_rolling_from_a_seam_vertex: It fails without the
-patch (shown 2026-11-20 by tools/occt-port-proof.py, reverted together
-with 0173, 1230, 1370, 1430, 1580, which change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0152.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index d867df2..2da19f1 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

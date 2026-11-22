@@ -1,0 +1,19 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "An extrude edited from Join to New Component takes its fillet along (mitcad#2185), tools/ui-new-component-fillets-test.sh: in Base:1 (C1), Sketch1 (F1) 40 x 30 extruded 10 by Extrude1 (F2) into Body1 (F2.b0); Sketch2 (F3) 10 x 10 at (5, 5) extruded 20 by Extrude2 (F4) and joined into Body1, a boss standing 10 above the block; Fillet1 (F5), r 1 on the edge of two of the boss's sides. Base:1 is active."},
+  {"cmd": "create_component", "name": "Base"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [5, 5], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "join", "participants": ["F2.b0"]}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F4:side(c1[c4,c2])|F4:side(c2[c1,c3])}"], "radius": 1}},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"feature": "F5", "status": "ok"}}
+]

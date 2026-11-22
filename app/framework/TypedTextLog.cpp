@@ -22,8 +22,14 @@
 #include <QWindowStateChangeEvent>
 #include <QtLogging>
 
+#include <cstddef>
 #include <functional>
+#include <iterator>
 #include <utility>
+
+#ifdef Q_OS_LINUX
+#include <xcb/xcb.h>
+#endif
 
 namespace mitcad {
 namespace {
@@ -278,6 +284,12 @@ public:
   explicit ShortcutLog(QObject* parent) : QObject(parent) {}
 
   bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr*) override {
+#ifdef Q_OS_LINUX
+    if (eventType == "xcb_generic_event_t") {
+      logXcbFocus(message);
+      return false;
+    }
+#endif
     if (eventType != "windows_generic_MSG") {
       return false;
     }
@@ -316,6 +328,35 @@ protected:
   }
 
 private:
+#ifdef Q_OS_LINUX
+  // X11 (mitcad#2206): the keyboard focus the X server gives a window of
+  // the application or takes from it, as it comes, before Qt makes a
+  // window active of it. In the UI tests' Xvfb no window manager hands the
+  // focus on: a window that has it and closes leaves it nowhere, and Qt
+  // ignores the focus a window gets only because the pointer is over it
+  // (detail "pointer"), so its window shortcuts take no key then.
+  static void logXcbFocus(const void* message) {
+    const auto* event = static_cast<const xcb_generic_event_t*>(message);
+    const int type = event->response_type & 0x7f; // without the "sent" bit
+    if (type != XCB_FOCUS_IN && type != XCB_FOCUS_OUT) {
+      return;
+    }
+    const auto* focus = static_cast<const xcb_focus_in_event_t*>(message);
+    static const char* const details[] = {"ancestor",          "virtual", "inferior",     "nonlinear",
+                                          "nonlinear virtual", "pointer", "pointer root", "none"};
+    static const char* const modes[] = {"normal", "grab", "ungrab", "while grabbed"};
+    const std::size_t detailIndex = focus->detail;
+    const std::size_t modeIndex = focus->mode;
+    const QString detail = detailIndex < std::size(details) ? QString::fromLatin1(details[detailIndex])
+                                                             : QString::number(detailIndex);
+    const QString mode =
+        modeIndex < std::size(modes) ? QString::fromLatin1(modes[modeIndex]) : QString::number(modeIndex);
+    qInfo().noquote() << QStringLiteral("Native %1: %2 (detail %3, mode %4)")
+                             .arg(type == XCB_FOCUS_IN ? QStringLiteral("FocusIn") : QStringLiteral("FocusOut"),
+                                  nativeName(static_cast<quintptr>(focus->event)), detail, mode);
+  }
+#endif
+
   struct Press {
     quint64 time = 0;
     int key = 0;

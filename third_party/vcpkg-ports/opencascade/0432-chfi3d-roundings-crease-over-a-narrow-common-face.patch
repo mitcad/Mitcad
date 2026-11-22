@@ -46,12 +46,9 @@ reports of a computation it cannot make (ChFi3d_IsComputationFailure,
 0016) where the two blends do not meet in such a crease: the corner is not
 made so and is left as before, which its caller is told. Any other failure
 (a broken invariant, a signal) is rethrown.
-Test: geometry/tests/port/p0432-roundings-crease-over-a-narrow-face.cpp
-(ctest geometry.port.0432): a second geometry to geometry.fillet_corners'
-lipped rim, a square rim (lines meeting at 90 degrees) whose lip's inner
-bottom edges are rounded with 4 over a ring 1 wide and a 45-degree
-chamfer: built, valid, the ends of each crease vertices, the volume exact;
-a ring 5 wide as stock.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0432.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 985258714..38b0ba8c6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

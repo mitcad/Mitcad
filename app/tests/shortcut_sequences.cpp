@@ -252,6 +252,9 @@ void cheatSheetTests() {
   registry.add(command("x.line", "Line", QKeySequence()));
   registry.add(command("x.none", "No Key", QKeySequence()));
   registry.reloadShortcuts();
+  // The keys in the native text: "Shift+F" on Windows and Linux, the Shift
+  // symbol and F on macOS.
+  const QString shiftF = QKeySequence(Qt::SHIFT | Qt::Key_F).toString(QKeySequence::NativeText);
   const auto groupOf = [](const QString& id) {
     return id.startsWith(QStringLiteral("solid.")) ? QStringLiteral("Solid › Create")
                                                     : QStringLiteral("Sketch › Create");
@@ -282,7 +285,7 @@ void cheatSheetTests() {
     }
     CHECK(all.tables[1].rows ==
           (QVector<QStringList>{{QStringLiteral("E"), QStringLiteral("Extrude")},
-                                {QStringLiteral("Shift+F"), QStringLiteral("Fillet")}}));
+                                {shiftF, QStringLiteral("Fillet")}}));
     // The sequence in the native text; a command with no key is not listed.
     CHECK(all.tables[2].rows == (QVector<QStringList>{{QStringLiteral("G, L"), QStringLiteral("Line")}}));
   }
@@ -294,10 +297,12 @@ void cheatSheetTests() {
   CHECK(found.subtitle == QStringLiteral("Mouse: MitCad · Search: line · 2026-11-19"));
   CHECK(found.tables.size() == 1 && found.tables[0].heading == QStringLiteral("Sketch › Create") &&
         found.tables[0].rows.size() == 1);
+  // By the key as the sheet shows it (on macOS its Shift is the symbol, so
+  // the word "shift" finds nothing there).
   const mitcad::CheatSheet byKey =
-      mitcad::shortcutCheatSheet(groups, QStringLiteral("shift"), QStringLiteral("MitCad"), QDate(2026, 11, 19));
-  CHECK(byKey.tables.size() == 1 && byKey.tables[0].rows ==
-                                        (QVector<QStringList>{{QStringLiteral("Shift+F"), QStringLiteral("Fillet")}}));
+      mitcad::shortcutCheatSheet(groups, shiftF.toLower(), QStringLiteral("MitCad"), QDate(2026, 11, 19));
+  CHECK(byKey.tables.size() == 1 &&
+        byKey.tables[0].rows == (QVector<QStringList>{{shiftF, QStringLiteral("Fillet")}}));
   // Several keys of one command: a sequence among them is set apart by ";".
   CHECK(mitcad::overviewKeysText({QKeySequence(Qt::Key_F2), QKeySequence(Qt::Key_F3)}) == QStringLiteral("F2, F3"));
   CHECK(mitcad::overviewKeysText({kGl, QKeySequence(Qt::Key_F3)}) == QStringLiteral("G, L; F3"));

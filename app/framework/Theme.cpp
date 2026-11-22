@@ -371,12 +371,34 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_ROLE(CamLeftThin, hex(0x4fb3bf), hex(0x6fd0db), View, CamLeftThin),
       MITCAD_ROLE(CamLeftThick, hex(0x5e35b1), hex(0x9575cd), View, CamLeftThick),
       MITCAD_ROLE(CamGouge, hex(0xd81b60), hex(0xff5c8d), View, CamGouge),
+      // Draft Analysis' classes (mitcad#2166): blue towards the pull,
+      // raspberry where a face needs more draft, violet against the pull;
+      // none of the status hues, each far in hue from the others.
+      MITCAD_ROLE(DraftPositive, hex(0x2b8cbe), hex(0x74c0e8), View, DraftPositive),
+      MITCAD_ROLE(DraftUnder, hex(0xc2185b), hex(0xec6aa0), View, DraftUnder),
+      MITCAD_ROLE(DraftNegative, hex(0x7b5cc4), hex(0xb59cf0), View, DraftNegative),
       // The Boost development pill (mitcad#1990): an outline and a rocket in
       // a warm pink, the label in the window's text; it fills with a
       // translucent tint of the pink only under the pointer. At least 3:1
       // on the windows as an indicator; lighter on a dark theme; off the
       // error's red.
       MITCAD_ROLE(Support, hex(0xd81b60), hex(0xf06292), Indicator, Support),
+      // The Discord pill (mitcad#2159): Discord's own blurple (#5865F2) on
+      // both themes, its logo mark and × in white, 4.6:1 on it.
+      MITCAD_ROLE(DiscordFill, hex(0x5865f2), hex(0x5865f2), Badge, DiscordMark),
+      MITCAD_SAME(DiscordMark, hex(0xffffff), View),
+      // The formula editor's tokens (mitcad#2179): texts on the fields
+      // (the window's colour) and on the two fills below, none of them a
+      // status hue; the fills under the window's text.
+      MITCAD_ROLE(FormulaName, hex(0x0a559f), hex(0x86bdff), Text, FormulaName),
+      MITCAD_ROLE(FormulaFunction, hex(0x6238b5), hex(0xc9b1ff), Text, FormulaFunction),
+      MITCAD_ROLE(FormulaKeyword, hex(0x961e74), hex(0xf59ad9), Text, FormulaKeyword),
+      MITCAD_ROLE(FormulaNumber, hex(0x00636c), hex(0x4fd1d9), Text, FormulaNumber),
+      MITCAD_ROLE(FormulaUnit, hex(0x87420e), hex(0xf2a96a), Text, FormulaUnit),
+      MITCAD_ROLE(FormulaOperator, hex(0x505664), hex(0xb0b6c0), Text, FormulaOperator),
+      MITCAD_ROLE(FormulaString, hex(0x505d00), hex(0xc8d46a), Text, FormulaString),
+      MITCAD_ROLE(FormulaLine, hex(0xdde3ec), hex(0x23272e), Fill, Text),
+      MITCAD_ROLE(FormulaBracket, hex(0xd3e2f7), hex(0x2b3b55), Fill, Text),
   };
   return table;
 }
@@ -436,6 +458,8 @@ double contrastRatio(const QColor& a, const QColor& b) {
 }
 
 bool isDarkPalette(const QPalette& palette) { return palette.color(QPalette::Window).lightness() < 128; }
+
+bool isDarkTheme() { return isDarkPalette(QGuiApplication::palette()); }
 
 QPalette themePalette(bool dark) {
   const auto role = [dark](ColorRole r) { return themeColor(r, dark); };

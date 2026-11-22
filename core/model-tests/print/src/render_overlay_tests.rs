@@ -251,6 +251,12 @@ fn faces_under_the_draft() {
     assert!(close(&summary["under_area"], 1600.0), "{summary}");
     assert!(close(&summary["area"], 2400.0), "{summary}");
     assert_eq!(summary["bodies"][0]["triangles"], 8);
+    // Draft Analysis' other two classes in numbers (mitcad#2166): the top
+    // releases along the pull, the bottom only against it.
+    assert!(close(&summary["positive_area"], 400.0), "{summary}");
+    assert!(close(&summary["negative_area"], 400.0), "{summary}");
+    assert!(close(&summary["bodies"][0]["positive_area"], 400.0));
+    assert!(close(&summary["bodies"][0]["negative_area"], 400.0));
     assert_eq!(middle(&preview), color_of(&summary));
     let top = render(
         &doc,

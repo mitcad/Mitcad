@@ -166,16 +166,27 @@ fn texture_image(
 /// rendered view projects the texture (`docs/rendering.md`, Materials):
 /// planar takes (x, y); box takes (y, z) where the surface faces X most,
 /// (x, z) where it faces Y, (x, y) where it faces Z; turned back by the
-/// rotation and divided by the size of one repeat.
-fn project(texture: &Texture, p: [f64; 3], normal: [f64; 3]) -> [f32; 2] {
+/// rotation and divided by the size of one repeat. Along the grain
+/// (mitcad#2186) by the directions of the point's face (`grain`,
+/// `appearance::grain_axes`; box where none are given).
+fn project(
+    texture: &Texture,
+    p: [f64; 3],
+    normal: [f64; 3],
+    grain: Option<&([f64; 3], [f64; 3])>,
+) -> [f32; 2] {
     let [x, y, z] = normal.map(f64::abs);
-    let (a, b) = match texture.projection {
-        Projection::Planar => (p[0], p[1]),
+    let (a, b) = match (texture.projection, grain) {
+        (Projection::Grain, Some(axes)) => {
+            let [a, b] = crate::appearance::grain_point(axes, p);
+            (a, b)
+        }
+        (Projection::Planar, _) => (p[0], p[1]),
         // A body without texture coordinates of its own (mitcad#1862;
         // `export_usdz` writes them where the mesh has them): as box.
-        Projection::Box | Projection::Uv if x >= y.max(z) => (p[1], p[2]),
-        Projection::Box | Projection::Uv if y >= z => (p[0], p[2]),
-        Projection::Box | Projection::Uv => (p[0], p[1]),
+        _ if x >= y.max(z) => (p[1], p[2]),
+        _ if y >= z => (p[0], p[2]),
+        _ => (p[0], p[1]),
     };
     let (sin, cos) = texture.rotation.sin_cos();
     let u = (a * cos + b * sin) / texture.size[0];
@@ -386,8 +397,37 @@ impl<K: Kernel> Document<K> {
                 .iter()
                 .any(|m| materials.textures.contains_key(m))
                 .then(|| {
+                    // The grain's directions of each face (mitcad#2186),
+                    // when a material lays its images along the grain.
+                    let grain: Vec<([f64; 3], [f64; 3])> = if materials
+                        .textures
+                        .values()
+                        .any(|t| t.projection == Projection::Grain)
+                    {
+                        starts
+                            .windows(2)
+                            .map(|range| {
+                                crate::appearance::grain_axes(
+                                    faces
+                                        .triangles
+                                        .get(range[0] as usize..range[1] as usize)
+                                        .unwrap_or_default()
+                                        .iter()
+                                        .map(|t| t.map(|i| faces.vertices[i as usize])),
+                                )
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let mut face = 0;
                     let mut st = Vec::with_capacity(faces.triangles.len() * 3);
-                    for (t, m) in faces.triangles.iter().zip(&triangle_material) {
+                    for (index, (t, m)) in
+                        faces.triangles.iter().zip(&triangle_material).enumerate()
+                    {
+                        while face + 1 < starts.len() && starts[face + 1] as usize <= index {
+                            face += 1;
+                        }
                         let [a, b, c] = t.map(|i| faces.vertices[i as usize]);
                         let normal = cross(sub(b, a), sub(c, a));
                         for (k, p) in [a, b, c].into_iter().enumerate() {
@@ -395,7 +435,7 @@ impl<K: Kernel> Document<K> {
                                 Some(texture) if own && texture.projection == Projection::Uv => {
                                     faces.uvs[t[k] as usize].map(|v| v as f32)
                                 }
-                                Some(texture) => project(texture, p, normal),
+                                Some(texture) => project(texture, p, normal, grain.get(face)),
                                 None => [0.0, 0.0],
                             });
                         }

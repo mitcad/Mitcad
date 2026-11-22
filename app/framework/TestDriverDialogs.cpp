@@ -233,4 +233,25 @@ void TestDriver::testDialogControls(const QString& kind) {
   qInfo().noquote() << QStringLiteral("Dialog controls checked: %1").arg(kind);
 }
 
+// This file's steps (mitcad#2173): their specs and their chain.
+namespace {
+
+const TestDriver::StepSpec kStepSpecs[] = {
+    {"show-dialog-style-fixture", 1, 1, TestDriver::kIdle},
+    {"test-dialog-controls", 1, 1, TestDriver::kInputOfTarget},
+};
+
+} // namespace
+
+const TestDriver::StepArea TestDriver::kDialogSteps{
+    kStepSpecs, std::size(kStepSpecs), &TestDriver::runDialogStep};
+
+void TestDriver::runDialogStep(const QString& name, const QStringList& a, int) {
+  if (name == QLatin1String("show-dialog-style-fixture")) {
+    showDialogStyleFixture(a.at(0));
+  } else if (name == QLatin1String("test-dialog-controls")) {
+    testDialogControls(a.at(0));
+  }
+}
+
 } // namespace mitcad

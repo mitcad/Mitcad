@@ -36,13 +36,8 @@ The edge's shortness and the mitre beside it are the case's example, not
 conditions. Nothing else comes from the case; 1e-6 is a confusion of the
 radii, not a margin of the case.
 
-Test: geometry/tests/test_fillet_stationary_ball.cpp,
-test_top_rim_through_the_mitres and test_both_rims_on_the_half_lid (ctest
-geometry.fillet_stationary_ball; with 1520): the lid's top rim rounded
-through both corners' mitres, the ball touching the top at one point:
-valid, each corner one new face on the ball's sphere within 1e-4; the
-port's notes record each rounding failing without 1520 and 1521. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1521.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index 07ba8dfd..8ed8e86e 100644

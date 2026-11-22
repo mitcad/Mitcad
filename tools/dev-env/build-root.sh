@@ -55,7 +55,8 @@ BUILD_EXTRAS=(
   ttf-mscorefonts-installer
 )
 # What an Ubuntu 24.04 desktop has that Mitcad's AppImage uses (glibc,
-# libstdc++, X11/xcb, OpenGL with GLVND's libOpenGL, fontconfig, FreeType, D-Bus,
+# libstdc++, X11/xcb, OpenGL with GLVND's libOpenGL, EGL, Wayland's client
+# libraries (Qt's Wayland platform, mitcad#2031), fontconfig, FreeType, D-Bus,
 # GLib, fonts; each package is on the 24.04 desktop image's manifest),
 # and Xvfb, xdotool and xwininfo to start it on a hidden display.
 PLAIN_PACKAGES=(
@@ -64,7 +65,7 @@ PLAIN_PACKAGES=(
   libglib2.0-0t64 libx11-6 libx11-xcb1 libxext6 libxrender1 libxi6 libsm6 libice6
   libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0
   libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0
-  libxcb-randr0
+  libxcb-randr0 libwayland-client0 libwayland-cursor0 libwayland-egl1
 )
 
 cmd_create() {

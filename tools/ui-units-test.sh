@@ -126,12 +126,8 @@ ui_step "cancel (Esc)"                     ui_key Escape
 echo "--- Parameters, grid, physical properties"
 ui_mark
 ui_step "Edit Parameters (search)"       ui_command "Edit Parameters"
-ui_expect_new "Parameters add at" "the dialog opened"
-ui_focus_dialog '^Parameters$'
-ui_step "User Parameter (+)"               ui_click_logged "Parameters add"
-ui_expect_new "Add User Parameter dialog opened: unit mm" "a new parameter is in millimetres"
-ui_focus_dialog '^Add User Parameter$'
-ui_step "close it (Esc)"                   ui_key Escape
+ui_expect_new "Parameters new name at" "the dialog opened"
+ui_expect_new "Parameters new row: unit mm" "a new parameter (the empty row, mitcad#2202) is in millimetres"
 ui_focus_dialog '^Parameters$'
 ui_step "close the parameters (Esc)"       ui_key Escape
 ui_focus_main

@@ -1,0 +1,199 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the approximation of a walked surface/restriction blend solves
+the sections between the walk's points on the walked ball, not on the
+ball on the restriction's other side (mitcad#2161).
+
+Defect. A plate with a round step 0.2 high, the step's foot rounded with
+0.4 (higher than the step, the ball rolling on the top rim, patch 0011).
+Expected: the rolling ball's blend all round. Observed: with the step's
+radius 100 or more (radius 150 for a rounding of 0.6, 200 for 1) the
+fillet failed, "PerformSurf : Failed approximation!": StoreData found no
+sample of the blend with a normal longer than the approximation's
+reached tolerance, which was 0.326 mm (4e-6 at radius 50).
+
+Cause. Each section of a surface/restriction blend has a second
+solution, the ball on the restriction's other side, its contact on the
+surface 2c from the walked one (c the contact's distance from the
+restriction across the surface, 0.346 here). The walk keeps to its
+branch with steps of 9.6 degrees: its deflection allowance is a
+thousandth of the guide's length, the same angles at any radius.
+BRepBlend_AppFuncRoot::SearchPoint starts each section between two walked
+points from their linear interpolation; on the surface that start lies on
+the chord, inside the contact circle by its sagitta, (R + c) theta^2 / 8
+= 0.35 at radius 100, past the middle between the two balls. The solver
+went over to the other ball (its plate contact at 99.654 instead of
+100.346), those sections were inserted into the line (more than three
+iterations) and drew more starts over, and the approximation joined the
+two branches.
+
+- BRepBlend_HermiteContact: the contact on the surface at the section's
+  parameter from the walked points about it that carry the contact's
+  tangent (dU/dt, dV/dt along the guide, as the walk stores them), a
+  cubic Hermite interpolation: its error is of the fourth order in the
+  step, the chord's of the second. Points the approximation inserted
+  carry no tangent and are passed over.
+- SearchPoint, for a surface/restriction blend (three variables), where
+  the solution from the linear start lies farther from that contact than
+  the start did (and more than ten times the variables' tolerance from
+  it), solves the section again from that contact, the restriction's
+  parameter as before, and takes the second solution where it lies
+  nearer to the contact; otherwise the first, solved again so that the
+  function's state is its own. The insertion of the point into the line
+  follows the solution taken.
+Elsewhere the linear start's solution lies on the walked contact, nearer
+to the Hermite contact than the chord, and is taken as before. Blends
+between two surfaces and between two restrictions are not changed.
+
+Upstream: new.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1870.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
+index 454c0d8eb..3fec25332 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
+@@ -19,7 +19,10 @@
+ #include <BRepBlend_AppFuncRoot.hxx>
+ #include <BRepBlend_Line.hxx>
+ #include <gp_Pnt.hxx>
++#include <gp_Vec2d.hxx>
+ #include <math_FunctionSetRoot.hxx>
++
++#include <cmath>
+ #include <Standard_Type.hxx>
+ 
+ IMPLEMENT_STANDARD_RTTIEXT(BRepBlend_AppFuncRoot, Approx_SweepFunction)
+@@ -282,6 +285,64 @@ void BRepBlend_AppFuncRoot::GetMinimalWeight(NCollection_Array1<double>& Weigths
+   Func->GetMinimalWeight(Weigths);
+ }
+ 
++//=======================================================================
++// function : BRepBlend_HermiteContact
++// purpose  : The contact on the surface of a surface/restriction blend at
++//            theParam, from the walked points about it that carry the
++//            contact's tangent (dU/dt, dV/dt along the guide): a cubic
++//            Hermite interpolation of its parameters (theU, theV). Its
++//            error is of the fourth order in the step, where the linear
++//            interpolation's (the chord's) is of the second: on a contact
++//            line curving round a wide circle the chord lies inside the
++//            arc by its sagitta. Points the approximation inserted carry
++//            no tangent and are passed over (they lie on the walked
++//            contact all the same). False where no such points are about
++//            theParam.
++//=======================================================================
++
++static bool BRepBlend_HermiteContact(const occ::handle<BRepBlend_Line>& theLine,
++                                     const double                       theParam,
++                                     const int                          theIndex,
++                                     double&                            theU,
++                                     double&                            theV)
++{
++  int aI1 = theIndex, aI2 = theIndex + 1;
++  while (aI1 >= 1 && theLine->Point(aI1).IsTangencyPoint())
++  {
++    aI1--;
++  }
++  while (aI2 <= theLine->NbPoints() && theLine->Point(aI2).IsTangencyPoint())
++  {
++    aI2++;
++  }
++  if (aI1 < 1 || aI2 > theLine->NbPoints())
++  {
++    return false;
++  }
++  const Blend_Point& aP1 = theLine->Point(aI1);
++  const Blend_Point& aP2 = theLine->Point(aI2);
++  const double       aT1 = aP1.Parameter(), aT2 = aP2.Parameter(), aH = aT2 - aT1;
++  if (!(aH > 0.) || theParam < aT1 || theParam > aT2)
++  {
++    return false;
++  }
++  double aU1 = 0., aV1 = 0., aU2 = 0., aV2 = 0.;
++  aP1.ParametersOnS(aU1, aV1);
++  aP2.ParametersOnS(aU2, aV2);
++  const gp_Vec2d aD1  = aP1.Tangent2dOnS1();
++  const gp_Vec2d aD2  = aP2.Tangent2dOnS1();
++  const double   aS   = (theParam - aT1) / aH;
++  const double   aS2  = aS * aS;
++  const double   aS3  = aS2 * aS;
++  const double   aH00 = 2. * aS3 - 3. * aS2 + 1.;
++  const double   aH10 = (aS3 - 2. * aS2 + aS) * aH;
++  const double   aH01 = -2. * aS3 + 3. * aS2;
++  const double   aH11 = (aS3 - aS2) * aH;
++  theU                = aH00 * aU1 + aH10 * aD1.X() + aH01 * aU2 + aH11 * aD2.X();
++  theV                = aH00 * aV1 + aH10 * aD1.Y() + aH01 * aV2 + aH11 * aD2.Y();
++  return true;
++}
++
+ //================================================================================
+ //
+ // Function : SearchPoint
+@@ -397,12 +458,64 @@ bool BRepBlend_AppFuncRoot::SearchPoint(Blend_AppFunction& Func,
+     return false;
+   }
+   mySolver->Root(Sol);
++  int aNbIter = mySolver->NbIterations();
++
++  // A surface/restriction blend (its contact on the surface, its parameter
++  // on the restriction) has a second solution at each section: the ball
++  // on the restriction's other side, its contact on the surface 2c from
++  // the walked one (c the contact's distance from the restriction across
++  // the surface). The walk keeps to its branch; the linear start, on the
++  // chord between two of its points, lies inside a contact line curving
++  // round a wide circle by the chord's sagitta, (R + c) theta^2 / 8 for a
++  // step of theta, and past the middle between the branches once that is
++  // more than c (a rim of radius 100 rolled on with c = 0.35 and steps of
++  // 9.6 degrees): the solver went over to the other ball, the sections
++  // from there were taken into the line, and the approximation joined the
++  // two branches, 0.33 mm off. Where the solution lies farther from the
++  // contact the walked tangents give (BRepBlend_HermiteContact) than the
++  // linear start did, the section is solved again from that contact; the
++  // second solution is taken where it lies nearer to it (mitcad#2161).
++  double aHermU = 0., aHermV = 0.;
++  if (!Trouve && dim == 3 && BRepBlend_HermiteContact(myLine, Param, Index, aHermU, aHermV))
++  {
++    const double aNoise    = 10. * std::hypot(myTolerance(1), myTolerance(2));
++    const double aFromInit = std::hypot(XInit(1) - aHermU, XInit(2) - aHermV);
++    const double aFromSol  = std::hypot(Sol(1) - aHermU, Sol(2) - aHermV);
++    if (aFromSol > aFromInit && aFromSol > aNoise)
++    {
++      math_Vector aFirst(Sol);
++      math_Vector aStart(XInit);
++      aStart(1)  = aHermU;
++      aStart(2)  = aHermV;
++      bool aTook = false;
++      mySolver->Perform(Func, aStart, X1, X2);
++      if (mySolver->IsDone())
++      {
++        mySolver->Root(Sol);
++        if (std::hypot(Sol(1) - aHermU, Sol(2) - aHermV) < aFromSol)
++        {
++          aNbIter = mySolver->NbIterations();
++          aTook   = true;
++        }
++      }
++      if (!aTook)
++      {
++        // The first solution, the function's state with it.
++        mySolver->Perform(Func, aFirst, X1, X2);
++        Sol = aFirst;
++        if (mySolver->IsDone())
++        {
++          mySolver->Root(Sol);
++        }
++      }
++    }
++  }
+ 
+   // (3) Storage of the point
+   Point(Func, Param, Sol, Pnt);
+ 
+   // (4) Insertion of the point if the calculation seems long.
+-  if ((!Trouve) && (mySolver->NbIterations() > 3))
++  if ((!Trouve) && (aNbIter > 3))
+   {
+ #ifdef OCCT_DEBUG
+     std::cout << "Evaluation in t = " << Param << "given" << std::endl;

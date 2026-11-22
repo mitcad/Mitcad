@@ -90,7 +90,8 @@ void MainWindow::keepOriginClearOfCards() {
   if (m_viewer->panClearOfCards(originPlanesBox(), QStringLiteral("the origin planes"))) {
     // The animated move's end is no navigation of the user's; the datums'
     // places are logged again once it rests (cameraRested), the faces' too.
-    m_originClearMoving = !m_viewer->ViewAnimation()->IsStopped();
+    // A window not exposed moves at once, as a navigation of its own.
+    m_originClearMoving = !m_viewer->ViewAnimation()->IsStopped() || m_viewer->isNavigating();
     m_originClearLogPicks = true;
   }
 }

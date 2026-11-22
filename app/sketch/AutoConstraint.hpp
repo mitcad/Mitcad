@@ -62,6 +62,21 @@ inline bool alignsHorizontally(const V2& a, const V2& b) {
   return std::abs(d.x) >= std::abs(d.y);
 }
 
+// Horizontal/Vertical's other direction (mitcad#2184): `vertical` for
+// `horizontal` and the other way round, likewise `vertical_points` and
+// `horizontal_points`; empty for any other type.
+QString otherDirection(const QString& type);
+// The direction Horizontal/Vertical adds (mitcad#2184): `nearer` (the
+// type of a line's or two points' nearer direction, as the tool chooses it
+// by their slope) when the sketch takes it; else the other direction when
+// the sketch takes that, because the nearer one is already implied or
+// conflicts while the other is neither; else `nearer`, whose refusal then
+// says why. `takes` says whether the sketch would add a constraint of that
+// type on the same picks, asked without changing anything
+// (`sketch.add_constraint` with `check`); it is not asked about the other
+// direction when the nearer one is taken.
+QString horizontalVerticalDirection(const QString& nearer, const std::function<bool(const QString&)>& takes);
+
 // The constraint of `type` between the reference and a new entity, as
 // `sketch.add_constraint` takes it; empty when the two do not take it.
 QJsonObject autoConstraintDefinition(const QString& type, const AutoEntity& reference, const AutoEntity& made);

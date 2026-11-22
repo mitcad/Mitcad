@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+# Insert Points through the real UI (mitcad#2232), the shared input script
+# of tools/ui-points-test.sh (Linux) and tools/ui-windows-points-test.ps1,
+# on naca2412.dat that the runner writes from the NACA 4-digit formula (a
+# Selig file of 121 points, 5 decimals, a blunt trailing edge):
+#   1. Insert Points on a new design: the file dialog, then the dialog finds
+#      the airfoil and its name; OK with its defaults (XY plane, a spline,
+#      chord 100 mm, angle 0, the trailing edge closed) makes a fitted
+#      spline and the closing line in a new sketch, whose one profile comes
+#      selected;
+#   2. Extrude (E) takes the profile: 10 mm make a solid of about the
+#      profile's area (0.0822 times the chord squared) times 10.
+expect-ever 'View area' 30
+wait-idle
+
+mark
+command insert.points
+focus-dialog '^Insert Points$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/naca2412.dat"
+sleep 300
+key Return
+wait-log '^Insert Points dialog opened: 121 points, airfoil NACA 2412 \(selig\)$'
+wait-log '^Insert Points OK at '
+focus-dialog '^Insert Points$'
+key Return
+focus-main
+wait-log '^Insert Points: spline, airfoil on, chord 100 mm, angle 0°, leading edge at \(0, 0\), trailing edge closed$'
+wait-log '^Inserted naca2412\.dat into Sketch1: 2 curves, [0-9]+ points, 1 profiles, 0 warnings, fit least_squares, [0-9]+ control points, deviation '
+wait-log '^Selected: 1 profile'
+
+mark
+key e
+wait-log '^Extrude Profiles: 1 profile'
+type-in '^Panel Extrude input distance at ' '10'
+wait-log '^Preview Extrude: ok' 30
+key Return
+capture made 'New body \S+ [(]F2[.]b0[)]: volume ([0-9.]+) mm3' 30
+expect-near ${made} 8221 0.02
+expect-never 'TestDriver: FAIL|Could not insert|Recompute failed'

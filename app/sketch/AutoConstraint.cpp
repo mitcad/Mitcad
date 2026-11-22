@@ -20,6 +20,30 @@ QJsonObject pair(const QString& type, const QString& a, const QString& b) {
 
 } // namespace
 
+QString otherDirection(const QString& type) {
+  if (type == QStringLiteral("horizontal")) {
+    return QStringLiteral("vertical");
+  }
+  if (type == QStringLiteral("vertical")) {
+    return QStringLiteral("horizontal");
+  }
+  if (type == QStringLiteral("horizontal_points")) {
+    return QStringLiteral("vertical_points");
+  }
+  if (type == QStringLiteral("vertical_points")) {
+    return QStringLiteral("horizontal_points");
+  }
+  return {};
+}
+
+QString horizontalVerticalDirection(const QString& nearer, const std::function<bool(const QString&)>& takes) {
+  const QString other = otherDirection(nearer);
+  if (other.isEmpty() || !takes || takes(nearer)) {
+    return nearer;
+  }
+  return takes(other) ? other : nearer;
+}
+
 QStringList autoConstraintTypes() { return {kEqual, kAlign, kConcentric, kParallel, kPerpendicular}; }
 
 QStringList autoConstraintTypes(AutoKind kind) {

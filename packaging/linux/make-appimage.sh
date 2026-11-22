@@ -7,12 +7,14 @@
 #      render worker mitcad-render).
 #   2. linuxdeploy copies the libraries the executables need into usr/lib
 #      (Qt, OCCT and the rest from vcpkg, ICU, ...) and points their
-#      RUNPATH there; its Qt plugin adds Qt's plugins (the X11 platform,
-#      image formats, the SVG icon engine, TLS, the CUPS print support of
-#      File › Print) and a qt.conf. What every
-#      Linux desktop has (glibc, X11 and xcb, OpenGL, fontconfig,
-#      FreeType, ...) stays the system's: linuxdeploy's exclude list, and
-#      ours: GLib (below), libcups and the GPU drivers. The libraries
+#      RUNPATH there; its Qt plugin adds Qt's plugins (the X11 platform
+#      with its GLX and EGL integrations, the Wayland platform with its
+#      shell, EGL and decoration plugins, image formats, the SVG icon
+#      engine, TLS, the CUPS print support of File › Print) and a qt.conf.
+#      What every Linux desktop has (glibc, X11 and xcb, OpenGL and EGL,
+#      Wayland's client libraries, fontconfig, FreeType, ...) stays the
+#      system's: linuxdeploy's exclude list, and ours: GLib (below),
+#      libcups, Wayland's libraries and the GPU drivers. The libraries
 #      nothing in the AppDir needs then go, and the ELF files are
 #      stripped.
 #      The AppImage's entry point is packaging/linux/AppRun (mitcad#1170):
@@ -143,9 +145,14 @@ excluded+=('libcups.so*')
 for library in $GLIB_FAMILY; do
   excluded+=("$library.so*")
 done
+# Wayland (mitcad#2031): the system's client libraries, which its EGL (the
+# GPU driver's) loads too: one copy in the process, as with GLib.
+excluded+=('libwayland-client.so*' 'libwayland-cursor.so*' 'libwayland-egl.so*')
+excluded_args=()
 for pattern in "${excluded[@]}"; do
-  executables+=(--exclude-library "$pattern")
+  excluded_args+=(--exclude-library "$pattern")
 done
+executables+=("${excluded_args[@]}")
 # OpenSSL (see the header): the libssl.so.3 next to the libcrypto.so.3 that
 # the executables link, so that the AppImage has both or neither.
 crypto=""
@@ -171,10 +178,38 @@ export QMAKE
 # plugin; mitcad#1654).
 LINUXDEPLOY_EXCLUDED_LIBRARIES=$(IFS=';'; echo "${excluded[*]}")
 export LINUXDEPLOY_EXCLUDED_LIBRARIES
+# Qt's Wayland platform (mitcad#2031, GitHub mitcad/Mitcad#434): MitCad
+# runs natively in a Wayland session (app/framework/DisplayPlatform.hpp),
+# so a scaled desktop is not blurry. The Qt plugin deploys only xcb unless
+# told; its Wayland plugin folders (the shell, the EGL client buffers, the
+# window decorations) come with the platform, or below.
+export EXTRA_PLATFORM_PLUGINS=libqwayland.so
 linuxdeploy --appdir "$APPDIR" \
   "${executables[@]}" \
   --desktop-file "$APPDIR/usr/share/applications/mitcad.desktop" \
   --plugin qt
+# Wayland's plugin folders, when the Qt plugin left them out, from Qt's
+# own plugin folder, with their libraries deployed (Qt's Wayland client
+# libraries) and RUNPATHs pointed into the AppDir.
+qt_plugins=$("$QMAKE" -query QT_INSTALL_PLUGINS)
+[ -f "$APPDIR/usr/plugins/platforms/libqwayland.so" ] || {
+  mkdir -p "$APPDIR/usr/plugins/platforms"
+  cp "$qt_plugins/platforms/libqwayland.so" "$APPDIR/usr/plugins/platforms/"
+}
+wayland_folders=(wayland-shell-integration wayland-graphics-integration-client wayland-decoration-client)
+deploy_deps=(--deploy-deps-only "$APPDIR/usr/plugins/platforms/libqwayland.so")
+for folder in "${wayland_folders[@]}"; do
+  if [ ! -d "$APPDIR/usr/plugins/$folder" ]; then
+    [ -d "$qt_plugins/$folder" ] || { echo "Qt has no $folder plugins in $qt_plugins" >&2; exit 1; }
+    cp -r "$qt_plugins/$folder" "$APPDIR/usr/plugins/"
+  fi
+  deploy_deps+=(--deploy-deps-only "$APPDIR/usr/plugins/$folder")
+done
+linuxdeploy --appdir "$APPDIR" "${deploy_deps[@]}" "${excluded_args[@]}"
+for plugin in platforms/libqwayland.so wayland-shell-integration/libxdg-shell.so \
+  wayland-graphics-integration-client/libqt-plugin-wayland-egl.so xcbglintegrations/libqxcb-egl-integration.so; do
+  [ -f "$APPDIR/usr/plugins/$plugin" ] || { echo "the AppDir has no usr/plugins/$plugin" >&2; exit 1; }
+done
 # None of them in the AppDir, whichever step deployed it.
 for pattern in "${excluded[@]}"; do
   for library in "$APPDIR"/usr/lib/$pattern; do

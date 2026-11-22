@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# The 3DxWare driver on Windows (mitcad#2152, GitHub mitcad/Mitcad#529),
+# with the test's stand-in for its runtime (MITCAD_TEST_3DXWARE=1), which
+# reports one device, so the backend asks for MitCad's window at the moment
+# a real driver start does. It is given only a window that exists (the
+# shown document frame's): the design window gets no native window of its
+# own, which painted the Floating cards' translucent margins black, and
+# the screen beside the Browser's card, the navigation bar and the message
+# band shows the view's background (where the system draws the window; not
+# in SSH's session 0). A start before the design sat in its frame is tried
+# again once it does: the driver connects ("via 3DxWare"), not only Raw
+# Input. Run by ui-windows-space-mouse-3dxware-test.ps1 in the Windows VM,
+# in the Floating layout.
+wait-idle
+expect-ever '^3D mouse: test 3DxWare runtime \(MITCAD_TEST_3DXWARE\) reports one device$' 15
+expect-ever '^3D mouse: 3DxWare connected \(Test 3D mouse via 3DxWare\)$' 15
+expect-ever '^3D mouse: test 3DxWare runtime opened its device$'
+expect-never '^3D mouse: test 3DxWare runtime got no window$'
+wait-idle
+expect-design-native no
+expect-screen-beside-cards browserDock navigationBar messageBandCard

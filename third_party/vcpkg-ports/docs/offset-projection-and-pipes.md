@@ -1,4 +1,4 @@
-# Offset, projection and pipes: 0100, 0960, 1030, 1130, 1160, 1180, 1190, 1200
+# Offset, projection and pipes: 0100, 0960, 1030, 1130, 1160, 1180, 1190, 1200, 2050
 
 OCCT's offset (`TKOffset`), the projection of a curve onto a surface
 (`ProjLib`) and the pipe shell's guide trihedron (`GeomFill`). Back to the
@@ -37,6 +37,13 @@ OCCT's offset (`TKOffset`), the projection of a curve onto a surface
 - **1200** enlarges a B-spline face at C2 across a side that is the
   iso-line of a tangential edge, so that intersection curves ending there
   no longer cross a crease of its offset (mitcad#1202).
+- **2050** trims an intersection all round a periodic curve to the arcs
+  over the edges it is the image of, also across the curve's origin (the
+  offset of a cylinder's concave foot running three quarters round, where
+  the cylinder continues a plate's rounded corner), and applies 1160's
+  rule also to a line and a conic whose edges leave their common vertex in
+  the same direction; those shells and closed offsets failed
+  (mitcad#2050).
 
 ## 0100: faces vanishing within the offset
 
@@ -384,6 +391,71 @@ substitutes keeps points on its edges up to 1.4e-4 mm off it. Patch
 1190's `CoverPoints` widens its tolerance to them, so those offsets are
 valid.
 
+## 2050: an intersection all round a circle, trimmed across its origin
+
+### 2050-brepoffset-intersection-round-a-periodic-curve-trimmed-over-its-edges-across-the-origin
+
+A plate with corners rounded 15 and a cylinder of radius 15 joined on its
+top on the axis of one corner (GitHub #466, mitcad#2050). The cylinder
+continues a quarter of the corner's side (one face after the join), so
+the concave edge round the cylinder's foot runs three quarters round,
+from one end of that quarter to the other, and the plate's top ends in a
+point of no angle at each of its ends: the top's straight edge along the
+plate's side and the concave arc leave the point in the same direction,
+and below it the side meets the cylinder tangentially. The reporter's
+shell, 2 mm with the cylinder's top and the plate's bottom removed, failed
+inside and outside with `BRepOffset_UnknownError` ("the offset faces do
+not close up"), also with the design's roundings suppressed, and the
+closed inward offsets of MitCad's cavity fallback
+(`geometry/src/shell_cavity.cpp`) failed or hollowed nothing. With OCCT
+alone (the probe of `test_shell_boss_on_corner`): with the intersection
+join the shells and closed offsets were not done, or not valid with the
+foot's faces apart; with the arc join they were valid; with a smaller
+cylinder on the axis, or a larger corner (the foot's edge a whole circle),
+all were valid.
+
+`BRepOffset_Inter3d` intersects the enlarged offsets of the top and the
+cylinder into a whole circle, its origin where the enlarged cylinder's
+seam cuts it, and `TrimEdge` (`BRepOffset_MakeOffset.cxx`) cut it to the
+range from the smallest to the largest parameter of its vertices: from the
+origin to one end of the foot's edge, over the corner quarter the foot does
+not run along, instead of the three quarters across the origin. `TrimEdge`
+now gets the map of the edges' intersections (`theBuild`); for an edge all
+round a periodic curve, the new `TrimOverOrigins` splits the curve at its
+vertices into arcs, keeps those whose middles project inside the range of
+an edge the intersection is the image of (`IsOverOrigins`), and trims the
+edge to them where they make one run round the curve and not all of it.
+Where the run crosses the origin and a vertex lies there (where the
+cylinder's seam cuts the circle), the edge is cut there in two (`TrimEdge`'s
+new `theSecond`; `TrimEdges` adds the second piece to the intersections of
+the edges the first is the image of): trimmed as one edge across the
+origin, it lay past the period of the cylinder's offset on it, and the
+shells came out of the right volume but invalid. Where the arcs are no such
+run, where the run is the range from the smallest to the largest parameter,
+where it crosses the origin with no vertex there, and for edges not all
+round a periodic curve, it is as before.
+
+At the points of no angle, `BRepOffset_Inter2d::ConnexIntByInt` leaves the
+images of the top's two edges on the top's offset, a line and a circle
+touching there, unintersected with each other, as 1160 does for curves that
+are not lines or conics (the new `LeaveInOneDirection`: the tangents of the
+two edges, pointing away from their common vertex, within 1e-3 rad of each
+other); the vertex is where each crosses the offset of the tangential edge
+below. Where they leave it in opposite directions (a rounding between
+planes cut by a plane, the images continuing each other) it is as before.
+`MeetAlongTangentEdge` also takes such a vertex with a fourth edge, a seam of
+one of the faces beyond the two running on from the tangential edge: in the
+reporter's design the merged face's seam starts at one of the points of no
+angle (its corner's arc starts there; `geometry.shell_boss_on_corner`'s case
+"seam at the corner").
+There the walk round the cylinder's offset also passes from the seam to the
+tangential edge it runs on from, neither with an image of its own;
+`ConnexIntByInt` put their common vertex, the offset of the original one,
+on both offset edges, which lie on one line, so the tangential edge's
+offset reached past where the foot's offset crosses that line. The new
+`SeamRunsOnFromTangentEdge` leaves that vertex out where another edge of the
+face at the vertex has an image.
+
 ## Reports and tests
 
 - 0100: mitcad#172 and `geometry/tests/test_shell_vanishing.cpp`, which
@@ -426,3 +498,13 @@ valid.
   circle of radius 24.5 offset 1 and 2 mm, the seam on a side: valid, the
   volume that of the seam on a corner within 3e-5; at 3 mm the edges fail
   without the patch, at 1 and 2 mm the octagon's offsets without 1190).
+- 2050: mitcad#2050 and `geometry/tests/test_shell_boss_on_corner.cpp`
+  (the ctest `geometry.shell_boss_on_corner`: the plate 75 x 50 x 10
+  rounded 15 with the cylinder of radius 15 on a corner's axis, also with
+  the radius and centre the reporter's sketch solved to, and with the
+  merged face's seam where the cylinder meets the plate's side, shelled 2 mm
+  inside and outside with the cylinder's top and the plate's bottom open,
+  and offset 2 mm inward closed, with OCCT alone: valid shapes of
+  the volumes from the areas within 1e-6; it fails without the patch,
+  shown 2026-11-21), and the reporter's design with and without its
+  roundings in `cli.shell_reported`.

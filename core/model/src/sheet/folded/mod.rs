@@ -635,19 +635,26 @@ pub(super) fn trim_with_lineage<K: Kernel>(
                     aliases.dedup();
                     let piece = aliases[0].clone();
                     for source in &edge.lineage {
-                        let (domain, regions, piece) = match &source.source {
+                        // (A domain's fragments are in its chart's
+                        // coordinates, as the output; a tool's in its own.)
+                        let (domain, regions, piece, on) = match &source.source {
                             TrimSource::Domain { boundary } => {
                                 let input =
                                     inputs.iter().find(|d| d.domain == boundary.domain).ok_or(
                                         "sheet trim lineage refers to an unknown input domain",
                                     )?;
-                                (boundary.domain, input.regions.as_slice(), &boundary.piece)
+                                (
+                                    boundary.domain,
+                                    input.regions.as_slice(),
+                                    &boundary.piece,
+                                    Some(&edge.curve),
+                                )
                             }
                             TrimSource::Tool { piece } => {
                                 let Some(domain) = tool_domain else {
                                     continue;
                                 };
-                                (domain, tools, piece)
+                                (domain, tools, piece, None)
                             }
                         };
                         aliases.extend(inherited_aliases(
@@ -656,6 +663,7 @@ pub(super) fn trim_with_lineage<K: Kernel>(
                             regions,
                             piece,
                             source.span,
+                            on,
                         )?);
                     }
                     canonical_aliases(&mut aliases);
@@ -769,14 +777,25 @@ fn canonical_aliases(aliases: &mut Vec<CurvePieceRef>) {
     aliases.dedup();
 }
 
+/// The aliases of the input boundary fragment a trim's output edge comes
+/// from: the input edges of `piece` whose range holds `span`, with the
+/// lineage records that apply to them. Fragments of one curve can carry
+/// the same piece with ranges of their own (a trim returns each fragment
+/// as a curve of its own), so several may hold the span by parameter; then
+/// the fragment the output edge lies on decides (mitcad#2117: a flange
+/// whose cut runs along an existing side leaves that side in two fragments
+/// of one piece, one also aliased to the side's curve). `on` is the output
+/// edge in the input regions' coordinates (none for a tool's source).
 fn inherited_aliases(
     lineage: &[CurveLineage],
     domain: SheetDomainRef,
     regions: &[MaterialRegion],
     piece: &CurvePieceRef,
     span: ParamSpan,
+    on: Option<&BoundedCurve2>,
 ) -> Result<Vec<CurvePieceRef>, String> {
-    let mut resolved: Option<Vec<CurvePieceRef>> = None;
+    // (aliases, the input fragment's middle point over the span)
+    let mut candidates: Vec<(Vec<CurvePieceRef>, Option<[f64; 2]>)> = Vec::new();
     for edge in regions
         .iter()
         .flat_map(|r| &r.loops)
@@ -794,13 +813,42 @@ fn inherited_aliases(
             aliases.extend(record.aliases.iter().cloned());
         }
         canonical_aliases(&mut aliases);
-        if resolved.as_ref().is_some_and(|old| *old != aliases) {
-            return Err("sheet trim source fragment has ambiguous semantic aliases".into());
-        }
-        resolved = Some(aliases);
+        let middle = edge.curve.point(0.5 * (span.first + span.last)).ok();
+        candidates.push((aliases, middle));
     }
-    resolved.ok_or_else(|| "sheet trim source interval does not belong to an input boundary".into())
+    let agreed = |list: &[&(Vec<CurvePieceRef>, Option<[f64; 2]>)]| -> Option<Vec<CurvePieceRef>> {
+        let first = &list.first()?.0;
+        list.iter().all(|(a, _)| a == first).then(|| first.clone())
+    };
+    let all: Vec<_> = candidates.iter().collect();
+    if all.is_empty() {
+        return Err("sheet trim source interval does not belong to an input boundary".into());
+    }
+    if let Some(aliases) = agreed(&all) {
+        return Ok(aliases);
+    }
+    // The fragments the output edge lies on: one decides; several that
+    // all lie on it are all its material's boundary there, so it answers
+    // for each of their names.
+    let support = on.and_then(|c| c.support().ok());
+    let lying: Vec<_> = candidates
+        .iter()
+        .filter(|(_, middle)| match (&support, middle) {
+            (Some(s), Some(p)) => s.closest(*p).1 <= ON_OUTPUT,
+            _ => false,
+        })
+        .collect();
+    if lying.is_empty() {
+        return Err("sheet trim source fragment has ambiguous semantic aliases".into());
+    }
+    let mut aliases: Vec<CurvePieceRef> = lying.iter().flat_map(|(a, _)| a.clone()).collect();
+    canonical_aliases(&mut aliases);
+    Ok(aliases)
 }
+
+/// How close (mm) a trim's source fragment lies to the output edge it
+/// makes, for [`inherited_aliases`] to tell fragments of one piece apart.
+const ON_OUTPUT: f64 = 1e3 * TOLERANCE;
 
 pub(super) fn copy_lineage(
     lineage: &mut Vec<CurveLineage>,

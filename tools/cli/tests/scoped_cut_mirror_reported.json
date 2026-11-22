@@ -1,0 +1,24 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Mirror and patterns of a scoped Extrude Cut (mitcad#2126, GitHub #495) on a reported design (opened with --open, never committed; tools/cli/scoped-cut-mirror-reported-test.cmake): two components, a cylinder (F2.b0, radius 25, 20.5 high) in C1 and a smaller one (F4.b0, radius 21.06, 10 high) in C2 standing on its top, and a pocket (F6, radius 5.95 at x = -11.9, 5 deep) cut into C2's top with an automatic target scope. The pocket does not reach C1. Before the fix every mirror or pattern of the pocket failed (`unsupported cut scope for feature replay: automatic scope includes another component or occurrence`) because C1 has a body."},
+  {"expect": {"feature": "F6", "status": "ok"}},
+  {"expect": {"body": "F2.b0", "volume": 40251.65587411923}},
+  {"expect": {"body": "F4.b0", "volume": 13373.441985209587}},
+  {"cmd": "activate_component", "component": "C2"},
+
+  {"comment": "Mirrored about the plane x = 0 of C2: a second pocket at x = 11.9 in C2's body; C1's body unchanged."},
+  {"cmd": "add_feature", "name": "PocketMirror", "def": {"type": "mirror", "objects": {"type": "features", "features": ["F6"]},
+    "plane": {"type": "fixed", "origin": [0, 0, 0], "normal": [1, 0, 0]}}},
+  {"expect": {"feature": "PocketMirror", "status": "ok"}},
+  {"expect": {"body": "F4.b0", "volume": 12817.238701483682}},
+  {"expect": {"body": "F2.b0", "volume": 40251.65587411923}},
+  {"cmd": "undo"},
+  {"expect": {"body": "F4.b0", "volume": 13373.441985209587}},
+
+  {"comment": "The same copy by a rectangular pattern along X (two pockets 23.81 apart), Identical."},
+  {"cmd": "add_feature", "name": "PocketPattern", "def": {"type": "rectangular_pattern", "objects": {"type": "features", "features": ["F6"]},
+    "direction1": {"axis": {"type": "origin", "axis": "x"}, "quantity": 2, "distance": 23.80651336780996},
+    "distance_type": "spacing", "compute": "identical"}},
+  {"expect": {"feature": "PocketPattern", "status": "ok"}},
+  {"expect": {"body": "F4.b0", "volume": 12817.238701483682}},
+  {"expect": {"body": "F2.b0", "volume": 40251.65587411923}}
+]

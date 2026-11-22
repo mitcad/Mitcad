@@ -52,3 +52,11 @@ mod ground_offset_tests;
 // Drags leave placed parts at their Offset, a carriage's travel limits and
 // joints named after the parts they join (mitcad#2088).
 mod drag_travel_tests;
+// Joint conditions of profiles along sketch lines (mitcad#2200).
+mod joint_conditions_tests;
+// Profiles in parallel, long faces in contact (mitcad#2201).
+mod parallel_tests;
+// A BUILD part of a source not for print services (mitcad#2214).
+mod print_service_build_tests;
+// Group identical parts in the Bill of Materials' views (mitcad#2215).
+mod bom_group_view_tests;

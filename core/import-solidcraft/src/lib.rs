@@ -23,6 +23,8 @@
 //!   points ([`refs`]) and named by MitCad's topological names, which
 //!   follow later edits. Bodies are named as the file names them.
 //! - Joints ([`assembly`]), sheet metal ([`sheet`]).
+//! - A sketch's 3D curves as a 3D sketch ([`spatial`]), frame members as
+//!   pipes and sweeps along their lines ([`frames`], mitcad#2157).
 
 mod assembly;
 mod features;
@@ -40,6 +42,11 @@ mod surfaces;
 mod surface_modelling;
 // Plastic part features and rules (mitcad#459).
 mod plastic;
+// 3D curves as 3D sketches, frame members as pipes and sweeps (mitcad#2157).
+mod frames;
+#[cfg(test)]
+mod frames_tests;
+mod spatial;
 #[cfg(test)]
 mod tests;
 
@@ -129,7 +136,9 @@ pub fn import_solidcraft_file<K: Kernel>(
         sheet_rule_features: HashMap::new(),
         sheet_bases: HashMap::new(),
         sheet_unfolds: HashMap::new(),
+        sheet_body_rules: HashMap::new(),
         plastic_rules: HashMap::new(),
+        member_body: None,
     };
     importer.run(options)?;
     let Importer {
@@ -190,8 +199,14 @@ pub(crate) struct Importer<'d, 'f, K: Kernel> {
     pub sheet_bases: HashMap<BodyUid, FeatureUid>,
     /// The last Unfold of each sheet body.
     pub sheet_unfolds: HashMap<BodyUid, FeatureUid>,
+    /// The rule each sheet body was made under, as the file names it
+    /// (none: the design's active one): a hem's gap is its rule's.
+    pub sheet_body_rules: HashMap<BodyUid, Option<String>>,
     /// Plastic rules made, by the file's rule name (mitcad#459).
     pub plastic_rules: HashMap<String, FeatureUid>,
+    /// The name of the body the next feature makes: a frame member's, as
+    /// the file names it (mitcad#2157).
+    pub member_body: Option<String>,
 }
 
 /// The result of mapping one feature.
@@ -295,6 +310,26 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 format!("{notes} notes (text anchored to a point in the model): not mapped")
             });
         }
+        // Drawings (format 59) and rigid groups of imported parts (format
+        // 62): MitCad keeps neither of the file's.
+        let drawings = self.design.drawings.len();
+        if drawings > 0 {
+            self.report.notes.push(if drawings == 1 {
+                "a drawing: not mapped".to_owned()
+            } else {
+                format!("{drawings} drawings: not mapped")
+            });
+        }
+        let groups = self.design.rigid_groups().len();
+        if groups > 0 {
+            self.report.notes.push(if groups == 1 {
+                "a rigid group (parts an import placed, held as one): not mapped; the parts stay where the file places them".to_owned()
+            } else {
+                format!(
+                    "{groups} rigid groups (parts an import placed, held as one): not mapped; the parts stay where the file places them"
+                )
+            });
+        }
         if let Some(position) = marker
             && let Err(e) = self.doc.set_marker(position)
         {
@@ -307,7 +342,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         self.doc.recompute();
-        self.measure();
+        // The kernel's validity check only where the check asks for it
+        // (mitcad#2175): an import for the app does not spend its time.
+        let validity = options
+            .expected
+            .as_ref()
+            .and_then(|e| e.get("valid"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        self.measure(validity);
         Ok(())
     }
 
@@ -612,6 +655,13 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     /// SolidCraft's name of a feature's k-th new body (`eval.rs`, `new_name`).
     fn new_body_name(&mut self, f: &Feature, k: usize) -> String {
+        // A frame member's body (mitcad#2157): the name worked out for its
+        // line, the `Body<n>` counter untouched.
+        if k == 0
+            && let Some(name) = self.member_body.take()
+        {
+            return name;
+        }
         // A bounding solid's box: its stored name or `Bounding`, made
         // unique, the `Body<n>` counter untouched (`eval.rs`, BoundingSolid).
         if f.kind == "bounding_solid" {
@@ -790,8 +840,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// The bodies after the import: volume, area and world box per placed
-    /// body.
-    fn measure(&mut self) {
+    /// body, and with `validity` whether the kernel's checker finds it
+    /// valid.
+    fn measure(&mut self, validity: bool) {
         let names: HashMap<BodyUid, String> =
             self.bodies.iter().map(|(n, u)| (*u, n.clone())).collect();
         let kernel = self.doc.kernel();
@@ -821,6 +872,11 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 area_mm2: mass.map_or(0.0, |m| m.area),
                 bbox_min: bbox.map_or([0.0; 3], |b| b.min),
                 bbox_max: bbox.map_or([0.0; 3], |b| b.max),
+                valid: if validity {
+                    kernel.is_valid(shape).ok()
+                } else {
+                    None
+                },
             });
         }
         self.report.bodies = out;
@@ -942,6 +998,20 @@ pub fn check(report: &SolidcraftReport, expected: &Value) -> CheckReport {
                 "{name}: box {:?} .. {:?}, expected {} .. {}",
                 ours.bbox_min, ours.bbox_max, bbox["min"], bbox["max"]
             ));
+        }
+    }
+    // Every body valid by the kernel's checker (mitcad#2175).
+    if expected.get("valid").and_then(Value::as_bool) == Some(true) {
+        checks += 1;
+        for b in &bodies {
+            match b.valid {
+                Some(true) => {}
+                Some(false) => failures.push(format!("{}: not valid", b.name)),
+                None => failures.push(format!(
+                    "{}: its validity was not checked (the kernel cannot check it)",
+                    b.name
+                )),
+            }
         }
     }
     if let Some(timeline) = expected.get("timeline").and_then(Value::as_array) {

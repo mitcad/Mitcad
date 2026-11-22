@@ -30,14 +30,8 @@ failed.
 
 Upstream: new.
 
-Test: geometry/tests/test_fillet_three_face_corner.cpp,
-test_rounding_over_a_trimmed_torus (ctest
-geometry.fillet_three_face_corner): the case fillet-trimmed-torus, the
-replay's body before its key's top is rounded: valid and closed; the
-port's notes record its ends failing without the patch. It fails without
-the patch (shown 2026-11-20 by tools/occt-port-proof.py). The test reads a
-stored case (MITCAD_GEOMETRY_CASES), not a synthetic body: a synthetic
-test is still wanted (mitcad#1986).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1381.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index e2415548..a51fcdc7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

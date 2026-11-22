@@ -126,6 +126,8 @@ const Allowed kAllowed[] = {
     {"view/CenterOfMassView.cpp", 1, "white as the marker's object color, which OCCT multiplies the marker image by"},
     {"view/ImageReferenceView.cpp", 1, "white under a reference image, which OCCT multiplies its texture by"},
     {"platform/macos/NativeDialogs.mm", 1, "the dimming outside a crop, as ReportDialogs.cpp"},
+    {"view/TexturedBody.hpp", 1,
+     "white under a texture in the shaded view (mitcad#2186), which OCCT multiplies its texture by"},
 };
 
 // The source text without its comments: strings (raw strings too) and

@@ -100,6 +100,102 @@ pub struct ExternalLink {
     /// warning.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unlinked: Vec<EnvelopeFrame>,
+    /// The whole design with its components, read only (mitcad#2209,
+    /// `document/link_tree.rs`): the components, occurrences, joints and
+    /// rigid groups made for those of the design. None: the design's
+    /// bodies as one base feature (a design without components, chosen
+    /// parts, and every link saved before).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<LinkTree>,
+}
+
+/// A linked design kept with its components (mitcad#2209): what this
+/// document made for each component, occurrence and joint of the design,
+/// by the design's uids, so that reading the file again updates them in
+/// place. The base feature of the design's root's own bodies is
+/// [`ExternalLink::feature`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkTree {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<LinkedComponent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub occurrences: Vec<LinkedOccurrence>,
+    /// The design's joints, as-built joints and rigid groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<LinkedFeature>,
+}
+
+/// A component of a linked design (mitcad#2209) and the read-only
+/// component made for it here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkedComponent {
+    /// Its uid in the design.
+    pub source: ComponentUid,
+    /// Its name in the design when it was last read.
+    #[serde(default)]
+    pub name: String,
+    /// The component here.
+    pub component: ComponentUid,
+    /// The base feature here that holds its bodies.
+    pub feature: FeatureUid,
+    /// The design no longer has it: it keeps the bodies saved with the
+    /// project, because a feature of this design uses it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
+}
+
+/// An occurrence of a linked design (mitcad#2209) and the one made for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkedOccurrence {
+    pub source: OccurrenceUid,
+    pub occurrence: OccurrenceUid,
+    /// The design no longer has it; kept where it was because a feature of
+    /// this design uses it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
+}
+
+/// A joint, as-built joint or rigid group of a linked design (mitcad#2209)
+/// and the read-only feature made for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkedFeature {
+    pub source: FeatureUid,
+    pub feature: FeatureUid,
+}
+
+impl LinkTree {
+    /// Whether a component is one made for a component of the design.
+    pub fn holds(&self, component: ComponentUid) -> bool {
+        self.components.iter().any(|c| c.component == component)
+    }
+
+    /// The occurrence made for one of the design's (one the design still
+    /// has before one kept after it was gone).
+    pub fn occurrence(&self, source: OccurrenceUid) -> Option<OccurrenceUid> {
+        self.occurrences
+            .iter()
+            .filter(|o| o.source == source)
+            .min_by_key(|o| o.gone)
+            .map(|o| o.occurrence)
+    }
+
+    /// The feature made for one of the design's.
+    pub fn feature(&self, source: FeatureUid) -> Option<FeatureUid> {
+        self.features
+            .iter()
+            .find(|f| f.source == source)
+            .map(|f| f.feature)
+    }
+
+    /// Whether a feature is one made for a joint, as-built joint or rigid
+    /// group of the design.
+    pub fn made(&self, feature: FeatureUid) -> bool {
+        self.features.iter().any(|f| f.feature == feature)
+    }
 }
 
 /// One chosen part of a linked design (mitcad#2130): an occurrence, by its
@@ -392,6 +488,21 @@ impl Assembly {
 
     pub fn occurrence_mut(&mut self, uid: OccurrenceUid) -> Option<&mut Occurrence> {
         self.occurrences.iter_mut().find(|o| o.uid == uid)
+    }
+
+    /// The linked component whose design `component` is a component of,
+    /// kept with its components (mitcad#2209): read only like it. None for
+    /// any other component (also the linked component itself).
+    pub fn linked_in(&self, component: ComponentUid) -> Option<ComponentUid> {
+        self.components
+            .iter()
+            .find(|c| {
+                c.link
+                    .as_ref()
+                    .and_then(|l| l.tree.as_ref())
+                    .is_some_and(|t| t.holds(component))
+            })
+            .map(|c| c.uid)
     }
 
     /// An occurrence's display name, `Component1:2`.
@@ -738,6 +849,18 @@ impl Assembly {
                     "{}: feature {} does not exist",
                     c.name, link.feature
                 ));
+            }
+            // The features made for a design kept with its components
+            // (mitcad#2209).
+            let tree = c.link.as_ref().and_then(|l| l.tree.as_ref());
+            if let Some(f) = tree.and_then(|t| {
+                t.components
+                    .iter()
+                    .map(|c| c.feature)
+                    .chain(t.features.iter().map(|f| f.feature))
+                    .find(|f| !features.contains(f))
+            }) {
+                return Err(format!("{}: feature {} does not exist", c.name, f));
             }
         }
         let mut numbers = BTreeMap::new();

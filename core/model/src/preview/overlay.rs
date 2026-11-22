@@ -14,7 +14,8 @@
 //!   summary is `print_thickness`' (and the result is the one that query
 //!   keeps, so asking both computes once).
 //! - **draft**: the triangles whose normals are within the minimum draft
-//!   angle of square to the pull direction, either way ([`drafts`]).
+//!   angle of square to the pull direction, either way
+//!   ([`print_analysis::drafts`]'s under class, mitcad#2166).
 //! - **failed**: every triangle of the bodies the failed features read
 //!   (else the bodies of the features they name), as the failures left
 //!   them: a failed feature changes nothing, so they show what it did not
@@ -28,7 +29,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use mitcad_preview::overlay::{Overlay, OverlayKind, OverlayMesh, color_text};
-use mitcad_vec3::{Vec3, cross, dot, norm, scale, sub, unit};
+use mitcad_vec3::{Vec3, cross, norm, scale, sub, unit};
 use serde_json::{Value, json};
 
 use super::{display_deviation, invalid};
@@ -39,7 +40,7 @@ use crate::document::{
 use crate::exchange::{MeshTolerance, Refinement, TriangleMesh};
 use crate::ids::BodyUid;
 use crate::kernel::Kernel;
-use crate::print_analysis::{self, Bed};
+use crate::print_analysis::{self, Bed, drafts};
 use crate::recompute::Read;
 use crate::transform::Transform;
 
@@ -114,41 +115,6 @@ fn inverse(t: &Transform) -> Option<Transform> {
     };
     map.translation = scale(map.apply_vector(t.translation), -1.0);
     Some(map)
-}
-
-/// A body's faces with too little draft.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct Drafts {
-    /// Of all triangles, mm².
-    pub area: f64,
-    /// Of those under the draft, mm².
-    pub under_area: f64,
-    /// Those under the draft, indices into the mesh's.
-    pub triangles: Vec<usize>,
-}
-
-/// The triangles of `mesh` (counter-clockwise seen from outside) with less
-/// draft than `angle` degrees for a mold pulled along `pull` (a unit
-/// vector), either way: their normals within `angle` of square to the
-/// pull. A face exactly at the angle has enough.
-pub(crate) fn drafts(mesh: &TriangleMesh, pull: Vec3, angle: f64) -> Drafts {
-    let mut result = Drafts::default();
-    let limit = angle.to_radians().sin() - 1e-9;
-    for t in 0..mesh.triangles.len() {
-        let p = corners(mesh, t);
-        let n = cross(sub(p[1], p[0]), sub(p[2], p[0]));
-        let double = norm(n);
-        if double.is_nan() || double <= 0.0 {
-            continue;
-        }
-        let area = double / 2.0;
-        result.area += area;
-        if (dot(n, pull) / double).abs() < limit {
-            result.under_area += area;
-            result.triangles.push(t);
-        }
-    }
-    result
 }
 
 /// The placements of a body among those drawn.
@@ -468,6 +434,7 @@ impl<K: Kernel> Document<K> {
         let mut meshes = Vec::new();
         let mut results = Vec::new();
         let (mut area, mut under_area) = (0.0, 0.0);
+        let (mut positive_area, mut negative_area) = (0.0, 0.0);
         for &uid in bodies {
             self.overlay_stop()?;
             let Some(body) = self.analysed_or_noted(uid, &tolerance, &mut results, warnings) else {
@@ -477,22 +444,28 @@ impl<K: Kernel> Document<K> {
             let found = drafts(&printed, pull, angle);
             area += found.area;
             under_area += found.under_area;
+            positive_area += found.positive_area;
+            negative_area += found.negative_area;
+            // The other two classes of Draft Analysis (mitcad#2166) in
+            // numbers; the overlay draws the faces that need more draft.
             results.push(json!({
                 "body": uid,
                 "name": body.name,
                 "area": found.area,
                 "under_area": found.under_area,
                 "share": share(found.under_area, found.area),
-                "triangles": found.triangles.len(),
+                "triangles": found.under.len(),
+                "positive_area": found.positive_area,
+                "negative_area": found.negative_area,
             }));
             let mut triangles = Vec::new();
             for t in placements(drawn, uid) {
                 if t == body.placement {
-                    triangles.extend(found.triangles.iter().map(|&i| corners(&printed, i)));
+                    triangles.extend(found.under.iter().map(|&i| corners(&printed, i)));
                 } else {
                     let placed = print_analysis::placed(&body.mesh, &t);
                     let here = drafts(&placed, pull, angle);
-                    triangles.extend(here.triangles.iter().map(|&i| corners(&placed, i)));
+                    triangles.extend(here.under.iter().map(|&i| corners(&placed, i)));
                 }
             }
             meshes.push(OverlayMesh {
@@ -508,6 +481,8 @@ impl<K: Kernel> Document<K> {
             "area": area,
             "under_area": under_area,
             "share": share(under_area, area),
+            "positive_area": positive_area,
+            "negative_area": negative_area,
         });
         Ok((meshes, summary))
     }

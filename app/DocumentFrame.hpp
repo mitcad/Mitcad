@@ -42,8 +42,13 @@ public:
   // laid out as a single document window). Elsewhere (macOS) the tabs are
   // the frame's row under its menu bar, as showsDocumentTabs says.
   bool tabsInTitleRow() const;
-  // Whether this frame shows its tab bar now.
+  // Whether this frame shows its tab bar now: never while its only document
+  // has no design open (the last one closed to the Start page, mitcad#2142).
   bool showsTabs() const;
+  // `document` closed its last design to the Start page or shows a design
+  // again (MainWindow::closeToStartPage, mitcad#2142): its tab and the
+  // frame's title follow.
+  void documentShownChanged(MainWindow* document);
   // macOS: the system menu bar already shows the frame's menus, so the
   // window's own copy of them is hidden unless Preferences › Display asks
   // for it (off by default). Elsewhere the window's menu bar is the only
@@ -65,6 +70,8 @@ private:
   // "Document tab shown at x,y" (the shown design's tab in its window) when
   // it changed.
   void logShownTab();
+  // Closes them one after another as the window's close button does (Close
+  // All and Close Others too: the last one closed ends MitCad).
   void closeDocuments(const QList<MainWindow*>& documents);
   void continueClosing();
   void scheduleClosing();

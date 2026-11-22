@@ -40,12 +40,8 @@ end plane, which grows over the tip's section (1770's start). MitCad rounds
 the knife edges first and the other edges on that result
 (knife_line_apart in geometry/src/dressup.cpp).
 
-Test: geometry/tests/test_fillet_knife_chain.cpp: the block with the bite,
-the knife edge and the square edge on its line in one fillet with 1 and 3:
-not done, the corner failed at the vertex on the bite's end plane with the
-message above (before the patch: done, a valid body 6611 mm3 larger than
-the expected one at 1); the knife edge alone valid with the exact volume;
-MitCad's fillet of the chain valid with the exact volume.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1790.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index adfe7f25..16578e74 100644

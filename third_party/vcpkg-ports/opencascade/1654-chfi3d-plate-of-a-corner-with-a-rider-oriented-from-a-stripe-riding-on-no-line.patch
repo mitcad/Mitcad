@@ -18,17 +18,8 @@ eave the tip is the rider and the corner's first stripe is not.
   is taken from the first stripe at the corner that rides on no other's
   line (the first one where all ride).
 
-Test: geometry/tests/port/p1654-plate-of-a-ride-corner-oriented.cpp
-(ctest geometry.port.1654): test_plate_of_a_corner_with_a_rider, the roof
-slab's 21 edges rounded with 0.8 by OCCT's fillet alone in the body's edge
-order: valid, every face of a positive area (the plate's face the wrong
-way round without the patch); and test_corners_without_riders, the
-boundary, the same at 0.5, where nothing rides. It fails without the patch
-(shown 2026-11-20 by tools/occt-port-proof.py). The earlier test,
-geometry/tests/test_fillet_roof_slab.cpp, test_slab (ctest
-geometry.fillet_roof_slab), rounds the slab through the MitCad facade,
-whose shape healing of a result BRepCheck rejects can turn the plate's
-wire round: it passes without the patch.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1654.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 index a5463f46..684d169f 100644

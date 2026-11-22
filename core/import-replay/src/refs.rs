@@ -677,14 +677,16 @@ pub fn face_pieces_in<K: Kernel>(
 }
 
 /// An edge of the file that the replay splits into several (a thread's
-/// helical edge, one edge per turn in the replay), by its fingerprint: the
+/// helical edge, one edge per turn in the replay; a sheet's straight edge
+/// over collinear sketch lines, one edge per line in the replay,
+/// mitcad#2117), by its fingerprint: the
 /// connected edges of one body that `keep` keeps from `start_point` to
 /// `end_point`, each going on smoothly from the one before (the file's
 /// edge is one curve), whose lengths add up to `length` and whose middle
 /// (half way along them) is `mid_point`, in order; within 1e-3 mm (the
 /// length within 1e-3 of it). None for a closed edge, or where no chain or
 /// several fit.
-pub(crate) fn resolve_edge_chain<K: Kernel>(
+pub fn resolve_edge_chain<K: Kernel>(
     doc: &Document<K>,
     fp: &Fingerprint,
     keep: &dyn Fn(BodyUid) -> bool,

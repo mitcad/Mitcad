@@ -185,7 +185,7 @@ elif [ "$scenario" = secondary ]; then
   if [ -n "$(git -C "$MITCAD_TEST_WORK/NativeCloudProject" ls-files .mitcad/local)" ]; then
     ui_fail 'per-computer creation settings were added to version history'
   fi
-  ui_expect_log 'Added parameter nativeWidth = 30 mm' 'native parameter sheet changed the document'
+  ui_expect_log 'Created user parameter nativeWidth = 30 mm' 'native parameter sheet changed the document'
   ui_expect_log 'Appearances dialog opened' 'native constrained appearances list was opened'
   ui_expect_no_log 'Unable to simultaneously satisfy constraints' 'native secondary windows have no contradictory layout constraints'
   if grep -Eq '^Report sent:|^Report on the clipboard:' "$UI_LOG_FILE"; then

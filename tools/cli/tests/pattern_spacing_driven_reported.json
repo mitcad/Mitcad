@@ -1,0 +1,32 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A sketch pattern's spacing from a driven dimension of its own sketch (mitcad#2057, GitHub #470), on a reported design (opened with --open, never committed; tools/cli/pattern-spacing-driven-reported-test.cmake): Sketch14 (F1) has a 30 x 200 rectangle fixed at the origin, a construction line c35 from its corner p5 to the middle of its right side measured by the driven length k11 (d5), and a pattern k12 of the rectangle along that line, its spacing d6 written from the driving dimensions. Spacing d5 was refused: the sketch itself could not use it outside its driving dimensions."},
+  {"expect": {"feature": "Sketch14", "status": "ok"}},
+  {"comment": "The pattern's own spacing parameter given the reference, as the parameter table does: accepted, the copies where they were."},
+  {"cmd": "set_parameter", "name": "d6", "expression": "d5"},
+  {"expect": {"feature": "Sketch14", "status": "ok"}},
+  {"expect": {"parameter": "d6", "value": 104.4030650891055}},
+  {"comment": "The spacing set to d5 itself, as the Pattern panel does."},
+  {"cmd": "sketch.edit_pattern", "sketch": "F1", "pattern": "k12", "spacing": ["d5", "d7"]},
+  {"expect": {"feature": "Sketch14", "status": "ok"}},
+  {"comment": "The copy of p5 (p41) lies d5 along the pattern's direction from it, at the middle of the right side: entities c1-c4, p5-p9, p34, c35, then the copies p40-p43 of p8, p5, p7, p6."},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"entities": [
+    {"id": "c1"}, {"id": "c2"}, {"id": "c3"}, {"id": "c4"},
+    {"id": "p5", "at": [0, 0]}, {"id": "p6"}, {"id": "p7"}, {"id": "p8"}, {"id": "p9"}, {"id": "p34"}, {"id": "c35"},
+    {"id": "p40", "at": [30.000000000000007, 300.0]},
+    {"id": "p41", "at": [30.000000000000007, 100.0]},
+    {"id": "p42", "at": [60.00000000000001, 300.0]},
+    {"id": "p43", "at": [60.00000000000001, 100.0]},
+    {"id": "c36"}, {"id": "c37"}, {"id": "c38"}, {"id": "c39"}]}}},
+  {"comment": "A wider rectangle: the driven length measures again and the copies move by the new measure in the same recompute (the direction is stored, so they leave the line)."},
+  {"cmd": "set_parameter", "name": "d1", "value": "40 mm"},
+  {"expect": {"feature": "Sketch14", "status": "ok"}},
+  {"expect": {"parameter": "d5", "value": 107.70329614269008}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"entities": [
+    {"id": "c1"}, {"id": "c2"}, {"id": "c3"}, {"id": "c4"},
+    {"id": "p5", "at": [0, 0]}, {"id": "p6", "at": [40, 0]}, {"id": "p7", "at": [40, 200]}, {"id": "p8"}, {"id": "p9"}, {"id": "p34"}, {"id": "c35"},
+    {"id": "p40", "at": [30.94831441512793, 303.1610480504264]},
+    {"id": "p41", "at": [30.94831441512793, 103.1610480504264]},
+    {"id": "p42", "at": [70.94831441512792, 303.1610480504264]},
+    {"id": "p43", "at": [70.94831441512792, 103.1610480504264]},
+    {"id": "c36"}, {"id": "c37"}, {"id": "c38"}, {"id": "c39"}]}}}
+]

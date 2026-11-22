@@ -113,19 +113,8 @@ them once the handlers were narrowed:
   length's magnitude, not "longer than tolesp" as for the guides between
   pieces.
 
-Test: geometry/tests/test_chamfer_overflow.cpp,
-test_chamfer_wider_than_a_fin_side_strip (ctest
-geometry.suite.chamfer_overflow): the fin's tip edge chamfered wider than
-its side strip, the guide kept to its edges where the foot's chamfer is
-beside it: the volume removed that of the chamfer's sections less the part
-inside the foot's chamfer extended. Its failure without the patch is still
-to be shown: the patch does not revert at the port's tip without the more
-than 40 later patches that change the same lines (tried 2026-11-20 by
-tools/occt-port-proof.py). NF on B's location:
-test_chamfer_of_a_sloped_boss_top_moved in the same file, a sloped boss
-top's chamfer on the body moved by a location the same as on the body as
-made (before, the moved body's chamfer failed by the signal). The guide of
-no length: none yet beside OCCT's DRAW cases above.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0531.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeChamfer.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeChamfer.hxx
 index 7a900b2d..8fd06755 100644

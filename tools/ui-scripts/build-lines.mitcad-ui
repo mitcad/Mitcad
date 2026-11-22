@@ -37,7 +37,7 @@ wait-idle
 mark
 click-logged '^Browser [^ ]+/Sketches/Sketch1 at '
 wait-log '^BUILD profile along sketch lines: .*F1.* picked$' 30
-wait-log '^Inspect Profile: along sketch lines: 4 profile[(]s[)], lengths 600[.]0, 400[.]0, 600[.]0, 400[.]0 mm .*align center, rotate 0, flip off, corners on' 60
+wait-log '^Inspect Profile: along sketch lines: 4 profile[(]s[)], lengths 600[.]0, 400[.]0, 600[.]0, 400[.]0 mm .*align center, rotate 0, flip off, corners mitre' 60
 wait-idle
 capture-undo-depth start
 mark

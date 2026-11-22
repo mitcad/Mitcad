@@ -4,6 +4,7 @@
 # check-all sources: app/framework/CommandSession.cpp app/framework/CommandSessionAuto.cpp
 # check-all sources: app/framework/Numbers.cpp
 # check-all sources: app/framework/AutoOperationPolicy.hpp app/framework/Command.hpp
+# check-all sources: app/framework/ExtrudeStartPreference.cpp
 # check-all sources: core/model/src/document/auto_operation.rs core/model-api/src/lib.rs
 # check-all sources: geometry/src/contact.cpp geometry/src/boolean.cpp tools/cli
 # Extrude's automatic operation (mitcad#289) for new features, and edits that keep
@@ -23,6 +24,10 @@
 #       block, then flipped into it, the Operation field stays Join; Cut
 #       chosen by hand still works; cancelled.
 #   4. Editing the deliberate touching New Body keeps its stored choice.
+#   5. Preferences > General > Extrude starts with: New Body (mitcad#2164),
+#      started again on the block and its face's square alone: Extrude
+#      starts with New Body and the model chooses nothing, inward (OK: a
+#      new body inside the block) and, undone, outward (a new body on it).
 # tools/ui-windows-auto-operation-test.ps1 is the Windows counterpart.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -184,6 +189,69 @@ ui_expect_new " with Extrude" "editing Extrude3 again"
 ui_expect_new "operation=new_body" "still New Body"
 ui_step "cancel (Escape)"                ui_key Escape
 ui_expect_new "Command Extrude cancelled" "edit cancelled"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- 5. Preferences > General > Extrude starts with: New Body (mitcad#2164)"
+# Started again with the preference set, on the block and its face's
+# square alone: outward and inward the extrusion stays New Body.
+ui_stop_app
+cat > "$WORK/new-body.json" << EOF
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "$R"}],
+    "extent": {"type": "distance", "distance": -20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [10, 10], "width": 10, "height": 10}
+]
+EOF
+"$CLI" run "$WORK/new-body.json" --save "$WORK/new-body.mitcad" > "$WORK/cli-new-body.log" 2>&1 ||
+  { cat "$WORK/cli-new-body.log"; ui_fail "mitcad-cli (New Body design)"; }
+mkdir -p "$UI_CONFIG/Mitcad"
+printf '\n[extrude]\nstartOperation=new_body\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+ui_start_app --open "$WORK/new-body.mitcad"
+ui_step "fit (F6)"                       ui_key F6
+ui_expect_log "Bodies shown: F2.b0" "the block shown"
+ui_mark
+ui_step "extrude (E)"                    ui_key e
+ui_expect_new "Extrude Profiles: 1 profile [profile $R of F3]" "the square on the block's face taken"
+ui_expect_new "Extrude: automatic operation off by preference" "the preference keeps the model's choice off"
+ui_expect_new "Preview Extrude: ok" "the outward New Body previewed (10 mm up from the face)"
+ui_wait_idle
+no_new "Extrude: automatic Operation" "outward, touching the block: it stays New Body"
+ui_mark
+ui_step "distance -5"                    ui_type_in "Panel Extrude input distance" "-5"
+ui_expect_new "Extrude Distance: -5 = -5 mm" "into the block"
+ui_expect_new "Preview Extrude: ok" "the inward New Body previewed"
+ui_wait_idle
+no_new "Extrude: automatic Operation" "inward: still New Body, no Cut"
+ui_focus_main
+ui_mark
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Added extrude (New Body), distance -5" "a new body inside the block"
+ui_expect_new "New body " "a body added"
+ui_expect_new "): volume 500.000 mm3" "the new body is the 10 x 10 x 5 square"
+no_new "Body Body1 (F2.b0): volume" "the block is not cut"
+ui_mark
+ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
+ui_expect_new "Undo: " "the inward body undone"
+ui_mark
+ui_step "extrude (E)"                    ui_key e
+ui_expect_new "Extrude Profiles: 1 profile [profile $R of F3]" "the square on the face again"
+ui_expect_new "Extrude: automatic operation off by preference" "off by preference again"
+ui_expect_new "Preview Extrude: ok" "previewed"
+ui_mark
+ui_step "distance 5"                     ui_type_in "Panel Extrude input distance" "5"
+ui_expect_new "Extrude Distance: 5 = 5 mm" "5 mm out of the face"
+ui_expect_new "Preview Extrude: ok" "the outward New Body previewed"
+ui_wait_idle
+no_new "Extrude: automatic Operation" "outward: no Join"
+ui_focus_main
+ui_mark
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Added extrude (New Body), distance 5" "a new body on the block's face"
+ui_expect_new "): volume 500.000 mm3" "the new body is the 10 x 10 x 5 square"
+no_new "Body Body1 (F2.b0): volume" "the block does not grow"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI auto operation test"

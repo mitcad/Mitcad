@@ -40,16 +40,9 @@ continuity (the offset refuses C0 faces before, CheckInputData), so its
 constructor fails on nothing but a failed allocation;
 the handler that took such a failure for a face with no offset surface is
 removed, and a failure there fails the offset as any other.
-Test: geometry/tests/test_shell_vanishing.cpp (geometry.suite part of
-mitcad#172); geometry/tests/port/p0100-offset-vanishing-face.cpp (ctest
-geometry.port.0100): a block with its bottom front edge chamfered 0.5
-shelled inwards from its open top by 1 (the strip vanishes: valid, the
-cavity that of the plain block, its neighbours' offsets meeting) and by 0.2
-(the strip stays, as stock), with the intersection and arc joins; the same
-with a vertical edge chamfered, and the closed offset inwards; a slab
-whose top face is a C0 B-spline ridge (not flat: the offset replaces a flat
-one with its plane), refused before the vanishing faces are
-sought (BRepOffset_C0Geometry), as stock.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0100.
 diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
 index babef964e..5f79e3a8c 100644
 --- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx

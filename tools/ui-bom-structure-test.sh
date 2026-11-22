@@ -33,6 +33,7 @@ done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'BOM Structure driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 ui_expect_log 'Build BOM item:   2.1 Rail x 2 (Normal)' 'the structured view'
+ui_expect_log 'Build BOM item: 1 Base x 3 (Normal)' 'identical parts grouped in Parts only'
 ui_expect_log 'Build BOM item: 2 Frame x 1 (Inseparable)' 'an Inseparable subassembly'
 ui_expect_log 'Build BOM item: 2 Rail x 2 (Normal)' 'a Phantom'"'"'s children a level up'
 ui_expect_log 'Build BOM item: - Frame x 0 (Reference)' 'a Reference without a number'

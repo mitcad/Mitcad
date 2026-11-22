@@ -324,6 +324,14 @@ function Test-Programs([string]$Install) {
   }
   if (Test-Path (Join-Path $bin 'translations\mitcad_xx.qm')) { Fail 'the tests'' pseudo-language is installed' }
   else { Pass 'no pseudo-language' }
+  # The built-in woods' and panels' textures (mitcad#2186), once, as files
+  # in bin\textures, which mitcad.exe and mitcad-cli.exe read at run time
+  # (mitcad#2218): each image of core\model-base\textures.
+  $sourceTextures = @(Get-ChildItem (Join-Path $PSScriptRoot '..\core\model-base\textures') -Filter '*.jpg')
+  $missingTextures = @($sourceTextures | Where-Object { -not (Test-Path (Join-Path $bin "textures\$($_.Name)")) })
+  if ($sourceTextures.Count -eq 0) { Fail 'no texture images in core\model-base\textures' }
+  elseif ($missingTextures.Count -eq 0) { Pass "$($sourceTextures.Count) built-in texture images in bin\textures" }
+  else { Fail "texture images missing from bin\textures: $($missingTextures.Name -join ', ')" }
   foreach ($pattern in 'opengl32.dll', 'libgallium_wgl.dll', 'opengl32sw.dll', '*.pdb') {
     $found = @(Get-ChildItem $Install -Recurse -Filter $pattern -ErrorAction SilentlyContinue)
     if ($found.Count -eq 0) { Pass "no $pattern" } else { Fail "$pattern must not be installed: $($found[0].FullName)" }

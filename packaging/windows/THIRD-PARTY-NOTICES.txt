@@ -135,3 +135,11 @@ Rust libraries compiled into mitcad.exe and mitcad-cli.exe
   url's idna (Unicode-3.0); TLS by the rustls and ring above. CAM's
   toolpath offsets: cavalier_contours and static_aabb2d_index (MIT or
   Apache-2.0).
+
+Discord's logo mark (built into the application, on the top bar's button
+that opens MitCad's Discord server)
+  "Discord" and the Discord logo are trademarks of Discord Inc. The mark is
+  used unchanged, as Discord's Brand Guidelines (https://discord.com/branding)
+  allow for showing that a project has a Discord server; MitCad is not
+  made, sponsored or endorsed by Discord. Not covered by MitCad's MIT
+  licence.

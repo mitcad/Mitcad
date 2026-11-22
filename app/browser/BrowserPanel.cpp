@@ -900,6 +900,14 @@ QString jointTooltip(const DocumentSnapshot& snapshot, const DocumentSnapshot::F
 }
 
 
+// An analysis' icon by its type: Section, Print (mitcad#620) or Draft
+// Analysis (mitcad#2166).
+QString analysisIcon(const QString& type) {
+  return type == QStringLiteral("print")   ? QStringLiteral("print-analysis")
+         : type == QStringLiteral("draft") ? QStringLiteral("draft-analysis")
+                                           : QStringLiteral("section-analysis");
+}
+
 } // namespace
 
 SelectionItem BrowserNode::item() const {
@@ -1110,6 +1118,16 @@ protected:
     cancelSlowClick();
     const QPoint at = event->position().toPoint();
     m_partPress = false;
+    // A right click on a selection set's row keeps the selection
+    // (mitcad#2192): its menu's Add Selection and Replace with Selection
+    // take it; selecting the row would select the set's members instead.
+    if (event->button() == Qt::RightButton) {
+      QTreeWidgetItem* pressed = itemAt(at);
+      if (pressed != nullptr && m_panel.nodeOf(pressed).type == BrowserNode::Type::SelectionSet) {
+        event->accept();
+        return;
+      }
+    }
     if (event->button() == Qt::LeftButton && clickPart(at, false)) {
       // The press is consumed here, so its moves and its release must not
       // reach the view either: its pressed index would still be an earlier
@@ -1534,8 +1552,9 @@ BrowserPanel::BrowserPanel(QWidget* parent) : QWidget(parent), m_tree(new Browse
     if (item == nullptr) {
       return;
     }
-    if (!item->isSelected()) {
-      // A right click on a row that is not selected selects it.
+    // A right click on a row that is not selected selects it; a selection
+    // set's row keeps the selection (mitcad#2192, mousePressEvent).
+    if (!item->isSelected() && nodeOf(item).type != BrowserNode::Type::SelectionSet) {
       m_tree->clearSelection();
       item->setSelected(true);
     }
@@ -1792,6 +1811,12 @@ bool BrowserPanel::dropFor(const QVector<BrowserNode>& sources, const BrowserNod
   if (sources.isEmpty() || !target.isValid()) {
     return false;
   }
+  // A selection set's member rows (mitcad#2192) are links: they are not
+  // moved, and nothing is dropped among them.
+  if (target.isSetMember() ||
+      std::any_of(sources.begin(), sources.end(), [](const BrowserNode& source) { return source.isSetMember(); })) {
+    return false;
+  }
   const BrowserNode::Type kind = sources.first().type;
   // The occurrence path of the occurrence a component's row is placed in
   // ("O1/O4": "O1"; "O1": the root's, "").
@@ -2037,6 +2062,13 @@ void BrowserPanel::setPresentationExpanded(const QString& key, bool expanded) {
 }
 
 QString BrowserPanel::keyOf(const BrowserNode& node) const {
+  // A member's row of a selection set (mitcad#2192): under its set, apart
+  // from its item's own row.
+  if (node.isSetMember()) {
+    BrowserNode own = node;
+    own.selectionSet.clear();
+    return QStringLiteral("set-member:%1>").arg(node.selectionSet) + keyOf(own);
+  }
   const QString at = QLatin1Char('@') + node.occurrence;
   switch (node.type) {
   case BrowserNode::Type::Settings:
@@ -2122,6 +2154,10 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("sketch-block:") + node.uid;
   case BrowserNode::Type::ComponentFolder: // mitcad#2103
     return QStringLiteral("component-folder:") + node.uid + at;
+  case BrowserNode::Type::SelectionSets: // mitcad#2192
+    return QStringLiteral("selection-sets");
+  case BrowserNode::Type::SelectionSet:
+    return QStringLiteral("selection-set:") + node.uid;
   case BrowserNode::Type::None:
     break;
   }
@@ -2288,7 +2324,8 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
   // bodies, sketches, joints, the occurrences in it) takes its component's;
   // the design's own rows (Design Settings, Named Views) have none.
   const bool designRow = node.type == BrowserNode::Type::Settings || node.type == BrowserNode::Type::Units ||
-                         node.type == BrowserNode::Type::NamedViews || node.type == BrowserNode::Type::NamedView;
+                         node.type == BrowserNode::Type::NamedViews || node.type == BrowserNode::Type::NamedView ||
+                         node.type == BrowserNode::Type::SelectionSets || node.type == BrowserNode::Type::SelectionSet;
   if (const QColor bar = designRow ? QColor() : m_componentColors.value(node.component); bar.isValid()) {
     item->setData(kName, kComponentColorRole, QVariant::fromValue(bar));
   }
@@ -2307,6 +2344,7 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                          // A folder of bodies or of components (mitcad#2103).
                          node.type == BrowserNode::Type::BodyFolder ||
                          node.type == BrowserNode::Type::ComponentFolder ||
+                         node.type == BrowserNode::Type::SelectionSet || // mitcad#2192
                          (node.type == BrowserNode::Type::NamedView &&
                           node.uid.startsWith(QStringLiteral("named:")));
   if (renamable) {
@@ -2321,7 +2359,8 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                     node.type == BrowserNode::Type::ContactSets || node.type == BrowserNode::Type::MotionLinks ||
                     node.type == BrowserNode::Type::Measurements || node.type == BrowserNode::Type::Drawings ||
                     node.type == BrowserNode::Type::ImageReferences || node.type == BrowserNode::Type::Features ||
-                    node.type == BrowserNode::Type::CamFolder || node.type == BrowserNode::Type::CamSetup;
+                    node.type == BrowserNode::Type::CamFolder || node.type == BrowserNode::Type::CamSetup ||
+                    node.type == BrowserNode::Type::SelectionSets;
   item->setExpanded(m_expanded.value(key, open));
   return item;
 }
@@ -2939,6 +2978,58 @@ void BrowserPanel::addConstraintRows(const DocumentSnapshot& snapshot, const Doc
   }
 }
 
+namespace {
+
+// A selection set's member as a row of its item's own type (mitcad#2192),
+// from the `selection_sets` query's member: a body, an occurrence's
+// component row, or a feature's row (a sketch, construction geometry and a
+// joint origin as their rows in their folders, a joint as a joint's, any
+// other feature as a Features folder's row); `icon` its item's icon. An
+// invalid node for a member the row cannot show.
+BrowserNode setMemberNode(const QJsonObject& member, const QString& set, QString* icon) {
+  BrowserNode node;
+  node.selectionSet = set;
+  node.occurrence = member.value(QStringLiteral("occurrence")).toString();
+  node.component = member.value(QStringLiteral("component")).toString();
+  node.name = member.value(QStringLiteral("name")).toString();
+  const QString kind = member.value(QStringLiteral("kind")).toString();
+  if (kind == QStringLiteral("body")) {
+    node.type = BrowserNode::Type::Body;
+    node.uid = member.value(QStringLiteral("body")).toString();
+    *icon = QStringLiteral("body");
+  } else if (kind == QStringLiteral("component")) {
+    if (node.occurrence.isEmpty()) {
+      return BrowserNode();
+    }
+    node.type = BrowserNode::Type::Component;
+    node.uid = node.component;
+    *icon = QStringLiteral("component");
+  } else if (kind == QStringLiteral("feature")) {
+    DocumentSnapshot::Feature feature;
+    feature.type = member.value(QStringLiteral("type")).toString();
+    node.uid = member.value(QStringLiteral("feature")).toString();
+    node.featureType = feature.type;
+    if (feature.isAnySketch()) {
+      node.type = BrowserNode::Type::Sketch;
+    } else if (feature.isConstruction() || feature.type == QStringLiteral("joint_origin")) {
+      node.type = BrowserNode::Type::Datum;
+    } else if (feature.isJoint()) {
+      node.type = BrowserNode::Type::Joint;
+    } else {
+      node.type = BrowserNode::Type::Feature;
+    }
+    *icon = featureIcon(feature.type);
+  } else {
+    return BrowserNode();
+  }
+  if (node.name.isEmpty()) {
+    node.name = node.uid;
+  }
+  return node;
+}
+
+} // namespace
+
 void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   // What to keep: the selected rows and the scroll position.
   QSet<QString> selected;
@@ -3002,6 +3093,71 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
     node.uid = QStringLiteral("named:") + name;
     node.name = name;
     addRow(views, node, QStringLiteral("named-view"), tr("Double-click to look from here"));
+  }
+
+  // Selection sets (mitcad#2192): the root's Selection Sets folder beside
+  // Named Views while the design has a set; the sets by name, each with its
+  // members' rows under it: the item's icon with the link badge and its
+  // live name, grayed while its item is suppressed, rolled back or gone.
+  if (!snapshot.selectionSets.isEmpty()) {
+    BrowserNode folder;
+    folder.type = BrowserNode::Type::SelectionSets;
+    folder.component = rootNode.uid;
+    folder.name = tr("Selection Sets");
+    QTreeWidgetItem* setsRow = addRow(rootItem, folder, QStringLiteral("folder"));
+    QVector<QJsonObject> sets;
+    for (const QJsonValue& value : snapshot.selectionSets) {
+      sets.append(value.toObject());
+    }
+    std::stable_sort(sets.begin(), sets.end(), [](const QJsonObject& a, const QJsonObject& b) {
+      const QString first = a.value(QStringLiteral("name")).toString();
+      const QString second = b.value(QStringLiteral("name")).toString();
+      const int order = first.compare(second, Qt::CaseInsensitive);
+      return order != 0 ? order < 0 : first < second;
+    });
+    QStringList logged;
+    for (const QJsonObject& set : std::as_const(sets)) {
+      BrowserNode row;
+      row.type = BrowserNode::Type::SelectionSet;
+      row.component = rootNode.uid;
+      row.uid = set.value(QStringLiteral("name")).toString();
+      row.name = row.uid;
+      const QJsonArray members = set.value(QStringLiteral("members")).toArray();
+      QTreeWidgetItem* setRow =
+          addRow(setsRow, row, QStringLiteral("selection-set"),
+                 tr("%1: %n item(s); click to select them", nullptr, static_cast<int>(members.size())).arg(row.name));
+      QStringList names;
+      for (const QJsonValue& value : members) {
+        const QJsonObject member = value.toObject();
+        QString icon;
+        const BrowserNode memberNode = setMemberNode(member, row.uid, &icon);
+        if (!memberNode.isValid()) {
+          continue;
+        }
+        const bool active = member.value(QStringLiteral("exists")).toBool(true) &&
+                            member.value(QStringLiteral("active")).toBool(true);
+        const QString placed = member.value(QStringLiteral("path_name")).toString();
+        QString tip = placed.isEmpty() ? memberNode.name : tr("%1 in %2").arg(memberNode.name, placed);
+        if (!active) {
+          tip = tr("%1: suppressed, rolled back or gone").arg(tip);
+        }
+        QTreeWidgetItem* memberRow = addRow(setRow, memberNode, icon, tip);
+        memberRow->setIcon(kName, QIcon(new LinkedIconEngine(memberRow->icon(kName), themeIcon(QStringLiteral("link")))));
+        if (!active) {
+          setNameRole(memberRow, ColorRole::TextHidden);
+        }
+        names << (active ? memberNode.name : memberNode.name + QStringLiteral(" (inactive)"));
+      }
+      logged << QStringLiteral("%1 [%2]").arg(row.name, names.join(QStringLiteral(", ")));
+    }
+    const QString line = logged.join(QStringLiteral("; "));
+    if (line != m_loggedSelectionSets) {
+      m_loggedSelectionSets = line;
+      qDebug().noquote() << QStringLiteral("Browser Selection Sets: %1").arg(line);
+    }
+  } else if (!m_loggedSelectionSets.isEmpty()) {
+    m_loggedSelectionSets.clear();
+    qDebug().noquote() << QStringLiteral("Browser Selection Sets: none");
   }
 
   node = BrowserNode();
@@ -3088,7 +3244,8 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
     if (const int dof = snapshot.occurrenceDof(occurrence.uid); dof >= 0) {
       tip += tr(", %n degree(s) of freedom", nullptr, dof);
     }
-    if (def != nullptr && def->linked) {
+    // A part of a design linked with its components too (mitcad#2209).
+    if (def != nullptr && (def->linked || !def->linkedIn.isEmpty())) {
       tip += tr(", linked to a file");
     }
     // Machined by cuts made in this assembly (mitcad#2131): said on its
@@ -3203,12 +3360,11 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       row.name = row.uid;
       row.visible = analysis.value(QStringLiteral("visible")).toBool();
       row.hasEye = true;
-      // Section and Print Analysis (mitcad#620), each with its icon.
+      // Section, Print (mitcad#620) and Draft Analysis (mitcad#2166), each
+      // with its icon.
       row.featureType = analysis.value(QStringLiteral("type")).toString();
-      const bool print = row.featureType == QStringLiteral("print");
       m_analysisRows.insert(row.name, analysis);
-      styleAnalysisRow(addRow(analyses, row, print ? QStringLiteral("print-analysis") : QStringLiteral("section-analysis")),
-                       analysis);
+      styleAnalysisRow(addRow(analyses, row, analysisIcon(row.featureType)), analysis);
     }
   }
 
@@ -3510,10 +3666,12 @@ void BrowserPanel::applyAnalysisNotes() {
 
 void BrowserPanel::styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& analysis) {
   const QString name = analysis.value(QStringLiteral("name")).toString();
-  const bool print = analysis.value(QStringLiteral("type")).toString() == QStringLiteral("print");
+  const QString type = analysis.value(QStringLiteral("type")).toString();
   const QString error = mitcad::modelMessage(analysis.value(QStringLiteral("error")).toString());
-  const QString kind = print ? tr("Print Analysis") : tr("Section Analysis");
-  const QIcon icon = themeIcon(print ? QStringLiteral("print-analysis") : QStringLiteral("section-analysis"));
+  const QString kind = type == QStringLiteral("print")   ? tr("Print Analysis")
+                       : type == QStringLiteral("draft") ? tr("Draft Analysis")
+                                                         : tr("Section Analysis");
+  const QIcon icon = themeIcon(analysisIcon(type));
   // A plane that cannot be found stays the error it is (mitcad#1230).
   const AnalysisNote note = error.isEmpty() ? m_analysisNotes.value(name) : AnalysisNote{};
   QString tooltip = QStringLiteral("%1: %2").arg(name, error.isEmpty() ? kind : error);
@@ -3908,6 +4066,9 @@ QTreeWidgetItem* BrowserPanel::applyOwnerMarks() {
   QHash<QString, QVector<QTreeWidgetItem*>> sketchRows;
   for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
     const BrowserNode& node = it.value();
+    if (node.isSetMember()) {
+      continue; // a selection set's link (mitcad#2192): the item's own row is marked
+    }
     const bool body = node.type == BrowserNode::Type::Body;
     const bool sketch = node.type == BrowserNode::Type::Sketch;
     const bool occurrence = node.type == BrowserNode::Type::Component && !node.occurrence.isEmpty();
@@ -3978,12 +4139,29 @@ QVector<BrowserNode> BrowserPanel::nodesOfFeature(const QString& feature) const 
   QVector<BrowserNode> nodes;
   for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
     const BrowserNode node = nodeOf(*it);
+    if (node.isSetMember()) {
+      continue; // the item's own rows only, not a selection set's links (mitcad#2192)
+    }
     const bool made = node.type == BrowserNode::Type::Body &&
                       node.uid.startsWith(feature + QLatin1Char('.'));
     if (made || ((node.type == BrowserNode::Type::Sketch || node.type == BrowserNode::Type::Datum ||
                   node.type == BrowserNode::Type::Joint) &&
                  node.uid == feature)) {
       nodes.append(node);
+    }
+  }
+  return nodes;
+}
+
+QVector<BrowserNode> BrowserPanel::setMemberNodes(const QString& set) const {
+  QVector<BrowserNode> nodes;
+  for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+    const BrowserNode node = nodeOf(*it);
+    if (node.type == BrowserNode::Type::SelectionSet && node.uid == set) {
+      for (int index = 0; index < (*it)->childCount(); ++index) {
+        nodes.append(nodeOf((*it)->child(index)));
+      }
+      break;
     }
   }
   return nodes;
@@ -3996,7 +4174,7 @@ bool BrowserPanel::reveal(const QString& feature) {
   }
   // Its rows under the sketches it uses (mitcad#177).
   for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
-    if (it.value().type == BrowserNode::Type::Feature && it.value().uid == feature) {
+    if (it.value().type == BrowserNode::Type::Feature && it.value().uid == feature && !it.value().isSetMember()) {
       keys.insert(keyOf(it.value()));
     }
   }
@@ -4013,7 +4191,8 @@ bool BrowserPanel::revealItem(const SelectionItem& item) {
   QSet<QString> keys;
   for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
     const SelectionItem row = it.value().item();
-    if (row.isValid() && itemKey(row) == itemKey(whole)) {
+    // The item's own rows, not a selection set's links to it (mitcad#2192).
+    if (row.isValid() && itemKey(row) == itemKey(whole) && !it.value().isSetMember()) {
       keys.insert(keyOf(it.value()));
     }
   }
@@ -4103,20 +4282,30 @@ void BrowserPanel::selectionChanged() {
   // Each once, by sets: every row of a large design selected (mitcad#1631).
   QSet<SelectionItem> taken;
   QSet<QString> takenFeatures;
-  for (QTreeWidgetItem* row : m_tree->selectedItems()) {
-    const BrowserNode node = nodeOf(row);
+  const auto take = [&](const BrowserNode& node) {
     if (node.type == BrowserNode::Type::Feature) {
       if (!takenFeatures.contains(node.uid)) {
         takenFeatures.insert(node.uid);
         features.append(node.uid);
       }
-      continue;
+      return;
     }
     const SelectionItem item = node.item();
     if (item.isValid() && !taken.contains(item)) {
       taken.insert(item);
       items.append(item);
     }
+  };
+  for (QTreeWidgetItem* row : m_tree->selectedItems()) {
+    const BrowserNode node = nodeOf(row);
+    // A selection set's row selects every member (mitcad#2192).
+    if (node.type == BrowserNode::Type::SelectionSet) {
+      for (int index = 0; index < row->childCount(); ++index) {
+        take(nodeOf(row->child(index)));
+      }
+      continue;
+    }
+    take(node);
   }
   // The CAM operation selected (mitcad#1013): its toolpath is the view's
   // current one.

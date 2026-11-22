@@ -107,6 +107,9 @@ pub mod ffi {
         constant_direction: [f64; 3],
         /// The sections only move along the centre line (mitcad#547).
         parallel: bool,
+        /// Tangent Edges: Merge (mitcad#2162): each section's tangent
+        /// edges joined into one smooth edge per run.
+        merge_tangent: bool,
     }
 
     /// `section` 0 circular, 1 square, 2 triangular; `thickness` 0 for a
@@ -510,6 +513,7 @@ pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, K
             _ => [0.0, 0.0, 1.0],
         },
         parallel: spec.centerline_parallel,
+        merge_tangent: spec.merge_tangent_edges,
     };
     // OCCT's lofts (through sections, the pipe shell along a centerline) do
     // not look at their progress range (mitcad#1922).

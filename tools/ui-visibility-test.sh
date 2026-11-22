@@ -126,7 +126,15 @@ hide_body1() {
   last_line "Preview bodies: " | grep -qF "F2.b0 at" && ui_fail "the preview still draws Body1"
   last_line "Preview bodies: " | grep -qF "F4.b0 at" || ui_fail "the preview lost Body2"
   echo "ok   the preview without Body1, with Body2"
-  expect_none "Preview $1: " "the preview not computed again"
+  # The display meshes' refinement (CommandSession::refinePreview) is not a
+  # computation: its timer runs a moment after the preview, so under load
+  # its "Preview <command>: refining ..." lines fall after the mark
+  # (mitcad#2189).
+  ui_sync
+  tail -n +$((${UI_MARK:-0} + 1)) "$UI_LOG" | grep -F -- "Preview $1: " |
+    grep -vE "^Preview $1: (refining the display meshes|display meshes refined)" | grep -q . &&
+    ui_fail "the preview not computed again: 'Preview $1: ' logged"
+  echo "ok   the preview not computed again"
 }
 
 ui_start_display

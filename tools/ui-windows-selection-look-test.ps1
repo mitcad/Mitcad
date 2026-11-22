@@ -39,6 +39,7 @@ foreach ($scale in @(1, 1.25)) {
   $env:MITCAD_TEST_WORK = $work
   $env:MITCAD_TEST_STEP_MS = '50'
   $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/selection-look.mitcad-ui'
+  $env:MITCAD_TEST_PREFERENCES_DONE = 'Return' # OK of the Preferences dialog
   if ($scale -eq 1) {
     Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
   } else {

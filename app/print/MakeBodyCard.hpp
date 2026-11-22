@@ -151,6 +151,10 @@ public:
   // perimeters icon body"; and its rows' names from the top, "Make card
   // rows: Printer, Process, Material, Walls" (mitcad#1239).
   QStringList places() const;
+  // Whether the rows made last are shown, so that places() gives where
+  // they are (mitcad#2189): rows made again are shown by a call Qt queues
+  // after them, and until then the layout gives them no place.
+  bool rowsShown() const;
 
 signals:
   // Another material chosen, or another printer or process profile (its

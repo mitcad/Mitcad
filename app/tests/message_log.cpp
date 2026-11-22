@@ -271,8 +271,77 @@ void actionTests() {
 
 } // namespace
 
+// An error put right goes (mitcad#2181): a refused parameter command, then
+// the missing parameter added (a successful command of the Parameters
+// dialog), leaves no error in the band, neither in full nor as the stub;
+// the history keeps it, resolved. A failed feature's error goes when the
+// feature computes again.
+void resolveTests() {
+  MessageLog log;
+  const QString refused =
+      QStringLiteral("The expression of cabinet_lenght uses table_lenght, which is not a parameter.");
+  const QString cabinet = QStringLiteral("parameter/cabinet_lenght");
+  CHECK(!log.resolve(QStringLiteral("parameter"))); // nothing shown
+  CHECK(log.add(refused, NoticeLevel::Error, QString(), at(0), QString(), QString(), cabinet));
+  CHECK(log.full()->subject == cabinet);
+  CHECK(log.shownError(QStringLiteral("parameter")) != nullptr);
+  CHECK(log.shownError(QStringLiteral("feature")) == nullptr);
+  CHECK(!log.resolve(QStringLiteral("parameter/table_lenght"))); // another parameter
+  CHECK(!log.resolve(QStringLiteral("feature")));
+  CHECK(log.shown() == MessageLog::Shown::Full);
+  // Any successful command of the Parameters dialog: in full, it goes.
+  CHECK(log.resolve(QStringLiteral("parameter")));
+  CHECK(log.shown() == MessageLog::Shown::None);
+  CHECK(log.stub() == nullptr);
+  CHECK(log.entries().front().resolved);
+  CHECK(log.size() == 1); // the history keeps it
+
+  // As the stub (the next command made it one): it goes too.
+  CHECK(log.add(refused, NoticeLevel::Error, QString(), at(1), QString(), QString(), cabinet));
+  CHECK(log.size() == 1 && log.entries().front().count == 2);
+  CHECK(!log.entries().front().resolved); // refused again
+  CHECK(log.commandStarted());
+  CHECK(log.shown() == MessageLog::Shown::Stub);
+  CHECK(log.resolve(cabinet)); // the same parameter succeeded
+  CHECK(log.shown() == MessageLog::Shown::None);
+  CHECK(!log.resolve(cabinet)); // nothing to change any more
+  // The next message shows as before.
+  CHECK(log.add(QStringLiteral("Saved."), NoticeLevel::Information, QString(), at(2)));
+  CHECK(log.expire());
+  CHECK(log.stub()->text == QStringLiteral("Saved."));
+
+  // A hint after the error goes to the history only; the error put right
+  // leaves the stub of that hint, the latest.
+  CHECK(log.add(refused, NoticeLevel::Error, QString(), at(3), QString(), QString(), cabinet));
+  CHECK(!log.add(QStringLiteral("Pick a face"), NoticeLevel::Hint, QString(), at(4)));
+  CHECK(log.resolve(QStringLiteral("parameter")));
+  CHECK(log.stub()->text == QStringLiteral("Pick a face"));
+
+  // A warning and an error of no subject are not put right.
+  CHECK(log.add(QStringLiteral("Fillet2: check the result"), NoticeLevel::Warning, QString(), at(5), QString(),
+                QString(), QStringLiteral("parameter/x")));
+  CHECK(!log.resolve(QStringLiteral("parameter")));
+  const QString failed = QStringLiteral("Recompute failed: Fillet2: the radius is too large");
+  CHECK(log.add(failed, NoticeLevel::Error, QStringLiteral("F4"), at(6)));
+  CHECK(!log.resolve(QStringLiteral("parameter")));
+  CHECK(log.full()->text == failed);
+
+  // A failed feature's error, by its subject.
+  CHECK(log.add(failed, NoticeLevel::Error, QStringLiteral("F4"), at(7), QString(), QString(),
+                QStringLiteral("feature/F4")));
+  const MessageEntry* shown = log.shownError(QStringLiteral("feature"));
+  CHECK(shown != nullptr && shown->subject == QStringLiteral("feature/F4"));
+  CHECK(log.commandStarted());
+  CHECK(log.shownError(QStringLiteral("feature")) != nullptr); // the stub too
+  CHECK(!log.resolve(QStringLiteral("feature/F40")));
+  CHECK(log.resolve(QStringLiteral("feature/F4")));
+  CHECK(log.shown() == MessageLog::Shown::None);
+  CHECK(log.shownError(QStringLiteral("feature")) == nullptr);
+}
+
 int messageLogTests() {
   failures = 0;
+  resolveTests();
   lifetimeTests();
   bandTests();
   clearTests();

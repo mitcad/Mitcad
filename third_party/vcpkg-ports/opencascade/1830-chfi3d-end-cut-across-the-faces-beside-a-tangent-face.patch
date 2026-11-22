@@ -55,11 +55,8 @@ where the pro15368 shortcut was taken with CV1 off Face[2]'s surface (an
 invalid shape before), and where a face lies between two faces tangent to
 it, neither of its edges crossed (the general walk gave crossing cuts).
 
-Test: geometry.port.1830 (geometry/tests/port/p1830-end-cut-across-a-tangent-face.cpp),
-the half-disc block against the half-cylinder wall rounded and chamfered
-with 0.5, 1 and 3: one valid solid each, the added volume that of the
-section cut by both cylinders continued within 1e-5; the wall's top rounded
-with 3 only at its edges, the side plane crossed: as before.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1830.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index 64ca556..46fc601 100644

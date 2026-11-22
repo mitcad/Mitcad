@@ -17,13 +17,8 @@ face at the end was unorientable. The pieces now take the intersection's
 own p-curve on Fv, trimmed at the seam crossing, as the opposite face's
 pieces are computed on that face.
 
-Test: geometry/tests/test_fillet_results.cpp (ctest
-geometry.suite.fillet_results),
-test_rib_foot_rounded_across_the_rods_seam: It fails with this patch and
-18 later patches that change the same lines reverted together, so the test
-does not single this patch out (shown 2026-11-20 by
-tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0300.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 index b869f0c..931f51c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx

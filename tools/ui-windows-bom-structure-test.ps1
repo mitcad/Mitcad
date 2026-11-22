@@ -32,6 +32,7 @@ if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "BOM Structure driver failed (exit code $exitCode)"
 }
 Ui-ExpectLog 'Build BOM item:   2.1 Rail x 2 (Normal)' 'the structured view'
+Ui-ExpectLog 'Build BOM item: 1 Base x 3 (Normal)' 'identical parts grouped in Parts only'
 Ui-ExpectLog 'Build BOM item: 2 Frame x 1 (Inseparable)' 'an Inseparable subassembly'
 Ui-ExpectLog 'Build BOM item: 2 Rail x 2 (Normal)' "a Phantom's children a level up"
 Ui-ExpectLog 'Build BOM item: - Frame x 0 (Reference)' 'a Reference without a number'

@@ -24,24 +24,8 @@ Fillets: three causes of segmentation faults in TKFillet (mitcad#122).
   index past its end, and a later Value() (ChFi3d_StripeEdgeInter) followed
   a null node.
 
-Test: geometry/tests/port/p0020-crash-fixes.cpp (ctest geometry.port.0020),
-for two of the three faults. The corner curve parallel to the seam: a
-chamfer and a rounding of 2 of the arc where a lug's top meets its bore's
-wall, the lug ending or starting on the bore's seam (the prolongation of
-the lug's end on the wall runs along the seam; the extrema in
-PerformOneCorner's split of the prolongation are parallel): valid, the
-blend's section turned through the lug's sweep within 1e-6; a segmentation
-fault without the patch. A lug away from the seam, the boundary case,
-builds the same with and without it. PerformMoreSurfdata's neighbour face:
-the pipe and rod cut by an inclined end plane (test_fillet_overflow's
-body), the junction rounded with 3 after another contour: after the other
-junction (the first stripe's surface data at that index another blend's),
-valid, the two adding what each adds alone, invalid without the patch;
-after a box's edge in the same compound (the first stripe with one surface
-data), valid, the junction's section between the end planes and the box
-edge's loss within 1e-9, a segmentation fault without the patch. Each was
-shown with TKFillet built without the patch, and without its
-PerformMoreSurfdata change alone.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0020.
 
 StartSol's obstacle without the arc has no test: no synthetic body reaches
 it. A probe in that branch found no case in the geometry tests or in OCCT's

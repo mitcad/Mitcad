@@ -2,8 +2,9 @@
 
 The `.solidcraft` import (`core/solidcraft`, mitcad#450) reads designs of
 every SolidCraft file format by first upgrading an older file to the one
-format it maps (57, the format of release 0.43.0; mitcad#1331,
-mitcad#1994), and reads a design a newer build saved as far as it can,
+format it maps (63, the format of release 0.45.0; mitcad#1331,
+mitcad#1994, mitcad#2153), and reads a design a newer build saved as far
+as it can,
 with a warning. The upgrade
 steps are SolidCraft's own, adapted here. The cam geometry of motion links
 (`cam.rs`, mitcad#466: where a follower touches a cam's profile over a
@@ -13,11 +14,13 @@ is SolidCraft's too, as data the import maps onto MitCad's plastic
 rules.
 
 - Source: https://github.com/tangency-labs/solidcraft.
-  - `format.rs`: release `v0.43.0`, commit
-    `8ba46e9e2181396a9b5903b98031399aef61cf26` (15.11.2026, the newest
-    release tag on 17.11.2026; it has no pending format changes). Before
-    mitcad#1994 it was release `v0.40.0-rc.2`, commit `777f9609` (format
-    50).
+  - `format.rs`: release `v0.45.0`, commit
+    `e8ce12ef78fe76281a04b7242a9ce059ff7d5067` (19.11.2026, the newest
+    release tag on 21.11.2026; it has no pending format changes:
+    `crates/doc/src/format/pending/` holds only its README). Before
+    mitcad#2153 it was release `v0.43.0`, commit `8ba46e9e` (format 57),
+    and before mitcad#1994 release `v0.40.0-rc.2`, commit `777f9609`
+    (format 50).
   - `cam.rs`, `mesh_convert.rs` and `plastic.rs`: commit
     `0b787f8eae4244cd40f07dddccd2e1b27e4cf9f8` (19.10.2026, after release
     0.16.2).
@@ -31,11 +34,14 @@ rules.
 
 | Here | From | SHA-256 of the source file |
 |---|---|---|
-| `format.rs` | `crates/doc/src/format.rs` at `8ba46e9e` (`v2_to_v3`, `v3_to_v4`, `v4_to_v5`, `v5_to_v6`, `v13_to_v14` and their helpers, unchanged since `777f9609`) | `6491bef00d8d9af206d593be25a8b6dc68bc285b06899dfd5efffd6d0456ca4f` |
-| | `crates/format/src/lib.rs` at `8ba46e9e` (`Formats::upgrade`, `Formats::parts`, `Family::newer`, `Family::canonical_applied_name`, `Newer`) | `145b385301523c97a90a3d0d1752c70218aa0f7dcf87edf0a6867c7ff82975bd` |
-| | `crates/doc/src/newer_file.rs` at `8ba46e9e` (`salvage`: what of a newer design is read and what is left out) | `0faec28e7fad487e064ca94df878c7236abc5df6b11c2852ae88ce9ac89bb075` |
-| | `crates/doc/src/assembly.rs` at `8ba46e9e` (`mat_mul`, `mat_inverse`, `transform_through`) | `9efa5528e0cd8dc0b3bc411f553dcba7f9fd0f5516f226f6f383c6f63236412e` |
-| | `crates/doc/src/format/v28/two-sided-extrude-direction.rs` (`step` and its test) | `5202815ffe17a6a7a1fc270300a3beed28d91a5231c8565635d0c0c91d987cb6` |
+| `format.rs` | `crates/doc/src/format.rs` at `e8ce12ef` (`v2_to_v3`, `v3_to_v4`, `v4_to_v5`, `v5_to_v6`, `v13_to_v14` and their helpers, unchanged since `777f9609`) | `fa288085de4af1548a136a3bd2181b604261d7012e4292ab01faf8fa28da9e60` |
+| | `crates/format/src/lib.rs` at `e8ce12ef` (`Formats::upgrade`, `Formats::parts`, `Family::newer`, `Family::canonical_applied_name`, `Newer`; unchanged since `8ba46e9e`) | `145b385301523c97a90a3d0d1752c70218aa0f7dcf87edf0a6867c7ff82975bd` |
+| | `crates/doc/src/newer_file.rs` at `e8ce12ef` (`salvage`: what of a newer design is read and what is left out; unchanged since `8ba46e9e`) | `0faec28e7fad487e064ca94df878c7236abc5df6b11c2852ae88ce9ac89bb075` |
+| | `crates/doc/src/assembly.rs` at `e8ce12ef` (`mat_mul`, `mat_inverse`, `transform_through`, `is_placement`) | `6c5ace5f5081bd4240f21547f9b1475396a92d88ba7bc61c81260a64d0cf267b` |
+| | `crates/doc/src/face_anchor.rs` at `e8ce12ef` (`plane_face_anchor`, `FaceAnchor::author_frame`) | `933a78e34c43f35fde9f9f243dbc857edf25724e0e6bc76a03a8442bae6e7f37` |
+| | `crates/doc/src/document.rs` at `e8ce12ef` (`EmbossFace::component_frame`, `Document::placement_frame`) | `62a917cf492ff64c0105fc56dd2b5fe6e8a229a27d381c61989c22d7ef887e1c` |
+| | `crates/doc/src/project.rs` at `e8ce12ef` (`source_sketches`, `MAX_SKETCH_PLACEMENTS`) | `3b3d72a4d8f4c075b56f56071ceda4274ae500d5b27962e52abd0d9c2432fc41` |
+| | `crates/doc/src/format/v28/two-sided-extrude-direction.rs` (`step` and its test; this and the step files below up to `v57` unchanged from `8ba46e9e` to `e8ce12ef`) | `5202815ffe17a6a7a1fc270300a3beed28d91a5231c8565635d0c0c91d987cb6` |
 | | `crates/doc/src/format/v29/face-pieces-by-place.rs` | `d6a2bbc7fccaa26e3daad4db49563cda1a1b2d2096caec874668f715013138a2` |
 | | `crates/doc/src/format/v35/inserted-file-features.rs` | `045cddbd953032ae87b50e51f03a574112ac6606d8353de61d920de36bcc8b70` |
 | | `crates/doc/src/format/v40/feature-id-refs.rs` | `957bb125b91ca56943049c719850eb62c7e9d6f0ddffeeee39a58662ceaffcac` |
@@ -50,8 +56,15 @@ rules.
 | | `crates/doc/src/format/v56/pattern-names-by-source.rs` | `c4046d16511ca7f16d93d9964b80e4af08243f902c2f2eb9d740c3fad0277c25` |
 | | `crates/doc/src/format/v57/extrude-to-object-keeps-picked-placements.rs` | `6e440360c9ef7d808c2e63311b43aa149bd048b404223cc56ab742bb7416b4eb` |
 | | `crates/doc/src/format/v57/sweep-walls-named-along-the-path.rs` | `f8da9eff6dd0416c170eca1fbb61c79ee69cde1e4278df40256224a5baf1e3d6` |
-| | the names of every change file of `crates/doc/src/format/v23` to `v57` (`FOLDED`) | (the folders' listings) |
-| | `crates/doc/src/params.rs` at `8ba46e9e` (`Document::name_all_feature_inputs`, the same naming as at `777f9609` and `0b787f8e`) | `3053d3856fb61e187bc58c423e234248c0e1b86f5444db9b1a729d9eb6a46c10` |
+| | `crates/doc/src/format/v58/extrude-from-slanted-face.rs` (at `e8ce12ef`, as the six below) | `69ca547dace3f7b2ee3bdc85f63155c9deff179683f9330b4336e1c2fb6abf21` |
+| | `crates/doc/src/format/v58/sketch-reference-placements.rs` | `470b7729f1df45c98fc4849098f97a18734ad32d2cbfead1f632f00a4cb19dfc` |
+| | `crates/doc/src/format/v58/surface-sweep-exact-spline-path.rs` | `31c895d6be4a0a64bb3b64cb705361c025f31639e36558c02148eae657931664` |
+| | `crates/doc/src/format/v62/sheet-edge-names.rs` | `a52bb729a53580429010b6b35fe6ec956556a9b80f64d65f587441d28d319cdd` |
+| | `crates/doc/src/format/v62/sheet-face-names.rs` | `1d142aeb777f2ba54b4039573ed7ec9ce614cb42f95b01fa01b850dc90ea979b` |
+| | `crates/doc/src/format/v62/sheet-hem-gap.rs` | `dbadb3063e475be6d6051c26a49b340b9f9c2cd53edf3b85b8e2c9a226f392f2` |
+| | `crates/doc/src/format/v62/sheet-surface-convert.rs` | `bcbf4e5cd4153417eb76ac2b058a170c86af414bab4ad12390e6643830a91123` |
+| | the names of every change file of `crates/doc/src/format/v23` to `v63` (`FOLDED`) | (the folders' listings) |
+| | `crates/doc/src/params.rs` at `e8ce12ef` (`Document::name_all_feature_inputs`, the same naming as at `777f9609`, `0b787f8e` and `8ba46e9e`) | `52894294c222979ef6df460bd49162fdb00c480c74b0ceaffe25467f72019f9d` |
 | `cam.rs` | `crates/doc/src/joints_cam.rs` at `0b787f8e` (the follower's contact with a cam's profile: `first_contact_along`, `touches_turning`, `overlaps_turning`, `first_contact_turning`, `next_contact_turning`, `dist_to_segment`, `inside`, `area`, `round`, the sampling loop of `table`) | `b31e49db7a82e8a72a472d2f2b128b5dce3c71ad6926093eb38436bc59a877cc` |
 | `mesh_convert.rs` | `crates/kernel/src/mesh_convert.rs` at `0b787f8e` (Convert Mesh, mitcad#462, built into `core/model/src/features/mesh_convert.rs`: `convert_prismatic_mesh`, `weld`, `extrusion`, `certify_nesting`, `fit_loop`) | `982246e109a52b8270d07073fad4ebcf144bdbde16c05096a165a7747665905e` |
 | `plastic.rs` | `crates/doc/src/plastic.rs` at `0b787f8e` (`PlasticRule::new`, `PlasticRule::library`, the order of `PlasticRule::fields`; mitcad#459) | `2a6dbad07597fe331bb5cf2a1f11f12e1bfbc38a2a2f8029fc0a7152a72aa7d4` |
@@ -59,13 +72,16 @@ rules.
 The feature walk that names a feature's inputs (`core/solidcraft/src/inputs.rs`)
 is MitCad's own port of `crates/doc/src/walk.rs` and the `#[walk]`
 attributes of `crates/doc/src/document.rs`, checked against the golden
-record `crates/doc/src/feature_walk_tests/golden_exprs.txt` at `8ba46e9e`.
+record `crates/doc/src/feature_walk_tests/golden_exprs.txt` at `e8ce12ef`
+(formats 58 to 63 add a fillet's `Edge radius` inputs and a bounding
+solid's six side margins; a plane at an angle's axis origin, an
+expression since format 59, is a placement, not an input).
 
 ## Formats
 
-Formats 23 to 57 are the changes of their `v<N>/` folders (`FOLDED` in
-`format.rs`; formats 51 to 57 hold 65). The steps that rewrite an older
-design as it opens:
+Formats 23 to 63 are the changes of their `v<N>/` folders (`FOLDED` in
+`format.rs`; formats 51 to 57 hold 65, formats 58 to 63 hold 42). The
+steps that rewrite an older design as it opens:
 
 | Format | Change | What the step does |
 |---|---|---|
@@ -84,8 +100,15 @@ design as it opens:
 | 56 | `pattern-names-by-source` | a Pattern of several bodies with stored names keeps reading them in the order the copies were made (`pattern_names_in_order`) |
 | 57 | `extrude-to-object-keeps-picked-placements` | an extrude to or from an object gets the other components' placements the file holds (`picked_placements`) |
 | 57 | `sweep-walls-named-along-the-path` | a sketch link's saved name on a wall of a sweep along several curves is dropped (`name_dropped`) |
+| 58 | `extrude-from-slanted-face` | an extrude From Object keeps starting on a plane parallel to the sketch at the level where the face meets the middle of the profiles (`from_level`) |
+| 58 | `sketch-reference-placements` | a sketch in a component captures where the sketches its links read (`sketch_placements`) and the construction plane of another component it lies on (`placement`) stood relative to its own component |
+| 58 | `surface-sweep-exact-spline-path` | a surface sweep along a 3D sketch curve keeps its walls along the lines between the spline's samples (`spline_as_samples`) |
+| 62 | `sheet-edge-names` | a flange's or hem's edges saved by the sheet's own names (`base:<line>:<side>`, `F<f>.<k>:<edge>:<side>`) take the model's names where the design says what made them |
+| 62 | `sheet-face-names` | a sheet's faces saved by the sheet's own names (`sheet:<body>:base:<side>`) take the model's names where the design says what made them |
+| 62 | `sheet-hem-gap` | a hem's `gap` and a rule's `hem_gap` are doubled (`2 * (…)`), the space between leg and face where they were the inside radius; a rule without `hem_gap` gets `0.02 mm` |
+| 62 | `sheet-surface-convert` | a conversion of a plate (no bend edges) becomes Recognize of that plate from its face (`sheet_recognize`) |
 
-Every other change of formats 28 to 57 needs no rewrite: it adds a field or
+Every other change of formats 28 to 63 needs no rewrite: it adds a field or
 a kind an older design does not have, and is listed by name only (so a
 design written while it was pending is read). The import reads the ones it
 maps (`core/import-solidcraft/docs/solidcraft.md`); the display-only ones
@@ -93,14 +116,16 @@ maps (`core/import-solidcraft/docs/solidcraft.md`); the display-only ones
 `glass-material-models`, `canvas-lock`, browser state, print faces,
 identification colours, component origin visibility, history visibility,
 timeline folders' joints, point clouds, embedded surface textures, model
-caches' `blend-definition-faces` and `saved-face-points`, plugin data) are
-read and ignored.
+caches' `blend-definition-faces` and `saved-face-points`, plugin data,
+`names-count-characters`, `named-view-roll-and-up`,
+`plugin-data-documents`, `canvas-anchor`, `sheet-rule-material`) are read
+and ignored.
 
 The pinned release has no pending changes, so `PENDING` is empty. A design
-saved by a newer build of SolidCraft (a format past 57, or changes this
-import does not know in its `format_pending`) is read as SolidCraft 0.43.0
+saved by a newer build of SolidCraft (a format past 63, or changes this
+import does not know in its `format_pending`) is read as SolidCraft 0.45.0
 reads it (`crates/doc/src/newer_file.rs`, mitcad#1994): `newer` says so,
-the steps of the changes it knows run, a format past 57 has none to run,
+the steps of the changes it knows run, a format past 63 has none to run,
 and the reader (`core/solidcraft`) leaves out the sections it does not know
 or cannot read and the parameters it cannot read, naming them, and keeps a
 feature it cannot read in its place for the import's placeholder. Only a
@@ -116,6 +141,18 @@ refused as drawings.
 - `extrude-to-object-keeps-picked-placements` reads the occurrences it
   needs from the JSON (`Placing`) instead of SolidCraft's `Occurrence`,
   with `mat_mul`, `mat_inverse` and `transform_through` on `[[f64; 4]; 4]`.
+- `sketch-reference-placements` reads the occurrences likewise, with one
+  at the identity for each component the file never placed (as
+  `add_occurrence` gives it); a sketch plane's face anchor is read from
+  the JSON (`anchor` with its `path` and `author_path`, beneath an offset,
+  a plane through a point, an angle or a flip) instead of SolidCraft's
+  typed `PlaneRef` and `FaceAnchor`, a link's source sketches likewise
+  (`sketch_curve`, `sketch_point`, `on_surface` and both sides of an
+  `intersection`; a source of another kind reads none).
+- The steps of formats 58 and 62 that have helpers of their own
+  (`sketch-reference-placements`, `sheet-edge-names`, `sheet-face-names`)
+  are modules of `format.rs`; `sheet-face-names`' `parts` is
+  `name_parts`.
 - A newer design is not refused: `newer` (SolidCraft's `Family::newer`)
   says what makes it newer, and `check` refuses only format 0.
 - The upgrade path (`upgrade`, `check`, `parts`, `canonical`: SolidCraft's
@@ -129,7 +166,10 @@ refused as drawings.
   format's changes it does not list (mitcad#1331: a released format 28 is
   not upgraded to 28 again). The names of the steps that ran are given for
   the import's report.
-- The steps' tests are SolidCraft's, adapted (`format.rs`, `mod tests`).
+- The steps' tests are SolidCraft's, adapted (`format.rs`, `mod tests`);
+  `sketch-reference-placements` has none upstream at `e8ce12ef` (its tests
+  there go through SolidCraft's document), so its tests here are MitCad's
+  own on minimal designs.
 - `name_all_feature_inputs` works on the design's JSON; the number of
   inputs of a feature comes from MitCad's port of SolidCraft's feature
   walk (`core/solidcraft/src/inputs.rs`).

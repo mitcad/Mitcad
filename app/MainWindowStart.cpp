@@ -7,6 +7,7 @@
 // projects' browser's session and state icons (mitcad#1301).
 #include "MainWindow.hpp"
 
+#include <algorithm>
 #include <utility>
 
 #include <QBuffer>
@@ -15,6 +16,7 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QImage>
 #include <QKeySequence>
 #include <QSaveFile>
@@ -22,6 +24,7 @@
 #include <QTabBar>
 #include <QToolBar>
 #include <QUrl>
+#include <QWindow>
 #include <QtLogging>
 
 #include "DocumentFrame.hpp"
@@ -31,6 +34,7 @@
 #include "framework/CommandRegistry.hpp"
 #include "framework/FloatingLayout.hpp"
 #include "framework/Ribbon.hpp"
+#include "framework/TestSync.hpp"
 #include "files/Autosave.hpp"
 #include "files/FileFormats.hpp"
 #include "files/ProjectIndicator.hpp"
@@ -49,6 +53,57 @@ namespace mitcad {
 namespace {
 
 const QString kStartTab = QStringLiteral("START");
+
+// Where the toolbar panel is once the Start page is left (mitcad#2031),
+// for "Toolbar panel after the Start page: ...": "shown at x,y wxh (Floating;
+// the window exposed, platform xcb)", or "not shown (<layout>: <why>; ...)":
+// the panel or a parent of it hidden, its parts hidden (`partsHidden`, the
+// Floating row's), no size, outside the window. The window's exposure and
+// the platform tell a panel that is placed but not on the screen (a window
+// not exposed yet).
+QString toolbarPanelState(const QWidget* panel, const QString& layout, bool partsHidden) {
+  if (panel == nullptr) {
+    return QStringLiteral("not shown (%1: no toolbar panel)").arg(layout);
+  }
+  const QWidget* top = panel->window();
+  const QWindow* handle = top->windowHandle();
+  const QString window = QStringLiteral("%1, platform %2")
+                             .arg(handle == nullptr  ? QStringLiteral("the window has no native window")
+                                  : handle->isExposed() ? QStringLiteral("the window exposed")
+                                                        : QStringLiteral("the window not exposed"),
+                                  QGuiApplication::platformName());
+  if (!panel->isVisible()) {
+    QString hidden = QStringLiteral("the window");
+    for (const QWidget* widget = panel; widget != nullptr && widget != top; widget = widget->parentWidget()) {
+      if (widget->isHidden()) {
+        hidden = widget->objectName().isEmpty() ? QString::fromLatin1(widget->metaObject()->className())
+                                                : widget->objectName();
+        break;
+      }
+    }
+    return QStringLiteral("not shown (%1: %2 hidden; %3)").arg(layout, hidden, window);
+  }
+  if (partsHidden) {
+    return QStringLiteral("not shown (%1: its parts hidden; %2)").arg(layout, window);
+  }
+  const QRect place(panel->mapTo(top, QPoint(0, 0)), panel->size());
+  if (place.isEmpty()) {
+    return QStringLiteral("not shown (%1: no size; %2)").arg(layout, window);
+  }
+  if (!place.intersects(top->rect())) {
+    return QStringLiteral("not shown (%1: outside the window at %2,%3; %4)")
+        .arg(layout)
+        .arg(place.x())
+        .arg(place.y())
+        .arg(window);
+  }
+  return QStringLiteral("shown at %1,%2 %3x%4 (%5; %6)")
+      .arg(place.x())
+      .arg(place.y())
+      .arg(place.width())
+      .arg(place.height())
+      .arg(layout, window);
+}
 
 // The issue list of the tracker the reports go to (a template's address
 // without its form: ".../issues/new?title={title}" is ".../issues").
@@ -152,7 +207,20 @@ void MainWindow::updateStartPage(const QString& tab) {
       }
     }
   } else {
+    // What left it (mitcad#2031): a session log tells a page that was left
+    // from one that only stopped showing.
+    qInfo().noquote() << QStringLiteral("Start page left for %1").arg(tab);
     m_startPage->hidePage();
+    // Off the page the window shows a design again (mitcad#2142): the one
+    // New or Open installed, or the untitled one that waited under the page.
+    if (m_noDesign) {
+      m_noDesign = false;
+      updateWindowTitle();
+      qInfo().noquote() << QStringLiteral("Design shown again after the last design closed");
+      if (DocumentFrame* frame = DocumentFrame::containing(this)) {
+        frame->documentShownChanged(this);
+      }
+    }
     if (m_floating != nullptr) {
       // A drawing that opened from the page keeps its Drawings card
       // (mitcad#1008, mitcad#1990).
@@ -167,6 +235,9 @@ void MainWindow::updateStartPage(const QString& tab) {
     }
   }
   updateStartToolbar();
+  if (!start) {
+    logToolbarPanelAfterStart();
+  }
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeWindow) {
     m_nativeWindow->setStartPageShown(start);
@@ -212,7 +283,9 @@ void MainWindow::updateStartToolbar() {
   const bool designTabs = frame != nullptr && frame->showsTabs();
   StartToolbar wanted = StartToolbar::Whole;
   if (startPageShown()) {
-    wanted = designTabs ? StartToolbar::Hidden : StartToolbar::TabRow;
+    // With no design open (mitcad#2142) there is no workspace to go back
+    // to: New and Open lead on.
+    wanted = designTabs || m_noDesign ? StartToolbar::Hidden : StartToolbar::TabRow;
   }
   // Also when a kept dock state hid or showed the bar (restoreState).
   const bool hidden = wanted == StartToolbar::Hidden;
@@ -237,6 +310,39 @@ void MainWindow::updateStartToolbar() {
   }
 }
 
+void MainWindow::logToolbarPanelAfterStart() {
+  if (m_nativeUi || m_ribbon == nullptr) {
+    return;
+  }
+  // Once the layouts that leaving the page queued have placed the panel
+  // (FloatingLayout::requestLayout, the tool bar's); watched, so a UI
+  // test's sync waits for the line.
+  TestSync::singleShot(0, this, [this] {
+    if (startPageShown()) {
+      return; // back on the page meanwhile
+    }
+    const QWidget* panel = nullptr;
+    QString layout = QStringLiteral("Docked");
+    bool partsHidden = false;
+    if (m_floating != nullptr) {
+      m_floating->layoutNow();
+      panel = m_ribbon;
+      layout = QStringLiteral("Floating");
+      // The row shows while one of its parts does (the workspace selector,
+      // the tabs and groups).
+      const QList<QWidget*> parts = m_ribbon->panelRowParts();
+      partsHidden = std::none_of(parts.cbegin(), parts.cend(),
+                                 [](const QWidget* part) { return part != nullptr && !part->isHidden(); });
+    } else if (m_dockedPanel != nullptr) {
+      panel = m_dockedPanel;
+    } else {
+      panel = findChild<QToolBar*>(QStringLiteral("ribbonToolbar"), Qt::FindDirectChildrenOnly);
+    }
+    qInfo().noquote() << QStringLiteral("Toolbar panel after the Start page: %1")
+                             .arg(toolbarPanelState(panel, layout, partsHidden));
+  });
+}
+
 void MainWindow::leaveStartPage() {
   if (startPageShown() && m_ribbon != nullptr) {
     m_ribbon->showTab(QStringLiteral("SOLID"));
@@ -253,6 +359,43 @@ void MainWindow::leaveStartPageForDesign() {
   } else {
     leaveStartPage();
   }
+}
+
+bool MainWindow::closeToStartPage() {
+  if (m_noDesign) {
+    qInfo().noquote() << QStringLiteral("Last design closed already: Start page");
+    return true;
+  }
+  if (deferForNativeCommand([this] { closeToStartPage(); })) {
+    return false;
+  }
+  if (!maybeSave()) {
+    if (m_windowManager != nullptr) {
+      m_windowManager->cancelQuit(this);
+    }
+    return false;
+  }
+  // The design goes (its edit lock with it, installDocument); an empty
+  // untitled one waits under the page for New, as the window's design
+  // before any is made.
+  m_keepStartPage = true;
+  const bool emptied = installEmptyDocument(QString());
+  m_keepStartPage = false;
+  if (!emptied) {
+    return false;
+  }
+  if (m_ribbon != nullptr && !startPageShown()) {
+    m_ribbon->showTab(kStartTab);
+  }
+  m_noDesign = true;
+  updateWindowTitle();
+  updateStartToolbar();
+  if (DocumentFrame* frame = DocumentFrame::containing(this)) {
+    frame->documentShownChanged(this);
+  }
+  qInfo() << "Document closed";
+  qInfo().noquote() << QStringLiteral("Last design closed: Start page");
+  return true;
 }
 
 void MainWindow::showStartPageAtLaunch(const QString& skip) {

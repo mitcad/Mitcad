@@ -26,6 +26,7 @@
 #include <gp_Vec.hxx>
 
 #include "../OcctViewer.hpp"
+#include "../framework/UserText.hpp"
 #include "SketchController.hpp"
 
 namespace mitcad::sketch {
@@ -851,7 +852,7 @@ QString Sketch3dController::rotatePlaneBy(Axis3 about, const QString& text) {
       problem = tr("not a finite value");
     }
   } catch (const std::exception& e) {
-    problem = QString::fromUtf8(e.what());
+    problem = userText(QString::fromUtf8(e.what())); // without its [placed: …] line (mitcad#2181)
   }
   if (!problem.isEmpty()) {
     toolLog(QStringLiteral("3D sketch rotate %1: %2 refused (%3)").arg(axisLabel(about), text, problem));
@@ -1200,7 +1201,7 @@ void Sketch3dController::setField(const QString& id, const QString& text) {
         value.problem = tr("not a finite value");
       }
     } catch (const std::exception& e) {
-      value.problem = QString::fromUtf8(e.what());
+      value.problem = userText(QString::fromUtf8(e.what()));
     }
   }
   toolLog(QStringLiteral("3D sketch field %1: %2%3")

@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# mitcad#2209: a design linked with its components made Flexible, on
+# linked-flexible-holder.json: Slider:1 links a design whose Key slides
+# along x on its grounded Base (the design's Joint1, which comes along,
+# read only). Flexible is offered on Slider:1's Browser row (the menu then
+# shows it checked), and the Key dragged in the view slides along Joint1
+# for Slider:1 alone (the drag logs Joint1's new value "in Slider:1"),
+# while the Base stays. All geometry is synthetic.
+# Run by tools/ui-linked-flexible-test.sh (Linux),
+# tools/ui-windows-linked-flexible-test.ps1 (Windows) and
+# tools/ui-macos-linked-flexible-test.sh (macOS).
+mark
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+# Where the linked design's parts are shown before.
+capture key '^Body F3[.]b0 in O1/O3 at ([0-9]+,[0-9]+)$' 20
+capture base '^Body F2[.]b0 in O1/O2 at ([0-9]+,[0-9]+)$' 20
+# Slider:1 made Flexible from its row's menu: it has components in it.
+mark
+context-menu-logged '^Browser Root/Slider:1 at ' 'Flexible'
+expect-log '^Context menu: .*Flexible'
+wait-log '^Flexible Slider:1$' 30
+wait-idle 30
+mark
+context-menu-logged '^Browser Root/Slider:1 at ' cancel
+expect-log '^Context menu checked: (.* [|] )?Flexible'
+# Its Key dragged: it slides along the design's Joint1, for Slider:1
+# alone; the grounded Base stays.
+mark
+drag-from '^Body F3[.]b0 in O1/O3 at ' 80 20
+wait-log '^Drag of Key:1 started' 10
+wait-log '^Dragged Key:1 to [(].*[)]: Joint1 tx -?[0-9.]+ mm in Slider:1$' 30
+wait-idle 30
+wait-log '^Body F2[.]b0 in O1/O2 at ${base:re}$' 30
+expect-no-log '^Body F3[.]b0 in O1/O3 at ${key:re}$'
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

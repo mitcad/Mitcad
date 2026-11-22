@@ -686,13 +686,12 @@ void BuildListsDialog::load() {
     qWarning().noquote() << QStringLiteral("Cut list not read: %1").arg(errorText(error));
   }
   try {
-    // Group identical parts groups the list of every component; the views
-    // list each component once (mitcad#1985).
+    // Group identical parts combines equal parts in every view: the list,
+    // the parts-only view across the design, the structured view among
+    // siblings (mitcad#2215).
     const QString view = m_view->currentData().toString();
-    const bool everyComponent = view == QStringLiteral("list");
-    m_groupIdentical->setEnabled(everyComponent);
     QJsonObject query{{QStringLiteral("query"), QStringLiteral("parts_list")},
-                      {QStringLiteral("group_identical"), everyComponent && m_groupIdentical->isChecked()},
+                      {QStringLiteral("group_identical"), m_groupIdentical->isChecked()},
                       {QStringLiteral("view"), view}};
     if (!keys.isEmpty()) {
       query.insert(QStringLiteral("properties"), QJsonArray::fromStringList(keys));

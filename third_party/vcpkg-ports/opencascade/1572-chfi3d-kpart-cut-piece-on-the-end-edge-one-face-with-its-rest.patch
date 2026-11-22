@@ -13,9 +13,8 @@ other, the walk's pieces were split so that the face at the end cut them
 cylinder, named as numbered pieces where the result of the other pick has
 one face. Now the result has the same faces whichever edge is picked.
 
-Test: geometry/tests/test_fillet_boss_tangent.cpp, the plate's top edge
-picked at its other side: the rounding of that edge one face named after
-it.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1572.
 
 Upstream: new.
 

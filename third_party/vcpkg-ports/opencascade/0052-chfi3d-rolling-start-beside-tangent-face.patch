@@ -30,12 +30,8 @@ side's far edge.
   leaving it, is the start. Before, the walk was not done (PerformSurf :
   Failed processing).
 
-Test: geometry/tests/test_fillet_overflow.cpp (ctest
-geometry.suite.fillet_overflow),
-test_rounding_rolls_beside_a_round_corner: Its failure without the patch
-is still to be shown: the patch does not revert at the port's tip without
-the more than 40 later patches that change the same lines (tried
-2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0052.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
 index d79fc74..77fb509 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx

@@ -367,6 +367,10 @@ void fail_occt_allocation_if_asked(const char* operation) {
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
 }
 
+bool refusal_asked(const char* operation) {
+  return named_operation("MITCAD_TEST_OCCT_REFUSES") == operation;
+}
+
 void throw_if_allocation_failed(std::size_t before) {
   if (failed_allocations_in_thread() != before) {
     throw std::bad_alloc();

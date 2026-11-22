@@ -35,14 +35,8 @@ computed analytically, ChFiKPart, which finds the ball).
   wedge allows), or the faces do not meet as a knife, the start is the
   edge's point as before.
 
-Test: geometry/tests/test_fillet_knife_edge.cpp (ctest
-geometry.fillet_knife_edge): test_two_cylinders, two cylinders tangent to
-each other rounded at their knife edge with 1 and 5 (no start without the
-patch), seams on the edge and arcs through three points, each mirrored,
-the exact volume within 1e-6 relative; test_reported_knife_edge and
-test_with_ordinary_edges; and the boundary test_radius_too_large (25
-fails). Also geometry.suite.dressup, test_fillets_of_knife_edges. It fails
-without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1770.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
 index ee4e1452..00e3373c 100644

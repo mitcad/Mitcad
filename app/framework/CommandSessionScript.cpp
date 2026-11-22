@@ -174,8 +174,10 @@ bool CommandSession::scriptInputs(const QJsonObject& inputs, const ItemReader& r
 }
 
 bool CommandSession::scriptBusy() const {
+  // A value waiting for the model to take it (numericInputAction) too: its
+  // preview follows its drain (mitcad#2189).
   return !m_done && (m_previewTimer.isActive() || m_asyncPending || m_commitRequested || m_committing ||
-                     m_cancelRequested || m_host.modelBusy());
+                     m_cancelRequested || m_host.modelBusy() || !m_pendingNumbers.isEmpty());
 }
 
 QJsonObject CommandSession::scriptState() {

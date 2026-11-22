@@ -40,6 +40,10 @@ public:
                bool oneLine = false, const QString& notice = QString(),
                NoticeLevel level = NoticeLevel::Information);
   QString text() const { return m_text; }
+  // The tooltip of the text and link buttons (InputDef::tooltip of the row,
+  // mitcad#2222: the Plates panel's Take Off Plate); an icon button keeps
+  // its action as its tooltip. Set before setNote makes the buttons.
+  void setActionTooltip(const QString& tooltip) { m_actionTooltip = tooltip; }
   // The buttons in order, for the places logged.
   const std::vector<QPushButton*>& buttons() const { return m_buttons; }
 
@@ -63,6 +67,7 @@ private:
   QStringList m_actions;
   QStringList m_icons;
   bool m_oneLine = false;
+  QString m_actionTooltip;
   QString m_notice;
   NoticeLevel m_noticeLevel = NoticeLevel::Information;
   QLabel* m_noticeLabel = nullptr; // the notice under the text's line

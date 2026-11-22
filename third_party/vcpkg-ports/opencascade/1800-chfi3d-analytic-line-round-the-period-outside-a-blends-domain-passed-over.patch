@@ -35,12 +35,8 @@ taking 0.33 away.
   inside the domains. A line inside them is taken as before.
 - No catch is added.
 
-Test: cli.fcstd_bend_reported (tools/cli/fcstd-bend-reported-test.cmake),
-the reported bent guide imported with its bend radius set to 32: every
-feature rebuilds and the body stays within its two pads' ends (before: the
-rounding at a pad's end reached 3.8 beyond it). No body built from OCCT's
-primitives alone reproduced the line round the period: it depends on the
-input's last bits.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1800.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index d587317..f4d6954 100644

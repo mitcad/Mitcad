@@ -12,7 +12,9 @@
 #      out of sight: Make is a workspace of its own). The title row's Home shows the Start page without the panel
 #      (no workspace there); a picture of it (workspaces-start.png). A
 #      click on the design's tab leaves the page for Design's Solid tab,
-#      the panel back; a picture of it (workspaces-solid.png).
+#      the panel back ("Start page left for SOLID", and "Toolbar panel
+#      after the Start page: shown at ..." with the window exposed,
+#      mitcad#2031); a picture of it (workspaces-solid.png).
 #   2. Design -> Make from the selector's list (a click on the selector,
 #      the arrow keys, Enter; Make's entry names its tabs, 3D Print · Laser
 #      · CNC): Make's three tabs alone, 3D Print shown, Design's out of
@@ -80,8 +82,14 @@ mark
 click-logged '^Document tab shown at '
 wait-log '^Start page left by the design.s tab$'
 wait-log '^Ribbon tab shown: SOLID$'
+wait-log '^Start page left for SOLID$'
 wait-log '^Start page hidden$'
 wait-log '^Ribbon panel shown$'
+# The panel placed once the page is left (mitcad#2031): in the window,
+# below the title row. The window is exposed on Linux and macOS (their
+# wrappers check it); in Windows' session 0, where the build VM runs the UI
+# tests, no window is ever exposed (mitcad#2248).
+wait-log '^Toolbar panel after the Start page: shown at \d+,\d+ \d+x\d+ [(]Floating; the window (?:not )?exposed, platform '
 wait-idle
 sleep 500
 screenshot '${MITCAD_TEST_WORK}/workspaces-solid.png'

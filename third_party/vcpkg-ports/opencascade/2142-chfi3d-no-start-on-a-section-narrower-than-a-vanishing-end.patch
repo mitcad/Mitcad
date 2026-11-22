@@ -1,0 +1,102 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the first section of a constant rounding's walk is not taken
+where it is narrower than 5e-4 of the radius (a section by a vanishing
+end); the next place along the spine is tried, and such a section is the
+start only where no place has another (mitcad#2140, GitHub
+mitcad/Mitcad#517).
+
+The case: a Y tube, a circle of radius 10 swept along a line of 25 and a
+tangent quarter arc of radius 30, mirrored and joined. The arms (two tori)
+meet along a crease, two edges over the crotch's top, whose angle fades to
+nothing at both ends where the arms leave the trunk tangentially. The
+crease is rounded with 6, 6.5 and 7, but from 8 on the stripe fails with
+no piece. The walk's trace (patch 2141): StartSol tries the first place,
+0.19 % of the first edge from its start (w 0.058, 0.06 from the vanishing
+vertex). At 7 no section is found there, the walk starts at the next place
+(w 6.27), walks back into the vanishing end and on over both edges. At 8
+the section there is found, its contacts 5e-5 apart, the faces' normals
+within 1e-5 rad: the walk back towards the vertex stops after 0.0009 and
+ComputeData gives it up as dragging ("If it drags without control,
+quit"), and the stripe fails. With the arms' seams turned away from the
+crotch the same happens at 6.
+
+- ChFi3d_Builder::StartSol (of a stripe): a first section found for a
+  constant rounding whose contacts are less than 5e-4 of the radius apart
+  (the width at which ChFi3d_EndBeforeVanishing, patch 0771, takes a walk
+  into a vanishing end for that end) is not taken; the next place is
+  tried. The first such section is taken only where no place along the
+  spine gives another, its faces set again where a later place was on
+  another edge. Elsewhere nothing changes.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2142.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -1294,6 +1294,11 @@
+                   Spine->LastParameter(nbed),
+                   Precision::Confusion());
+   TopAbs_State Pos1 = TopAbs_UNKNOWN, Pos2 = TopAbs_UNKNOWN;
++  // The first section found narrower than a vanishing end (below).
++  bool     aNarrowFound = false;
++  gp_Pnt2d aNarrowP1, aNarrowP2;
++  double   aNarrowW    = 0.;
++  int      aNarrowEdge = 0;
+   for (nbessai = 0; nbessai <= nbessaimax; nbessai++)
+   {
+     double t  = nbessai * unsurnbessaimax;
+@@ -1398,10 +1403,52 @@
+     {
+       P1.SetCoord(SolDep(1), SolDep(2));
+       P2.SetCoord(SolDep(3), SolDep(4));
++      // (A section narrower than 5e-4 of the radius, as where
++      // ChFi3d_EndBeforeVanishing takes a walk into a vanishing end for that
++      // end, is no start: the walk from it towards the end stalls at once and
++      // drags, mitcad#2140. The next place is tried; it starts there only
++      // where no other place has a section.)
++      if (!aKnifeSpine.IsNull() && aKnifeSpine->IsConstant(iedge)
++          && HS1->Value(SolDep(1), SolDep(2)).Distance(HS2->Value(SolDep(3), SolDep(4)))
++               < 5.e-4 * aKnifeSpine->Radius(iedge))
++      {
++        if (!aNarrowFound)
++        {
++          aNarrowFound = true;
++          aNarrowP1    = P1;
++          aNarrowP2    = P2;
++          aNarrowW     = w;
++          aNarrowEdge  = iedge;
++        }
++        if (ChFi3d_TracingWalkOnSpine())
++        {
++          std::fprintf(stderr, "fillet walk: the section at w %.9g is narrower than a vanishing end: no start\n", w);
++        }
++        continue;
++      }
+       First = w;
+       return;
+     }
+   }
++  if (aNarrowFound)
++  {
++    // (No place but narrow ones: the first of them, as before.)
++    if (aNarrowEdge != iedge)
++    {
++      ConexFaces(Spine, aNarrowEdge, HS1, HS2);
++      I1->Initialize((const occ::handle<Adaptor3d_Surface>&)HS1);
++      const occ::handle<Adaptor3d_Surface>& aHSon2 = HS2; // to avoid ambiguity
++      I2->Initialize(aHSon2);
++    }
++    P1    = aNarrowP1;
++    P2    = aNarrowP2;
++    First = aNarrowW;
++    if (ChFi3d_TracingWalkOnSpine())
++    {
++      std::fprintf(stderr, "fillet walk: only narrow sections: the start at w %.9g\n", aNarrowW);
++    }
++    return;
++  }
+   // No solution was found for the faces adjacent to the trajectory.
+   // Now one tries the neighbor faces.
+   iedge = 0;

@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# A panel's preview held while the model finishes another job shows the
+# busy mark (mitcad#2118), on panel-message-top.json (a 20 mm cube:
+# Sketch1 F1, Extrude1 F2), in the layout the runner chose (Docked,
+# Floating):
+#   Extrude1 edited, its Distance 7 mm: the preview, then its display
+#   meshes refined in a job of their own, which the test's worker gate
+#   holds (hold-model-display). A Distance of 9 mm typed meanwhile waits
+#   for that job ("Preview Extrude: waits for the model"), and the busy mark
+#   beside OK and Cancel shows while it waits ("Panel Extrude busy mark
+#   shown after N ms: Waiting for the design to finish computing…"), as it
+#   does while a preview computes (mitcad#1907). Once the job is let go
+#   the 9 mm preview follows and the mark hides. (Before, the panel waited
+#   with no mark.)
+# Run by tools/ui-panel-busy-waiting-test.sh (Linux),
+# tools/ui-windows-panel-busy-waiting-test.ps1 (Windows) and
+# tools/ui-macos-panel-busy-waiting-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Extrude1 edited, its first preview and refinement done.
+mark
+dblclick-logged '^Timeline Extrude1 at '
+wait-log '^Editing F2 with Extrude' 20
+wait-log '^Panel Extrude input distance at ' 20
+wait-idle 30
+
+# Distance 7 mm: a new preview, whose refinement the gate holds.
+mark
+hold-model-display true
+type-in '^Panel Extrude input distance at ' '7 mm'
+wait-log '^Preview Extrude: ok' 30
+wait-log '^Preview Extrude: refining the display meshes' 30
+expect-model-busy true
+
+# Distance 9 mm while that job is held: the panel waits, its busy mark shown.
+mark
+qt-type-now input_distance '9 mm'
+wait-log '^Preview Extrude: waits for the model' 10
+wait-log '^Panel Extrude busy mark shown after [0-9]+ ms: Waiting for the design to finish computing' 10
+expect-model-busy true
+expect-no-log '^Preview Extrude: ok'
+
+# The job let go: the 9 mm preview, then the mark hidden.
+mark
+hold-model-display false
+wait-log '^Extrude Distance: 9 mm' 30
+wait-log '^Preview Extrude: ok' 30
+wait-log '^Panel Extrude busy mark hidden after ' 10
+wait-idle 30
+
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle
+expect-never 'The document was read while a job computes it|TestDriver: FAIL'

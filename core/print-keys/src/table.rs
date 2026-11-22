@@ -4252,9 +4252,12 @@ pub(super) static KEYS: &[KeyDef] = &[
     ),
     // The purge volumes' multiplier (mitcad#705): the Bambu family keeps it
     // beside its purge matrix, which it multiplies; PrusaSlicer has none
-    // (its matrix is written multiplied, the model's `print_purge`). Read as a
-    // list (one per extruder in newer projects), written as one text, which
-    // the family's loaders take for both forms (the export's purge table).
+    // (its matrix is written multiplied, the model's `print_purge`). A list
+    // with one entry per extruder: read as its first entry, written by the
+    // export's purge table with as many entries as it writes tables
+    // (mitcad#2207: the family's loaders keep it per extruder and count the
+    // matrix's tables by its length; one text crashes Bambu Studio 2.9's
+    // slicing of a two-extruder printer).
     key!(
         Process,
         "flush_multiplier",

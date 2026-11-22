@@ -566,6 +566,7 @@ void SketchItemList::describeStep(const QString& kind, Cell& cell) const {
       {"chamfer", "sketch-chamfer", tr("Sketch Chamfer")},
       {"trim", "trim", tr("Trim")},
       {"extend", "extend", tr("Extend")},
+      {"extend_to_meet", "extend-to-meet", tr("Extend to Meet")},
       {"break", "sketch-break", tr("Break")},
       {"split", "sketch-split", tr("Split at Point")},
       {"offset", "offset", tr("Offset")},
@@ -583,6 +584,7 @@ void SketchItemList::describeStep(const QString& kind, Cell& cell) const {
       {"edit_equal_spacing", "equal-spacing", tr("Equal Spacing")},
       {"paste", "paste", tr("Paste")},
       {"import_svg", "import", tr("Insert SVG")},
+      {"import_points", "import", tr("Insert Points")},
       {"import_dxf", "insert-dxf", tr("Insert DXF")},
       {"move", "move", tr("Move/Copy")},
       {"scale", "sketch-scale", tr("Sketch Scale")},
@@ -594,6 +596,8 @@ void SketchItemList::describeStep(const QString& kind, Cell& cell) const {
       {"insert_block", "insert-block", tr("Insert Block")},
       {"explode_block", "explode-block", tr("Explode Block")},
       {"edit_block", "edit-block", tr("Edit Block")},
+      // Explode Text (mitcad#2163).
+      {"explode_text", "explode-text", tr("Explode Text")},
   };
   cell.name = tr("Sketch Step");
   cell.icon = QStringLiteral("sketch");

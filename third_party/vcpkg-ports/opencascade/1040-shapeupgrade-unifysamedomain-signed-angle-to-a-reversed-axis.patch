@@ -36,18 +36,8 @@ reversed, u on the reference is u on the face plus the angle; where the
 handedness is, the angle less u. Where neither is reversed nothing
 changes, nor where the angle lies between 0 and pi.
 
-Test: geometry/tests/test_merge_reversed_axis.cpp,
-test_sector_behind_with_its_axis_reversed and
-test_sector_ahead_with_its_axis_reversed (ctest
-geometry.merge_reversed_axis): a quarter of a cylinder fused with a sector
-before or after it mirrored top to bottom (its axis down, its frame
-indirect), either first: the merge valid, one cylindrical face, the volume
-kept. Without the patch the two faces stay apart wherever the other face's
-X direction lies behind the reference face's (the sector behind with the
-quarter first, the sector ahead with the sector first); the other two
-orders, whose angle lies between 0 and pi, are the boundary cases the
-patch leaves as they were. It fails without the patch (shown 2026-11-20 by
-tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1040.
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 @@ -1445,19 +1445,12 @@

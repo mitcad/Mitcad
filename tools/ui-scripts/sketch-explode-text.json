@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-explode-text.mitcad-ui (mitcad#2163): Sketch1 (F1) on XY holds the text t1 'I' in the bundled font, 20 mm high, from the origin; its outline is straight lines, the first piece of which becomes c4 when it explodes (its ends p2 and p3)."},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_text", "sketch": "F1", "text": "I", "at": [0, 0], "height": 20}
+]

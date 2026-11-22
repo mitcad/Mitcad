@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: MIT
+# Boundary Fill (mitcad#2149, app/COMMANDS.md "Boundary Fill") on the
+# design boundary-fill.json makes: four untrimmed surface walls (Body1-4)
+# that Plane1 and Plane2 close off into a 20 mm box from z 5 to 25, and a
+# block (Body5) with Plane3 across its middle.
+#   1. Boundary Fill: the four walls and the two planes picked; the one
+#      closed region is taken at once (Cells 1), New Body, OK: a solid of
+#      8000 mm3 (BoundaryFill1, F13.b0).
+#   2. Boundary Fill again: the block and Plane3 close off two regions,
+#      none taken; Operation Cut, the dot of the region beyond the plane
+#      clicked in the view (Cells 2), OK: the block keeps its half,
+#      8000 -> 4000 mm3.
+#   3. Undo takes the cut back; BoundaryFill1 edited from the timeline
+#      opens the panel with its cell (Cells 1, its preview); Escape.
+# Run by tools/ui-boundary-fill-test.sh (Linux),
+# tools/ui-windows-boundary-fill-test.ps1 (Windows) and
+# tools/ui-macos-boundary-fill-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle 30
+# The browser's Bodies and Construction folders open collapsed here: open
+# them, and wait for their rows' places.
+mark
+click-logged '^Browser arrow Root/Bodies at '
+wait-log '^Browser Root/Bodies/Body5 at ' 30
+wait-idle
+mark
+click-logged '^Browser arrow Root/Construction at '
+wait-log '^Browser Root/Construction/Plane3 at ' 30
+wait-idle
+
+# 1. Four surfaces and two planes: the one closed region filled.
+mark
+command solid.boundary_fill
+wait-log '^Command Boundary Fill started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Boundary Fill Tools: 1 body' 30
+click-logged '^Browser Root/Bodies/Body2 at '
+click-logged '^Browser Root/Bodies/Body3 at '
+click-logged '^Browser Root/Bodies/Body4 at '
+click-logged '^Browser Root/Construction/Plane1 at '
+wait-log '^Boundary Fill closed regions: 0$' 60
+click-logged '^Browser Root/Construction/Plane2 at '
+wait-log '^Boundary Fill closed regions: 1$' 60
+wait-log '^Preview Boundary Fill: ok' 60
+wait-idle 60
+expect-input-text cells '^1$'
+screenshot '${MITCAD_TEST_WORK}/boundary-fill-one-region.png'
+mark
+key Return
+wait-log '^Added boundary fill [(]New Body[)] of 1 cells from 6 tools' 60
+wait-idle 60
+capture made 'New body \S+ [(]F13[.]b0[)]: volume ([0-9.]+) mm3' 30
+expect-near ${made} 8000 1e-6 0.01
+expect-ever '^Timeline BoundaryFill1 at ' 30
+
+# 2. A plane across the block: two closed regions, the one beyond the plane
+# clicked and cut from the block.
+mark
+command solid.boundary_fill
+wait-log '^Command Boundary Fill started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/Body5 at '
+wait-log '^Boundary Fill closed regions: 1$' 60
+click-logged '^Browser Root/Construction/Plane3 at '
+wait-log '^Boundary Fill closed regions: 2$' 60
+wait-log '^Panel Boundary Fill error: Click the dots of the closed regions to fill in the view' 60
+wait-idle 60
+click-logged '^Panel Boundary Fill input operation at '
+key Home Down Down Return
+wait-log 'Boundary Fill: Operation = Cut' 30
+wait-idle 30
+click-view-point 55,10,10
+wait-log '^Boundary Fill Cells: 2$' 30
+wait-log '^Preview Boundary Fill: ok' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/boundary-fill-cut.png'
+mark
+key Return
+wait-log '^Added boundary fill [(]Cut[)] of 1 cells from 2 tools' 60
+wait-idle 60
+capture cut 'Body \S+ [(]F11[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${cut} 4000 1e-6 0.01
+expect-ever '^Timeline BoundaryFill2 at ' 30
+
+# 3. Undo, then BoundaryFill1 edited: its panel opens with its cell.
+mark
+key ctrl+z
+wait-log '^Undo: ' 30
+wait-idle 30
+expect-model-bodies 6 16000
+mark
+dblclick-logged '^Timeline BoundaryFill1 at '
+wait-log ' with Boundary Fill$' 30
+wait-log '^Boundary Fill cells loaded: 1 of 1 closed regions, 0 points kept' 60
+wait-log '^Preview Boundary Fill: ok' 60
+wait-idle 60
+expect-input-text cells '^1$'
+mark
+key Escape
+wait-log '^Command Boundary Fill cancelled' 30
+wait-idle 30
+expect-model-bodies 6 16000
+expect-never 'Recompute failed|The document was read while a job computes it|TestDriver: FAIL'

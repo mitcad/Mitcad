@@ -23,14 +23,8 @@ the stripe failed.
 
 Upstream: new.
 
-Test: none, because no synthetic body reached its failure (mitcad#1986).
-Tried with the patch's code traced and with the patch reverted: the
-release within the tolerance is taken only on test_fillet_rolled_end_cut's
-body with its slot 1.06 to 1.15 times as wide (31 of 103 variants), whose
-rim rounding fails with and without the patch; no other of the OCCT-only
-geometry tests' bodies has a step land on the tangency. Verified on the
-design's replayed body only, a few micrometres off the stored one
-(core/import/docs/f3d-rounds-3.md).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0907.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_SurfRstLineBuilder.cxx
 index 47f5cdb2..9019424f 100644

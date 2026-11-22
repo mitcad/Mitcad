@@ -12,11 +12,8 @@ faces' order, as before. The results are unchanged. The faces and their
 intersectors are held in OCCT's containers (NCollection_DynamicArray and
 NCollection_Array1, mitcad#1986).
 
-Test: geometry/tests/test_classifier_pool_joins.cpp (joins with the
-classifier's intersectors made beside each other, on several threads at
-once, mitcad#1553). The speed itself: none, because the gain is the
-machine's cores (a parallel loop over the faces); no bound holds on a
-machine with one.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1282.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx
 index c92cb6e4..54fde971 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx

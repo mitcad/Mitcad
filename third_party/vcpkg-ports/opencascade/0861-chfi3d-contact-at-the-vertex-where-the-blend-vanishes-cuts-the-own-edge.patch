@@ -23,14 +23,8 @@ Fo, on an edge of F across which a face Fn goes on tangentially from F, Fn
 meeting Fo along an edge from V) a vertex interference on E at V, with the
 contact's transition carried over to E as E lies in F.
 
-Test: geometry/tests/test_fillet_near_tangent_contour.cpp,
-test_blend_thinner_than_the_vertex_tolerance (ctest
-geometry.fillet_near_tangent_contour): the same block with the vertex
-between the first two edges at a tolerance of 0.02, above the blend's half
-width there: valid, no part of the second edge left. Its failure without
-the patch is still to be shown: the patch does not revert at the port's
-tip without the more than 40 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0861.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index cb905b3e..11ed2ab9 100644

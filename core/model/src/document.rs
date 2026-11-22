@@ -220,6 +220,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 pub use analyses::{Analysis, AnalysisDef, SectionAnalysis, SectionPlane};
+pub use analyses::{DEFAULT_DRAFT_ANGLE, DraftAnalysis, check_draft_angle};
 pub use analyses::{EstimateCheck, MinGapCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
 pub use analyses::{check_minimum_wall, check_overhang_angle, print_material};
 pub use appearances::DeletedAppearance;
@@ -264,6 +265,26 @@ pub use mitcad_model_base::values::ModelError;
 
 fn invalid(message: impl Into<String>) -> ModelError {
     ModelError::Invalid(message.into())
+}
+
+/// A sketch's value by its slot, in words for a refusal (mitcad#2057):
+/// `offsets[k5].distance` is its "offset distance".
+fn sketch_value_words(slot: &str) -> &'static str {
+    if slot.starts_with("offsets[") {
+        "offset distance"
+    } else if slot.starts_with("texts[") {
+        "text"
+    } else if slot.starts_with("placement") {
+        "placement"
+    } else if slot.starts_with("patterns[") && slot.ends_with(".angle") {
+        "pattern angle"
+    } else if slot.starts_with("patterns[") {
+        "pattern spacing"
+    } else if slot.starts_with("dimensions[") {
+        "dimension"
+    } else {
+        "value"
+    }
 }
 
 /// `d12` and the like: the names the model gives new dimension parameters
@@ -410,6 +431,12 @@ pub struct DocState {
     /// The design's sketch blocks (mitcad#2110), in the order they were
     /// made; sketches hold instances of them.
     pub sketch_blocks: Vec<crate::sketch::block::SketchBlock>,
+    /// The groups of the user parameters (mitcad#2180): their paths, also
+    /// of groups that hold no parameter, and each grouped parameter's.
+    pub parameter_groups: crate::parameter_groups::ParameterGroups,
+    /// Selection sets (mitcad#2192), in the order they were added: named
+    /// links to bodies, occurrences and features.
+    pub selection_sets: Vec<SelectionSet>,
 }
 
 impl Default for DocState {
@@ -462,6 +489,8 @@ impl Default for DocState {
             gravity: None,
             cam: Default::default(),
             sketch_blocks: Vec::new(),
+            parameter_groups: Default::default(),
+            selection_sets: Vec::new(),
         }
     }
 }
@@ -581,6 +610,11 @@ impl DocState {
         owner_name: &str,
         old: Option<&FeatureDef>,
     ) -> Result<(FeatureDef, Vec<String>, Vec<KeptSlotParameter>), ModelError> {
+        if def.has_legacy_bend_relief() && !old.is_some_and(FeatureDef::has_legacy_bend_relief) {
+            return Err(invalid(
+                "Tear is no longer available for new bend reliefs. Choose Rectangular or Round.",
+            ));
+        }
         let mut old_slots = HashMap::new();
         if let Some(old) = old {
             let _ = old.map_params(&mut |slot, id: &ParamId| {
@@ -880,8 +914,10 @@ impl DocState {
     /// no value: a reference is known only after its sketch, so only the
     /// features after it may use it, directly or through other parameters'
     /// expressions, and the sketch's own driving dimensions (mitcad#1116:
-    /// solved after it, see [`DocState::check_driven_uses`]), not its
-    /// patterns, offsets, texts or placement.
+    /// solved after it, see [`DocState::check_driven_uses`]) and pattern
+    /// spacings and angles (mitcad#2057; a 3D sketch's patterns not), not
+    /// its offsets, texts or placement. The refusal names the value that
+    /// uses it in words (`Sketch1's offset distance`).
     pub(crate) fn check_reference_order(&self) -> Result<(), ModelError> {
         // Each reference: its sketch's position and name, and its dimension.
         let mut refs: HashMap<ParamId, (usize, &str, crate::sketch::ConstraintUid)> =
@@ -933,20 +969,26 @@ impl DocState {
             // What the feature uses: a sketch's own references are not uses.
             let mut used = entry.def.params();
             // A sketch's driving dimensions may use its own references
-            // (mitcad#1116), its other values (patterns, offsets, texts,
-            // placement) not.
-            let mut dimension_values = BTreeSet::new();
-            let mut other_values = BTreeSet::new();
+            // (mitcad#1116), and so may its patterns' spacings and angles
+            // (mitcad#2057: users like the dimensions, solved in stages);
+            // its other values (offsets, texts, placement) not. Each value
+            // refused, in words.
+            let mut solved_values = BTreeSet::new();
+            let mut other_values: BTreeMap<ParamId, &'static str> = BTreeMap::new();
+            // Its patterns may use them (a 3D sketch's planar patterns not).
+            let mut patterns_may = false;
             if let FeatureDef::Sketch(def) = &entry.def {
                 for r in def.dimensions.iter().filter_map(|d| d.reference) {
                     if let Some(i) = used.iter().position(|p| *p == r) {
                         used.swap_remove(i);
                     }
                 }
-                dimension_values.extend(def.dimensions.iter().filter_map(|d| d.value));
+                solved_values.extend(def.dimensions.iter().filter_map(|d| d.value));
+                solved_values.extend(def.patterns.iter().flat_map(|p| p.values()).copied());
+                patterns_may = true;
                 let _ = def.map_params(&mut |slot, id: &ParamId| {
-                    if !slot.starts_with("dimensions[") {
-                        other_values.insert(*id);
+                    if !slot.starts_with("dimensions[") && !slot.starts_with("patterns[") {
+                        other_values.entry(*id).or_insert(sketch_value_words(slot));
                     }
                     Ok::<_, ()>(())
                 });
@@ -959,32 +1001,38 @@ impl DocState {
                         used.swap_remove(i);
                     }
                 }
-                dimension_values.extend(def.dimensions.iter().filter_map(|d| d.value));
+                solved_values.extend(def.dimensions.iter().filter_map(|d| d.value));
                 let _ = def.map_params(&mut |slot, id: &ParamId| {
                     if !slot.starts_with("dimensions[") {
-                        other_values.insert(*id);
+                        other_values.entry(*id).or_insert(sketch_value_words(slot));
                     }
                     Ok::<_, ()>(())
                 });
             }
             for id in used {
-                let in_dimension = dimension_values.contains(&id) && !other_values.contains(&id);
+                let in_solve = solved_values.contains(&id) && !other_values.contains_key(&id);
                 for r in uses(id) {
                     let (at, sketch, dimension) = refs[&r];
-                    if position < at || (position == at && !in_dimension) {
+                    if position < at || (position == at && !in_solve) {
                         let through = if id == r {
                             String::new()
                         } else {
                             format!(" (through parameter {})", self.parameters.name(id))
                         };
                         let (user, who) = if position == at {
-                            (
-                                format!("{sketch} itself"),
+                            let user = match other_values.get(&id) {
+                                Some(what) => format!("{sketch}'s {what}"),
+                                None => format!("{sketch} itself"),
+                            };
+                            let who = if patterns_may {
                                 format!(
-                                    " outside its driving dimensions; only those and the \
-                                     features after {sketch} can"
-                                ),
-                            )
+                                    "; only its dimensions, pattern spacings and angles, and \
+                                     the features after {sketch} can"
+                                )
+                            } else {
+                                format!("; only its dimensions and the features after {sketch} can")
+                            };
+                            (user, who)
                         } else {
                             (
                                 format!("{}, before {sketch} in the timeline,", entry.name),
@@ -1003,9 +1051,10 @@ impl DocState {
         Ok(())
     }
 
-    /// Refuses a circular dependency in a sketch whose driving dimensions
-    /// use its own driven ones (mitcad#1116): a driving dimension that can
-    /// move what a driven dimension it uses measures, directly or through
+    /// Refuses a circular dependency in a sketch whose driving dimensions or
+    /// patterns use its own driven ones (mitcad#1116, mitcad#2057): a
+    /// driving dimension or a pattern that can move what a driven dimension
+    /// it uses measures, directly or through
     /// other driven dimensions (`mitcad_sketch::driven`). Sketches whose
     /// definition and parameters are those of `before` are not checked
     /// again.
@@ -1157,6 +1206,49 @@ impl DocState {
         let name = self.parameters.name(id);
         users.extend(self.binding_users(&name));
         users.extend(self.cam.parameter_users(&name));
+        users
+    }
+
+    /// What uses a parameter, in words (mitcad#2202): the features, the
+    /// bindings, CAM's setups and operations, the configuration's rules,
+    /// options and columns, and the parameters whose expressions refer to
+    /// it. `delete_parameter` refuses a parameter while any of them uses
+    /// it; the Parameters window disables its delete button and says why.
+    pub fn parameter_users(&self, name: &str) -> Vec<String> {
+        let Some(id) = self.parameters.find(name) else {
+            return Vec::new();
+        };
+        let mut users = self.param_users(id);
+        users.extend(
+            self.configurations
+                .rules_using(name)
+                .into_iter()
+                .map(|rule| format!("the rule {rule}")),
+        );
+        if self.configurations.is_option(name)
+            || self.configurations.parameters.iter().any(|p| p == name)
+        {
+            users.push("the configurations".to_owned());
+        }
+        users.extend(
+            self.parameters
+                .table()
+                .dependents(id)
+                .into_iter()
+                .map(|dependent| {
+                    // A feature's dimension with its feature: `d1 of the
+                    // feature Extrude1`.
+                    let name = self.parameters.name(dependent);
+                    match self
+                        .parameters
+                        .owner(dependent)
+                        .and_then(|owner| self.entry(owner))
+                    {
+                        Some(feature) => format!("{name} of the feature {}", feature.name),
+                        None => name,
+                    }
+                }),
+        );
         users
     }
 
@@ -1332,6 +1424,20 @@ impl DocState {
         uid: FeatureUid,
         def: &FeatureDef<ValueInput>,
     ) -> Result<(Vec<String>, Vec<KeptSlotParameter>), ModelError> {
+        self.edit_feature_following(uid, def, None)
+    }
+
+    /// [`DocState::edit_feature_keeping`]; with `follow`, the later
+    /// features that work only on the geometry the feature makes go with
+    /// it when the edit changes its operation (mitcad#2185,
+    /// [`DocState::follow_operation`]): into the component it now makes,
+    /// or back into its own component before the one it made goes.
+    pub fn edit_feature_following(
+        &mut self,
+        uid: FeatureUid,
+        def: &FeatureDef<ValueInput>,
+        follow: Option<&OperationFollow>,
+    ) -> Result<(Vec<String>, Vec<KeptSlotParameter>), ModelError> {
         let position = self.require(uid)?;
         let old = self.features[position].clone();
         if old.def.type_name() != def.type_name() {
@@ -1352,6 +1458,18 @@ impl DocState {
         self.check_values(&entry.def)?;
         self.features[position] = Arc::new(entry);
         self.sync_point_pattern(uid)?;
+        // What works only on its geometry follows it (mitcad#2185): into
+        // the component it now makes (made first), or back into its own.
+        if let Some(follow) = follow {
+            let from = self.assembly.created_by(uid).unwrap_or(old.component);
+            let to = if self.features[position].def.info().new_component() {
+                self.sync_made_component(uid)?;
+                self.assembly.created_by(uid).unwrap_or(old.component)
+            } else {
+                old.component
+            };
+            self.follow_operation(uid, from, to, follow);
+        }
         // The features after it may refer to what the edit removed.
         for later in position + 1..self.features.len() {
             let entry = self.features[later].clone();
@@ -1817,6 +1935,10 @@ pub struct Document<K: Kernel> {
     sketch_step_kind: Option<String>,
     recorded_sketch_step: Option<(FeatureUid, u32)>,
     sketch_step_changes: Vec<EntityUid>,
+    /// The slicers' data folders the 3MF export looks printer presets up
+    /// in (mitcad#2207, [`Document::set_slicer_folders`]); the installed
+    /// slicers' when None. Runtime context only.
+    slicer_folders: Option<Vec<crate::print_files::installed::SlicerFolder>>,
 }
 
 /// A `sketch` query's answer with what it was made from (mitcad#679): the
@@ -1885,6 +2007,7 @@ impl<K: Kernel> Document<K> {
             sketch_step_kind: None,
             recorded_sketch_step: None,
             sketch_step_changes: Vec::new(),
+            slicer_folders: None,
         }
     }
 
@@ -2274,6 +2397,7 @@ impl<K: Kernel> Document<K> {
             sketch_step_kind: None,
             recorded_sketch_step: None,
             sketch_step_changes: Vec::new(),
+            slicer_folders: self.slicer_folders.clone(),
         })
     }
 
@@ -3013,9 +3137,16 @@ impl<K: Kernel> Document<K> {
         recompute |= next.settle_bindings();
         // Timeline groups stay runs whatever the edit did (P9).
         next.normalize_groups();
+        // A deleted parameter, or one a feature adopted, leaves its
+        // parameter group (mitcad#2180).
+        if next.parameters != self.state.parameters {
+            next.parameter_groups.retain_users(&next.parameters);
+        }
         // Studies and contact sets lose what deleted joints and
         // occurrences leave behind (mitcad#454).
         next.prune_motion();
+        // Selection sets lose the items deleted (mitcad#2192).
+        next.prune_selection_sets();
         // A sketch that got its first consumer hides, one that lost its
         // last shows (mitcad#7).
         next.follow_sketch_use(&self.state);
@@ -3236,8 +3367,11 @@ impl<K: Kernel> Document<K> {
         // Where an assembly cut lies against what it machines (mitcad#2131).
         let framed = self.with_machined_frames(def, Some(uid));
         let def = framed.as_ref();
+        // What works only on its geometry when the operation changes
+        // (mitcad#2185).
+        let follow = self.operation_follow(uid, def);
         self.apply(|state| {
-            let edited = state.edit_feature_keeping(uid, def)?;
+            let edited = state.edit_feature_following(uid, def, follow.as_ref())?;
             state.place_made_beside(uid, made, beside);
             let name = state.entry(uid).expect("edited").name.clone();
             Ok((format!("Edit {name}"), edited))
@@ -3467,6 +3601,22 @@ impl<K: Kernel> Document<K> {
         comment: &str,
         limits: ParamLimits,
     ) -> Result<(), ModelError> {
+        self.add_parameter_in_group(name, expression, unit, comment, limits, "")
+    }
+
+    /// [`Document::add_parameter_with_limits`] into a parameter group
+    /// (mitcad#2180), made with its parents when it does not exist; `""`
+    /// for none. One undo step.
+    pub fn add_parameter_in_group(
+        &mut self,
+        name: &str,
+        expression: &str,
+        unit: Option<Unit>,
+        comment: &str,
+        limits: ParamLimits,
+        group: &str,
+    ) -> Result<(), ModelError> {
+        let group = crate::parameter_groups::group_path(group).map_err(invalid)?;
         self.apply(|state| {
             let unit = match unit {
                 Some(unit) => unit,
@@ -3487,7 +3637,8 @@ impl<K: Kernel> Document<K> {
             let spec = ParamSpec::user(name, expression, unit)
                 .with_comment(comment)
                 .with_limits(limits);
-            state.parameters.add(spec, None)?;
+            let id = state.parameters.add(spec, None)?;
+            state.parameter_groups.set(id, &group);
             Ok((format!("Add Parameter {name}"), ()))
         })
     }
@@ -3763,6 +3914,34 @@ impl<K: Kernel> Document<K> {
         what: &str,
         edit: impl FnOnce(&mut SketchEdit<'_>) -> Result<T, String>,
     ) -> Result<(T, EditReport), ModelError> {
+        self.edit_sketch_or_check(sketch, what, false, edit)
+    }
+
+    /// Runs `edit` as [`Document::edit_sketch`] would, on a copy of the
+    /// document's state that is then dropped (mitcad#2184): the edit's
+    /// value when the sketch would take it, else the same refusal. Nothing
+    /// changes: not the design, its undo history or its results. A sketch
+    /// tool asks with it which of two constraints it can add
+    /// (`sketch.add_constraint` with `check`).
+    pub fn check_sketch_edit<T>(
+        &mut self,
+        sketch: FeatureUid,
+        what: &str,
+        edit: impl FnOnce(&mut SketchEdit<'_>) -> Result<T, String>,
+    ) -> Result<T, ModelError> {
+        self.edit_sketch_or_check(sketch, what, true, edit)
+            .map(|(value, _)| value)
+    }
+
+    /// [`Document::edit_sketch`], or with `check` its
+    /// [`Document::check_sketch_edit`].
+    fn edit_sketch_or_check<T>(
+        &mut self,
+        sketch: FeatureUid,
+        what: &str,
+        check: bool,
+        edit: impl FnOnce(&mut SketchEdit<'_>) -> Result<T, String>,
+    ) -> Result<(T, EditReport), ModelError> {
         if let Some(entry) = self.state.entry(sketch) {
             self.state.editable(entry.component)?;
         }
@@ -3776,7 +3955,7 @@ impl<K: Kernel> Document<K> {
         // (mitcad#1750, [`Document::set_sketch_step_kind`]).
         let step_kind = self.sketch_step_kind.clone();
         let step_changes = self.sketch_step_changes.clone();
-        let result = self.apply(|state| {
+        let change = |state: &mut DocState| -> Result<(String, (T, EditReport)), ModelError> {
             let position = state.require(sketch)?;
             let entry = state.features[position].clone();
             let FeatureDef::Sketch(def) = &entry.def else {
@@ -3841,7 +4020,14 @@ impl<K: Kernel> Document<K> {
                 format!("{what} in {}", entry.name)
             };
             Ok((label, (value, report)))
-        });
+        };
+        if check {
+            // The same edit on a copy, dropped: no undo step, no
+            // recompute, no recorded step (mitcad#2184).
+            let mut copy = self.state.clone();
+            return change(&mut copy).map(|(_, value)| value);
+        }
+        let result = self.apply(change);
         if let Ok((_, report)) = &result
             && let Some(step) = report.step
         {
@@ -4025,6 +4211,7 @@ impl<K: Kernel> Document<K> {
             occurrence,
             context,
             false,
+            false,
         )
     }
 
@@ -4045,7 +4232,9 @@ impl<K: Kernel> Document<K> {
         occurrence: Option<&[OccurrenceUid]>,
         context: Option<&[OccurrenceUid]>,
     ) -> Result<EditReport, ModelError> {
-        self.project_or_section(sketch, source, body, linked, occurrence, context, true)
+        self.project_or_section(
+            sketch, source, body, linked, occurrence, context, true, false,
+        )
     }
 
     /// Projects curves and points of another sketch into a sketch
@@ -4240,12 +4429,40 @@ impl<K: Kernel> Document<K> {
                 link,
                 linked,
                 section,
+                automatic: false,
                 label: if section {
                     "Section Curves to {sketch}"
                 } else {
                     "Project to {sketch}"
                 },
             },
+        )
+    }
+
+    /// The outline of the face a sketch was just made on, projected into
+    /// it, linked, as [`Document::project_from`] projects the face, and
+    /// marked as the sketch's automatic outline
+    /// ([`crate::sketch::Projection::automatic`], mitcad#2197): its curves
+    /// do not split an area the sketch's other curves close. What
+    /// `sketch.create` with `project_face` does (mitcad#2051).
+    pub fn project_face_outline(
+        &mut self,
+        sketch: FeatureUid,
+        face: &crate::topo::FaceName,
+        body: Option<BodyUid>,
+        occurrence: Option<&[OccurrenceUid]>,
+        context: Option<&[OccurrenceUid]>,
+    ) -> Result<EditReport, ModelError> {
+        let source = crate::topo::TopoName::Face(face.clone());
+        self.project_or_section(
+            sketch,
+            Some(&source),
+            body,
+            true,
+            occurrence,
+            context,
+            false,
+            true,
         )
     }
 
@@ -4259,6 +4476,7 @@ impl<K: Kernel> Document<K> {
         occurrence: Option<&[OccurrenceUid]>,
         context: Option<&[OccurrenceUid]>,
         section: bool,
+        automatic: bool,
     ) -> Result<EditReport, ModelError> {
         use crate::sketch::project::SourceCurves;
         use crate::topo::TopoName;
@@ -4413,6 +4631,7 @@ impl<K: Kernel> Document<K> {
                 link,
                 linked,
                 section,
+                automatic,
                 label,
             },
         )
@@ -4515,6 +4734,7 @@ impl<K: Kernel> Document<K> {
             link,
             linked,
             section,
+            automatic,
             label,
         } = what;
         // Joined only to the projections of the same sketch's geometry, or
@@ -4588,6 +4808,7 @@ impl<K: Kernel> Document<K> {
                         chain: group.chain,
                         after: None,
                         outline: group.outline,
+                        automatic,
                     });
                 }
             }
@@ -5396,12 +5617,14 @@ fn display_names<S>(state: &DocState, result: &Recomputed<S>) -> BTreeMap<BodyUi
 
 /// How `Document::push_projections` adds its curves: the source's body
 /// (model geometry), its link to another component, whether the
-/// projection is linked or a section, and the edit's undo label.
+/// projection is linked or a section, whether it is the sketch's automatic
+/// face outline (mitcad#2197), and the edit's undo label.
 struct Projecting<'a> {
     body: Option<BodyUid>,
     link: Option<crate::links::OccurrenceLink>,
     linked: bool,
     section: bool,
+    automatic: bool,
     label: &'a str,
 }
 
@@ -5544,6 +5767,29 @@ mod occurrence_order;
 // Linked parts of a design (mitcad#2130).
 mod link_parts;
 pub use link_parts::{LinkPartNode, LinkPartsInput, LinkPartsSet, LinkPartsTree};
+// Explode Text: a text as plain sketch curves, later features' names of its
+// pieces rewritten to them (mitcad#2163).
+mod sketch_explode_text;
+pub use sketch_explode_text::TextExploded;
+// Groups of user parameters: made, renamed, deleted, parameters moved into
+// them (mitcad#2180).
+mod parameter_groups;
+// Selection sets: named links to bodies, occurrences and features
+// (mitcad#2192).
+mod selection_sets;
+pub use selection_sets::{SelectionSet, SetMember};
+// Features that follow a feature whose operation an edit changed: a Join
+// edited to New Component takes the fillets on its edges along
+// (mitcad#2185).
+mod operation_follow;
+pub use operation_follow::OperationFollow;
+// Components not for print services: the library flag a part keeps in the
+// design, and which bodies a print service may take (mitcad#2214).
+mod print_service;
+pub use print_service::PrintServiceBlock;
+// A whole design linked with its components, joints, rigid groups and
+// grounding, read only (mitcad#2209).
+mod link_tree;
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

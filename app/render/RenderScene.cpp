@@ -344,6 +344,7 @@ QJsonObject materialJson(const MaterialData& m) {
           {QStringLiteral("opacity"), double(m.opacity)}};
   if (!m.texture.empty() || m.hasMaps()) {
     const QString projection = m.textureUv       ? QStringLiteral("uv")
+                               : m.textureGrain  ? QStringLiteral("grain")
                                : m.texturePlanar ? QStringLiteral("planar")
                                                  : QStringLiteral("box");
     QJsonObject texture{{QStringLiteral("size"), QJsonArray{double(m.textureSize[0]), double(m.textureSize[1])}},
@@ -415,6 +416,7 @@ MaterialData materialOf(const QJsonObject& json) {
   const QString projection = texture.value(QStringLiteral("projection")).toString();
   m.texturePlanar = projection == QLatin1String("planar");
   m.textureUv = projection == QLatin1String("uv");
+  m.textureGrain = projection == QLatin1String("grain");
   m.normalMap = texture.value(QStringLiteral("normal")).toString().toStdString();
   m.roughnessMap = texture.value(QStringLiteral("roughness")).toString().toStdString();
   m.metalnessMap = texture.value(QStringLiteral("metalness")).toString().toStdString();

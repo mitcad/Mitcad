@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# The hatch of a large body's section caps lies in the section plane
+# (mitcad#2146, GitHub mitcad/Mitcad#522), on section-caps.json: Body1
+# (F2.b0) 2000 x 1000 x 500 mm. The viewer's look line names the hatch's
+# largest distance from the plane, 0 within 0.000001 mm (it was half a
+# percent of the caps' size, 5.6 mm here, lifted toward the eye).
+#   1. Across, the YZ plane moved 1300: a 1000 x 500 mm cap, hatched at
+#      45 degrees, in the plane.
+#   2. Turned, the YZ plane turned 30 degrees about Z, moved 700 and
+#      flipped: a slanted cap, its hatch in the plane too.
+# Run by tools/ui-section-caps-test.sh (Linux) and
+# tools/ui-windows-section-caps-test.ps1 (Windows).
+wait-idle 120
+
+# 1. Across: 1000 x 500 mm at x = 1300.
+wait-log '^Section caps: 1 face\(s\) at .*"origin":\[1300,0,0\].*, area 500000\.0$' 120
+wait-log '^Section caps: 1 colour\(s\) \[#[0-9a-f]{6} hatch #[0-9a-f]{6} at 45 deg, [1-9][0-9]* lines, [0-9.]+ mm off the plane\]' 60
+capture acrossLift '^Section caps: 1 colour\(s\) \[.* lines, ([0-9.]+) mm off the plane\]'
+expect-near ${acrossLift} 0 0 0.000001
+expect-never '^Section: F2\.b0 shown whole'
+
+# Across hidden: the caps go, and the look is logged afresh for the next.
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Across","visible":false}'
+wait-log '^Section caps: none$' 60
+wait-idle 60
+
+# 2. Turned: slanted across the block, flipped.
+mark
+model-command '{"cmd":"set_analysis_visible","name":"Turned","visible":true}'
+wait-log '^Section caps: 1 face\(s\) at .*, area [0-9.]+$' 120
+wait-log '^Section caps: 1 colour\(s\) \[#[0-9a-f]{6} hatch #[0-9a-f]{6} at 45 deg, [1-9][0-9]* lines, [0-9.]+ mm off the plane\]' 60
+capture turnedLift '^Section caps: 1 colour\(s\) \[.* lines, ([0-9.]+) mm off the plane\]'
+expect-near ${turnedLift} 0 0 0.000001
+expect-never '^Section: F2\.b0 shown whole'
+expect-never '^Section clip warning: '
+expect-never 'TestDriver: FAIL'

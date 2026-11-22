@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "web/WebGlb.hpp"
 
+#include "render/GrainProjection.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -173,6 +175,8 @@ struct Projection {
   // By the mesh's own texture coordinates (mitcad#1862) where it has them,
   // else box.
   bool uv = false;
+  // Along each face's grain (mitcad#2186, render/GrainProjection.hpp).
+  bool grain = false;
   double width = 100.0;
   double height = 100.0;
   double rotation = 0.0;
@@ -180,16 +184,21 @@ struct Projection {
 
 // Texture coordinates of a point (mm, the body's own coordinates) on a
 // triangle facing `normal`: planar takes (x, y); box (y, z) where it faces
-// X most, (x, z) where it faces Y, (x, y) where it faces Z; turned back by
-// the rotation and divided by the size of one repeat. glTF's v grows down
-// the image, so it is negated.
-std::array<float, 2> project(const Projection& p, const float* point, const std::array<double, 3>& normal) {
+// X most, (x, z) where it faces Y, (x, y) where it faces Z; along the grain
+// the point's grain coordinates (`grain`, mm); turned back by the rotation
+// and divided by the size of one repeat. glTF's v grows down the image, so
+// it is negated.
+std::array<float, 2> project(const Projection& p, const float* point, const std::array<double, 3>& normal,
+                             const float* grain = nullptr) {
   const double nx = std::abs(normal[0]);
   const double ny = std::abs(normal[1]);
   const double nz = std::abs(normal[2]);
   double a = point[0];
   double b = point[1];
-  if (!p.planar) {
+  if (p.grain && grain != nullptr) {
+    a = grain[0];
+    b = grain[1];
+  } else if (!p.planar) {
     if (nx >= std::max(ny, nz)) {
       a = point[1];
       b = point[2];
@@ -438,13 +447,14 @@ int GlbWriter::material(const render::MaterialData& m) {
   if (textured) {
     projection.planar = m.texturePlanar;
     projection.uv = m.textureUv;
+    projection.grain = m.textureGrain;
     projection.width = m.textureSize[0] > 0.0f ? static_cast<double>(m.textureSize[0]) : 100.0;
     projection.height = m.textureSize[1] > 0.0f ? static_cast<double>(m.textureSize[1]) : 100.0;
     projection.rotation = m.textureRotation;
   }
   const QString key = QString::fromUtf8(QJsonDocument(entry).toJson(QJsonDocument::Compact)) +
                       (textured ? QStringLiteral("|%1|%2|%3|%4")
-                                      .arg(projection.uv ? 2 : projection.planar ? 1 : 0)
+                                      .arg(projection.uv ? 2 : projection.grain ? 3 : projection.planar ? 1 : 0)
                                       .arg(projection.width)
                                       .arg(projection.height)
                                       .arg(projection.rotation)
@@ -526,6 +536,8 @@ int GlbWriter::mesh(const render::MeshData& data, int bodyMaterial,
       // The mesh's own texture coordinates (mitcad#1862), glTF's v down
       // the image from its top.
       const bool ownUvs = projection.uv && data.uvs.size() == vertices * 2;
+      // Each vertex's grain coordinates (mitcad#2186), by its face.
+      const render::GrainMesh grain = projection.grain ? render::grainMeshOf(data) : render::GrainMesh{};
       std::vector<float> points;
       std::vector<float> directions;
       std::vector<float> uv;
@@ -555,7 +567,10 @@ int GlbWriter::mesh(const render::MeshData& data, int bodyMaterial,
           const std::array<float, 2> st =
               ownUvs ? std::array<float, 2>{data.uvs[static_cast<std::size_t>(corner[k]) * 2],
                                             1.0f - data.uvs[static_cast<std::size_t>(corner[k]) * 2 + 1]}
-                     : project(projection, p, facing);
+                     : project(projection, p, facing,
+                               grain.coordinates.size() == vertices * 2
+                                   ? &grain.coordinates[static_cast<std::size_t>(corner[k]) * 2]
+                                   : nullptr);
           uv.insert(uv.end(), {st[0], st[1]});
         }
       }

@@ -43,6 +43,10 @@ struct MaterialData {
   // the image once over 0 to 1 of each, its size and rotation not used. A
   // mesh without them is projected as box.
   bool textureUv = false;
+  // Along the grain (mitcad#2186, GrainProjection.hpp): each face from its
+  // own plane, the image's width along its longest side, then turned and
+  // scaled as planar and box are.
+  bool textureGrain = false;
   // The texture's other maps (mitcad#313, mitcad#314): files as `texture`
   // (empty: none), with its projection, size and rotation, also when the
   // base colour's image is not there. A tangent-space normal map (OpenGL

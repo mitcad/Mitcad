@@ -28,9 +28,8 @@ degrees, at 0.05 and 5 degrees; and at other settings from 20 to 28).
   end, and the sliver and the vertex in it are gone.
 - Elsewhere nothing changes. No catch is added.
 
-Test: cli.fcstd_bend_reported, the reported bent guide with its bend
-radius set to 24.5 and 25 exported as STL at deviations 0.0005, 0.002, 0.01
-and 0.05 mm with an angle of 10 degrees.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1803.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 index 7e752f18..286a60ac 100644

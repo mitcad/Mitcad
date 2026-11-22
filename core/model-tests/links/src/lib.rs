@@ -14,3 +14,12 @@ mod component_options_tests;
 mod inserted_materials_tests;
 // Linked parts of a design (mitcad#2130).
 mod link_parts_tests;
+// A component's standing Part number and Description rows, and the parts
+// list's part number of a library part with its own (mitcad#2138).
+mod part_number_rows_tests;
+// Components not for print services and the print_service_check query
+// (mitcad#2214).
+mod print_service_tests;
+// A whole design linked with its components, joints and grounding
+// (mitcad#2209).
+mod link_tree_tests;

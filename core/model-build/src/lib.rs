@@ -42,6 +42,10 @@ pub(crate) mod end_meets;
 pub(crate) mod lines;
 // A carriage's travel limits (mitcad#2088).
 pub(crate) mod travel;
+// Joint conditions of profiles along sketch lines (mitcad#2200).
+pub(crate) mod conditions;
+// Profiles in parallel (mitcad#2201).
+pub(crate) mod parallel;
 
 // What the design file keeps of BUILD: the sources, the records and the
 // libraries' `build` blocks (mitcad#777).
@@ -79,6 +83,10 @@ pub use edge::{Align, AlongLine};
 pub use lines::{AlongLines, LinesBuild};
 // A carriage's travel limits (mitcad#2088).
 pub use travel::{TravelInput, TravelNow, travel_of};
+// Joint conditions of profiles along sketch lines (mitcad#2200).
+pub use conditions::{Condition, Corners, JointEdit, JointKind, JointNow, LineEnd, LineJoint};
+// Profiles in parallel (mitcad#2201).
+pub use parallel::{Across, MatchLength, ParallelPart, parallel_of};
 
 // The document's BUILD methods (mitcad#777).
 pub use connect::{ConnectBuild, SetMembersBuild};

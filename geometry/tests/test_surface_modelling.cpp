@@ -28,6 +28,12 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Pln.hxx>
+// The vertices of an extended plane and their distances (mitcad#2056).
+#include <BRep_Tool.hxx>
+#include <gp_Ax3.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Lin.hxx>
+#include <gp_Vec.hxx>
 
 #include "check.hpp"
 #include "mitcad/geometry/extrude.hpp"
@@ -304,24 +310,155 @@ g::ShapePtr trapezoid() {
   return std::make_shared<g::Shape>(shell, std::vector<g::Shape::NamedFace>{{face, {"F2:side(c1)"}}});
 }
 
+// Whether the shape has a vertex within 1e-6 mm of the point.
+bool has_vertex(const g::Shape& shape, const gp_Pnt& point) {
+  for (int i = 0; i < shape.vertex_count(); ++i) {
+    if (BRep_Tool::Pnt(shape.vertex(i)).Distance(point) <= 1.0e-6) {
+      return true;
+    }
+  }
+  std::fprintf(stderr, "  no vertex at (%.9g, %.9g, %.9g); the vertices:\n", point.X(), point.Y(), point.Z());
+  for (int i = 0; i < shape.vertex_count(); ++i) {
+    const gp_Pnt p = BRep_Tool::Pnt(shape.vertex(i));
+    std::fprintf(stderr, "    (%.9g, %.9g, %.9g)\n", p.X(), p.Y(), p.Z());
+  }
+  return false;
+}
+
+// The distance from the point to the line through a and b.
+double from_line(const gp_Pnt& point, const gp_Pnt& a, const gp_Pnt& b) {
+  return gp_Lin(a, gp_Dir(gp_Vec(a, b))).Distance(point);
+}
+
+// A surface body of one planar face in the plane y = 0 with the corners
+// (x, z) given in turn, named F2:side(c1). The plane's own axes are turned
+// 30 degrees from x and z, so that even a rectangle along x and z is
+// trimmed inside the plane's parameter range (the extension's planar
+// path, not the widened range of an untrimmed face).
+g::ShapePtr plane_sheet(const std::vector<std::pair<double, double>>& corners) {
+  BRepBuilderAPI_MakePolygon outline;
+  for (const auto& corner : corners) {
+    outline.Add(gp_Pnt(corner.first, 0, corner.second));
+  }
+  outline.Close();
+  const gp_Pln plane(gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(0, -1, 0), gp_Dir(std::sqrt(3.0) / 2, 0, 0.5)));
+  const TopoDS_Face face = BRepBuilderAPI_MakeFace(plane, outline.Wire(), true).Face();
+  BRep_Builder builder;
+  TopoDS_Shell shell;
+  builder.MakeShell(shell);
+  builder.Add(shell, face);
+  return std::make_shared<g::Shape>(shell, std::vector<g::Shape::NamedFace>{{face, {"F2:side(c1)"}}});
+}
+
 void test_a_trimmed_plane_is_extended_past_one_edge() {
   // mitcad#1955: a single free edge of a face trimmed inside its plane,
-  // picked by a point on it, extends; the face stays one face.
+  // picked by a point on it, extends; the face stays one face. Its sides
+  // continue the neighbouring edges (mitcad#2056).
   const g::ShapePtr sheet = trapezoid();
   CHECK_NEAR_TOL(area(*sheet), 375.0, 1e-6);
   const g::ShapePtr lower =
       g::extend_surface(*sheet, {}, {{0, {}, {gp_Pnt(20, 0, 0)}}}, 2.0, g::ExtendMode::Natural);
   CHECK(lower->face_count() == 1);
   CHECK(named(*lower, "F2:side(c1)") == 1);
-  CHECK_NEAR_TOL(area(*lower), 375.0 + 80.0, 1e-6);
+  // The left edge continued square, the slanted edge continued along its
+  // slope (1 across for 2 down): a strip 40 long at the top, 41 at z = -2.
+  CHECK_NEAR_TOL(area(*lower), 375.0 + 81.0, 1e-6);
   CHECK_NEAR_TOL(z_range(*lower).first, -2.0, 1e-6);
-  // The slanted edge, square to itself (any mode continues a plane).
+  CHECK(lower->edge_count() == 4);
+  CHECK(has_vertex(*lower, gp_Pnt(0, 0, -2)));
+  CHECK(has_vertex(*lower, gp_Pnt(41, 0, -2)));
+  // The slanted edge (any mode continues a plane): the top and bottom
+  // edges continued by 2 / sin(63.4 degrees) = sqrt(5), the new end edge
+  // parallel to the slanted one, 2 from it (GitHub mitcad/Mitcad#462).
   const g::ShapePtr slanted =
       g::extend_surface(*sheet, {}, {{0, {}, {gp_Pnt(37.5, 0, 5)}}}, 2.0, g::ExtendMode::Tangent);
   CHECK(slanted->face_count() == 1);
+  CHECK(named(*slanted, "F2:side(c1)") == 1);
+  CHECK(slanted->edge_count() == 4);
   CHECK_NEAR_TOL(area(*slanted), 375.0 + 2.0 * std::sqrt(125.0), 1e-6);
+  const gp_Pnt bottom(40.0 + std::sqrt(5.0), 0, 0);
+  const gp_Pnt top(35.0 + std::sqrt(5.0), 0, 10);
+  CHECK(has_vertex(*slanted, bottom));
+  CHECK(has_vertex(*slanted, top));
+  CHECK(has_vertex(*slanted, gp_Pnt(0, 0, 0)));
+  CHECK(has_vertex(*slanted, gp_Pnt(0, 0, 10)));
+  CHECK_NEAR_TOL(from_line(bottom, gp_Pnt(40, 0, 0), gp_Pnt(35, 0, 10)), 2.0, 1e-6);
+  CHECK_NEAR_TOL(from_line(top, gp_Pnt(40, 0, 0), gp_Pnt(35, 0, 10)), 2.0, 1e-6);
   // The input is left as it was.
   CHECK_NEAR_TOL(area(*sheet), 375.0, 1e-6);
+  CHECK(sheet->edge_count() == 4);
+}
+
+void test_a_trimmed_plane_is_extended_round_a_corner() {
+  // mitcad#2056: two adjacent picked edges of a 30 x 20 rectangle extended
+  // by 3 meet at the mitre of their end lines: one rectangle of 33 x 23,
+  // the corner filled. Its bottom edge in two, of which the right one is
+  // picked: the left one runs along the end line, too flat to continue, so
+  // the strip is square at x = 15 (strips of (15 + 18) / 2 * 3 and
+  // (20 + 23) / 2 * 3).
+  const g::ShapePtr sheet = plane_sheet({{0, 0}, {15, 0}, {30, 0}, {30, 20}, {0, 20}});
+  CHECK_NEAR_TOL(area(*sheet), 600.0, 1e-6);
+  const g::ShapePtr both = g::extend_surface(*sheet, {}, {{0, {}, {gp_Pnt(25, 0, 0), gp_Pnt(30, 0, 10)}}}, 3.0,
+                                             g::ExtendMode::Natural);
+  CHECK(both->face_count() == 1);
+  CHECK(named(*both, "F2:side(c1)") == 1);
+  CHECK_NEAR_TOL(area(*both), 600.0 + 49.5 + 64.5, 1e-6);
+  CHECK(has_vertex(*both, gp_Pnt(33, 0, -3)));
+  CHECK(has_vertex(*both, gp_Pnt(33, 0, 20)));
+  CHECK(has_vertex(*both, gp_Pnt(15, 0, -3)));
+  // The plain rectangle, its bottom and right edges picked.
+  const g::ShapePtr box = plane_sheet({{0, 0}, {30, 0}, {30, 20}, {0, 20}});
+  const g::ShapePtr grown = g::extend_surface(*box, {}, {{0, {}, {gp_Pnt(15, 0, 0), gp_Pnt(30, 0, 10)}}}, 3.0,
+                                              g::ExtendMode::Natural);
+  CHECK(grown->face_count() == 1);
+  CHECK(grown->edge_count() == 4);
+  CHECK_NEAR_TOL(area(*grown), 33.0 * 23.0, 1e-6);
+  CHECK(has_vertex(*grown, gp_Pnt(0, 0, -3)));
+  CHECK(has_vertex(*grown, gp_Pnt(33, 0, -3)));
+  CHECK(has_vertex(*grown, gp_Pnt(33, 0, 20)));
+  CHECK(has_vertex(*grown, gp_Pnt(0, 0, 20)));
+  // The inputs are left as they were.
+  CHECK_NEAR_TOL(area(*box), 600.0, 1e-6);
+  CHECK(box->edge_count() == 4);
+}
+
+void test_a_trimmed_plane_falls_back_to_square_sides() {
+  // mitcad#2056: where the neighbouring edge cannot be continued the side
+  // is square to the picked edge. A reflex corner: the neighbour at
+  // (10, 5) runs up and left to (5, 15), its continuation would turn back
+  // into the face; the strip past the edge from (20, 5) to (10, 5) is
+  // square at x = 10 (continued, it would end at (9, 7) and add 1 more).
+  const g::ShapePtr notched = plane_sheet({{0, 0}, {20, 0}, {20, 5}, {10, 5}, {5, 15}, {0, 15}});
+  CHECK_NEAR_TOL(area(*notched), 175.0, 1e-6);
+  const g::ShapePtr reflex =
+      g::extend_surface(*notched, {}, {{0, {}, {gp_Pnt(15, 0, 5)}}}, 2.0, g::ExtendMode::Natural);
+  CHECK(reflex->face_count() == 1);
+  CHECK_NEAR_TOL(area(*reflex), 175.0 + 20.0, 1e-6);
+  CHECK(has_vertex(*reflex, gp_Pnt(10, 0, 7)));
+  CHECK(has_vertex(*reflex, gp_Pnt(20, 0, 7)));
+  // Under the angle limit: the neighbour at (40, 10) comes from (100, 0),
+  // 9.5 degrees from the picked top edge's line; continued, it would meet
+  // the end line 12 further on (a strip of 68 instead of 80).
+  const g::ShapePtr flat = plane_sheet({{0, 0}, {100, 0}, {40, 10}, {0, 10}});
+  CHECK_NEAR_TOL(area(*flat), 700.0, 1e-6);
+  const g::ShapePtr sliver =
+      g::extend_surface(*flat, {}, {{0, {}, {gp_Pnt(20, 0, 10)}}}, 2.0, g::ExtendMode::Natural);
+  CHECK(sliver->face_count() == 1);
+  CHECK_NEAR_TOL(area(*sliver), 700.0 + 80.0, 1e-6);
+  CHECK(has_vertex(*sliver, gp_Pnt(40, 0, 12)));
+  CHECK(has_vertex(*sliver, gp_Pnt(0, 0, 12)));
+  // Above the limit (26.6 degrees, from (60, 0)) the neighbour continues:
+  // to (36, 12), a strip of (40 + 36) / 2 * 2.
+  const g::ShapePtr steeper = plane_sheet({{0, 0}, {60, 0}, {40, 10}, {0, 10}});
+  const g::ShapePtr continued =
+      g::extend_surface(*steeper, {}, {{0, {}, {gp_Pnt(20, 0, 10)}}}, 2.0, g::ExtendMode::Natural);
+  CHECK(continued->face_count() == 1);
+  CHECK_NEAR_TOL(area(*continued), 500.0 + 76.0, 1e-6);
+  CHECK(has_vertex(*continued, gp_Pnt(36, 0, 12)));
+  // The inputs are left as they were.
+  CHECK_NEAR_TOL(area(*notched), 175.0, 1e-6);
+  CHECK_NEAR_TOL(area(*flat), 700.0, 1e-6);
+  CHECK(flat->edge_count() == 4);
 }
 
 // The name of the walls' edge between the two faces.
@@ -670,6 +807,9 @@ int main() {
                 test::test_a_patch_closes_a_loop_of_free_and_named_edges);
   test::guarded("test_a_patch_closes_free_edges_with_a_sketch_line",
                 test::test_a_patch_closes_free_edges_with_a_sketch_line);
+  test::guarded("test_a_trimmed_plane_is_extended_round_a_corner", test::test_a_trimmed_plane_is_extended_round_a_corner);
+  test::guarded("test_a_trimmed_plane_falls_back_to_square_sides",
+                test::test_a_trimmed_plane_falls_back_to_square_sides);
   for (const std::string& change : mitcad::geometry::input_changes()) {
     std::fprintf(stderr, "an input changed: %s\n", change.c_str());
     ++test::failures;

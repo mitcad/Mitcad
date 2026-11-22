@@ -552,6 +552,7 @@ fn cut_scope_linked_target_is_disabled_and_never_modified() {
             given: Vec::new(),
             parts: None,
             unlinked: Vec::new(),
+            tree: None,
         });
     let mut doc = Document::from_state(MockKernel::default(), state);
     doc.recompute();

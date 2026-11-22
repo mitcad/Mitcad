@@ -541,9 +541,14 @@ void test_to_planes() {
   spec.side1.target->offset = 0;
   spec.side1.target->plane = gp_Pln(gp_Pnt(0, 0, 20), gp_Dir(-0.25, 0, 1));
   CHECK(near(volume(*extrude_feature(spec)), 60 * 40 * 27.5));
-  // Behind the start, or along the plane.
+  // Behind the start: the side turns round to reach it (mitcad#2118). In
+  // the profile's plane, or along the plane, it is reached neither way.
   spec.side1.target->plane = gp_Pln(gp_Pnt(0, 0, -5), gp_Dir(0, 0, 1));
-  CHECK(throws_with([&] { extrude_feature(spec); }, "behind the start"));
+  const ShapePtr below = extrude_feature(spec);
+  CHECK(near(volume(*below), 60 * 40 * 5));
+  CHECK(face_at_z(*below, end_cap("F2", 1), -5) && face_at_z(*below, start_cap("F2", 1), 0));
+  spec.side1.target->plane = gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+  CHECK(throws_with([&] { extrude_feature(spec); }, "where the sweep starts"));
   spec.side1.target->plane = gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0));
   CHECK(throws_with([&] { extrude_feature(spec); }, "parallel to the target plane"));
   // Two sides: up to the plane, and 5 mm down.
@@ -588,10 +593,14 @@ void test_to_faces_and_bodies() {
   post.side1.target->through = false;
   post.regions = {circle(5, 60, 20, 10)};
   CHECK(throws_with([&] { extrude_feature(post); }, "does not cut across the whole profile"));
-  // Behind the start.
+  // Behind the start: the side turns round to reach it, down to the block's
+  // top as before (mitcad#2118).
   post.regions = {circle(5, 30, 20, 10)};
   post.direction = gp_Dir(0, 0, 1);
-  CHECK(throws_with([&] { extrude_feature(post); }, "behind the start"));
+  post.side1.target = top;
+  const ShapePtr turned = extrude_feature(post);
+  CHECK(near(volume(*turned), kPi * 100 * 20));
+  CHECK(face_at_z(*turned, "F4:end(r{c5})", 20) && face_at_z(*turned, "F4:start(r{c5})", 40));
 
   // Up to a curved face: a 4 x 4 bar along -x to a cylinder of radius 10
   // standing on the origin.
@@ -1458,6 +1467,53 @@ void test_oblique() {
   CHECK(throws_with([&] { extrude_feature(spec); }, "unsupported: a taper up to an object"));
 }
 
+void test_to_an_object_behind_the_start() {
+  // A one-sided extrusion up to an object goes toward it (mitcad#2118): a
+  // slot sketched on a 3.175 mm plate's top face, whose normal points out
+  // of the plate, cut up to the plate's bottom face (the reported cut
+  // through a rail's leg). The side turns round and runs down through the
+  // plate, the same whichever way it was set to go.
+  const double t = 3.175;
+  const ShapePtr plate = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, t);
+  ExtrudeFeatureSpec slot;
+  slot.feature = "F4";
+  slot.frame.origin = gp_Pnt(0, 0, t);
+  slot.regions = {rectangle(5, 20, 10, 20, 8)};
+  Target bottom;
+  bottom.kind = Target::Kind::Face;
+  bottom.body = plate;
+  bottom.face = start_cap("F2", 1);
+  for (const bool extend : {true, false}) {
+    bottom.extend = extend;
+    slot.side1.target = bottom;
+    for (const gp_Dir& way : {gp_Dir(0, 0, 1), gp_Dir(0, 0, -1)}) {
+      slot.direction = way;
+      const ShapePtr tool = extrude_feature(slot);
+      CHECK(near(volume(*tool), 20 * 8 * t));
+      CHECK(near(bounding_box(*tool).min.Z(), 0) && near(bounding_box(*tool).max.Z(), t));
+      CHECK(!extend || (face_at_z(*tool, end_cap("F4", 5), 0) && face_at_z(*tool, start_cap("F4", 5), t)));
+      const BooleanResult cut = boolean(BooleanOp::Cut, {plate.get()}, *tool);
+      CHECK(cut.pieces.size() == 1);
+      if (cut.pieces.size() == 1) {
+        CHECK(near(volume(*cut.pieces[0].shape), (60 * 40 - 20 * 8) * t));
+        CHECK(BRepCheck_Analyzer(cut.pieces[0].shape->occt()).IsValid());
+      }
+    }
+  }
+  // Up to the plate's bottom plane, offset 1 mm past it: 1 mm longer.
+  Target plane;
+  plane.plane = gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+  plane.offset = 1;
+  slot.side1.target = plane;
+  slot.direction = gp_Dir(0, 0, 1);
+  CHECK(near(volume(*extrude_feature(slot)), 20 * 8 * (t + 1)));
+  // Two sides keep their directions: side one up to the bottom stays
+  // behind its start.
+  slot.side1.target = bottom;
+  slot.side2 = distance(5);
+  CHECK(throws_with([&] { extrude_feature(slot); }, "behind the start"));
+}
+
 // Each test named on stdout before it runs, flushed, so that a crash
 // shows where it was (the suite crashed with no output in a scheduled run,
 // mitcad#1851).
@@ -1481,6 +1537,8 @@ void extrude_feature_tests() {
   traced("test_to_planes", test_to_planes);
   traced("test_to_faces_and_bodies", test_to_faces_and_bodies);
   traced("test_to_body_from_inside", test_to_body_from_inside);
+  // Up to an object behind the start (mitcad#2118).
+  traced("test_to_an_object_behind_the_start", test_to_an_object_behind_the_start);
   traced("test_clockwise_loops", test_clockwise_loops);
   traced("test_circles_touching_at_a_point", test_circles_touching_at_a_point);
   traced("test_several_regions", test_several_regions);

@@ -60,8 +60,8 @@ patch (mitcad-cli info --names); and OCCT's blend and chamfer DRAW cases
 
 Upstream: new (the narrow-face tries are Mitcad's own).
 
-Test: geometry.fillet_consumed_strip (the fillet within 15 s, the same
-volume and checks as before); tools/ui-fillet-chain-remark-test.sh.
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1696.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index 1667c27b..e5fb7a58 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx

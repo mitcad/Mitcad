@@ -26,10 +26,8 @@ is not derived from the case: it is the walk's own end test's (ten times
 the spine's tolerance), not the measured lag (2.2 and 4 micrometres): the
 stop comes from the contact that arrived, not from the one that lags.
 
-Test: geometry/tests/test_fillet_fin_top_creases.cpp, the rounding of a
-reported fin's top across creases of 1.4 and 2.2 degrees: built and closed,
-the stored body after it on the result within 0.01 mm (with patch 1300
-alone the result has an edge on one face only).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 1301.
 
 Upstream: new.
 

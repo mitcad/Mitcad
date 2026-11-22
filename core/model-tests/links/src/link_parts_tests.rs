@@ -381,8 +381,10 @@ fn the_design_file_keeps_the_parts_and_a_file_without_them_links_the_whole_desig
                "bodies": [ids.root_body.to_string()]}),
     ));
     let whole = component(&insert(&mut doc, &dir, Value::Null));
-    // Without parts: every body of the design.
-    assert_eq!(placed(&doc, whole).len(), 5);
+    // Without parts: the whole design, with its components beside the
+    // root's own body (mitcad#2209): Bracket:1, Bracket:2 and Board:1.
+    assert_eq!(placed(&doc, whole).len(), 1);
+    assert_eq!(doc.assembly().children(whole).count(), 3);
     assert_eq!(link_parts(&doc, whole), None);
 
     let text = doc.to_json();
@@ -412,7 +414,8 @@ fn the_design_file_keeps_the_parts_and_a_file_without_them_links_the_whole_desig
     assert!(messages.is_empty(), "{messages:?}");
     assert_eq!(link_parts(&opened, linked), link_parts(&doc, linked));
     assert_eq!(placed(&opened, linked), placed(&doc, linked));
-    assert_eq!(placed(&opened, whole).len(), 5);
+    assert_eq!(placed(&opened, whole).len(), 1);
+    assert_eq!(opened.assembly().children(whole).count(), 3);
     assert_eq!(link_parts(&opened, whole), None);
 
     // The query the dialog lists them from.
@@ -513,8 +516,23 @@ fn set_link_parts_changes_the_choice_in_one_undo_step() {
 fn a_whole_design_link_switched_to_parts_keeps_the_ids_of_their_bodies() {
     let (dir, ids) = saved_source("2130-whole");
     let mut doc = Document::new(MockKernel::default());
-    let linked = component(&insert(&mut doc, &dir, Value::Null));
+    // The whole design linked flat, as chosen parts made whole again (and
+    // as links saved before mitcad#2209 have it): a whole design inserted
+    // linked keeps its components, and takes no chosen parts
+    // (`link_tree_tests.rs`).
+    let linked = component(&insert(
+        &mut doc,
+        &dir,
+        json!({"occurrences": [ids.bracket1.to_string()]}),
+    ));
+    command(
+        &mut doc,
+        json!({"cmd": "set_link_parts", "component": "Linked", "base": base(&dir),
+               "parts": null}),
+    )
+    .unwrap();
     let bodies = doc.component_bodies(linked);
+    assert_eq!(bodies.len(), 5);
     let data = placed(&doc, linked);
     let at = data.iter().position(|d| d.ends_with(",300,0,0)")).unwrap();
     let link = doc
@@ -636,4 +654,94 @@ fn unticking_a_part_a_joint_uses_keeps_its_place_with_a_warning_in_words() {
         .unwrap()
         .clone();
     assert_ne!(entry["level"], json!("warning"), "{entry}");
+}
+
+#[test]
+fn chosen_parts_of_a_design_copied_into_the_project_are_linked_against_the_copy() {
+    // mitcad#2137: Insert Component of a design outside the project with
+    // Copy into the Project and Link and Choose parts... ticked. The parts
+    // are listed from the file asked for, before anything is copied; the
+    // copy has the same occurrences and bodies, so the link records them
+    // against the copy.
+    let (outside, ids) = saved_source("2137-outside");
+    let dir = mitcad_model::testing::unique_temp_dir("2137-project");
+    let project = dir.join("project");
+    mitcad_model::Project::init(&project).unwrap();
+    let designs = project.join("designs");
+    std::fs::create_dir_all(&designs).unwrap();
+    let file = outside.join("assembly.mitcad");
+    let mut doc = Document::new(MockKernel::default());
+
+    // The list the dialog shows: from the file outside, nothing copied yet.
+    let listed = query(
+        &doc,
+        json!({"query": "link_parts", "path": file.to_string_lossy(), "base": base(&designs)}),
+    );
+    assert_eq!(
+        listed["occurrences"][0]["name"],
+        json!("Bracket:1"),
+        "{listed}"
+    );
+    assert!(!project.join("parts").exists());
+
+    let reply = command(
+        &mut doc,
+        json!({"cmd": "insert_component", "path": file.to_string_lossy(),
+               "base": base(&designs), "copy_into_project": true,
+               "parts": {"occurrences": [ids.bracket1.to_string()]}}),
+    )
+    .unwrap();
+    let copy = project.join("parts").join("assembly.mitcad");
+    assert_eq!(
+        reply["copied"],
+        json!([{"from": file.to_string_lossy(), "to": copy.to_string_lossy()}]),
+        "{reply}"
+    );
+    assert_eq!(reply["name"], json!("assembly"), "{reply}");
+    assert_eq!(reply["parts"]["names"], json!(["Bracket:1"]), "{reply}");
+    let linked = component(&reply);
+    // Only Bracket:1's body, where the design places it.
+    assert_eq!(doc.component_bodies(linked).len(), 1, "{reply}");
+    let data = placed(&doc, linked);
+    assert_eq!(ends(&data, ",100,0,0)"), 1, "{data:?}");
+    let link = doc
+        .assembly()
+        .component(linked)
+        .and_then(|c| c.link.clone())
+        .unwrap();
+    assert_eq!(link.path, "../parts/assembly.mitcad");
+    assert_eq!(
+        link_parts(&doc, linked),
+        Some(vec![ids.bracket1.to_string()])
+    );
+
+    // Saved and opened again: the parts are read from the copy.
+    let path = designs.join("holder.mitcad");
+    let text = doc.to_json();
+    std::fs::write(&path, &text).unwrap();
+    let mut opened = Document::from_json_at(&text, &path, MockKernel::default()).unwrap();
+    let messages = opened.update_links(Some(&designs)).unwrap();
+    assert!(messages.is_empty(), "{messages:?}");
+    assert_eq!(placed(&opened, linked), placed(&doc, linked));
+    let listed = query(
+        &opened,
+        json!({"query": "link_parts", "component": linked.to_string(), "base": base(&designs)}),
+    );
+    assert_eq!(listed["file"], json!("assembly.mitcad"), "{listed}");
+    assert_eq!(
+        listed["chosen"]["occurrences"],
+        json!([ids.bracket1.to_string()]),
+        "{listed}"
+    );
+
+    // A change of the copy's chosen part comes in with Update Link; the
+    // file outside is no longer read.
+    let (changed, _) = source(2, 1, true);
+    std::fs::write(&copy, changed.to_json()).unwrap();
+    let messages = opened.update_links(Some(&designs)).unwrap();
+    let data = placed(&opened, linked);
+    assert_eq!(data.len(), 2, "{messages:?}");
+    assert_eq!(ends(&data, ",100,0,0)"), 2, "{data:?}");
+    mitcad_model::testing::remove_temp(&dir);
+    mitcad_model::testing::remove_temp(&outside);
 }

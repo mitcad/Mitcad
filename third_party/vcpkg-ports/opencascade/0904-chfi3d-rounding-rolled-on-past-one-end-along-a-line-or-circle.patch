@@ -55,17 +55,8 @@ failure is rethrown, not taken for the end of the walk.
 
 Upstream: new.
 
-Test: none, because no synthetic body reached its failure (mitcad#1986).
-Tried with the patch's code traced and with it switched off: about 35
-bodies of the OCCT-only geometry tests (test_fillet_corners, _kernel,
-_eave, _lens_overflow, _rolling_ball and the port tests of 0011, 0013,
-0342 and 0430) and variants of their dimensions roll to a face at the end
-(ChFi3d_RolledToFaceAtEnd), but each builds alike without the patch.
-Earlier tries (an ear on a tube whose top narrows to a point under a
-chamfer, a chamfer edge with a kink) failed in the blend's approximation
-or turned concavely. Verified on the stored design's bodies
-(core/import/docs/f3d-rounds-3.md, a bar's rim and notch walls rounded
-with 0.86).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0904.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 4ae7c8bc..56f95aaa 100644

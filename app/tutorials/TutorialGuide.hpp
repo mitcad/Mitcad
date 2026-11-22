@@ -11,7 +11,7 @@
 // allowsCommand); view navigation stays free unless the step says
 // otherwise. Escape with no command open, the callout's Leave Tutorial and
 // Help › Leave Tutorial end it. What the user did that completes it, and
-// its end, are events (event()): to the tutorial page and to MCP's
+// its end, are events (guideEvent()): to the tutorial page and to MCP's
 // mitcad://ui-guide resource.
 //
 // Its log lines are the UI tests' ("Guide: step <id> started: ...",
@@ -93,7 +93,7 @@ public:
 signals:
   // {"event": "step_done" | "step_left" | "refused", "step": <id>,
   //  "sequence": n, ...} (docs/tutorials.md "Events").
-  void event(const QJsonObject& event);
+  void guideEvent(const QJsonObject& event);
   // The state changed (a step started or ended, an event).
   void changed();
 

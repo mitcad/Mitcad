@@ -9,7 +9,8 @@
 # (mitcad#419) and of the defaults (mitcad#429) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-chrome-layout-test.sh does on Linux:
-#   1. Without a choice (a plate open) Floating with the Browser's Rows:
+#   1. Without a choice (a plate open) Floating with the Browser's Rows
+#      (mitcad#2144; the card from mitcad#1990 until then):
 #      nothing above the view, no menu bar under the system's title bar
 #      (mitcad#1990: its menus are the title row's); the title row (one flat
 #      bar across the view's top, mitcad#1990: its controls, each whole
@@ -18,16 +19,19 @@
 #      has no commands by default, mitcad#1990) and the
 #      toolbar panel (the workspace selector, the workspace's tabs, the
 #      search field and at least two groups within it, mitcad#1990) are over
-#      its top, every other card starts below them; no place between two
+#      its top, every other card starts below them; the Browser's card
+#      overlaps none of the left column's other cards (Projects,
+#      Configuration) nor the Timeline; no place between two
 #      cards is logged, and with the plate zoomed in to fill the view, a
 #      click on the bar's free stretch stays the bar's (nothing selected).
 #      Preferences > Display > Layout Docked asks Restart MitCad, Later
 #      keeps it in the settings for the next start.
 #   2. Floating again is the window's layout: saved, no question.
 #   3. A sketch on XY clicked in the view as a user would: Create Sketch's
-#      command card and the Browser's card leave XY's place clear
-#      (mitcad#1990: the view moves the origin's planes out from under
-#      them); the next sketch on XY picked from the Browser. Docked,
+#      command card leaves XY's place clear, and the Browser's card on its
+#      card (with Rows the click beside the rows' boxes reaches the view,
+#      mitcad#419) (mitcad#1990: the view moves the origin's planes out from
+#      under them); the next sketch on XY picked from the Browser. Docked,
 #      Restart Now with unsaved changes: the window asks about them as
 #      quitting does; Cancel keeps Mitcad open and nothing restarts.
 #   4. Saved, Docked, Restart Now: Mitcad quits and would start again
@@ -35,11 +39,11 @@
 #      options and the design, without --chrome.
 #   5. The next start is Docked by the preference: no cards; Preferences
 #      shows the Browser background there too (mitcad#429); Floating and
-#      the Rows background chosen together, Later.
-#   6. The next start is Floating by the preference, with the Rows
-#      background: the cards at the default size, in a narrow and a wide
-#      window; a click on the title bar beside its controls stays the
-#      bar's.
+#      the Card background chosen together, Later.
+#   6. The next start is Floating by the preference, with the Card
+#      background as chosen (mitcad#2144: a saved Card stays Card): the
+#      cards at the default size, in a narrow and a wide window; a click on
+#      the title bar beside its controls stays the bar's.
 #   7. --chrome=docked overrides the preference.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-chrome-layout-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
@@ -207,6 +211,17 @@ function Cards-BelowBar([string]$Description, [int]$Min, [int]$Max) {
   }
   if ($groups -lt 2) { Ui-Fail "${Description}: $groups groups in the toolbar panel in '$line'" }
   Ui-QuickAccessPlace $Description $line
+  # The Browser's card (Rows or Card, mitcad#2144) overlaps none of the left
+  # column's other cards nor the Timeline.
+  $browser = $entries['browserDock']
+  foreach ($name in @('projectsDock', 'configurationDock', 'timelineDock')) {
+    if (-not $entries.ContainsKey($name)) { continue }
+    $other = $entries[$name]
+    if ($other[0] -lt $browser[0] + $browser[2] -and $browser[0] -lt $other[0] + $other[2] -and
+        $other[1] -lt $browser[1] + $browser[3] -and $browser[1] -lt $other[1] + $other[3]) {
+      Ui-Fail "${Description}: the Browser's card ($($browser -join ',')) overlaps $name ($($other -join ',')): '$line'"
+    }
+  }
   Write-Host "ok   ${Description}: the view below the menu bar ($bar), $count cards and parts, $groups groups in the toolbar panel, the title row's and the panel's parts within them, the others below the rows' bottom $rows (window $width wide)"
   return $entries
 }
@@ -265,9 +280,16 @@ function Click-TitleRow($Entries) {
 # 2D and 3D row, mitcad#1524) came over the only part of XY's square left
 # to click; the view now moves the origin's planes out from under the cards
 # as the pick starts ("View for the origin planes: moved ..."). XY's logged
-# place is inside neither the command card nor the Browser's card of the
-# last "Floating cards:" line. As sketch_on_xy_in_view in the Linux twin.
+# place is inside neither the command card nor, on its card, the Browser's
+# card of the last "Floating cards:" line. With the Rows background
+# (mitcad#2144: the default) the Browser takes the mouse only on its rows'
+# boxes (mitcad#419), and the view keeps the planes clear of their extent
+# (GlassCard::coveredRect), not of the card's rectangle: a place in that
+# rectangle beside the rows reaches the view, which the click then shows
+# (the sketch starts on XY). As sketch_on_xy_in_view in the Linux twin.
 function Sketch-OnXyInView {
+  $cards = @('commandDock', 'browserDock')
+  if ("$(Ui-LastLineWith 'Browser background: ' -Start)" -eq 'Browser background: rows') { $cards = @('commandDock') }
   Ui-Mark
   Ui-Key 'alt+s'
   Ui-ExpectNew 'Create Sketch: select a plane' 'Create Sketch asks for a plane' | Out-Null
@@ -294,7 +316,7 @@ function Sketch-OnXyInView {
   $xy = $at -split ','
   $ax = [int]$xy[0]
   $ay = [int]$xy[1]
-  foreach ($name in @('commandDock', 'browserDock')) {
+  foreach ($name in $cards) {
     $rect = $null
     foreach ($entry in ($line -split ';')) {
       if ($entry.Trim() -match ('^' + $name + ' (-?\d+),(-?\d+) (\d+)x(\d+)$')) {
@@ -306,7 +328,7 @@ function Sketch-OnXyInView {
       Ui-Fail "XY's place $at is inside the $name card ($($rect[0]),$($rect[1]) $($rect[2])x$($rect[3])): no place of XY to click in the view"
     }
   }
-  Write-Host "ok   XY's place $at clear of the command card and the Browser's card"
+  Write-Host "ok   XY's place $at clear of the cards that take the mouse there ($($cards -join ', '))"
   Ui-ClickLogged 'Datum xy'
   Ui-ExpectNew 'Sketch started on xy' 'sketch started on xy from the click in the view' | Out-Null
 }
@@ -334,10 +356,13 @@ function Click-PaletteFinish {
   Ui-ClickLogged 'Palette Finish Sketch'
 }
 
-Write-Host '--- 1. Without a choice Floating with the Card; the cards; Docked chosen, Later'
+Write-Host '--- 1. Without a choice Floating with Rows; the cards; Docked chosen, Later'
 Ui-StartApp 'chrome-layout' @('--open', $plate) -DefaultChrome
 Ui-ExpectLog "Chrome: floating (the platform's default)" 'Floating without a choice'
-Ui-ExpectLog 'Browser background: card' 'the Browser''s card without a choice (mitcad#1990)'
+Ui-ExpectLog 'Browser background: rows' 'the Browser''s Rows without a choice (mitcad#2144)'
+if ((Test-Path $ini) -and (Select-String -Path $ini -Pattern '^browserBackground=' -Quiet)) {
+  Ui-Fail 'a Browser background saved without a choice'
+}
 Ui-ExpectLog 'Floating cards: window ' 'the cards placed'
 # The default size is the session's (1028 wide in session 0 of the VM).
 $entries = Cards-BelowBar 'at the default size' 1 100000
@@ -421,7 +446,7 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) { Ui-Fail "Mitcad exited with $exitCode" }
 Write-Host 'ok   Mitcad quit to restart'
 
-Write-Host '--- 5. The next start: Docked by the preference; Floating and the Rows background chosen there'
+Write-Host '--- 5. The next start: Docked by the preference; Floating and the Card background chosen there'
 Ui-StartApp 'chrome-layout-docked-pref' @('--open', $file) -DefaultChrome
 Ui-ExpectLog 'Chrome: docked (the preference)' 'Docked by the preference'
 if (Has-Line 'Floating cards: ') { Ui-Fail 'Floating cards in the Docked layout' }
@@ -434,24 +459,24 @@ Ui-Step 'create another Docked sketch'    { Ui-CreateSketch 'alt+s' 'xy' }
 Ui-Mark
 Ui-Step 'finish Docked sketch from ribbon' { Ui-ClickLogged 'Ribbon button sketch.finish' }
 Ui-ExpectNew 'Sketch finished' 'Docked ribbon still finishes a sketch'
-Choose-Layout 'End' 'End'
-Ui-ExpectNew 'Preferences: browser background rows' 'the Rows background chosen while Docked'
+Choose-Layout 'End' 'Home'
+Ui-ExpectNew 'Preferences: browser background card' 'the Card background chosen while Docked'
 Ui-ExpectNew 'Layout preference: floating (restart asked)' 'Floating chosen, a restart asked'
 Ui-FocusDialog '^Restart MitCad$'
 Ui-Step 'later (Escape)'                   { Ui-Key 'Escape' }
 Ui-FocusMain
 Ui-ExpectNew 'Layout restart: later (floating at the next start)' 'kept for the next start'
 if (-not (Select-String -Path $ini -Pattern '^layout=floating$' -Quiet)) { Ui-Fail 'the layout is not saved' }
-if (-not (Select-String -Path $ini -Pattern '^browserBackground=rows$' -Quiet)) {
+if (-not (Select-String -Path $ini -Pattern '^browserBackground=card$' -Quiet)) {
   Ui-Fail 'the Browser background is not saved'
 }
 Write-Host 'ok   both saved for the next start'
 Ui-StopApp
 
-Write-Host '--- 6. The next start: Floating with Rows by the preferences; the cards'
+Write-Host '--- 6. The next start: Floating with the Card by the preferences; the cards'
 Ui-StartApp 'chrome-layout-floating' @('--open', $plate) -DefaultChrome
 Ui-ExpectLog 'Chrome: floating (the preference)' 'Floating by the preference'
-Ui-ExpectLog 'Browser background: rows' 'the Browser''s Rows by the preference'
+Ui-ExpectLog 'Browser background: card' 'the Browser''s Card kept after a restart (mitcad#2144)'
 Ui-ExpectLog 'Floating cards: window ' 'the cards placed'
 $entries = Cards-BelowBar 'at the default size' 1 100000
 Click-TitleRow $entries

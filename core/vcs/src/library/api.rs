@@ -350,6 +350,9 @@ fn component_json(
         // Standard and Supplier filters offer.
         "standards": component.row_standards(&[]),
         "suppliers": component.row_suppliers(&manifest.suppliers),
+        // Not for print services (mitcad#2214): the component's, else the
+        // library's; the pickers' details say so.
+        "non_printable": manifest.non_printable_of(component),
     });
     if tables
         && let Some(design) = component_design(repo, commit, &component.path)

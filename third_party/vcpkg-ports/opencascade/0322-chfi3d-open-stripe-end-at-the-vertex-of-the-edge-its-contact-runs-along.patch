@@ -25,10 +25,8 @@ at the old point (the end's) are put at the vertex (the new
 ChFi3d_StripeEndAtVertex). The fin builds, valid, each side's rounding
 taking off the same volume.
 
-Test: geometry/tests/test_fillet_kernel.cpp (ctest
-geometry.suite.fillet_kernel), test_fin_sides_rounded_one_after_the_other:
-It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py,
-reverted together with 0440, 1560, which change the same lines).
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0322.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index f5f5492..1a039de 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

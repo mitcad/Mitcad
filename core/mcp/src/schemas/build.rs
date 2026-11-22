@@ -57,11 +57,12 @@ fn at(description: &str) -> Value {
             "occurrence": text("A path from the BUILD host (uids or names); \"\" for its own geometry"),
             "geometry": text("What was picked: a face or a frame of a placed part, or for the first part a plane, a point or a face; left out: grounded at point"),
             "point": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "Where it was picked, in the host's coordinates, mm"},
-            "place": {"type": "string", "enum": ["auto", "side", "end"], "default": "auto", "description": "A side or an end; auto: the pick decides"},
+            "place": {"type": "string", "enum": ["auto", "side", "end", "parallel"], "default": "auto", "description": "A side or an end; auto: the pick decides; parallel: along the profile picked, a long face on its side (mitcad#2201)"},
             "offset": value_input("On a side: the offset from `from`; on a turned end: the new part's end from the target's outer side"),
             "from": {"type": "string", "enum": ["a", "b", "middle", "gap"], "default": "a", "description": "What offset is measured from on a side"},
             "direction": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "On an end: the new part's axis; for the first part the axis it runs along (+Z)"},
-            "snap": {"type": "number", "description": "The app's least snap distance, mm"}
+            "snap": {"type": "number", "description": "The app's least snap distance, mm"},
+            "across": {"type": "string", "enum": ["middle", "slot"], "default": "middle", "description": "In parallel: centred on the side picked, or on the slot picked or nearest point"}
         },
         "additionalProperties": false
     })
@@ -70,7 +71,7 @@ fn at(description: &str) -> Value {
 /// A length: a value, or bound to what the part's ray meets.
 fn length(description: &str) -> Value {
     json!({
-        "description": format!("{description}: a value, or {{\"bind\": {{\"occurrence\", \"geometry\"}}, \"mode\": \"face\"/\"centre\"/\"through\", \"add\"}}, or to a picked face {{\"mode\": \"to_face\", \"face\": {{\"occurrence\", \"geometry\"}}, \"offset\"}}"),
+        "description": format!("{description}: a value, or {{\"bind\": {{\"occurrence\", \"geometry\"}}, \"mode\": \"face\"/\"centre\"/\"through\", \"add\"}}, or to a picked face {{\"mode\": \"to_face\", \"face\": {{\"occurrence\", \"geometry\"}}, \"offset\"}}, or in parallel the target's {{\"match\": \"target\"}}"),
         "type": ["number", "string", "object"]
     })
 }
@@ -99,7 +100,7 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "spacing": object("The member repeated as a spacing set; the reference's Spacing sets"),
                 "grade": text("The part's own grade (a timber member's)"),
                 "along": object("A member along a straight edge, lying on a face beside it, or along one sketch line; the reference's Members along an edge"),
-                "lines": object("One member along each picked sketch line ({\"curves\": [sketch lines or sketches], \"chain\", \"align\", \"corners\"}), the corners mitered and butted; the reference's Along sketch lines"),
+                "lines": object("One member along each picked sketch line ({\"curves\": [sketch lines or sketches], \"chain\", \"align\", \"corners\": \"mitre\" (default), \"butt\" or \"none\"}), the joints' conditions kept with them; the reference's Along sketch lines"),
                 "limits": {"type": "object", "description": "A part that slides on another (a carriage on its rail): its travel limits", "properties": {"min": value_input("Min: where its frame may slide to nearest the rail's end A, from end A; null or left out: flush with end A"), "max": value_input("Max: the farthest, from end A; null or left out: flush with end B, following the rail's length")}, "additionalProperties": false}
             },
             "required": ["part"],
@@ -110,10 +111,10 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "restrictions": [SOURCE_ONLY]
         }),
         "build_edit" => json!({
-            "description": format!("Edits a placed part. Result: changed (offset, from, rotate, flip, detached, length, bound, tilt, ends, config, parameters, machining, limits). {REFERENCE}."),
+            "description": format!("Edits a placed part. Result: changed (offset, from, rotate, flip, detached, length, bound, tilt, ends, config, parameters, machining, limits, joint, along). {REFERENCE}."),
             "properties": {
                 "component": id("The part's component (uid or name)"),
-                "at": {"type": "object", "description": "Its place again: offset, from (a, b, middle, gap), point (a member by two points: its start)", "properties": {"offset": value_input("The offset"), "from": {"type": "string", "enum": ["a", "b", "middle", "gap"]}, "point": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}}}, "additionalProperties": false},
+                "at": {"type": "object", "description": "Its place again: offset, from (a, b, middle, gap), point (a member by two points: its start), across (in parallel: middle, slot)", "properties": {"offset": value_input("The offset"), "from": {"type": "string", "enum": ["a", "b", "middle", "gap"]}, "point": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}}, "across": {"type": "string", "enum": ["middle", "slot"]}}, "additionalProperties": false},
                 "rotate": value_input("Its turn about its axis"),
                 "flip": {"type": "boolean", "description": "Which end meets"},
                 "length": length("Its length: a value detaches, a bind binds"),
@@ -129,8 +130,9 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "lie": object("A member by two points: its lie again"),
                 "frame": object("The timber frame it is in, laid out again with these fields"),
                 "along": object("A member along an edge: its edge, face and offsets; along a sketch line also its align"),
-                "shared_mitre": {"type": "string", "enum": ["a", "b"], "description": "On its own: the shared miter at this end with the profile end it meets, as a corner placement makes"},
-                "limits": {"type": "object", "description": "A part that slides on another (a carriage on its rail): its travel limits again, both sent (each null for its default)", "properties": {"min": value_input("Min: where its frame may slide to nearest the rail's end A, from end A; null or left out: flush with end A"), "max": value_input("Max: the farthest, from end A; null or left out: flush with end B, following the rail's length")}, "additionalProperties": false}
+                "shared_mitre": {"type": "string", "enum": ["a", "b"], "description": "On its own: the shared miter at this end with the profile end it meets, as a corner placement makes; of two profiles along sketch lines kept as the joint's condition mitre"},
+                "limits": {"type": "object", "description": "A part that slides on another (a carriage on its rail): its travel limits again, both sent (each null for its default)", "properties": {"min": value_input("Min: where its frame may slide to nearest the rail's end A, from end A; null or left out: flush with end A"), "max": value_input("Max: the farthest, from end A; null or left out: flush with end B, following the rail's length")}, "additionalProperties": false},
+                "joint": {"type": "object", "description": "On its own: the condition of the joint an end of a profile along a sketch line is in, kept with the joint (the build_end_meets query reports it); the reference's Joint conditions", "properties": {"end": {"type": "string", "enum": ["a", "b"]}, "condition": {"type": "string", "enum": ["mitre", "butt", "square", "near_side", "far_side"], "description": "An L: mitre, butt or square; a T: near_side, far_side or square"}, "through": id("A butt: the profile that runs through (this one or the other); left out, the one that does now, else the one placed first")}, "required": ["end", "condition"], "additionalProperties": false}
             },
             "required": ["component"],
             "examples": [

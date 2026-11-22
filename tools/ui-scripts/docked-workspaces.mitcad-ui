@@ -246,8 +246,13 @@ mark
 click-logged '^Document tab shown at '
 wait-log '^Start page left by the design.s tab$'
 wait-log '^Ribbon tab shown: SOLID$'
+wait-log '^Start page left for SOLID$'
 wait-log '^Start page hidden$'
 wait-log '^Docked toolbar panel shown$'
+# Placed (mitcad#2031). The window is exposed on Linux and macOS (their
+# wrappers check it); in Windows' session 0, where the build VM runs the UI
+# tests, no window is ever exposed (mitcad#2248).
+wait-log '^Toolbar panel after the Start page: shown at \d+,\d+ \d+x\d+ [(]Docked; the window (?:not )?exposed, platform '
 wait-idle
 expect-widget-property dockedPanel visible true
 expect-widget-property ribbonWorkspace visible true

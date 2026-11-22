@@ -364,9 +364,26 @@ impl EvalError {
     }
 }
 
-impl fmt::Display for EvalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl EvalError {
+    /// What is wrong, in words a person reads, without the byte offset
+    /// that `Display` (the agents' and the log's text) ends with
+    /// (mitcad#2181): "table_lenght is not a parameter" rather than
+    /// "unknown parameter table_lenght at byte 0". The offset is the
+    /// `span`, which a field marks.
+    pub fn message(&self) -> String {
+        struct Words<'a>(&'a EvalError);
+        impl fmt::Display for Words<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.describe(f, true)
+            }
+        }
+        Words(self).to_string()
+    }
+
+    /// The error without its offset; `words`: as a person reads it.
+    fn describe(&self, f: &mut fmt::Formatter<'_>, words: bool) -> fmt::Result {
         match self {
+            Self::UnknownReference { name, .. } if words => write!(f, "{name} is not a parameter")?,
             Self::UnknownReference { name, .. } => write!(f, "unknown parameter {name}")?,
             Self::DimensionMismatch {
                 operation,
@@ -478,6 +495,13 @@ impl fmt::Display for EvalError {
                 write!(f, "{function} has no values: the column's cells are empty")?;
             }
         }
+        Ok(())
+    }
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.describe(f, false)?;
         if let Some(span) = self.span() {
             write!(f, " at byte {}", span.start)?;
         }

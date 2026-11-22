@@ -995,6 +995,12 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         if surface {
             def["surface"] = json!(true);
         }
+        // Tangent Edges (mitcad#2162): merged where the dump says so (the
+        // API dumps' `isTangentEdgesMerged`; the stream decoder does not
+        // read it yet), else kept as before.
+        if d.get("isTangentEdgesMerged").and_then(Value::as_bool) == Some(true) {
+            def["tangent_edges"] = json!("merge");
+        }
         let bodies: Option<Vec<Reference>> = d
             .get("participantBodies")
             .and_then(Value::as_array)

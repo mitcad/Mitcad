@@ -50,7 +50,18 @@ class CutTargetsPanel final : public QWidget {
 public:
   explicit CutTargetsPanel(QWidget* parent = nullptr);
   void setScope(const QJsonObject& scope);
+  // The preview's `cut_targets`; empty: the list is stale while the inputs
+  // change, its line kept until a preview computes (setComputing) or ends.
   void setPreview(const QJsonObject& report);
+  // A whole preview report (mitcad#2118): its `cut_targets` (setPreview);
+  // without them, a failed preview's (`status` "error") cause in the words a
+  // person reads, the same as the panel's message ("Affected components
+  // could not be found: …"), or, `status` "incomplete", inputs that make no
+  // cut yet; empty: stale.
+  void setPreviewResult(const QJsonObject& report);
+  // A preview of the inputs computing: "Updating affected components…"
+  // while the list is stale, only then.
+  void setComputing(bool computing);
   // For UI tests: "Cut target row C1@O1 at x,y" and "Cut target check C1@O1
   // at x,y" for each row in sight, in the window's coordinates.
   QStringList places() const;
@@ -66,9 +77,14 @@ protected:
 private:
   void rebuild();
   void highlight(const QModelIndex& index);
+  // The line over the list, logged when it changes (for UI tests).
+  void setStatus(const QString& text);
+  // The stale list: rows and buttons off.
+  void markStale();
   QJsonObject m_scope;
   QJsonObject m_report;
   bool m_current = false;
+  bool m_computing = false;
   bool m_refreshing = false;
   bool m_wraps = false; // a row shows a wrapped reason or note
   QTreeWidget* m_tree = nullptr;

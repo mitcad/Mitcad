@@ -408,11 +408,15 @@ fn derive<K: Kernel>(
                     .find(|p| p.domain == patch.domain)
                     .map_or(usize::MAX, |p| p.regions.len());
                 if after <= before {
-                    joined = Some(trial);
+                    joined = Some((trial, patch.domain));
                     break;
                 }
             }
-            state = joined.ok_or("it added material that touches no panel in its plane")?;
+            let (trial, primary) =
+                joined.ok_or("it added material that touches no panel in its plane")?;
+            // Other panels of the plane it now meets (material bridging the
+            // walls of flanges side by side, mitcad#2117): one material.
+            state = merge_coplanar(ctx, trial, primary)?;
         }
     }
     // The re-derived sheet must be the result.
@@ -888,6 +892,213 @@ fn added_regions(
         out.push(region);
     }
     Ok(out)
+}
+
+/// Other panels of `primary`'s plane that it now meets over a boundary, a
+/// seam joining neither to it (material an ordinary feature added between
+/// two walls, mitcad#2117: a Join bridging the gaps between the walls of
+/// flanges side by side), are one material with it: each is united into
+/// `primary` (its curves keep their identities and lineage), its chart
+/// removed, and its seams, bends, open bends and gaps refer to `primary`.
+fn merge_coplanar<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    mut state: SheetState,
+    primary: SheetDomainRef,
+) -> Result<SheetState, Failure> {
+    loop {
+        let Some(target) = state.charts.iter().find(|p| p.domain == primary) else {
+            return Ok(state);
+        };
+        let embedding = target.embedding.clone();
+        let count = target.regions.len();
+        let joined = |a: SheetDomainRef, b: SheetDomainRef| {
+            state.joins.iter().any(|p| {
+                let (x, y) = (p.first.boundary.domain, p.second.boundary.domain);
+                (x == a && y == b) || (x == b && y == a)
+            })
+        };
+        let mut merged = None;
+        for other in &state.charts {
+            if other.domain == primary
+                || !matches!(other.domain, SheetDomainRef::Panel(_))
+                || joined(primary, other.domain)
+            {
+                continue;
+            }
+            let Ok(map) = planar_map(&other.embedding, &embedding) else {
+                continue;
+            };
+            let tool = mapped_regions(&other.regions, map);
+            let mut trial = state.clone();
+            super::folded::copy_lineage(&mut trial.lineage, other.domain, primary, &other.regions);
+            super::folded::remap_lineage(&mut trial.lineage, primary, &other.regions, map);
+            super::folded::trim_with_lineage(
+                ctx,
+                &mut trial,
+                &[primary],
+                SheetTrimOperation::Union,
+                &tool,
+                &[Isometry2::IDENTITY],
+                Some(primary),
+            )?;
+            let after = trial
+                .charts
+                .iter()
+                .find(|p| p.domain == primary)
+                .map_or(usize::MAX, |p| p.regions.len());
+            if after < count + other.regions.len() {
+                merged = Some((trial, other.domain, map));
+                break;
+            }
+        }
+        let Some((mut trial, gone, map)) = merged else {
+            return Ok(state);
+        };
+        trial.charts.retain(|p| p.domain != gone);
+        rebind_merged(&state, &mut trial, gone, primary, map)?;
+        state = trial;
+    }
+}
+
+/// The references to the panel `gone`, united into `primary` (`map`: from
+/// `gone`'s chart to `primary`'s), bound to the same boundaries in
+/// `primary`'s chart, found by where they lie ([`merge_coplanar`]).
+fn rebind_merged(
+    before: &SheetState,
+    after: &mut SheetState,
+    gone: SheetDomainRef,
+    primary: SheetDomainRef,
+    map: Isometry2,
+) -> Result<(), String> {
+    let old_edges: Vec<MaterialEdge> = before
+        .charts
+        .iter()
+        .filter(|p| p.domain == gone)
+        .flat_map(|p| &p.regions)
+        .flat_map(|r| &r.loops)
+        .flat_map(|l| &l.edges)
+        .cloned()
+        .collect();
+    let new_edges: Vec<MaterialEdge> = after
+        .charts
+        .iter()
+        .filter(|p| p.domain == primary)
+        .flat_map(|p| &p.regions)
+        .flat_map(|r| &r.loops)
+        .flat_map(|l| &l.edges)
+        .cloned()
+        .collect();
+    // The new edge holding the points `p`, `q` (primary's chart), with
+    // their parameters on it.
+    let found = |p: [f64; 2], q: [f64; 2]| -> Option<(MaterialEdge, f64, f64)> {
+        new_edges.iter().find_map(|edge| {
+            let SegmentGeometry::Line { start, end } = edge.curve.geometry else {
+                return None;
+            };
+            let d = crate::sketch::geometry::sub(end, start);
+            let len = crate::sketch::geometry::dot(d, d);
+            if len <= 0.0 {
+                return None;
+            }
+            let at = |x: [f64; 2]| {
+                crate::sketch::geometry::dot(crate::sketch::geometry::sub(x, start), d) / len
+            };
+            let (lo, hi) = (
+                edge.curve.range.first.min(edge.curve.range.last),
+                edge.curve.range.first.max(edge.curve.range.last),
+            );
+            let on = |t: f64, x: [f64; 2]| {
+                t >= lo - 1e-9
+                    && t <= hi + 1e-9
+                    && edge
+                        .curve
+                        .point(t)
+                        .is_ok_and(|y| crate::sketch::geometry::dist(x, y) <= 1e3 * TOLERANCE)
+            };
+            let (t0, t1) = (at(p), at(q));
+            (on(t0, p) && on(t1, q)).then(|| (edge.clone(), t0, t1))
+        })
+    };
+    // The old edge of a piece over a span, its points there in primary's
+    // chart.
+    let old_points =
+        |piece: &CurvePieceRef, span: Option<ParamSpan>| -> Option<([f64; 2], [f64; 2])> {
+            let edge = old_edges.iter().find(|e| {
+                &e.piece == piece
+                    && span.is_none_or(|s| {
+                        let (lo, hi) = (
+                            e.curve.range.first.min(e.curve.range.last),
+                            e.curve.range.first.max(e.curve.range.last),
+                        );
+                        s.first.min(s.last) >= lo - 1e-9 && s.first.max(s.last) <= hi + 1e-9
+                    })
+            })?;
+            let span = span.unwrap_or(edge.curve.range);
+            Some((
+                map.point(edge.curve.point(span.first).ok()?),
+                map.point(edge.curve.point(span.last).ok()?),
+            ))
+        };
+    let lost = |what: &str| format!("the united panel lost the boundary of {what}");
+    for port in &mut after.joins {
+        for side in [&mut port.first, &mut port.second] {
+            if side.boundary.domain != gone {
+                continue;
+            }
+            let (p, q) =
+                old_points(&side.boundary.piece, Some(side.span)).ok_or_else(|| lost("a seam"))?;
+            let (edge, t0, t1) = found(p, q).ok_or_else(|| lost("a seam"))?;
+            let a0 = side.axial.offset + side.axial.scale * side.span.first;
+            let a1 = side.axial.offset + side.axial.scale * side.span.last;
+            if (t1 - t0).abs() <= 1e-12 {
+                return Err(lost("a seam"));
+            }
+            let scale = (a1 - a0) / (t1 - t0);
+            *side = ShapePortSide {
+                boundary: BoundaryPieceRef {
+                    domain: primary,
+                    piece: edge.piece.clone(),
+                },
+                span: ParamSpan {
+                    first: t0,
+                    last: t1,
+                },
+                axial: AxialMap {
+                    offset: a0 - scale * t0,
+                    scale,
+                },
+            };
+        }
+    }
+    for bend in &mut after.bends {
+        for side in [&mut bend.stationary, &mut bend.moving] {
+            if side.domain != gone {
+                continue;
+            }
+            let (p, q) = old_points(&side.piece, None).ok_or_else(|| lost("a bend"))?;
+            let (edge, _, _) = found(p, q).ok_or_else(|| lost("a bend"))?;
+            *side = BoundaryPieceRef {
+                domain: primary,
+                piece: edge.piece.clone(),
+            };
+        }
+    }
+    let (SheetDomainRef::Panel(gone_panel), SheetDomainRef::Panel(kept)) = (gone, primary) else {
+        return Ok(());
+    };
+    for opened in &mut after.opened {
+        if opened.stationary == Some(gone_panel) {
+            opened.stationary = Some(kept);
+        }
+    }
+    for gap in &mut after.gaps {
+        for panel in &mut gap.panels {
+            if *panel == gone_panel {
+                *panel = kept;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn settled_regions(

@@ -72,7 +72,9 @@ if [ "$UI_SCALE" != 1 ]; then
 fi
 # The test screen's logical height (UI_SCREEN_HEIGHT, default 1000): a test
 # of a tall dialog that must not scroll sets a larger one before
-# ui_start_display.
+# ui_start_display. Its width (UI_SCREEN_WIDTH, default 1600): a test of
+# two screens side by side sets twice that and splits it
+# (tools/ui-orbit-screens-test.sh).
 # No update checks (mitcad#9): the tests make no network requests;
 # tools/ui-update-test.sh checks against a local server of its own.
 export MITCAD_NO_UPDATE_CHECK=1
@@ -247,7 +249,7 @@ ui_start_display() {
   for display in $(seq 90 189); do
     owner=$(ui_lock_owner "$display")
     [ -n "$owner" ] && kill -0 "$owner" 2> /dev/null && continue
-    Xvfb ":$display" -screen 0 $((1600 * UI_SCALE))x$((${UI_SCREEN_HEIGHT:-1000} * UI_SCALE))x24 -nolisten tcp -noreset \
+    Xvfb ":$display" -screen 0 $((${UI_SCREEN_WIDTH:-1600} * UI_SCALE))x$((${UI_SCREEN_HEIGHT:-1000} * UI_SCALE))x24 -nolisten tcp -noreset \
       > /dev/null 2>&1 &
     UI_XVFB_PID=$!
     # Up to 30 s: competing servers retry their lock every 2 s.

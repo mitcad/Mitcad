@@ -5512,3 +5512,117 @@ fn a_reference_after_a_siblings_removal_names_its_body_object() {
         "{p}"
     );
 }
+
+/// A sheet-metal Unfold and its Refold (mitcad#2117): the Unfold's input
+/// slots in the order its record names them, the bends' faces (role 16),
+/// the stationary face (role 16, one input) and the body (role 4), become
+/// the sheet item `unfold` with its faces by their names and its body; the
+/// Refold's one slot (role 8) the sheet item `refold` with its body.
+#[test]
+fn unfold_and_refold_records() {
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const SLOT_KEY: &str = "2DF7DA30-A4E4-4260-AFD1-D9C7154CB44B";
+    const UNFOLD: &str = "EC187027-FF97-48A3-8031-F923807E630B";
+    const REFOLD: &str = "483D584F-29AA-46DA-ABA2-F139B0ED8100";
+    let mut d = sample();
+    for g in [
+        UNFOLD, REFOLD, BODY_INPUT, BODY_REF, FACE_REF, RECIPE, SLOT_KEY,
+    ] {
+        d.class(g, ROOT, 1);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(4), &r(10), &r(20), &r(800), &r(900)]),
+    );
+    // The faces: two bends' inner and outer faces and the stationary face.
+    for (k, face) in [811u64, 812, 813, 814, 821].into_iter().enumerate() {
+        d.obj(face, FACE_REF, cat(&[&[0, 0], &r(face + 40)]));
+        d.obj(face + 40, RECIPE, face_recipe(&(k + 11).to_string(), &[5]));
+    }
+    // The body, by its recipe.
+    let mut body = face_recipe("1", &[3]);
+    let n = body.len();
+    body.truncate(n - 20);
+    body.extend(s8("body_recipe_data"));
+    d.obj(831, BODY_REF, cat(&[&[0, 0], &r(871)]));
+    d.obj(871, RECIPE, body);
+    let slot = |inputs: &[u64], key: u64, role: u32| {
+        let mut s = cat(&[&[0, 0], &u32b(inputs.len() as u32)]);
+        for &i in inputs {
+            s.extend(r(i));
+        }
+        s.extend(cat(&[&[0; 6], &r(key), &u32b(0), &u32b(role), &[0; 4]]));
+        s
+    };
+    for (id, inputs, key, role) in [
+        (810, vec![811, 812, 813, 814], 815, 16),
+        (820, vec![821], 825, 16),
+        (830, vec![831], 835, 4),
+        (910, vec![831], 915, 8),
+    ] {
+        d.obj(id, BODY_INPUT, slot(&inputs, key, role));
+        d.obj(key, SLOT_KEY, vec![0, 0]);
+    }
+    // The Unfold names its bends' slot, the rule (left out here) and its
+    // stationary face's slot, then its body's slot; then the input list.
+    d.obj(
+        800,
+        UNFOLD,
+        cat(&[
+            &[0, 0],
+            &[1],
+            &r(810),
+            &r(820),
+            &[0; 12],
+            &u32b(1),
+            &r(830),
+            &u32b(3),
+            &r(810),
+            &r(820),
+            &r(830),
+            &tail(9, "Unfold", 6, "", [0, 0, 0], 801),
+        ]),
+    );
+    d.obj(801, HEALTH, vec![0, 0]);
+    d.obj(
+        900,
+        REFOLD,
+        cat(&[
+            &[0, 0],
+            &r(910),
+            &[0; 12],
+            &u32b(1),
+            &r(910),
+            &u32b(1),
+            &r(910),
+            &tail(10, "Refold", 5, "", [0, 0, 0], 901),
+        ]),
+    );
+    d.obj(901, HEALTH, vec![0, 0]);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let unfold = &items[2];
+    assert_eq!(unfold["objectType"], "UnfoldFeature", "{unfold}");
+    let s = &unfold["detail"]["sheet"];
+    assert_eq!(s["kind"], "unfold", "{unfold}");
+    assert_eq!(s["stationary"]["kind"], "face");
+    assert_eq!(s["stationary"]["_f3d"]["object_id"], 821);
+    assert_eq!(s["stationary"]["_f3d"]["entities"][0][0]["tag"], "15");
+    let bends: Vec<&Value> = s["bends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| &f["_f3d"]["object_id"])
+        .collect();
+    assert_eq!(bends, [&json!(811), &json!(812), &json!(813), &json!(814)]);
+    assert_eq!(s["participantBodies"][0]["kind"], "body");
+    assert_eq!(s["participantBodies"][0]["_f3d"]["object_id"], 831);
+    let refold = &items[3];
+    assert_eq!(refold["objectType"], "RefoldFeature", "{refold}");
+    let s = &refold["detail"]["sheet"];
+    assert_eq!(s["kind"], "refold", "{refold}");
+    assert_eq!(s["participantBodies"][0]["_f3d"]["object_id"], 831);
+}

@@ -30,10 +30,13 @@ endif()
 include(cmake/VcpkgCompilerCache.cmake)
 
 project(Mitcad
-  VERSION 0.69.0
+  VERSION 0.70.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 mitcad_vcpkg_compiler_cache_done()
+# A changed overlay port (OCCT's patches) makes the next build configure
+# again and so run vcpkg's install, also without a configure step first.
+include(cmake/VcpkgPortDepends.cmake)
 
 if(APPLE)
   # app/platform/macos: the parts that need AppKit.
@@ -354,6 +357,12 @@ if(BUILD_TESTING)
       COMMAND "${Python3_EXECUTABLE}" -m unittest discover
         -s "${CMAKE_CURRENT_SOURCE_DIR}/tools/f3d-learn" -p "test_*.py")
     set_tests_properties(tools.f3d_learn PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    # The scoped check's UI test selection (mitcad#2173): what each UI test
+    # uses of the test library and of the UI test driver, on a small tree
+    # and on this checkout's driver files.
+    add_test(NAME repo.ui-test-deps
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/ui-test-deps.py" --self-test
+        --work "${CMAKE_CURRENT_BINARY_DIR}/ui-test-deps-self-test" --repo "${CMAKE_CURRENT_SOURCE_DIR}")
   endif()
 endif()
 

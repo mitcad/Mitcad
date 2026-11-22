@@ -21,6 +21,17 @@
 //! (`set_body_appearance`), and single faces of it can have their own
 //! (`set_face_appearance`, mitcad#53); an id that is in neither (an
 //! imported one) shows the default look.
+//!
+//! The library's woods and panels carry texture sets of MitCad's own,
+//! image files shipped once beside the programs and read when the library
+//! is first used (mitcad#2218), laid along each face's grain (mitcad#2186,
+//! [`wood_textures`], [`Projection::Grain`], [`grain_axes`]).
+
+mod grain;
+mod wood_textures;
+
+pub use grain::{SQUARE as GRAIN_SQUARE, grain_axes, grain_point};
+pub use wood_textures::{SOURCE as BUILT_IN_TEXTURE_SOURCE, textured_ids};
 
 use std::collections::HashMap;
 use std::fmt;
@@ -587,6 +598,14 @@ pub enum Projection {
     /// is projected as by `Box`. Written as `uv`, which older versions
     /// refuse.
     Uv,
+    /// Along the grain (mitcad#2186): each face from a plane of its own,
+    /// the image's width along the face's longest side (a panel's length)
+    /// and its height across it ([`grain_axes`]), so a wood's grain runs
+    /// along each part whatever way it lies; then turned by the rotation
+    /// and divided by the size as the others. The built-in woods' and
+    /// panels' textures use it. Written as `grain`, which older versions
+    /// refuse.
+    Grain,
 }
 
 impl Default for Appearance {
@@ -917,7 +936,8 @@ const ENTRIES: &[Entry] = &[
         ..filament("filament_translucent", "Filament - Translucent", 0xeef0ec)
     },
     // The looks of the bundled dataset's woods and panels (mitcad#1552),
-    // colours only. Their ids are stable: never renamed.
+    // with texture sets of their own since mitcad#2186 (`wood_textures`):
+    // the colours stay. Their ids are stable: never renamed.
     wood(dielectric("wood_birch", "Wood - Birch", 0xe0c49a, 0.55)),
     wood(dielectric("wood_cedar", "Wood - Cedar", 0xa8643c, 0.55)),
     wood(dielectric("wood_cherry", "Wood - Cherry", 0x9a4f2c, 0.5)),
@@ -983,6 +1003,10 @@ fn srgb(rgb: u32) -> Color {
 }
 
 /// Mitcad's appearance library, in the order the application lists it.
+/// The woods and panels of mitcad#1552 have their built-in texture sets
+/// (mitcad#2186), embedded images like a design's, read from the shipped
+/// image files when the library is first built (mitcad#2218; without the
+/// files they stay plain colours).
 pub fn library() -> &'static [Appearance] {
     static LIBRARY: LazyLock<Vec<Appearance>> = LazyLock::new(|| {
         ENTRIES
@@ -997,6 +1021,7 @@ pub fn library() -> &'static [Appearance] {
                 transmission: e.transmission,
                 coat: e.coat,
                 emission: e.emission,
+                texture: wood_textures::texture(e.id),
                 ..Appearance::default()
             })
             .collect()
@@ -1219,6 +1244,85 @@ mod tests {
         for a in &filaments {
             assert_eq!(library().iter().filter(|b| b.id == a.id).count(), 1);
             assert_eq!(library().iter().filter(|b| b.name == a.name).count(), 1);
+        }
+    }
+
+    /// mitcad#2186: every built-in wood and panel has a texture set (base
+    /// colour, normal and roughness, JPEG images built in, laid along the
+    /// grain at a real-world repeat) and keeps its id, name, colour and
+    /// parameters from mitcad#1552; no other library appearance has one.
+    #[test]
+    fn built_in_woods_and_panels_have_texture_sets_and_keep_their_looks() {
+        // Id, name, colour and roughness as mitcad#1552 gave them.
+        const LOOKS: [(&str, &str, u32, f64); 14] = [
+            ("wood_birch", "Wood - Birch", 0xe0c49a, 0.55),
+            ("wood_cedar", "Wood - Cedar", 0xa8643c, 0.55),
+            ("wood_cherry", "Wood - Cherry", 0x9a4f2c, 0.5),
+            ("wood_douglas_fir", "Wood - Douglas Fir", 0xc89060, 0.55),
+            ("wood_eucalyptus", "Wood - Eucalyptus", 0xbf9a6a, 0.55),
+            ("wood_pine", "Wood - Pine", 0xe2c58e, 0.55),
+            ("wood_teak", "Wood - Teak", 0xa8743c, 0.5),
+            ("panel_chipboard", "Chipboard", 0xc8ab7c, 0.8),
+            ("panel_mdf", "MDF", 0xb38a5e, 0.75),
+            ("panel_osb", "OSB", 0xc89a5a, 0.75),
+            ("plywood_birch", "Plywood - Birch", 0xe6cfa4, 0.6),
+            ("plywood_eucalyptus", "Plywood - Eucalyptus", 0xc49a70, 0.6),
+            ("plywood_pine", "Plywood - Pine", 0xdcc08c, 0.6),
+            ("plywood_spruce", "Plywood - Spruce", 0xe8d2a6, 0.6),
+        ];
+        assert_eq!(LOOKS.map(|l| l.0), WOOD_LOOKS_TAKEN_LATER);
+        assert_eq!(textured_ids().collect::<Vec<_>>(), WOOD_LOOKS_TAKEN_LATER);
+        let mut digests = std::collections::HashSet::new();
+        for (id, name, rgb, roughness) in LOOKS {
+            let a = library_appearance(id).unwrap_or_else(|| panic!("{id} is missing"));
+            assert_eq!(a.name, name);
+            assert_eq!(a.base_color, srgb(rgb), "{id}");
+            assert_eq!(a.display_color(), srgb(rgb), "{id}");
+            assert_eq!(a.roughness, roughness, "{id}");
+            assert_eq!((a.metalness, a.specular, a.coat), (0.0, 0.5, 0.0), "{id}");
+            assert_eq!(a.material_class(), MaterialClass::Wood, "{id}");
+            let t = a
+                .texture
+                .as_ref()
+                .unwrap_or_else(|| panic!("{id} has no texture"));
+            assert_eq!(t.projection, Projection::Grain, "{id}");
+            assert_eq!(t.rotation, 0.0, "{id}");
+            // Furniture-sized repeats: 400 mm (chipboard's chips) to 1 m
+            // (a plywood face).
+            assert_eq!(t.size[0], t.size[1], "{id}");
+            assert!((400.0..=1000.0).contains(&t.size[0]), "{id}: {:?}", t.size);
+            if id.starts_with("plywood_") {
+                assert_eq!(t.size, [1000.0, 1000.0], "{id}");
+            }
+            // Base colour, normal and roughness, embedded JPEG images.
+            for map in [BASE_COLOR, "normal", "roughness"] {
+                let data = t
+                    .image_data(map)
+                    .unwrap_or_else(|| panic!("{id} has no {map} image"));
+                let bytes = data.bytes().unwrap_or_else(|e| panic!("{id} {map}: {e}"));
+                assert_eq!(image_format(&bytes), Some("jpeg"), "{id} {map}");
+                // Small enough for the installer: under 512 kB each.
+                assert!(bytes.len() < 512 << 10, "{id} {map}: {} bytes", bytes.len());
+                assert!(digests.insert(data.sha256().to_owned()), "{id} {map}");
+            }
+            assert!(t.metalness.is_none() && t.occlusion.is_none(), "{id}");
+            let source = t.source.as_ref().expect("a source");
+            assert_eq!(source.id, BUILT_IN_TEXTURE_SOURCE);
+            assert_eq!(source.asset, id);
+            assert_eq!(source.license.as_deref(), Some("MIT"));
+            a.check().unwrap_or_else(|e| panic!("{id}: {e}"));
+            // Laid along the grain, which older versions refuse: written
+            // as `grain`.
+            assert_eq!(serde_json::to_value(t).unwrap()["projection"], "grain");
+        }
+        // Only these: the other library appearances stay plain.
+        for a in library() {
+            assert_eq!(
+                a.texture.is_some(),
+                WOOD_LOOKS_TAKEN_LATER.contains(&a.id.as_str()),
+                "{}",
+                a.id
+            );
         }
     }
 

@@ -49,8 +49,11 @@ ShapePtr sweep_sheet(const std::string& feature, const std::vector<Path>& chains
 // A surface through the sections in order (each one chain; all open or all
 // closed), smooth or `ruled`; `closed` runs on from the last section back
 // to the first. Faces "<feature>:side(<curve>)" after the first section's
-// curves.
-ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& sections, bool ruled, bool closed);
+// curves. `merge_tangent` (Tangent Edges: Merge, mitcad#2162): each
+// section's runs of tangent curves joined first, as a loft's (loft.hpp),
+// a face per run named after its first curve.
+ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& sections, bool ruled, bool closed,
+                    bool merge_tangent = false);
 
 // A surface helix's growth and flat ends (mitcad#1797), as the solid
 // helix's (HelixSweepSpec): `growth` moves the chains out per turn along

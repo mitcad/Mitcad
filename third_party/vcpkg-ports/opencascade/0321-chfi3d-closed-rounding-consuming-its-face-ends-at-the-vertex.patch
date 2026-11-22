@@ -18,16 +18,8 @@ failed. As for a contact along a closed edge, the stripe's point there is
 now the vertex, for closed and periodic spines. A round hole (one closed
 edge) built before and builds the same.
 
-Test: geometry/tests/test_fillet_kernel.cpp (ctest
-geometry.suite.fillet_kernel), test_fin_sides_rounded_one_after_the_other:
-a fin's sides rounded one after the other, the second rounding's contacts
-running along the whole edges the first one left, up to the block, its
-stripe ending at those edges' vertices; without the patch the second
-rounding fails.
-It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py,
-reverted together with 0322, 0440, 1560, which change the same lines).
-(The rim rounded as wide as its ledge, named before, succeeds without the
-patch.)
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 0321.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 index e11bb77..f9f242d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx

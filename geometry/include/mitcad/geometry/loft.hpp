@@ -58,7 +58,8 @@ struct LoftEnd {
 // Faces: side(<key>) from the edges of the first section that is not a
 // point (#k pieces), keyed by segment for a region and by edge name for a
 // face; caps start(<key>) and end(<key>) keyed by the region or the face
-// name. A closed loft has no caps. Rails split the sections' edges where
+// name. With merge_tangent a joined run of edges names its face after the
+// run's first edge. A closed loft has no caps. Rails split the sections' edges where
 // they meet them (their pieces #k); every rail must meet every section and
 // run through them in order. End conditions and rails need an open, smooth
 // loft without a centre line; rails need sections that are not points.
@@ -84,6 +85,16 @@ struct LoftSpec {
   // Along a centre line (mitcad#547): the sections do not turn, they only
   // move along it (a sweep's parallel orientation); not with a frame.
   bool parallel = false;
+  // Tangent Edges: Merge (mitcad#2162). Each section's runs of edges that
+  // meet tangentially (within the model's angular tolerance, 1e-6 rad) are
+  // joined into one edge each, by arc length within 1e-8 mm, so that the
+  // side between them is one face, tangent-continuous across the former
+  // joins; a section smooth all round becomes one closed edge, started at
+  // the point matching the neighbouring section's start. Each joined edge
+  // names its face after the first edge of its run (side(<key>); a closed
+  // smooth one after its edge whose name sorts first). Edges
+  // that meet at a corner stay as they are. False: every edge its own face.
+  bool merge_tangent = false;
 };
 
 ShapePtr loft(const LoftSpec& spec);

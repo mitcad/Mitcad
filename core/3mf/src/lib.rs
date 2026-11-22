@@ -14,6 +14,11 @@
 //! [`read`] reads any core model back into parts with their placements
 //! (and the build's objects when it has several) and checks what the core
 //! specification requires of it (tests use it on what [`write`] wrote).
+//! It follows the Production extension's components into other model parts
+//! of the package, as slicers' projects keep their meshes (mitcad#2156), and
+//! names objects without a name as the project's settings file does.
+//! [`read_for_import`] reads a file to import (mitcad#2156): meshes that
+//! are not closed come in with a warning rather than a refusal.
 //!
 //! A slicer's settings (mitcad#640) go with the model: more metadata of
 //! the model and of each part's mesh object, and more files of the
@@ -25,7 +30,7 @@ mod read;
 mod write;
 
 pub use package::{Package, PackageObject, read_package};
-pub use read::read;
+pub use read::{read, read_for_import};
 pub use write::write;
 
 use std::fmt;
@@ -36,6 +41,25 @@ pub const CORE_NAMESPACE: &str = "http://schemas.microsoft.com/3dmanufacturing/c
 pub const MODEL_CONTENT_TYPE: &str = "application/vnd.ms-package.3dmanufacturing-3dmodel+xml";
 /// The relationship type of the package's root model.
 pub const MODEL_RELATIONSHIP: &str = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel";
+/// The Production extension's namespace (2015/06): components and build
+/// items that refer to objects of other model parts by `p:path`
+/// (mitcad#2156).
+pub const PRODUCTION_NAMESPACE: &str =
+    "http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
+
+/// What [`read_for_import`] read (mitcad#2156): the model, the base
+/// material's name of each part's colour, and what it took that [`read`]
+/// refuses, in words.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ImportRead {
+    pub model: Model,
+    /// By the index of the part in the model's `parts`: the name of the
+    /// base material its colour comes from, when it has one.
+    pub materials: Vec<Option<String>>,
+    /// Each part whose mesh is not closed, faces inwards or had triangles
+    /// left out: its name and what is wrong.
+    pub warnings: Vec<String>,
+}
 
 /// A triangle mesh: vertices and triangles of vertex indices,
 /// counter-clockwise seen from outside.

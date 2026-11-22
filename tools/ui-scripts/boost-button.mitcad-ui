@@ -6,7 +6,10 @@
 # after the quick-access group), in a 1024 x 768 window,
 # with a fresh profile:
 #   1. The button shows ("Boost button shown", its places logged); a
-#      picture of it (boost-button.png in MITCAD_TEST_WORK).
+#      picture of it (boost-button.png in MITCAD_TEST_WORK), and one in
+#      each theme with the Discord pill beside it (boost-button-dark.png,
+#      boost-button-light.png, mitcad#2159), each after the Browser is
+#      checked to be drawn in that theme (mitcad#2176).
 #   2. A click on it opens the project's Ko-fi page: "Boost link opened:
 #      https://ko-fi.com/mitcad", and the UI tests' URL log instead of the
 #      browser (MITCAD_TEST_LOG_URLS: "Open URL (test, not opened): ...").
@@ -22,8 +25,20 @@
 #   6. It stays while Boost development is hidden by its ×: a click on it
 #      opens the link again.
 #   7. Help › MitCad on Discord opens the same link.
+# The Discord pill's own × and setting (mitcad#2159):
+#   8. Its × hides it: "Discord button hidden", saved
+#      (appearance/discordButton false), no link opened, Boost development
+#      left shown (the wrappers check the parts logged meanwhile: titleBoost
+#      without titleDiscord).
+#   9. Preferences › Display › Show the Discord button checked (Show the
+#      Boost development button still checked): saved, the pill back with
+#      its places.
 # Preferences is a dialog on Windows and Linux (applied on OK) and the
-# Settings window on macOS (at once). Run by tools/ui-boost-button-test.sh
+# Settings window on macOS (at once). Return (OK) is pressed in the empty
+# search field, not on the check box just ticked: Qt's GTK platform theme
+# (the Linux wrapper's, mitcad#2176) lets Return press a focused button, so
+# it would untick the box and never reach OK (mitcad#2187). Run by
+# tools/ui-boost-button-test.sh
 # (Linux), tools/ui-windows-boost-button-test.ps1 (Windows) and
 # tools/ui-macos-boost-button-test.sh (macOS, Docked).
 expect-ever 'View area' 30
@@ -33,10 +48,30 @@ expect-ever '^Boost button shown$' 30
 expect-ever '^Boost button at ' 30
 expect-ever '^Boost button close at ' 30
 expect-never '^Boost button hidden$'
+expect-ever '^Discord button shown$' 30
 expect-ever '^Discord button at ' 30
+expect-ever '^Discord button close at ' 30
 wait-idle
 sleep 300
 screenshot '${MITCAD_TEST_WORK}/boost-button.png'
+# Both pills in each theme (mitcad#2159): boost-button-dark.png and
+# boost-button-light.png; the steps go on in the light theme. The window
+# must really be in that theme before its picture (mitcad#2176): the
+# Browser as the window draws it ("TestDriver: widget theme ...") is
+# dark, then light; a platform that ignores the request fails here (the
+# Linux wrapper uses Qt's GTK platform theme, the generic one has no dark
+# scheme).
+color-scheme dark
+wait-idle
+sleep 500
+expect-widget-theme modelBrowserTree dark
+screenshot '${MITCAD_TEST_WORK}/boost-button-dark.png'
+color-scheme light
+wait-idle
+sleep 500
+expect-widget-theme modelBrowserTree light
+screenshot '${MITCAD_TEST_WORK}/boost-button-light.png'
+wait-idle
 
 # 5. The Discord button: the link logged, not opened.
 mark
@@ -60,6 +95,8 @@ wait-log '^Boost button hidden$'
 wait-idle
 expect-setting appearance/boostButton false
 expect-no-log '^Boost link opened'
+# Boost's × leaves the Discord pill.
+expect-no-log '^Discord button hidden$'
 
 # 6. The Discord button stays without Boost development: its click opens
 # the link (at its place logged last).
@@ -84,6 +121,8 @@ expect-widget-property boostVisible checked false
 focus-widget boostVisible
 key space
 expect-widget-property boostVisible checked true
+# OK by Return from the empty search field (mitcad#2187).
+focus-widget preferencesSearch
 key Return
 focus-main
 wait-log '^Preferences: Boost development button shown$'
@@ -91,5 +130,36 @@ wait-log '^Boost button shown$'
 expect-setting appearance/boostButton true
 wait-log '^Boost button at ' 30
 wait-log '^Boost button close at ' 30
+wait-idle
+
+# 8. The Discord pill's ×: hidden and saved, Boost development left.
+mark
+click-logged '^Discord button close at '
+wait-log '^Discord button hidden$'
+wait-idle
+expect-setting appearance/discordButton false
+expect-setting appearance/boostButton true
+expect-no-log '^Discord link opened'
+expect-no-log '^Boost button hidden$'
+sleep 300
+
+# 9. Preferences › Display: shown again.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property discordVisible checked false
+expect-widget-property boostVisible checked true
+focus-widget discordVisible
+key space
+expect-widget-property discordVisible checked true
+focus-widget preferencesSearch
+key Return
+focus-main
+wait-log '^Preferences: Discord button shown$'
+wait-log '^Discord button shown$'
+expect-setting appearance/discordButton true
+wait-log '^Discord button at ' 30
+wait-log '^Discord button close at ' 30
+expect-no-log '^Boost button hidden$'
 wait-idle
 expect-never 'TestDriver: FAIL'

@@ -25,7 +25,10 @@
 # Run by tools/ui-selection-look-test.sh (at device pixel ratio 1 and 2)
 # and, in the Windows build VM, tools/ui-windows-selection-look-test.ps1
 # (at 1 and 1.25: its 1024 x 768 screen leaves the Docked window no view
-# at 2).
+# at 2), and tools/ui-macos-selection-look-test.sh, where Preferences is
+# the Settings window (no OK, a change saved as it is made): the wrapper
+# sets MITCAD_TEST_PREFERENCES_DONE, the key that closes Preferences
+# keeping the changes (Return for OK, ctrl+w for the Settings window).
 wait-idle
 expect-ever '^View selection look: color #1f7aff, line width normal; edges [0-9.]+ px \(4 x ratio [0-9.]+\)'
 command view.home
@@ -43,18 +46,18 @@ view-line-width normal 3 'edge F1[.]b0/E[{]F1:side1[|]F1:top[}]'
 # 2. Selection color: the color dialog's HTML field, OK in both.
 mark
 command tools.preferences.display
-focus-dialog '^Preferences$'
+focus-dialog '^(Preferences|Settings)$'
 focus-widget selectionColor
 key space
 focus-dialog '^Selection Color$'
 key alt+h
 type '#d02090'
 key Return
-focus-dialog '^Preferences$'
+focus-dialog '^(Preferences|Settings)$'
 wait-log '^Preferences selection color chosen: #d02090$'
 focus-widget selectedLineWidth
-key Return
-expect-dialog-gone '^Preferences$'
+key ${MITCAD_TEST_PREFERENCES_DONE}
+expect-dialog-gone '^(Preferences|Settings)$'
 focus-main
 wait-log '^Preferences: selection color #d02090, line width normal$'
 expect-setting view/selectionColor '#d02090'
@@ -65,10 +68,10 @@ wait-idle
 # 3. Selected line width: Thick.
 mark
 command tools.preferences.display
-focus-dialog '^Preferences$'
+focus-dialog '^(Preferences|Settings)$'
 qt-choice selectedLineWidth Thick
-key Return
-expect-dialog-gone '^Preferences$'
+key ${MITCAD_TEST_PREFERENCES_DONE}
+expect-dialog-gone '^(Preferences|Settings)$'
 focus-main
 wait-log '^Preferences: selection color #d02090, line width thick$'
 expect-setting view/selectedLineWidth thick

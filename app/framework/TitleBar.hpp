@@ -65,7 +65,8 @@ public:
   void setBoostButton(QWidget* button);
   // The Discord button (mitcad#2123, DiscordButton): right of the Boost
   // development button, left of the indicators (or Preferences and Help);
-  // the part "titleDiscord". It stays when Boost development is hidden.
+  // the part "titleDiscord" while it shows. Its own × hides it
+  // (mitcad#2159); it stays when Boost development is hidden.
   void setDiscordButton(QWidget* button);
   // The quick-access group (mitcad#1090). In the Floating row it is the one
   // left group, first in the row, the document tabs after it

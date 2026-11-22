@@ -99,6 +99,42 @@ std::vector<detail::SweepFace> profile_faces(const ExtrudeFeatureSpec& spec, con
   return merge ? detail::merged(faces) : faces;
 }
 
+// Whether a one-sided extrusion up to an object turns round to reach it
+// (mitcad#2118): the object lies wholly behind the start along the
+// direction and ahead of it the other way, as a face on the far side of a
+// wall from the face the sketch lies on (whose normal points out of the
+// material) does. A start on a plane not parallel to the sketch or on a
+// curved face keeps its direction.
+bool turns_to_target(const ExtrudeFeatureSpec& spec) {
+  if (spec.side2 || !spec.side1.target) {
+    return false;
+  }
+  const gp_Dir normal = spec.frame.normal();
+  double offset = spec.start_offset;
+  if (spec.start) {
+    if (spec.start->kind == Target::Kind::Body || detail::is_curved_face(*spec.start)) {
+      return false;
+    }
+    const gp_Pln plane = detail::target_plane(*spec.start, normal);
+    if (!plane.Axis().Direction().IsParallel(normal, 1.0e-9)) {
+      return false;
+    }
+    offset = gp_Vec(spec.frame.origin, plane.Location()).Dot(gp_Vec(normal));
+  }
+  gp_Trsf to_start;
+  to_start.SetTranslation(gp_Vec(normal) * offset);
+  Bnd_Box start;
+  for (const detail::SweepFace& face : profile_faces(spec, spec.side1, false)) {
+    start.Add(detail::bounds_of(face.face).Transformed(to_start));
+  }
+  if (start.IsVoid()) {
+    return false;
+  }
+  const Target& target = *spec.side1.target;
+  return detail::lies_behind(target, spec.direction, start) &&
+         !detail::lies_behind(target, spec.direction.Reversed(), start);
+}
+
 // A tapered side along a direction off the face's normal (mitcad#539): the
 // profile grows in its plane by t tan(taper) at distance t along `along`,
 // each side face ruled from its edge to the edge's offset moved along the
@@ -339,6 +375,8 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
     if (spec.start && spec.start->kind == Target::Kind::Body) {
       throw std::invalid_argument("an extrusion cannot start from a body");
     }
+    // Toward a one-sided extrusion's object (mitcad#2118).
+    const gp_Dir direction = turns_to_target(spec) ? spec.direction.Reversed() : spec.direction;
     const bool curved = spec.start && detail::is_curved_face(*spec.start);
     if (spec.start && !curved) {
       const gp_Pln plane = detail::target_plane(*spec.start, normal);
@@ -362,7 +400,7 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
     // where the sketch's origin lies in its plane: a face the projection
     // crosses twice (a whole cylinder) is met where it faces the profile
     // (mitcad#1852).
-    gp_Dir scan = spec.direction;
+    gp_Dir scan = direction;
     if (curved) {
       Bnd_Box box;
       for (const TopoDS_Face& face : detail::target_faces(*spec.start)) {
@@ -372,7 +410,7 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
       box.Get(x0, y0, z0, x1, y1, z1);
       const gp_Pnt middle((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0);
       const double ahead = gp_Vec(spec.frame.origin, middle).Dot(gp_Vec(normal));
-      if (ahead * spec.direction.Dot(normal) < 0.0) {
+      if (ahead * direction.Dot(normal) < 0.0) {
         scan.Reverse();
       }
     }
@@ -393,12 +431,12 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
         throw std::invalid_argument("the extrusion has no length");
       }
       gp_Trsf place;
-      place.SetTranslation(gp_Vec(normal) * offset + gp_Vec(spec.direction) * low);
+      place.SetTranslation(gp_Vec(normal) * offset + gp_Vec(direction) * low);
       for (const detail::SweepFace& face : profile_faces(spec, spec.side1, false)) {
         const NameList start = detail::cap_names(spec.feature, "start", face);
         const NameList end = detail::cap_names(spec.feature, "end", face);
         parts.push_back(detail::named_prism(detail::transformed(face, place),
-                                            gp_Vec(spec.direction) * length, two ? end : start,
+                                            gp_Vec(direction) * length, two ? end : start,
                                             two ? start : end));
       }
     } else {
@@ -412,7 +450,7 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
           continue;
         }
         const ExtrudeSide& side = k == 0 ? spec.side1 : *spec.side2;
-        const gp_Dir along = k == 0 ? spec.direction : spec.direction.Reversed();
+        const gp_Dir along = k == 0 ? direction : direction.Reversed();
         // Touching profiles taper as one.
         for (const detail::SweepFace& face : profile_faces(spec, side, taper)) {
           const NameList near = detail::cap_names(spec.feature, two ? "mid" : "start", face);

@@ -74,6 +74,11 @@ pub(crate) const COMMANDS: &[&str] = &[
     "rename_feature",
     "add_parameter",
     "set_parameter",
+    // Groups of user parameters (mitcad#2180).
+    "add_parameter_group",
+    "rename_parameter_group",
+    "delete_parameter_group",
+    "set_parameter_group",
     "undo",
     "redo",
     "address_comment",
@@ -265,7 +270,8 @@ fn spec(name: &str) -> Option<Value> {
                 "max": limit("The greatest value"),
                 "step": limit("The step between allowed values"),
                 "strict": {"type": "boolean", "description": "Refuse values outside the limits instead of warning"},
-                "values": {"type": ["array", "null"], "description": "The allowed values (expression texts or numbers); null or [] removes them"}
+                "values": {"type": ["array", "null"], "description": "The allowed values (expression texts or numbers); null or [] removes them"},
+                "group": {"type": "string", "default": "", "description": "Its group: a path nested with / (Cabinet/Doors), made when it does not exist; empty for none"}
             },
             "required": ["name"],
             "examples": [{"cmd": "add_parameter", "name": "w", "value": "40 mm", "comment": "Width"}, {"cmd": "add_parameter", "name": "half", "expression": "w / 2"}]
@@ -283,10 +289,47 @@ fn spec(name: &str) -> Option<Value> {
                 "max": limit("The greatest value"),
                 "step": limit("The step between allowed values"),
                 "strict": {"type": "boolean", "description": "Refuse values outside the limits instead of warning"},
-                "values": {"type": ["array", "null"], "description": "The allowed values; null or [] removes them"}
+                "values": {"type": ["array", "null"], "description": "The allowed values; null or [] removes them"},
+                "group": {"type": "string", "description": "A user parameter's group: a path nested with / (Cabinet/Doors), made when it does not exist; \"\" takes it out of its group"}
             },
             "required": ["name"],
-            "examples": [{"cmd": "set_parameter", "name": "w", "value": 50}, {"cmd": "set_parameter", "name": "w", "expression": "2 * h"}]
+            "examples": [{"cmd": "set_parameter", "name": "w", "value": 50}, {"cmd": "set_parameter", "name": "w", "expression": "2 * h"}, {"cmd": "set_parameter", "name": "w", "group": "Cabinet"}]
+        }),
+        // Groups of user parameters (mitcad#2180): organization only,
+        // nothing recomputed.
+        "add_parameter_group" => json!({
+            "description": "Makes a group of user parameters, with the parent groups it lacks; a group may hold no parameter. Result: group (its path).",
+            "properties": {
+                "group": {"type": "string", "minLength": 1, "description": "Its path, nested with / (Cabinet/Doors)"}
+            },
+            "required": ["group"],
+            "examples": [{"cmd": "add_parameter_group", "group": "Cabinet/Doors"}]
+        }),
+        "rename_parameter_group" => json!({
+            "description": "Renames a group of user parameters: its subgroups and the parameters in them follow. Refused when another group has the new path. Result: group (the new path).",
+            "properties": {
+                "group": {"type": "string", "minLength": 1, "description": "The group's path"},
+                "new_group": {"type": "string", "minLength": 1, "description": "Its whole new path (Cabinet/Fronts)"}
+            },
+            "required": ["group", "new_group"],
+            "examples": [{"cmd": "rename_parameter_group", "group": "Cabinet/Doors", "new_group": "Cabinet/Fronts"}]
+        }),
+        "delete_parameter_group" => json!({
+            "description": "Deletes a group of user parameters: its parameters move to its parent group (out of any group at the top) and its subgroups up a level; no parameter is deleted. Result: moved (the parameters that were in it).",
+            "properties": {
+                "group": {"type": "string", "minLength": 1, "description": "The group's path"}
+            },
+            "required": ["group"],
+            "examples": [{"cmd": "delete_parameter_group", "group": "Cabinet"}]
+        }),
+        "set_parameter_group" => json!({
+            "description": "Moves user parameters into a group in one undo step (the group made when it does not exist), or out of their groups with \"\". Result: group.",
+            "properties": {
+                "names": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "The user parameters"},
+                "group": {"type": "string", "default": "", "description": "The group's path; empty for none"}
+            },
+            "required": ["names"],
+            "examples": [{"cmd": "set_parameter_group", "names": ["width", "depth"], "group": "Cabinet"}]
         }),
         "undo" => json!({
             "description": "Undoes the last undo step. Result: label (null when there was none).",
@@ -355,7 +398,7 @@ fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "place_on_plate", "plate": "Vase", "items": [{"body": "Body1", "count": 4}, {"occurrence": "Arm:1"}]}]
         }),
         "remove_from_plates" => json!({
-            "description": "Takes bodies and occurrences off their print plates.",
+            "description": "Takes plate items (bodies and occurrences) off their print plates, back to the first plate; a target that is no item is refused (hide a body to keep it off the plates).",
             "properties": {
                 "items": {"type": "array", "minItems": 1, "items": plate_item(false)}
             },
